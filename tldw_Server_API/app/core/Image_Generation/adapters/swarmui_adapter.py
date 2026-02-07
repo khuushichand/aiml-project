@@ -3,19 +3,20 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
-from typing import Any, Dict, Optional
-from urllib.parse import urlparse, quote
+from typing import Any
+from urllib.parse import quote, urlparse
 
 from loguru import logger
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 from tldw_Server_API.app.core.Image_Generation.adapters.base import ImageGenRequest, ImageGenResult
 from tldw_Server_API.app.core.Image_Generation.config import (
     DEFAULT_SWARMUI_TIMEOUT_SECONDS,
     get_image_generation_config,
 )
 from tldw_Server_API.app.core.Image_Generation.exceptions import ImageBackendUnavailableError, ImageGenerationError
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 try:
     from PIL import Image
@@ -29,7 +30,7 @@ class SwarmUIAdapter:
 
     def __init__(self) -> None:
         self._config = get_image_generation_config()
-        self._session_id: Optional[str] = None
+        self._session_id: str | None = None
 
     def generate(self, request: ImageGenRequest) -> ImageGenResult:
         output_format = request.format.lower()
@@ -67,7 +68,7 @@ class SwarmUIAdapter:
             raw = f"http://{raw}"
         return raw.rstrip("/")
 
-    def _cookies(self) -> Optional[Dict[str, str]]:
+    def _cookies(self) -> dict[str, str] | None:
         token = (self._config.swarmui_swarm_token or "").strip()
         if not token:
             return None
@@ -89,8 +90,8 @@ class SwarmUIAdapter:
             raise ImageGenerationError("SwarmUI did not return a session_id")
         return str(session_id)
 
-    def _build_payload(self, request: ImageGenRequest, session_id: str) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    def _build_payload(self, request: ImageGenRequest, session_id: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "session_id": session_id,
             "images": 1,
             "prompt": request.prompt,
@@ -122,7 +123,7 @@ class SwarmUIAdapter:
                 payload[key] = value
         return payload
 
-    def _post_generate(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post_generate(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         data = self._post_json(url, payload)
         error_id = data.get("error_id") if isinstance(data, dict) else None
         if error_id == "invalid_session_id":
@@ -140,7 +141,7 @@ class SwarmUIAdapter:
                 raise ImageGenerationError(str(data.get("error")))
         return data if isinstance(data, dict) else {}
 
-    def _post_json(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post_json(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             data = fetch_json(
                 method="POST",
@@ -156,7 +157,7 @@ class SwarmUIAdapter:
         return data
 
     @staticmethod
-    def _extract_first_image_ref(data: Dict[str, Any]) -> Optional[str]:
+    def _extract_first_image_ref(data: dict[str, Any]) -> str | None:
         if not isinstance(data, dict):
             return None
         images = data.get("images")
@@ -195,24 +196,18 @@ class SwarmUIAdapter:
         except Exception:
             status = None
         if status and int(status) >= 400:
-            try:
+            with contextlib.suppress(Exception):
                 response.close()
-            except Exception:
-                pass
             raise ImageGenerationError(f"SwarmUI image fetch failed with status {status}")
         try:
             content = response.content
         except Exception as exc:
-            try:
+            with contextlib.suppress(Exception):
                 response.close()
-            except Exception:
-                pass
             raise ImageGenerationError(f"SwarmUI image fetch failed: {exc}") from exc
         content_type = response.headers.get("content-type", "application/octet-stream")
-        try:
+        with contextlib.suppress(Exception):
             response.close()
-        except Exception:
-            pass
         return content, content_type.split(";")[0].strip().lower()
 
 
@@ -222,10 +217,7 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str]:
         raise ImageGenerationError("invalid data URL")
     meta = header[5:]
     content_type = "application/octet-stream"
-    if ";" in meta:
-        content_type = meta.split(";", 1)[0] or content_type
-    else:
-        content_type = meta or content_type
+    content_type = meta.split(";", 1)[0] or content_type if ";" in meta else meta or content_type
     if ";base64" not in header:
         raise ImageGenerationError("unsupported data URL encoding")
     try:
@@ -235,7 +227,7 @@ def _decode_data_url(data_url: str) -> tuple[bytes, str]:
     return content, content_type
 
 
-def _format_from_content_type(content_type: str) -> Optional[str]:
+def _format_from_content_type(content_type: str) -> str | None:
     if not content_type:
         return None
     ctype = content_type.split(";", 1)[0].strip().lower()
@@ -248,7 +240,7 @@ def _format_from_content_type(content_type: str) -> Optional[str]:
     return None
 
 
-def _format_from_url(url: str) -> Optional[str]:
+def _format_from_url(url: str) -> str | None:
     lowered = url.lower()
     if lowered.endswith(".png"):
         return "png"
@@ -262,7 +254,7 @@ def _format_from_url(url: str) -> Optional[str]:
 def _maybe_convert_format(
     content: bytes,
     content_type: str,
-    actual_format: Optional[str],
+    actual_format: str | None,
     requested_format: str,
 ) -> tuple[bytes, str]:
     if requested_format == actual_format:

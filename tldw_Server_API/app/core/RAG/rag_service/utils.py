@@ -5,11 +5,12 @@ Utility functions for the RAG service.
 import hashlib
 import os
 import re
-from typing import List, Dict, Any, Optional, Tuple
+from collections import defaultdict
+from typing import Any, Callable, Optional
+
+import numpy as np
 import tiktoken
 from loguru import logger
-import numpy as np
-from collections import defaultdict
 
 
 class TokenCounter:
@@ -33,7 +34,7 @@ class TokenCounter:
         """Count tokens in text."""
         return len(self.encoding.encode(text))
 
-    def count_batch(self, texts: List[str]) -> List[int]:
+    def count_batch(self, texts: list[str]) -> list[int]:
         """Count tokens in multiple texts."""
         return [self.count(text) for text in texts]
 
@@ -55,7 +56,7 @@ def get_float_env(name: str, default: float) -> float:
         return float(default)
 
 
-def create_document_id(content: str, metadata: Dict[str, Any]) -> str:
+def create_document_id(content: str, metadata: dict[str, Any]) -> str:
     """
     Create a unique document ID from content and metadata.
 
@@ -73,7 +74,7 @@ def create_document_id(content: str, metadata: Dict[str, Any]) -> str:
     # Add stable metadata to hash
     for key in sorted(metadata.keys()):
         if key in ['source_id', 'chunk_index', 'document_id']:
-            hasher.update(f"{key}:{metadata[key]}".encode('utf-8'))
+            hasher.update(f"{key}:{metadata[key]}".encode())
 
     return hasher.hexdigest()
 
@@ -83,7 +84,7 @@ def chunk_text(
     chunk_size: int = 512,
     chunk_overlap: int = 128,
     separator: str = "\n\n"
-) -> List[Tuple[str, int]]:
+) -> list[tuple[str, int]]:
     """
     Split text into overlapping chunks.
 
@@ -158,7 +159,7 @@ def chunk_text(
     return chunks
 
 
-def normalize_scores(scores: List[float], method: str = "minmax") -> List[float]:
+def normalize_scores(scores: list[float], method: str = "minmax") -> list[float]:
     """
     Normalize scores to [0, 1] range.
 
@@ -172,14 +173,14 @@ def normalize_scores(scores: List[float], method: str = "minmax") -> List[float]
     if not scores:
         return []
 
-    scores_array = np.array(scores)
+    scores_array = np.asarray(scores, dtype=float)
 
     if method == "minmax":
         min_score = scores_array.min()
         max_score = scores_array.max()
         if max_score == min_score:
             return [0.5] * len(scores)
-        return ((scores_array - min_score) / (max_score - min_score)).tolist()
+        return list(((scores_array - min_score) / (max_score - min_score)).tolist())
 
     elif method == "zscore":
         mean = scores_array.mean()
@@ -188,17 +189,17 @@ def normalize_scores(scores: List[float], method: str = "minmax") -> List[float]
             return [0.5] * len(scores)
         z_scores = (scores_array - mean) / std
         # Convert to [0, 1] using sigmoid
-        return (1 / (1 + np.exp(-z_scores))).tolist()
+        return list((1 / (1 + np.exp(-z_scores))).tolist())
 
     else:
         raise ValueError(f"Unknown normalization method: {method}")
 
 
 def combine_scores(
-    scores_dict: Dict[str, List[float]],
-    weights: Optional[Dict[str, float]] = None,
+    scores_dict: dict[str, list[float]],
+    weights: Optional[dict[str, float]] = None,
     normalize: bool = True
-) -> List[float]:
+) -> list[float]:
     """
     Combine multiple score lists with optional weighting.
 
@@ -223,7 +224,7 @@ def combine_scores(
 
     # Default weights if not provided
     if weights is None:
-        weights = {name: 1.0 for name in scores_dict}
+        weights = dict.fromkeys(scores_dict, 1.0)
 
     # Normalize if requested
     if normalize:
@@ -233,21 +234,21 @@ def combine_scores(
         }
 
     # Combine with weights
-    combined = np.zeros(length)
+    combined = np.zeros(length, dtype=float)
     total_weight = sum(weights.get(name, 1.0) for name in scores_dict)
 
     for name, scores in scores_dict.items():
         weight = weights.get(name, 1.0) / total_weight
         combined += np.array(scores) * weight
 
-    return combined.tolist()
+    return list(combined.tolist())
 
 
 def deduplicate_documents(
-    documents: List[Any],
-    key_func: callable,
+    documents: list[Any],
+    key_func: Callable[[Any], str],
     similarity_threshold: float = 0.85
-) -> List[Any]:
+) -> list[Any]:
     """
     Remove duplicate documents based on similarity.
 
@@ -262,8 +263,8 @@ def deduplicate_documents(
     if len(documents) <= 1:
         return documents
 
-    seen = {}
-    deduplicated = []
+    seen: dict[str, Any] = {}
+    deduplicated: list[Any] = []
 
     for doc in documents:
         key = key_func(doc)
@@ -315,7 +316,7 @@ def calculate_text_similarity(text1: str, text2: str) -> float:
     return len(intersection) / len(union)
 
 
-def extract_keywords(text: str, max_keywords: int = 10) -> List[str]:
+def extract_keywords(text: str, max_keywords: int = 10) -> list[str]:
     """
     Extract keywords from text using simple frequency analysis.
 
@@ -338,7 +339,7 @@ def extract_keywords(text: str, max_keywords: int = 10) -> List[str]:
     words = re.findall(r'\b\w+\b', text.lower())
 
     # Count frequencies
-    word_freq = defaultdict(int)
+    word_freq: dict[str, int] = defaultdict(int)
     for word in words:
         if word not in stopwords and len(word) > 2:
             word_freq[word] += 1
@@ -348,7 +349,7 @@ def extract_keywords(text: str, max_keywords: int = 10) -> List[str]:
     return [word for word, _ in sorted_words[:max_keywords]]
 
 
-def format_sources(documents: List[Any], max_sources: int = 5) -> str:
+def format_sources(documents: list[Any], max_sources: int = 5) -> str:
     """
     Format source documents for display.
 

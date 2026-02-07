@@ -1,35 +1,62 @@
 from __future__ import annotations
 
-from typing import Any, Optional
-from datetime import datetime
 import os
+from datetime import datetime
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 #
 try:
     from pydantic import field_validator  # Pydantic v2
-except Exception:  # Fallback to v1 naming
+except ImportError:  # Fallback to v1 naming
     from pydantic import validator as field_validator  # type: ignore
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    require_roles,
-    get_auth_principal,
-)
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditContext
-from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from fastapi.responses import StreamingResponse
 import asyncio
+import contextlib
 import json as _json
+
+from fastapi.responses import StreamingResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    require_roles,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.Jobs.manager import JobManager
+
+_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    _json.JSONDecodeError,
+    HTTPException,
+)
 
 router = APIRouter(
     dependencies=[Depends(require_roles("admin"))],
 )
 
 
-def _is_truthy(v: Optional[str]) -> bool:
+def _is_truthy(v: str | None) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -57,7 +84,7 @@ def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
     }
 
 
-def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
+def _enforce_domain_scope(user: dict, domain: str | None) -> None:
     """Optional domain-scoped RBAC enforcement.
 
     Enabled when JOBS_DOMAIN_SCOPED_RBAC=true. If JOBS_REQUIRE_DOMAIN_FILTER=true,
@@ -70,7 +97,7 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
         # Be robust to user being a Pydantic model or dict
         try:
             uid_val = getattr(user, "id", None)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             uid_val = None
         if uid_val is None and isinstance(user, dict):
             uid_val = user.get("id")
@@ -88,14 +115,14 @@ def _enforce_domain_scope(user: dict, domain: Optional[str]) -> None:
                 raise HTTPException(status_code=403, detail="Domain filter required for allowlisted admin")
     except HTTPException:
         raise
-    except Exception as _rbac_exc:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as _rbac_exc:
         # Fail-closed in forced mode (tests), otherwise fail-open to avoid lockout
         if _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
-            raise HTTPException(status_code=403, detail="RBAC enforcement error")
+            raise HTTPException(status_code=403, detail="RBAC enforcement error") from _rbac_exc
         return
 
 
-def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optional[str]) -> None:
+def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: str | None) -> None:
     """
     Domain-scoped RBAC enforcement using AuthPrincipal (feature-flagged path).
 
@@ -113,7 +140,7 @@ def _enforce_domain_scope_from_principal(principal: AuthPrincipal, domain: Optio
 
 def _enforce_domain_scope_unified(
     principal: AuthPrincipal,
-    domain: Optional[str],
+    domain: str | None,
 ) -> dict[str, Any]:
     """
     Unified domain-scoped RBAC enforcement for jobs admin endpoints.
@@ -133,7 +160,7 @@ def _enforce_domain_scope_unified(
     return admin_user
 
 
-def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
+def _set_pg_rls_for_user(user: dict, domain: str | None) -> None:
     """Set per-request RLS context for Postgres sessions using contextvars.
 
     This avoids global env and is concurrency-safe within the request task.
@@ -142,7 +169,7 @@ def _set_pg_rls_for_user(user: dict, domain: Optional[str]) -> None:
         from tldw_Server_API.app.core.Jobs.manager import JobManager as _JM
         uid = str(user.get("id") or "")
         _JM.set_rls_context(is_admin=True, domain_allowlist=str(domain) if domain else None, owner_user_id=uid)
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -150,9 +177,9 @@ class PruneRequest(BaseModel):
     statuses: list[str] = Field(default_factory=lambda: ["completed", "failed", "cancelled"], description="Statuses to prune")
     older_than_days: int = Field(ge=1, le=3650, default=30, description="Delete jobs older than N days")
     # Optional scope filters
-    domain: Optional[str] = Field(default=None, description="Limit prune to a specific domain")
-    queue: Optional[str] = Field(default=None, description="Limit prune to a specific queue")
-    job_type: Optional[str] = Field(default=None, description="Limit prune to a specific job type")
+    domain: str | None = Field(default=None, description="Limit prune to a specific domain")
+    queue: str | None = Field(default=None, description="Limit prune to a specific queue")
+    job_type: str | None = Field(default=None, description="Limit prune to a specific job type")
     dry_run: bool = Field(default=False, description="When true, return count only without deleting")
     detail_top_k: int = Field(default=0, ge=0, le=100, description="When dry_run is true, optionally compute top-K groups by count")
 
@@ -163,8 +190,8 @@ class PruneRequest(BaseModel):
         allowed = {"queued", "processing", "completed", "failed", "cancelled"}
         try:
             items = list(v) if isinstance(v, (list, tuple)) else [v]
-        except Exception:
-            raise ValueError("statuses must be a list of strings")
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
+            raise ValueError("statuses must be a list of strings") from None
         out = []
         for item in items:
             s = str(item or "").strip().lower()
@@ -175,7 +202,7 @@ class PruneRequest(BaseModel):
 
     @field_validator("domain", "queue", "job_type", mode="before")
     @classmethod
-    def _trim_optional(cls, v: Optional[str]) -> Optional[str]:
+    def _trim_optional(cls, v: str | None) -> str | None:
         s = str(v or "").strip()
         return s or None
 
@@ -248,7 +275,7 @@ async def prune_jobs_endpoint(
         # Pre-parse raw JSON to enforce RBAC before model validation to avoid 422s
         try:
             raw_body = await request.json()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             raw_body = {}
         # Enforce domain-scoped RBAC (403) even if request body is incomplete.
         # When JOBS_DOMAIN_RBAC_PRINCIPAL is enabled, drive enforcement from
@@ -261,7 +288,7 @@ async def prune_jobs_endpoint(
             require_confirm_env = str(os.getenv("JOBS_REQUIRE_CONFIRM", "")).lower() in {"1", "true", "yes", "y", "on"}
             try:
                 older = int((raw_body or {}).get("older_than_days") or 0)
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 older = 0
             # Require confirmation when explicitly enabled (except in TEST_MODE),
             # or when pruning with immediate threshold (older_than_days <= 0)
@@ -292,7 +319,7 @@ async def prune_jobs_endpoint(
                 os.getenv("JOBS_UPDATE_GAUGES_ON_PRUNE", "")
             ).lower() in {"1","true","yes","y","on"}:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         # Best-effort audit logging for admin prune action
         try:
@@ -317,15 +344,15 @@ async def prune_jobs_endpoint(
                     "dry_run": req.dry_run,
                 },
             )
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             # Never fail prune due to audit logging issues
             pass
         return PruneResponse(deleted=deleted)
     except HTTPException:
         # Preserve intended HTTP errors (e.g., RBAC 403)
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prune failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Prune failed: {e}") from e
 
 
 # --- Queue controls (pause/resume/drain) ---
@@ -354,7 +381,7 @@ async def queue_control_endpoint(
     try:
         flags = jm.set_queue_control(req.domain, req.queue, req.action)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return QueueFlagsResponse(**flags)
 
 
@@ -376,12 +403,12 @@ async def queue_status_endpoint(
 
 # --- Reschedule / Retry-now ---
 class RescheduleRequest(BaseModel):
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    status: Optional[str] = Field(default=None, description="Optional status filter")
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    status: str | None = Field(default=None, description="Optional status filter")
     set_now: bool = True
-    delta_seconds: Optional[int] = None
+    delta_seconds: int | None = None
     dry_run: bool = False
 
 
@@ -403,15 +430,15 @@ async def reschedule_jobs_endpoint(
     try:
         n = jm.reschedule_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, status=req.status, set_now=req.set_now, delta_seconds=req.delta_seconds, dry_run=req.dry_run)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return AffectedResponse(affected=int(n))
 
 
 class RetryNowRequest(BaseModel):
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     only_failed: bool = True
     dry_run: bool = False
 
@@ -441,15 +468,15 @@ async def retry_now_jobs_endpoint(
 # --- Attachments ---
 class AttachmentRequest(BaseModel):
     kind: str = Field(description="log|artifact|tag")
-    content_text: Optional[str] = None
-    url: Optional[str] = None
+    content_text: str | None = None
+    url: str | None = None
 
 
 class AttachmentItem(BaseModel):
     id: int
     kind: str
-    content_text: Optional[str]
-    url: Optional[str]
+    content_text: str | None
+    url: str | None
     created_at: str
 
 
@@ -471,7 +498,7 @@ async def add_job_attachment_endpoint(
     job_id: int,
     req: AttachmentRequest,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> AttachmentItem:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -487,14 +514,14 @@ async def add_job_attachment_endpoint(
             raise HTTPException(status_code=500, detail="Failed to read back attachment")
         return _normalize_attachment_item(item)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
 
 
 @router.get("/jobs/{job_id}/attachments", response_model=list[AttachmentItem])
 async def list_job_attachments_endpoint(
     job_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> list[AttachmentItem]:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -511,8 +538,8 @@ class SlaPolicyRequest(BaseModel):
     domain: str
     queue: str
     job_type: str
-    max_queue_latency_seconds: Optional[int] = None
-    max_duration_seconds: Optional[int] = None
+    max_queue_latency_seconds: int | None = None
+    max_duration_seconds: int | None = None
     enabled: bool = True
 
 
@@ -542,9 +569,9 @@ async def upsert_sla_policy_endpoint(
 
 @router.get("/jobs/sla/policies")
 async def list_sla_policies_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[dict]:
     admin_user = _enforce_domain_scope_unified(principal, domain)
@@ -558,24 +585,32 @@ async def list_sla_policies_endpoint(
             # Apply Postgres RLS context so listings respect the same domain policies as jobs.
             _set_pg_rls_for_user(admin_user, domain)
             with jm._pg_cursor(conn) as cur:
-                where = ["1=1"]; params: list = []
+                where = ["1=1"]
+                params: list = []
                 if domain:
-                    where.append("domain=%s"); params.append(domain)
+                    where.append("domain=%s")
+                    params.append(domain)
                 if queue:
-                    where.append("queue=%s"); params.append(queue)
+                    where.append("queue=%s")
+                    params.append(queue)
                 if job_type:
-                    where.append("job_type=%s"); params.append(job_type)
+                    where.append("job_type=%s")
+                    params.append(job_type)
                 cur.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params))
                 rows = cur.fetchall() or []
                 return [dict(r) for r in rows]
         else:
-            where = ["1=1"]; params2: list = []
+            where = ["1=1"]
+            params2: list = []
             if domain:
-                where.append("domain=?"); params2.append(domain)
+                where.append("domain=?")
+                params2.append(domain)
             if queue:
-                where.append("queue=?"); params2.append(queue)
+                where.append("queue=?")
+                params2.append(queue)
             if job_type:
-                where.append("job_type=?"); params2.append(job_type)
+                where.append("job_type=?")
+                params2.append(job_type)
             rows = conn.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params2)).fetchall() or []
             return [dict(r) for r in rows]
     finally:
@@ -586,9 +621,9 @@ async def list_sla_policies_endpoint(
 class CryptoRotateRequest(BaseModel):
     old_key_b64: str
     new_key_b64: str
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
     fields: list[str] = Field(default_factory=lambda: ["payload", "result"])
     limit: int = 1000
     dry_run: bool = False
@@ -627,17 +662,17 @@ async def rotate_crypto_endpoint(
             dry_run=bool(body.dry_run),
         )
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return CryptoRotateResponse(affected=int(n))
 
 
 class TTLSweepRequest(BaseModel):
-    age_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
-    runtime_seconds: Optional[int] = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
+    age_seconds: int | None = Field(default=None, ge=1, description="Cancel/fail queued jobs older than this many seconds (created_at)")
+    runtime_seconds: int | None = Field(default=None, ge=1, description="Cancel/fail processing jobs running longer than this many seconds")
     action: str = Field(default="cancel", pattern="^(cancel|fail)$", description="Action to apply to matching jobs")
-    domain: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    job_type: Optional[str] = Field(default=None)
+    domain: str | None = Field(default=None)
+    queue: str | None = Field(default=None)
+    job_type: str | None = Field(default=None)
 
     model_config = ConfigDict(json_schema_extra={
             "example": {
@@ -655,15 +690,15 @@ class TTLSweepRequest(BaseModel):
 
 class JobEvent(BaseModel):
     id: int
-    job_id: Optional[int] = None
-    domain: Optional[str] = None
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    job_id: int | None = None
+    domain: str | None = None
+    queue: str | None = None
+    job_type: str | None = None
     event_type: str
     attrs: dict = Field(default_factory=dict)
-    owner_user_id: Optional[str] = None
-    request_id: Optional[str] = None
-    trace_id: Optional[str] = None
+    owner_user_id: str | None = None
+    request_id: str | None = None
+    trace_id: str | None = None
     created_at: str
 
 
@@ -671,9 +706,9 @@ class JobEvent(BaseModel):
 async def list_job_events(
     after_id: int = 0,
     limit: int = 200,
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> list[JobEvent]:
     """Return job events from the append-only outbox with a cursor (after_id).
@@ -730,7 +765,7 @@ async def list_job_events(
                     attrs = r.get("attrs_json")
                     try:
                         attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         attrs_obj = {}
                     events.append(JobEvent(
                         id=int(r.get("id")), job_id=(r.get("job_id")), domain=r.get("domain"), queue=r.get("queue"), job_type=r.get("job_type"),
@@ -740,27 +775,25 @@ async def list_job_events(
                     attrs_val = r[6]
                     try:
                         attrs_obj = _json.loads(attrs_val) if isinstance(attrs_val, str) else (attrs_val or {})
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         attrs_obj = {}
                     events.append(JobEvent(
                         id=int(r[0]), job_id=(r[1]), domain=r[2], queue=r[3], job_type=r[4], event_type=str(r[5]), attrs=attrs_obj, owner_user_id=r[7], request_id=r[8], trace_id=r[9], created_at=str(r[10])
                     ))
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 continue
         return events
     finally:
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             conn.close()
-        except Exception:
-            pass
 
 
 @router.get("/jobs/events/stream")
 async def stream_job_events(
     after_id: int = 0,
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> StreamingResponse:
     """Server-Sent Events stream of job events from the outbox.
@@ -774,13 +807,14 @@ async def stream_job_events(
         _set_pg_rls_for_user(admin_user, domain)
     jm = JobManager(backend=backend, db_url=db_url)
 
-    from tldw_Server_API.app.core.Streaming.streams import SSEStream
+    import time as _time
+
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
-        get_metrics_registry,
         MetricDefinition,
         MetricType,
+        get_metrics_registry,
     )
-    import time as _time
+    from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
     nonlocal_after_id = after_id  # keep compatibility with inner mutation
     poll_interval = float(os.getenv("JOBS_EVENTS_POLL_INTERVAL", "1.0") or "1.0")
@@ -797,17 +831,17 @@ async def stream_job_events(
                 labels=["component", "endpoint"],
             )
         )
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _reg = get_metrics_registry()
 
     # In test mode, bound the stream duration to avoid teardown hangs in CI/sandbox
     try:
         _test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _test_mode = False
     try:
         _max_s = float(os.getenv("JOBS_SSE_TEST_MAX_SECONDS", "1.0")) if _test_mode else None
-    except Exception:
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _max_s = 1.0 if _test_mode else None
 
     stream = SSEStream(
@@ -820,16 +854,14 @@ async def stream_job_events(
     async def _producer() -> None:
         nonlocal nonlocal_after_id
         # Initial small event to prompt client streaming
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             await stream.send_event("ping", {})
-        except Exception:
-            pass
         while True:
             # Terminate promptly if the stream has been closed (e.g., max_duration or client done)
             try:
                 if getattr(stream, "_closed", False):
                     break
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 pass
             conn = jm._connect()
             try:
@@ -875,31 +907,27 @@ async def stream_job_events(
                             attrs = r[2]
                         try:
                             attrs_obj = _json.loads(attrs) if isinstance(attrs, str) else (attrs or {})
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             attrs_obj = {}
                         # Preserve SSE id line for clients using Last-Event-ID
                         await stream.send_event("job", {"event": et, "attrs": attrs_obj}, event_id=str(eid))
-                        try:
+                        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                             _reg.set_gauge(
                                 "jobs_events_last_ts_seconds",
                                 float(_time.time()),
                                 {"component": "jobs", "endpoint": "jobs_events_sse"},
                             )
-                        except Exception:
-                            pass
                         nonlocal_after_id = eid
                 # If no rows, rely on heartbeat to keep connection alive
                 await asyncio.sleep(poll_interval)
             except (asyncio.CancelledError, GeneratorExit):
                 break
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 # Swallow transient errors and continue after a short delay; heartbeat covers liveness
                 await asyncio.sleep(poll_interval)
             finally:
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except Exception:
-                    pass
 
     async def _gen():
         prod_task = asyncio.create_task(_producer())
@@ -909,34 +937,26 @@ async def stream_job_events(
         except asyncio.CancelledError:
             # Client cancelled: cancel producer promptly and re-raise
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     prod_task.cancel()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     await prod_task
-                except (asyncio.CancelledError, Exception):
-                    pass
             raise
         else:
             # Normal shutdown: ensure producer completes without forced cancel
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     await prod_task
-                except Exception:
-                    pass
         finally:
             # Ensure producer task never leaks on unexpected exceptions
             if not prod_task.done():
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     prod_task.cancel()
-                except Exception:
-                    pass
                 try:
                     await prod_task
                 except asyncio.CancelledError:
                     pass
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     # Swallow any cleanup-time errors to avoid propagating
                     pass
 
@@ -993,13 +1013,13 @@ async def ttl_sweep_endpoint(
 ) -> TTLSweepResponse:
     try:
         # Correlation IDs and diagnostics
-        from tldw_Server_API.app.core.Logging.log_context import get_ps_logger, ensure_request_id, ensure_traceparent
+        from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         # Pre-parse raw to enforce RBAC and confirm header before validation
         try:
             raw = await request.json()
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             raw = {}
         raw_domain = (raw or {}).get("domain")
         domain_val = str(raw_domain or "").strip() or None
@@ -1027,18 +1047,17 @@ async def ttl_sweep_endpoint(
         req = TTLSweepRequest(**(raw or {}))
         # Capture a single reference time to avoid boundary drift between age/runtime calculations
         try:
-            from datetime import datetime, timezone as _tz
+            from datetime import datetime
+            from datetime import timezone as _tz
             ref_now = datetime.now(tz=_tz.utc)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             ref_now = None
         # Diagnostics before executing
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
                 "TTL sweep request: action=%s domain=%s queue=%s job_type=%s age=%s runtime=%s backend=%s ref_now=%s",
                 req.action, req.domain, req.queue, req.job_type, req.age_seconds, req.runtime_seconds, (backend or "sqlite"), str(ref_now) if ref_now else ""
             )
-        except Exception:
-            pass
         affected = jm.apply_ttl_policies(
             age_seconds=req.age_seconds,
             runtime_seconds=req.runtime_seconds,
@@ -1052,28 +1071,26 @@ async def ttl_sweep_endpoint(
         try:
             if req.domain and req.queue and req.job_type:
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-        except Exception:
+        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
         # Diagnostics after executing
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="jobs").info(
                 "TTL sweep result: affected=%s action=%s domain=%s queue=%s job_type=%s",
                 int(affected), req.action, req.domain, req.queue, req.job_type
             )
-        except Exception:
-            pass
         return TTLSweepResponse(affected=int(affected))
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}") from e
 
 
 class IntegritySweepRequest(BaseModel):
     fix: bool = Field(default=False, description="When true, attempt to repair invalid states")
-    domain: Optional[str] = Field(default=None)
-    queue: Optional[str] = Field(default=None)
-    job_type: Optional[str] = Field(default=None)
+    domain: str | None = Field(default=None)
+    queue: str | None = Field(default=None)
+    job_type: str | None = Field(default=None)
 
     model_config = ConfigDict(json_schema_extra={
             "example": {
@@ -1145,8 +1162,8 @@ async def integrity_sweep_endpoint(
         return IntegritySweepResponse(**stats)
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}") from e
 
 
 class QueueStatsResponse(BaseModel):
@@ -1173,9 +1190,9 @@ class QueueStatsResponse(BaseModel):
 
 @router.get("/jobs/stats", response_model=list[QueueStatsResponse])
 async def get_jobs_stats(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    job_type: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     """Aggregate counts grouped by domain/queue/job_type for the WebUI."""
@@ -1191,8 +1208,8 @@ async def get_jobs_stats(
         return [QueueStatsResponse(**s) for s in stats]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Stats failed: {e}") from e
 
 
 class ArchiveMetaResponse(BaseModel):
@@ -1206,7 +1223,7 @@ class ArchiveMetaResponse(BaseModel):
 @router.get("/jobs/archive/meta", response_model=ArchiveMetaResponse)
 async def get_archive_meta(
     job_id: int,
-    domain: Optional[str] = None,
+    domain: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ) -> ArchiveMetaResponse:
     """Return archive compression metadata for a given job id (if archived).
@@ -1254,39 +1271,37 @@ async def get_archive_meta(
             result_compressed_present=bool(result_compressed_present),
         )
     finally:
-        try:
+        with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
             conn.close()
-        except Exception:
-            pass
 
 
 class JobItem(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     domain: str
     queue: str
     job_type: str
     status: str
-    priority: Optional[int] = None
-    retry_count: Optional[int] = None
-    max_retries: Optional[int] = None
-    available_at: Optional[str] = None
-    created_at: Optional[str] = None
-    acquired_at: Optional[str] = None
-    started_at: Optional[str] = None
-    leased_until: Optional[str] = None
-    completed_at: Optional[str] = None
+    priority: int | None = None
+    retry_count: int | None = None
+    max_retries: int | None = None
+    available_at: str | None = None
+    created_at: str | None = None
+    acquired_at: str | None = None
+    started_at: str | None = None
+    leased_until: str | None = None
+    completed_at: str | None = None
 
 
 class JobDetailResponse(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     domain: str
     queue: str
     job_type: str
     status: str
-    payload: Optional[Any] = None
-    result: Optional[Any] = None
+    payload: Any | None = None
+    result: Any | None = None
     archived: bool = False
 
     model_config = ConfigDict(extra="allow")
@@ -1294,14 +1309,14 @@ class JobDetailResponse(BaseModel):
 
 @router.get("/jobs/list", response_model=list[JobItem])
 async def list_jobs_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
-    status: Optional[str] = None,
-    owner_user_id: Optional[str] = None,
-    job_type: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
+    status: str | None = None,
+    owner_user_id: str | None = None,
+    job_type: str | None = None,
     limit: int = 100,
-    sort_by: Optional[str] = None,
-    sort_order: Optional[str] = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -1346,8 +1361,8 @@ async def list_jobs_endpoint(
         return items
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"List failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"List failed: {e}") from e
 
 
 class StaleGroup(BaseModel):
@@ -1358,8 +1373,8 @@ class StaleGroup(BaseModel):
 
 @router.get("/jobs/stale", response_model=list[StaleGroup])
 async def stale_processing_endpoint(
-    domain: Optional[str] = None,
-    queue: Optional[str] = None,
+    domain: str | None = None,
+    queue: str | None = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
 ):
     try:
@@ -1404,20 +1419,20 @@ async def stale_processing_endpoint(
         finally:
             try:
                 conn.close()
-            except Exception:
+            except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                 logger.opt(exception=True).debug("Failed to close connection in list_stale_groups")
         return out
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}") from e
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)
 async def get_job_detail(
     job_id: int,
     principal: AuthPrincipal = Depends(get_auth_principal),
-    domain: Optional[str] = None,
+    domain: str | None = None,
 ) -> JobDetailResponse:
     admin_user = _enforce_domain_scope_unified(principal, domain)
     db_url = os.getenv("JOBS_DB_URL")
@@ -1433,9 +1448,9 @@ async def get_job_detail(
 
 class BatchCancelRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     dry_run: bool = False
 
 
@@ -1483,10 +1498,7 @@ async def batch_cancel_endpoint(
                             tuple(params),
                         )
                         c = cur.fetchone()
-                        if isinstance(c, dict):
-                            count = int(c.get("count") or 0)
-                        else:
-                            count = int(c[0] if c else 0)
+                        count = int(c.get("count") or 0) if isinstance(c, dict) else int(c[0] if c else 0)
                         return BatchCancelResponse(affected=count)
                     # Counters pre-measure per group
                     counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
@@ -1557,17 +1569,15 @@ async def batch_cancel_endpoint(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - %s, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, d, q, jt),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                         conn.commit()
-                    except Exception:
-                        pass
                     try:
                         # If fully scoped, refresh gauges
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchCancelResponse(affected=int(affected))
             else:
@@ -1632,34 +1642,30 @@ async def batch_cancel_endpoint(
                                 "UPDATE job_counters SET processing_count = CASE WHEN (processing_count - ?) < 0 THEN 0 ELSE processing_count - ? END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
                                 (int(c), int(c), d, q, jt),
                             )
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Ensure changes are persisted for subsequent reads
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.commit()
-                except Exception:
-                    pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 return BatchCancelResponse(affected=int(affected))
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except Exception:
-                pass
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}") from e
 
 
 class BatchRescheduleRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
+    queue: str | None = None
+    job_type: str | None = None
     delay_seconds: int = Field(ge=0, default=0)
     dry_run: bool = False
 
@@ -1731,16 +1737,14 @@ async def batch_reschedule_endpoint(
                                     "UPDATE job_counters SET ready_count = GREATEST(ready_count - %s, 0), scheduled_count = job_counters.scheduled_count + %s, updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
                                     (c, c, d, q, jt),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                         conn.commit()
-                    except Exception:
-                        pass
                     try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchRescheduleResponse(affected=int(cur.rowcount or 0))
             else:
@@ -1778,34 +1782,30 @@ async def batch_reschedule_endpoint(
                                 ),
                                 (int(c), int(c), int(c), d, q, jt),
                             )
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                     conn.commit()
-                except Exception:
-                    pass
                 try:
                     if req.domain and req.queue and req.job_type:
                         jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                except Exception:
+                except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                     pass
                 return BatchRescheduleResponse(affected=int(affected))
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except Exception:
-                pass
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}") from e
 
 
 class BatchRequeueQuarantinedRequest(BaseModel):
     domain: str
-    queue: Optional[str] = None
-    job_type: Optional[str] = None
-    job_id: Optional[int] = None
+    queue: str | None = None
+    job_type: str | None = None
+    job_id: int | None = None
     dry_run: bool = False
 
     model_config = ConfigDict(json_schema_extra={
@@ -1898,20 +1898,20 @@ async def batch_requeue_quarantined_endpoint(
                 where = ["domain = %s", "status = 'quarantined'"]
                 params: list = [req.domain]
                 if req.queue:
-                    where.append("queue = %s"); params.append(req.queue)
+                    where.append("queue = %s")
+                    params.append(req.queue)
                 if req.job_type:
-                    where.append("job_type = %s"); params.append(req.job_type)
+                    where.append("job_type = %s")
+                    params.append(req.job_type)
                 if req.job_id is not None:
-                    where.append("id = %s"); params.append(int(req.job_id))
+                    where.append("id = %s")
+                    params.append(int(req.job_id))
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
                             cur.execute(f"SELECT COUNT(*) AS c FROM jobs WHERE {' AND '.join(where)}", tuple(params))
                             r = cur.fetchone()
-                            if isinstance(r, dict):
-                                count = int(r.get("c") or 0)
-                            else:
-                                count = int(r[0] if r else 0)
+                            count = int(r.get("c") or 0) if isinstance(r, dict) else int(r[0] if r else 0)
                             return BatchRequeueQuarantinedResponse(affected=count)
                         # Compute group counts to adjust counters post-update when enabled
                         counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
@@ -1942,24 +1942,27 @@ async def batch_requeue_quarantined_endpoint(
                                         ),
                                         (d, q, jt, c, c),
                                     )
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             pass
                         try:
                             # Refresh gauges for the scope (best-effort)
                             if req.domain and req.queue and req.job_type:
                                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                        except Exception:
+                        except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                             pass
                         return BatchRequeueQuarantinedResponse(affected=affected)
             else:
                 where = ["domain = ?", "status = 'quarantined'"]
                 params2: list = [req.domain]
                 if req.queue:
-                    where.append("queue = ?"); params2.append(req.queue)
+                    where.append("queue = ?")
+                    params2.append(req.queue)
                 if req.job_type:
-                    where.append("job_type = ?"); params2.append(req.job_type)
+                    where.append("job_type = ?")
+                    params2.append(req.job_type)
                 if req.job_id is not None:
-                    where.append("id = ?"); params2.append(int(req.job_id))
+                    where.append("id = ?")
+                    params2.append(int(req.job_id))
                 if req.dry_run:
                     cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))
                     r = cur.fetchone()
@@ -1989,20 +1992,18 @@ async def batch_requeue_quarantined_endpoint(
                                     ),
                                     (d, q, jt, int(c), int(c), int(c), int(c)),
                                 )
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         if req.domain and req.queue and req.job_type:
                             jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
-                    except Exception:
+                    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
                         pass
                     return BatchRequeueQuarantinedResponse(affected=affected2)
         finally:
-            try:
+            with contextlib.suppress(_JOBS_ADMIN_NONCRITICAL_EXCEPTIONS):
                 conn.close()
-            except Exception:
-                pass
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}")
+    except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}") from e

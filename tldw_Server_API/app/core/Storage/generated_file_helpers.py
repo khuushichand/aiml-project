@@ -27,31 +27,32 @@ Usage:
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import aiofiles
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    FILE_CATEGORY_TTS_AUDIO,
     FILE_CATEGORY_IMAGE,
-    FILE_CATEGORY_VOICE_CLONE,
     FILE_CATEGORY_MINDMAP,
     FILE_CATEGORY_SPREADSHEET,
-    SOURCE_FEATURE_TTS,
-    SOURCE_FEATURE_IMAGE_GEN,
-    SOURCE_FEATURE_VOICE_STUDIO,
-    SOURCE_FEATURE_MINDMAP,
+    FILE_CATEGORY_TTS_AUDIO,
+    FILE_CATEGORY_VOICE_CLONE,
     SOURCE_FEATURE_DATA_TABLES,
-    SOURCE_FEATURE_EXPORT,
+    SOURCE_FEATURE_IMAGE_GEN,
+    SOURCE_FEATURE_MINDMAP,
+    SOURCE_FEATURE_TTS,
+    SOURCE_FEATURE_VOICE_STUDIO,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-
 
 # MIME type mappings
 AUDIO_MIME_TYPES = {
@@ -85,11 +86,19 @@ def _compute_checksum(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _normalize_extension(file_format: str) -> str:
+    """Normalize a file extension to a safe, alphanumeric lowercase token."""
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "", str(file_format)).lower()
+    return cleaned or "bin"
+
+
 def _generate_filename(prefix: str, file_format: str) -> str:
-    """Generate a unique filename."""
+    """Generate a unique, sanitized filename."""
     file_uuid = uuid.uuid4().hex[:12]
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return f"{prefix}_{timestamp}_{file_uuid}.{file_format}"
+    safe_prefix = sanitize_filename(prefix, max_total_length=80).replace(" ", "_")
+    safe_ext = _normalize_extension(file_format)
+    return f"{safe_prefix}_{timestamp}_{file_uuid}.{safe_ext}"
 
 
 def _get_date_folder() -> str:
@@ -130,17 +139,17 @@ async def save_and_register_tts_audio(
     user_id: int,
     audio_bytes: bytes,
     audio_format: str = "mp3",
-    original_text: Optional[str] = None,
-    voice_name: Optional[str] = None,
-    model_name: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    original_text: str | None = None,
+    voice_name: str | None = None,
+    model_name: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save TTS audio and register with storage tracking.
 
@@ -165,7 +174,7 @@ async def save_and_register_tts_audio(
     # Generate filename
     filename = _generate_filename("tts_audio", audio_format)
     category_folder = "tts_audio"
-    date_folder = _get_date_folder()
+    _get_date_folder()
 
     # Save file
     file_path = await _save_file(user_id, audio_bytes, category_folder, filename)
@@ -218,13 +227,11 @@ async def save_and_register_tts_audio(
         logger.info(f"Registered TTS audio: {filename} ({len(audio_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
+    except Exception:
         # Cleanup file if registration fails
-        try:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_image(
@@ -232,16 +239,16 @@ async def save_and_register_image(
     user_id: int,
     image_bytes: bytes,
     image_format: str = "png",
-    source_prompt: Optional[str] = None,
-    model_name: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    source_prompt: str | None = None,
+    model_name: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated image and register with storage tracking.
 
@@ -303,12 +310,10 @@ async def save_and_register_image(
         logger.info(f"Registered image: {filename} ({len(image_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_voice_clone(
@@ -317,13 +322,13 @@ async def save_and_register_voice_clone(
     voice_data: bytes,
     voice_format: str = "bin",
     voice_name: str,
-    provider: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    provider: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save voice clone data and register with storage tracking.
 
@@ -381,12 +386,10 @@ async def save_and_register_voice_clone(
         logger.info(f"Registered voice clone: {voice_name} ({len(voice_data)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_spreadsheet(
@@ -394,16 +397,16 @@ async def save_and_register_spreadsheet(
     user_id: int,
     spreadsheet_bytes: bytes,
     spreadsheet_format: str = "xlsx",
-    original_filename: Optional[str] = None,
-    source_ref: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    original_filename: str | None = None,
+    source_ref: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated spreadsheet and register with storage tracking.
 
@@ -459,12 +462,10 @@ async def save_and_register_spreadsheet(
         logger.info(f"Registered spreadsheet: {filename} ({len(spreadsheet_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise
 
 
 async def save_and_register_mindmap(
@@ -472,16 +473,16 @@ async def save_and_register_mindmap(
     user_id: int,
     mindmap_bytes: bytes,
     mindmap_format: str = "json",
-    title: Optional[str] = None,
-    source_ref: Optional[str] = None,
-    org_id: Optional[int] = None,
-    team_id: Optional[int] = None,
-    folder_tag: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    title: str | None = None,
+    source_ref: str | None = None,
+    org_id: int | None = None,
+    team_id: int | None = None,
+    folder_tag: str | None = None,
+    tags: list[str] | None = None,
     is_transient: bool = False,
-    expires_at: Optional[datetime] = None,
+    expires_at: datetime | None = None,
     check_quota: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Save generated mindmap and register with storage tracking.
 
@@ -545,9 +546,7 @@ async def save_and_register_mindmap(
         logger.info(f"Registered mindmap: {filename} ({len(mindmap_bytes)} bytes) for user {user_id}")
         return file_record
 
-    except Exception as exc:
-        try:
+    except Exception:
+        with contextlib.suppress(Exception):
             file_path.unlink()
-        except Exception:
-            pass
-        raise exc
+        raise

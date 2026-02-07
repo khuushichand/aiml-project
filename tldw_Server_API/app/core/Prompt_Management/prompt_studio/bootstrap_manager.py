@@ -3,14 +3,11 @@
 
 import json
 import random
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
-from collections import defaultdict
+from typing import Any, Optional
+
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError
-)
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import DatabaseError, PromptStudioDatabase
 
 ########################################################################################################################
 # Bootstrap Manager Class
@@ -32,8 +29,8 @@ class BootstrapManager:
     # Trace Collection
 
     def collect_trace(self, prompt_id: int, test_case_id: int,
-                      inputs: Dict[str, Any], outputs: Dict[str, Any],
-                      score: float, metadata: Optional[Dict[str, Any]] = None) -> int:
+                      inputs: dict[str, Any], outputs: dict[str, Any],
+                      score: float, metadata: Optional[dict[str, Any]] = None) -> int:
         """
         Collect an execution trace for bootstrapping.
 
@@ -78,10 +75,10 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to collect trace: {e}")
-            raise DatabaseError(f"Failed to collect trace: {e}")
+            raise DatabaseError(f"Failed to collect trace: {e}") from e
 
     def get_traces(self, prompt_id: int, min_score: float = 0.7,
-                  limit: int = 100) -> List[Dict[str, Any]]:
+                  limit: int = 100) -> list[dict[str, Any]]:
         """
         Get high-quality traces for a prompt.
 
@@ -135,13 +132,13 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to get traces: {e}")
-            raise DatabaseError(f"Failed to get traces: {e}")
+            raise DatabaseError(f"Failed to get traces: {e}") from e
 
     ####################################################################################################################
     # Example Selection
 
     def select_bootstrap_examples(self, prompt_id: int, n_examples: int = 5,
-                                 strategy: str = "diverse") -> List[Dict[str, Any]]:
+                                 strategy: str = "diverse") -> list[dict[str, Any]]:
         """
         Select bootstrap examples for few-shot prompting.
 
@@ -173,8 +170,8 @@ class BootstrapManager:
         else:
             raise ValueError(f"Unknown selection strategy: {strategy}")
 
-    def _select_diverse_examples(self, traces: List[Dict[str, Any]],
-                                n_examples: int) -> List[Dict[str, Any]]:
+    def _select_diverse_examples(self, traces: list[dict[str, Any]],
+                                n_examples: int) -> list[dict[str, Any]]:
         """
         Select diverse examples using clustering.
 
@@ -218,8 +215,8 @@ class BootstrapManager:
 
         return selected
 
-    def _calculate_example_distance(self, ex1: Dict[str, Any],
-                                   ex2: Dict[str, Any]) -> float:
+    def _calculate_example_distance(self, ex1: dict[str, Any],
+                                   ex2: dict[str, Any]) -> float:
         """
         Calculate distance between two examples.
 
@@ -258,7 +255,7 @@ class BootstrapManager:
     # Bootstrap Optimization
 
     def create_bootstrapped_prompt(self, prompt_id: int, n_examples: int = 5,
-                                  selection_strategy: str = "diverse") -> Dict[str, Any]:
+                                  selection_strategy: str = "diverse") -> dict[str, Any]:
         """
         Create a bootstrapped version of a prompt with examples.
 
@@ -334,9 +331,9 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to create bootstrapped prompt: {e}")
-            raise DatabaseError(f"Failed to create bootstrapped prompt: {e}")
+            raise DatabaseError(f"Failed to create bootstrapped prompt: {e}") from e
 
-    def _format_examples_for_prompt(self, examples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _format_examples_for_prompt(self, examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Format examples for inclusion in a few-shot prompt.
 
@@ -362,7 +359,7 @@ class BootstrapManager:
     # Analysis Methods
 
     def analyze_bootstrap_performance(self, original_prompt_id: int,
-                                     bootstrapped_prompt_id: int) -> Dict[str, Any]:
+                                     bootstrapped_prompt_id: int) -> dict[str, Any]:
         """
         Analyze performance improvement from bootstrapping.
 
@@ -422,4 +419,4 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to analyze bootstrap performance: {e}")
-            raise DatabaseError(f"Failed to analyze bootstrap performance: {e}")
+            raise DatabaseError(f"Failed to analyze bootstrap performance: {e}") from e

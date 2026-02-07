@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -25,23 +25,23 @@ class Slide(BaseModel):
 
     order: int
     layout: SlideLayout
-    title: Optional[str] = None
+    title: str | None = None
     content: str = ""
-    speaker_notes: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    speaker_notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PresentationBase(BaseModel):
     """Shared fields for presentation create/update payloads."""
 
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     theme: str = "black"
-    marp_theme: Optional[str] = None
-    template_id: Optional[str] = None
-    settings: Optional[Dict[str, Any]] = None
-    slides: List[Slide] = Field(default_factory=list)
-    custom_css: Optional[str] = None
+    marp_theme: str | None = None
+    template_id: str | None = None
+    settings: dict[str, Any] | None = None
+    slides: list[Slide] = Field(default_factory=list)
+    custom_css: str | None = None
 
 
 class PresentationCreateRequest(PresentationBase):
@@ -59,29 +59,29 @@ class PresentationUpdateRequest(PresentationBase):
 class PresentationPatchRequest(BaseModel):
     """Request payload for patching a presentation."""
 
-    title: Optional[str] = None
-    description: Optional[str] = None
-    theme: Optional[str] = None
-    marp_theme: Optional[str] = None
-    template_id: Optional[str] = None
-    settings: Optional[Dict[str, Any]] = None
-    slides: Optional[List[Slide]] = None
-    custom_css: Optional[str] = None
+    title: str | None = None
+    description: str | None = None
+    theme: str | None = None
+    marp_theme: str | None = None
+    template_id: str | None = None
+    settings: dict[str, Any] | None = None
+    slides: list[Slide] | None = None
+    custom_css: str | None = None
 
 
 class PresentationReorderRequest(BaseModel):
     """Request payload for reordering presentation slides."""
 
-    order: List[int] = Field(..., min_items=1)
+    order: list[int] = Field(..., min_items=1)
 
 
 class PresentationResponse(PresentationBase):
     """Presentation response model."""
 
     id: str
-    source_type: Optional[str] = None
-    source_ref: Optional[Any] = None
-    source_query: Optional[str] = None
+    source_type: str | None = None
+    source_ref: Any | None = None
+    source_query: str | None = None
     created_at: datetime
     last_modified: datetime
     deleted: bool
@@ -95,14 +95,14 @@ class PresentationVersionSummary(BaseModel):
     presentation_id: str
     version: int
     created_at: datetime
-    title: Optional[str] = None
-    deleted: Optional[bool] = None
+    title: str | None = None
+    deleted: bool | None = None
 
 
 class PresentationVersionListResponse(BaseModel):
     """Paginated list of presentation versions."""
 
-    versions: List[PresentationVersionSummary]
+    versions: list[PresentationVersionSummary]
     total: int
     limit: int
     offset: int
@@ -114,16 +114,16 @@ class SlidesTemplateResponse(BaseModel):
     id: str
     name: str
     theme: str
-    marp_theme: Optional[str] = None
-    settings: Optional[Dict[str, Any]] = None
-    default_slides: Optional[List[Slide]] = None
-    custom_css: Optional[str] = None
+    marp_theme: str | None = None
+    settings: dict[str, Any] | None = None
+    default_slides: list[Slide] | None = None
+    custom_css: str | None = None
 
 
 class SlidesTemplateListResponse(BaseModel):
     """List response for slide templates."""
 
-    templates: List[SlidesTemplateResponse]
+    templates: list[SlidesTemplateResponse]
 
 
 class PresentationSummary(BaseModel):
@@ -131,7 +131,7 @@ class PresentationSummary(BaseModel):
 
     id: str
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     theme: str
     created_at: datetime
     last_modified: datetime
@@ -142,7 +142,7 @@ class PresentationSummary(BaseModel):
 class PresentationListResponse(BaseModel):
     """Paginated list response for presentations."""
 
-    presentations: List[PresentationSummary]
+    presentations: list[PresentationSummary]
     total: int
     limit: int
     offset: int
@@ -151,7 +151,7 @@ class PresentationListResponse(BaseModel):
 class PresentationSearchResponse(BaseModel):
     """Paginated list response for presentation search results."""
 
-    presentations: List[PresentationSummary]
+    presentations: list[PresentationSummary]
     total: int
     limit: int
     offset: int
@@ -160,21 +160,21 @@ class PresentationSearchResponse(BaseModel):
 class SlideGenerationBase(BaseModel):
     """Shared settings for slide generation requests."""
 
-    title_hint: Optional[str] = None
-    theme: Optional[str] = None
-    marp_theme: Optional[str] = None
-    template_id: Optional[str] = None
-    settings: Optional[Dict[str, Any]] = None
-    custom_css: Optional[str] = None
-    max_source_tokens: Optional[int] = Field(default=None, ge=1)
-    max_source_chars: Optional[int] = Field(default=None, ge=1)
+    title_hint: str | None = None
+    theme: str | None = None
+    marp_theme: str | None = None
+    template_id: str | None = None
+    settings: dict[str, Any] | None = None
+    custom_css: str | None = None
+    max_source_tokens: int | None = Field(default=None, ge=1)
+    max_source_chars: int | None = Field(default=None, ge=1)
     enable_chunking: bool = False
-    chunk_size_tokens: Optional[int] = Field(default=None, ge=1)
-    summary_tokens: Optional[int] = Field(default=None, ge=1)
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
+    chunk_size_tokens: int | None = Field(default=None, ge=1)
+    summary_tokens: int | None = Field(default=None, ge=1)
+    provider: str | None = None
+    model: str | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
 
 
 class GenerateFromPromptRequest(SlideGenerationBase):
@@ -192,7 +192,7 @@ class GenerateFromChatRequest(SlideGenerationBase):
 class GenerateFromNotesRequest(SlideGenerationBase):
     """Request payload for generating slides from notes."""
 
-    note_ids: List[str]
+    note_ids: list[str]
 
 
 class GenerateFromMediaRequest(SlideGenerationBase):
@@ -205,7 +205,7 @@ class GenerateFromRagRequest(SlideGenerationBase):
     """Request payload for generating slides from a RAG query."""
 
     query: str
-    top_k: Optional[int] = Field(default=8, ge=1)
+    top_k: int | None = Field(default=8, ge=1)
 
 
 class ExportFormat(str, Enum):
@@ -222,4 +222,4 @@ class SlidesHealthResponse(BaseModel):
 
     service: str
     status: str
-    detail: Optional[str] = None
+    detail: str | None = None

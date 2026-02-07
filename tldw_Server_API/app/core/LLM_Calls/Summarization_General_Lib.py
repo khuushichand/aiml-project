@@ -17,19 +17,16 @@
 import inspect
 import json
 import os
-from typing import Optional, Union, Generator, Any, Dict, List, Callable
-#
-# Import Local
-from tldw_Server_API.app.core.Chunking import (
-    improved_chunking_process
-)
-from tldw_Server_API.app.core.Utils.Utils import (
-    logging
-)
-from tldw_Server_API.app.core.config import load_and_log_configs
+from collections.abc import Generator
+from typing import Any, Callable, Optional, Union
+
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.streaming_utils import _extract_text_from_upstream_sse
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+
+#
+# Import Local
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
@@ -38,6 +35,9 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     resolve_provider_section,
 )
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -76,6 +76,19 @@ _DEFAULT_SYSTEM_PROMPT = (
     "- Ensure adherence to specified format\n"
     "- Do not reference these instructions in your response."
 )
+_SUMMARIZATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_default_system_prompt() -> str:
@@ -97,14 +110,14 @@ def _build_summary_prompt(text: str, custom_prompt_arg: Optional[str]) -> str:
     return text
 
 
-def _resolve_adapter_timeout(provider: str, app_config: Dict[str, Any]) -> Optional[float]:
+def _resolve_adapter_timeout(provider: str, app_config: dict[str, Any]) -> Optional[float]:
     section = resolve_provider_section(provider)
     if section:
         raw = (app_config.get(section) or {}).get("api_timeout")
         if raw is not None:
             try:
                 return float(raw)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
     return None
 
@@ -131,7 +144,7 @@ def _summarize_via_adapter(
     if not model:
         return f"Error: Model is required for provider '{provider}'"
     prompt = _build_summary_prompt(text_to_summarize, custom_prompt_arg)
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": [{"role": "user", "content": prompt}],
         "system_message": system_message,
         "model": model,
@@ -154,20 +167,20 @@ def _summarize_via_adapter(
                         return
                     if text_chunk:
                         yield text_chunk
-            except Exception as exc:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as exc:
                 logging.error(f"Error during adapter streaming for {provider}: {exc}", exc_info=True)
                 yield f"Error during streaming: {exc}"
             finally:
                 try:
                     if gen is not None and hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS:
                     pass
         return stream_generator()
     try:
         response = adapter.chat(request, timeout=timeout)
         return extract_response_content(response) or str(response)
-    except Exception as exc:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logging.error(f"Error during adapter summarization for {provider}: {exc}", exc_info=True)
         return f"Error calling API {api_name}: {exc}"
 
@@ -176,7 +189,7 @@ def _summarize_via_adapter(
 #
 
 # --- Keep existing helper functions ---
-def extract_text_from_segments(segments: List[Dict]) -> str:
+def extract_text_from_segments(segments: list[dict]) -> str:
     # (Keep existing implementation)
     logging.debug(f"Segments received: {segments}")
     logging.debug(f"Type of segments: {type(segments)}")
@@ -202,7 +215,7 @@ def extract_text_from_segments(segments: List[Dict]) -> str:
 
 
 def recursive_summarize_chunks(
-    chunks: List[str],
+    chunks: list[str],
     summarize_func: Callable[[str], str] # Function now only needs to accept the text
 ) -> str:
     """
@@ -265,7 +278,7 @@ def recursive_summarize_chunks(
             current_summary = step_result
             logging.debug(f"Chunk {i+1} processed. Current summary length: {len(current_summary)}")
 
-        except Exception as e:
+        except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
             logging.exception(f"Unexpected error calling summarize_func during recursive step {i+1}: {e}", exc_info=True)
             return f"Error: Unexpected failure during recursive step {i+1}: {e}"
 
@@ -281,7 +294,7 @@ def extract_text_from_input(input_data: Any) -> str:
         if os.path.isfile(input_data):
             logging.debug(f"Input is a file path: {input_data}")
             try:
-                with open(input_data, 'r', encoding='utf-8') as f:
+                with open(input_data, encoding='utf-8') as f:
                     content = f.read()
                 # Attempt to parse as JSON, otherwise return raw content
                 try:
@@ -291,7 +304,7 @@ def extract_text_from_input(input_data: Any) -> str:
                 except json.JSONDecodeError:
                     logging.debug("File content is not JSON, returning raw text.")
                     return content.strip()
-            except Exception as e:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Error reading file {input_data}: {e}")
                 return ""
         # Check if it's a JSON string
@@ -329,7 +342,7 @@ def extract_text_from_input(input_data: Any) -> str:
             logging.warning("No specific text field found in dict, converting entire dict to string.")
             try:
                 return json.dumps(input_data, indent=2)
-            except Exception:
+            except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS:
                  return str(input_data) # Final fallback
 
     elif isinstance(input_data, list):
@@ -377,7 +390,7 @@ def _dispatch_to_api(
             return error_msg
         return adapter_result
 
-    except Exception as e:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error during dispatch to API '{api_name}': {str(e)}", exc_info=True)
         return f"Error calling API {api_name}: {str(e)}"
 
@@ -458,7 +471,7 @@ def analyze(
                     final_string = "".join(result_list)
                     logging.debug("Generator consumed.")
                     return final_string
-                except Exception as e:
+                except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
                      logging.error(f"Error consuming generator: {e}", exc_info=True)
                      return f"Error consuming stream: {e}"
             return gen # Return as is if not a generator
@@ -587,7 +600,7 @@ def analyze(
                 logging.error(f"Unexpected final result type after processing: {type(final_string_summary)}")
                 return f"Error: Unexpected result type {type(final_string_summary)}"
 
-    except Exception as e:
+    except _SUMMARIZATION_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Critical error in summarize function: {str(e)}", exc_info=True)
         return f"Error: An unexpected error occurred during summarization: {str(e)}"
 
@@ -603,7 +616,7 @@ def extract_metadata_and_content(input_data):
 
     if isinstance(input_data, str):
         if os.path.exists(input_data):
-            with open(input_data, 'r', encoding='utf-8') as file:
+            with open(input_data, encoding='utf-8') as file:
                 data = json.load(file)
         else:
             try:
@@ -640,7 +653,7 @@ def format_input_with_metadata(metadata, content):
 
 
 
-def extract_text_from_input(input_data):
+def extract_text_from_input(input_data):  # noqa: F811
     if isinstance(input_data, str):
         try:
             # Try to parse as JSON

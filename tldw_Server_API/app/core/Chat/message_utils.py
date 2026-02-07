@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
-
-def should_persist_message_role(role: Optional[str]) -> bool:
+def should_persist_message_role(role: str | None) -> bool:
     """Return True when a message role is present and non-empty.
 
     This helper does not enforce a role allowlist; it only guards against

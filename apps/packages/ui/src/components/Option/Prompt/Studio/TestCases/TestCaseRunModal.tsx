@@ -97,7 +97,7 @@ export const TestCaseRunModal: React.FC<TestCaseRunModalProps> = ({
       }
       width={800}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="mt-4 space-y-4">
         {!results && (

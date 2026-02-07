@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-
 
 ABTEST_JOBS_DOMAIN = "evaluations"
 ABTEST_JOBS_JOB_TYPE = "embeddings_abtest_run"
@@ -28,7 +26,7 @@ def abtest_jobs_manager() -> JobManager:
     return JobManager(backend=backend, db_url=db_url)
 
 
-def abtest_jobs_idempotency_key(test_id: str, idempotency_key: Optional[str]) -> Optional[str]:
+def abtest_jobs_idempotency_key(test_id: str, idempotency_key: str | None) -> str | None:
     if not idempotency_key:
         return None
     base = str(idempotency_key).strip()

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react"
 import {
   Alert,
+  Button,
   Descriptions,
   Drawer,
   Empty,
@@ -12,8 +13,14 @@ import {
   message
 } from "antd"
 import type { ColumnsType } from "antd/es/table"
+import { Download } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { fetchScrapedItems, getRunDetails, updateScrapedItem } from "@/services/watchlists"
+import {
+  exportRunTalliesCsv,
+  fetchScrapedItems,
+  getRunDetails,
+  updateScrapedItem
+} from "@/services/watchlists"
 import type { RunDetailResponse, ScrapedItem } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
@@ -39,6 +46,19 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
   const [itemsPage, setItemsPage] = useState(1)
   const [itemsPageSize, setItemsPageSize] = useState(20)
   const [updatingItemIds, setUpdatingItemIds] = useState<number[]>([])
+  const [exportingTalliesCsv, setExportingTalliesCsv] = useState(false)
+
+  const downloadCsv = (content: string, filename: string): void => {
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
+  }
 
   useEffect(() => {
     if (open && runId) {
@@ -125,6 +145,25 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
       message.error(t("watchlists:runs.detail.itemsUpdateError", "Failed to update item"))
     } finally {
       setUpdatingItemIds((prev) => prev.filter((id) => id !== item.id))
+    }
+  }
+
+  const handleExportTalliesCsv = async () => {
+    if (!runId) return
+    try {
+      setExportingTalliesCsv(true)
+      const csv = await exportRunTalliesCsv(runId)
+      if (!csv || !csv.trim()) {
+        message.warning(t("watchlists:runs.detail.talliesEmpty", "No tallies available to export"))
+        return
+      }
+      downloadCsv(csv, `watchlists_run_${runId}_tallies_${Date.now()}.csv`)
+      message.success(t("watchlists:runs.detail.talliesExported", "Tallies CSV exported"))
+    } catch (err) {
+      console.error("Failed to export run tallies CSV:", err)
+      message.error(t("watchlists:runs.detail.talliesExportError", "Failed to export tallies CSV"))
+    } finally {
+      setExportingTalliesCsv(false)
     }
   }
 
@@ -263,7 +302,17 @@ export const RunDetailDrawer: React.FC<RunDetailDrawerProps> = ({
 
           {data?.filter_tallies && Object.keys(data.filter_tallies).length > 0 && (
             <div className="mt-4">
-              <div className="text-sm font-medium mb-2">Filter Matches</div>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="text-sm font-medium">Filter Matches</div>
+                <Button
+                  size="small"
+                  icon={<Download className="h-3.5 w-3.5" />}
+                  onClick={handleExportTalliesCsv}
+                  loading={exportingTalliesCsv}
+                >
+                  {t("watchlists:runs.detail.downloadTalliesCsv", "Download Tallies CSV")}
+                </Button>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(data.filter_tallies).map(([filter, count]) => (
                   <Tag key={filter}>

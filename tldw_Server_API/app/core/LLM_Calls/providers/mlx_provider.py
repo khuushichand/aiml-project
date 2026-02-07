@@ -15,52 +15,68 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Iterable, Optional
+from typing import Any
 
 from loguru import logger
 
-from .base import ChatProvider, EmbeddingsProvider
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatBadRequestError,
     ChatProviderError,
     ChatRateLimitError,
 )
-from tldw_Server_API.app.core.Utils.common import parse_boolean
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    openai_delta_chunk,
+)
 from tldw_Server_API.app.core.Metrics.metrics_manager import (
     get_metrics_registry,
     increment_counter,
     observe_histogram,
     set_gauge,
 )
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    finalize_stream,
-    openai_delta_chunk,
+from tldw_Server_API.app.core.Utils.common import parse_boolean
+
+from .base import ChatProvider, EmbeddingsProvider
+
+_MLX_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
 )
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 
 
-def _coerce_int(val: Optional[str], default: Optional[int] = None) -> Optional[int]:
+def _coerce_int(val: str | None, default: int | None = None) -> int | None:
     try:
         if val is None:
             return default
         return int(val)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
-def _extract_unexpected_kwarg(err: TypeError) -> Optional[str]:
+def _extract_unexpected_kwarg(err: TypeError) -> str | None:
     message = str(err)
     marker = "unexpected keyword argument"
     if marker not in message:
         return None
     try:
         return message.split(marker, 1)[1].strip().strip("'\"")
-    except Exception:
+    except (AttributeError, IndexError, TypeError, ValueError):
         return None
 
 
-def _retry_load_without_unknown_kwargs(load_fn, model_path: str, load_kwargs: Dict[str, Any], err: TypeError):
+def _retry_load_without_unknown_kwargs(load_fn, model_path: str, load_kwargs: dict[str, Any], err: TypeError):
     remaining = dict(load_kwargs)
     current_err: TypeError = err
     while remaining:
@@ -76,7 +92,7 @@ def _retry_load_without_unknown_kwargs(load_fn, model_path: str, load_kwargs: Di
     raise current_err
 
 
-def _default_settings() -> Dict[str, Any]:
+def _default_settings() -> dict[str, Any]:
     """Load MLX defaults from env/config shape (env-first)."""
     return {
         "model_path": os.getenv("MLX_MODEL_PATH"),
@@ -107,7 +123,7 @@ class MLXSession:
     generate_stream_fn: Any
     embed_fn: Any
     supports_embeddings: bool
-    config: Dict[str, Any]
+    config: dict[str, Any]
     loaded_at: float = field(default_factory=time.time)
     warmup_completed: bool = False
 
@@ -119,7 +135,7 @@ class MLXSessionRegistry:
         self._lock = threading.Lock()
         self._sema = threading.BoundedSemaphore(1)
         self._max_concurrent: int = 1
-        self._session: Optional[MLXSession] = None
+        self._session: MLXSession | None = None
         self._inflight: int = 0
         self._metrics_registered = False
 
@@ -175,11 +191,9 @@ class MLXSessionRegistry:
                         )
                     )
             self._metrics_registered = True
-        except Exception as exc:  # pragma: no cover - metrics must not break flow
-            try:
+        except _MLX_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - metrics must not break flow
+            with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"MLX metrics registration failed: {exc}")
-            except Exception:
-                pass
 
     def _import_mlx(self):
         try:
@@ -187,7 +201,7 @@ class MLXSessionRegistry:
         except ImportError as exc:  # pragma: no cover - env/optional
             raise ChatProviderError(provider="mlx", message="mlx-lm is not installed") from exc
 
-    def load(self, *, model_path: Optional[str], overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def load(self, *, model_path: str | None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         """Load or swap the active model. Keeps previous model on failure."""
         if not model_path:
             raise ChatBadRequestError(provider="mlx", message="model_path is required")
@@ -199,7 +213,7 @@ class MLXSessionRegistry:
                 if v is not None:
                     settings[k] = v
 
-        prev_session: Optional[MLXSession] = None
+        prev_session: MLXSession | None = None
         with self._lock:
             prev_session = self._session
 
@@ -261,7 +275,7 @@ class MLXSessionRegistry:
                 set_gauge("mlx_active_sessions", 1.0)
                 set_gauge("mlx_requests_inflight", float(self._inflight))
                 set_gauge("mlx_queue_depth", 0.0)
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             return self.status()
         except Exception as exc:
@@ -276,7 +290,7 @@ class MLXSessionRegistry:
                     labels={"model": model_path},
                 )
                 increment_counter("mlx_load_total", labels={"model": model_path, "status": "failure"})
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             if isinstance(exc, ChatProviderError):
                 raise
@@ -293,14 +307,14 @@ class MLXSessionRegistry:
             # Fallback without kwargs if the signature differs
             session.generate_fn(session.model, session.tokenizer, prompt)
 
-    def unload(self) -> Dict[str, Any]:
+    def unload(self) -> dict[str, Any]:
         with self._lock:
             self._session = None
         try:
             set_gauge("mlx_active_sessions", 0.0)
             set_gauge("mlx_requests_inflight", 0.0)
             set_gauge("mlx_queue_depth", 0.0)
-        except Exception:
+        except _MLX_NONCRITICAL_EXCEPTIONS:
             pass
         return {"status": "unloaded"}
 
@@ -324,24 +338,20 @@ class MLXSessionRegistry:
                 try:
                     set_gauge("mlx_requests_inflight", float(self._inflight))
                     set_gauge("mlx_queue_depth", 0.0)
-                except Exception:
+                except _MLX_NONCRITICAL_EXCEPTIONS:
                     pass
             yield session
         finally:
             if acquired:
-                try:
+                with contextlib.suppress(ValueError):
                     sema.release()
-                except Exception:
-                    pass
             if counted:
                 with self._lock:
                     self._inflight = max(0, self._inflight - 1)
-                    try:
+                    with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                         set_gauge("mlx_requests_inflight", float(self._inflight))
-                    except Exception:
-                        pass
 
-    def status(self) -> Dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         with self._lock:
             if not self._session:
                 return {
@@ -371,7 +381,7 @@ class MLXSessionRegistry:
             }
 
 
-_registry: Optional[MLXSessionRegistry] = None
+_registry: MLXSessionRegistry | None = None
 _registry_lock = threading.Lock()
 
 
@@ -384,7 +394,7 @@ def get_mlx_registry() -> MLXSessionRegistry:
     return _registry
 
 
-def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: Optional[str], template_override: Optional[str]) -> str:
+def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: str | None, template_override: str | None) -> str:
     """Convert OpenAI-style messages to a prompt string using tokenizer chat template when available."""
     msgs = messages or []
     if system_message:
@@ -397,12 +407,10 @@ def _messages_to_prompt(messages: Any, tokenizer: Any, system_message: Optional[
                     tokenizer.chat_template = template_override
                     return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
                 finally:
-                    try:
+                    with contextlib.suppress(_MLX_NONCRITICAL_EXCEPTIONS):
                         tokenizer.chat_template = original_template
-                    except Exception:
-                        pass
             return tokenizer.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-    except Exception as exc:
+    except _MLX_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"MLX chat template application failed; falling back: {exc}")
     # Fallback: naive concatenation
     parts = []
@@ -419,7 +427,7 @@ class MLXChatAdapter(ChatProvider):
     def __init__(self) -> None:
         self.registry = None
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         status = get_mlx_registry().status()
         return {
             "supports_streaming": True,
@@ -429,23 +437,29 @@ class MLXChatAdapter(ChatProvider):
             "supports_embeddings": status.get("supports_embeddings", False),
         }
 
-    def _generate_kwargs(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        out: Dict[str, Any] = {}
+    def _generate_kwargs(self, request: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
         for k in ("max_tokens",):
             if request.get(k) is not None:
                 out[k] = request[k]
-        temp = request.get("temperature") or request.get("temp")
+        temp = request.get("temperature")
+        if temp is None:
+            temp = request.get("temp")
         if temp is not None:
             out["temp"] = temp
-        top_p = request.get("top_p") or request.get("topp")
+        top_p = request.get("top_p")
+        if top_p is None:
+            top_p = request.get("topp")
         if top_p is not None:
             out["top_p"] = top_p
-        top_k = request.get("top_k") or request.get("topk")
+        top_k = request.get("top_k")
+        if top_k is None:
+            top_k = request.get("topk")
         if top_k is not None:
             out["top_k"] = top_k
         return out
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         with get_mlx_registry().session_scope() as session:
             prompt = _messages_to_prompt(
@@ -481,7 +495,7 @@ class MLXChatAdapter(ChatProvider):
                     value=float(tokens),
                     labels={"model": session.model_id, "streaming": "false"},
                 )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             return {
                 "id": f"chatcmpl-{uuid.uuid4()}",
@@ -497,7 +511,7 @@ class MLXChatAdapter(ChatProvider):
                 ],
             }
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         with get_mlx_registry().session_scope() as session:
             prompt = _messages_to_prompt(
@@ -537,11 +551,11 @@ class MLXChatAdapter(ChatProvider):
                                 value=float(total_tokens),
                                 labels={"model": session.model_id, "streaming": "true"},
                             )
-                    except Exception:
+                    except _MLX_NONCRITICAL_EXCEPTIONS:
                         pass
                     yield from finalize_stream(None)
                     return
-                except Exception as exc:
+                except _MLX_NONCRITICAL_EXCEPTIONS as exc:
                     logger.error(f"MLX streaming failed, falling back to non-stream: {exc}")
             # Fallback to single-shot if streaming not available
             try:
@@ -569,7 +583,7 @@ class MLXChatAdapter(ChatProvider):
                         value=float(tokens),
                         labels={"model": session.model_id, "streaming": "true"},
                     )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
             yield openai_delta_chunk(content)
             yield from finalize_stream(None)
@@ -581,7 +595,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
     def __init__(self) -> None:
         self.registry = get_mlx_registry()
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         status = self.registry.status()
         return {
             "dimensions_default": None,
@@ -590,7 +604,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
             "supports_embeddings": status.get("supports_embeddings", False),
         }
 
-    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         inputs = request.get("input")
         if inputs is None:
             raise ChatBadRequestError(provider="mlx", message="'input' is required for embeddings")
@@ -618,7 +632,7 @@ class MLXEmbeddingsAdapter(EmbeddingsProvider):
                     "mlx_embeddings_requests_total",
                     labels={"model": session.model_id},
                 )
-            except Exception:
+            except _MLX_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Normalize to OpenAI-like response shape

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 
+_RAG_CACHE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 def _collect_cache_namespaces(
-    current_user: Optional[User],
-    namespaces: Optional[Iterable[str]] = None,
+    current_user: User | None,
+    namespaces: Iterable[str] | None = None,
 ) -> set[str]:
     collected: set[str] = {str(ns) for ns in (namespaces or []) if ns}
     if current_user:
@@ -23,10 +33,10 @@ def _collect_cache_namespaces(
 
 
 async def delete_media_vectors(
-    current_user: Optional[User],
+    current_user: User | None,
     *,
     media_id: int,
-    namespaces: Optional[Iterable[str]] = None,
+    namespaces: Iterable[str] | None = None,
 ) -> None:
     """Best-effort vector-store cleanup for a media item."""
     cache_namespaces = _collect_cache_namespaces(current_user, namespaces)
@@ -40,7 +50,7 @@ async def delete_media_vectors(
         rag_cfg = _settings.get("RAG", {}) or {}
         if not rag_cfg.get("vector_store_type"):
             return
-    except Exception as exc:
+    except (ImportError, *_RAG_CACHE_NONCRITICAL_EXCEPTIONS) as exc:
         logger.debug("Vector cleanup skipped (settings error): {}", exc)
         return
 
@@ -48,7 +58,7 @@ async def delete_media_vectors(
         from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
             create_from_settings_for_user,
         )
-    except Exception as exc:
+    except ImportError as exc:
         logger.debug("Vector cleanup skipped (factory import error): {}", exc)
         return
 
@@ -62,7 +72,7 @@ async def delete_media_vectors(
                 await adapter.initialize()
             collection_name = f"user_{user_id}_media_embeddings"
             await adapter.delete_by_filter(collection_name, {"media_id": str(media_id)})
-        except Exception as exc:
+        except _RAG_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Vector cleanup skipped for user {} media {}: {}",
                 namespace,
@@ -72,10 +82,10 @@ async def delete_media_vectors(
 
 
 def invalidate_rag_caches(
-    current_user: Optional[User],
+    current_user: User | None,
     *,
-    namespaces: Optional[Iterable[str]] = None,
-    media_id: Optional[int] = None,
+    namespaces: Iterable[str] | None = None,
+    media_id: int | None = None,
 ) -> None:
     """Best-effort RAG cache invalidation for content updates."""
     cache_namespaces = _collect_cache_namespaces(current_user, namespaces)
@@ -90,7 +100,7 @@ def invalidate_rag_caches(
                 clear_shared_caches(namespace=namespace)
         else:
             clear_shared_caches(namespace=None)
-    except Exception as exc:
+    except (ImportError, *_RAG_CACHE_NONCRITICAL_EXCEPTIONS) as exc:
         logger.debug("RAG cache invalidation skipped: {}", exc)
 
     if media_id is None:
@@ -102,5 +112,5 @@ def invalidate_rag_caches(
         )
 
         invalidate_intra_doc_vectors(str(media_id))
-    except Exception as exc:
+    except (ImportError, *_RAG_CACHE_NONCRITICAL_EXCEPTIONS) as exc:
         logger.debug("Agentic cache invalidation skipped: {}", exc)

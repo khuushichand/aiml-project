@@ -3,14 +3,25 @@
 #
 # Imports
 import asyncio
+import os
 import threading
 import time
-import os
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
+
+_RATE_LIMITER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 #######################################################################################################################
 #
@@ -31,7 +42,7 @@ class UsageStats:
     request_count: int = 0
     token_count: int = 0
     last_request_time: Optional[float] = None
-    conversation_request_counts: Dict[str, int] = None
+    conversation_request_counts: dict[str, int] = None
 
     def __post_init__(self):
         if self.conversation_request_counts is None:
@@ -147,15 +158,15 @@ class ConversationRateLimiter:
             refill_rate=config.global_rpm / 60
         )
 
-        self.user_buckets: Dict[str, TokenBucket] = {}
-        self.conversation_buckets: Dict[str, TokenBucket] = {}
-        self.user_token_buckets: Dict[str, TokenBucket] = {}
+        self.user_buckets: dict[str, TokenBucket] = {}
+        self.conversation_buckets: dict[str, TokenBucket] = {}
+        self.user_token_buckets: dict[str, TokenBucket] = {}
 
         # Usage tracking
-        self.usage_stats: Dict[str, UsageStats] = defaultdict(UsageStats)
+        self.usage_stats: dict[str, UsageStats] = defaultdict(UsageStats)
 
         # Sliding window for more accurate tracking
-        self.request_windows: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+        self.request_windows: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
 
         # Idle cleanup support
         self._last_cleanup: float = time.time()
@@ -164,7 +175,7 @@ class ConversationRateLimiter:
 
     async def _get_or_create_bucket(
         self,
-        bucket_dict: Dict[str, TokenBucket],
+        bucket_dict: dict[str, TokenBucket],
         key: str,
         capacity: int,
         refill_rate: float
@@ -195,7 +206,7 @@ class ConversationRateLimiter:
         user_id: str,
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0,
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Legacy in-process rate limit evaluation using token buckets.
 
@@ -290,7 +301,7 @@ class ConversationRateLimiter:
         user_id: str,
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Check if request is within rate limits.
 
@@ -319,7 +330,7 @@ class ConversationRateLimiter:
             )
         except NameError:
             rg_decision = None
-        except Exception as exc:  # pragma: no cover - defensive
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug("Chat RG enforcement failed: {}", exc)
             rg_decision = None
 
@@ -348,7 +359,7 @@ class ConversationRateLimiter:
         conversation_id: Optional[str] = None,
         estimated_tokens: int = 0,
         timeout: float = 60
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Wait for rate limit capacity to become available.
 
@@ -374,9 +385,9 @@ class ConversationRateLimiter:
             # Wait a bit before retrying
             await asyncio.sleep(0.5)
 
-        return False, f"Timeout waiting for rate limit capacity"
+        return False, "Timeout waiting for rate limit capacity"
 
-    async def get_usage_stats(self, user_id: str) -> Dict[str, Any]:
+    async def get_usage_stats(self, user_id: str) -> dict[str, Any]:
         """
         Get usage statistics for a user (async with lock protection).
 
@@ -390,7 +401,7 @@ class ConversationRateLimiter:
         async with self._state_lock:
             stats = self.usage_stats.get(user_id, UsageStats())
             window = list(self.request_windows.get(user_id, deque()))
-            user_bucket = self.user_buckets.get(user_id)
+            self.user_buckets.get(user_id)
             token_bucket = self.user_token_buckets.get(user_id)
             # Copy stats values while under lock
             request_count = stats.request_count
@@ -407,7 +418,6 @@ class ConversationRateLimiter:
         tokens_per_minute = sum(tokens for _, tokens in recent_requests)
 
         # Get current bucket states
-        user_tokens_available = user_bucket.tokens if user_bucket else self.config.per_user_rpm
         user_token_capacity = token_bucket.tokens if token_bucket else self.config.per_user_tokens_per_minute
 
         return {
@@ -496,11 +506,11 @@ class ConversationRateLimiter:
             # Remove conversation buckets with no recent activity based on any user's conversation counts
             active_conversations = set()
             for stats in self.usage_stats.values():
-                for cid in stats.conversation_request_counts.keys():
+                for cid in stats.conversation_request_counts:
                     active_conversations.add(cid)
 
             conversations_to_remove = [
-                cid for cid in self.conversation_buckets.keys()
+                cid for cid in self.conversation_buckets
                 if cid not in active_conversations
             ]
             for cid in conversations_to_remove:
@@ -555,7 +565,7 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
                     config.per_user_tokens_per_minute = max(1, int(tokens_per_min))
                 # Default burst to 1.0 in TEST_MODE to make 429s deterministic on the N+1th call
                 config.burst_multiplier = float(burst_mult) if burst_mult is not None else 1.0
-        except Exception:
+        except (TypeError, ValueError):
             # Ignore env parse errors and use defaults
             pass
         _rate_limiter = ConversationRateLimiter(config)
@@ -571,14 +581,14 @@ _rg_chat_init_error_logged = False
 _rg_chat_fallback_logged = False
 
 
-def _rg_chat_context() -> Dict[str, str]:
+def _rg_chat_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         policy_path_resolved = policy_path
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),
@@ -624,6 +634,7 @@ def _log_rg_chat_fallback(reason: str) -> None:
     )
 
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -634,8 +645,7 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
-except Exception:  # pragma: no cover - safe fallback when RG not installed
+except ImportError:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
@@ -650,7 +660,7 @@ def _rg_chat_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -702,7 +712,7 @@ async def _get_chat_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_chat_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
+        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             _log_rg_chat_init_failure(exc)
             return None
 
@@ -712,7 +722,7 @@ async def _maybe_enforce_with_rg_chat(
     user_id: str,
     conversation_id: Optional[str],
     estimated_tokens: int,
-) -> Optional[Dict[str, object]]:
+) -> Optional[dict[str, object]]:
     """
     Optionally enforce Chat limits via ResourceGovernor.
 
@@ -731,12 +741,12 @@ async def _maybe_enforce_with_rg_chat(
     try:
         try:
             tokens_units = int(estimated_tokens or 0)
-        except Exception:
+        except (TypeError, ValueError):
             tokens_units = 0
         tokens_units = max(0, tokens_units)
 
         # Only enforce token budgets here; request-rate limiting happens at ingress.
-        categories: Dict[str, Dict[str, int]] = {}
+        categories: dict[str, dict[str, int]] = {}
         if tokens_units > 0:
             categories["tokens"] = {"units": tokens_units}
         else:
@@ -760,11 +770,11 @@ async def _maybe_enforce_with_rg_chat(
                 try:
                     # Treat reserve as consumption; commit with the same units
                     # to keep semantics simple for now.
-                    actuals: Dict[str, int] = {}
+                    actuals: dict[str, int] = {}
                     if tokens_units > 0:
                         actuals["tokens"] = tokens_units
                     await gov.commit(handle, actuals=actuals, op_id=op_id)
-                except Exception:
+                except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Chat RG commit failed", exc_info=True)
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
         return {
@@ -772,6 +782,6 @@ async def _maybe_enforce_with_rg_chat(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Chat RG reserve failed; falling back to legacy limiter: {}", exc)
         return None

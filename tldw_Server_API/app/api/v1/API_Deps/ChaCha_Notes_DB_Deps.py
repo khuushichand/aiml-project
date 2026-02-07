@@ -4,28 +4,30 @@ import faulthandler
 import inspect
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
 
+from cachetools import LRUCache
 from fastapi import Depends, HTTPException, status
 from loguru import logger
-from cachetools import LRUCache
+
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 # Local Imports
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
-    SchemaError,
-    InputError,
     ConflictError,
+    InputError,
+    SchemaError,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 #
@@ -39,7 +41,7 @@ _CHACHA_EXECUTOR_LOCK = threading.Lock()
 _CHACHA_EXECUTOR_MAX_WORKERS = max(1, int(os.getenv("CHACHA_EXECUTOR_MAX_WORKERS", "4")))
 _CHACHA_WATCHDOG_SECS = float(os.getenv("CHACHA_INIT_WATCHDOG_SECS", "5"))
 _CHACHA_HEALTH_LOCK = threading.Lock()
-_CHACHA_HEALTH: Dict[str, Any] = {
+_CHACHA_HEALTH: dict[str, Any] = {
     "init_attempts": 0,
     "init_failures": 0,
     "last_init_ms": None,
@@ -120,7 +122,7 @@ def _maybe_dump_traceback(reason: str) -> None:
     try:
         logger.warning(f"ChaChaNotes watchdog dump triggered: {reason}")
         faulthandler.dump_traceback(file=sys.stderr)
-    except Exception as dump_err:
+    except (OSError, RuntimeError, ValueError) as dump_err:
         logger.debug(f"Faulthandler dump failed: {dump_err}")
 
 
@@ -134,7 +136,7 @@ def _track_default_character_future(future: asyncio.Future) -> None:
     future.add_done_callback(_cleanup)
 
 
-def get_chacha_health_snapshot() -> Dict[str, Any]:
+def get_chacha_health_snapshot() -> dict[str, Any]:
     status = "healthy"
     if _CHACHA_HEALTH.get("init_failures"):
         status = "degraded"
@@ -175,8 +177,8 @@ _chacha_db_instances: LRUCache = LRUCache(maxsize=MAX_CACHED_CHACHA_DB_INSTANCES
 logger.info(f"Using LRUCache for ChaChaNotes DB instances (maxsize={MAX_CACHED_CHACHA_DB_INSTANCES}).")
 
 _chacha_db_lock = threading.Lock()
-_chacha_default_char_tasks: Set[asyncio.Task] = set()
-_chacha_default_char_futures: Set[asyncio.Future] = set()
+_chacha_default_char_tasks: set[asyncio.Task] = set()
+_chacha_default_char_futures: set[asyncio.Future] = set()
 _chacha_default_char_futures_lock = threading.Lock()
 
 
@@ -211,7 +213,7 @@ def _apply_sqlite_tuning(db_instance: CharactersRAGDB) -> None:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA busy_timeout = 10000")
-    except Exception as e:
+    except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError) as e:
         logger.debug(f"ChaChaNotes tuning skipped: {e}")
 
 
@@ -221,7 +223,7 @@ def _health_check_instance(db_instance: CharactersRAGDB) -> bool:
         conn.execute("PRAGMA busy_timeout = 1000")
         conn.execute("SELECT 1")
         return True
-    except Exception as e:
+    except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError) as e:
         logger.warning(f"ChaChaNotes health probe failed: {e}")
         return False
 
@@ -231,7 +233,7 @@ def _create_and_prepare_db(user_id: int, client_id: str) -> CharactersRAGDB:
     db_path = _get_chacha_db_path_for_user(user_id)
     try:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    except Exception as _mk2:
+    except OSError as _mk2:
         logger.debug(f"Secondary ensure for ChaChaNotes parent failed softly: {_mk2}")
     logger.info(f"Initializing CharactersRAGDB instance for user {user_id} at path: {db_path}")
     db_instance = CharactersRAGDB(db_path=str(db_path), client_id=str(client_id))
@@ -252,7 +254,7 @@ async def _ensure_default_character_async(db_instance: CharactersRAGDB, user_id:
     except asyncio.TimeoutError:
         _record_default_character(False)
         logger.warning(f"Timed out ensuring default character for user {user_id}; will retry on next access.")
-    except Exception as e:
+    except (CharactersRAGDBError, SchemaError, InputError, ConflictError, OSError, RuntimeError, ValueError) as e:
         _record_default_character(False)
         logger.warning(
             f"Error ensuring default character for user {user_id}: {e}. Continuing; will retry on next access.",
@@ -314,7 +316,7 @@ def _ensure_default_character(db_instance: CharactersRAGDB) -> Optional[int]:
     except (CharactersRAGDBError, SchemaError, InputError) as e:
         logger.error(f"Database error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e}", exc_info=True)
         return None  # Indicate failure
-    except Exception as e_gen:
+    except (AttributeError, KeyError, TypeError, ValueError, OSError, RuntimeError) as e_gen:
         logger.error(
             f"Unexpected error while ensuring default character '{DEFAULT_CHARACTER_NAME}': {e_gen}", exc_info=True
         )
@@ -328,7 +330,7 @@ async def _is_instance_healthy(db_instance: CharactersRAGDB) -> bool:
             timeout=1.0,
         )
         return bool(result)
-    except Exception:
+    except (asyncio.TimeoutError, OSError, RuntimeError):
         return False
 
 
@@ -363,7 +365,7 @@ async def _get_or_init_db_instance(user_id: int, client_id: str) -> CharactersRA
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="ChaChaNotes initialization timed out",
         ) from e
-    except Exception as e:
+    except (CharactersRAGDBError, sqlite3.Error, OSError, RuntimeError, ValueError, TypeError) as e:
         duration_ms = (time.perf_counter() - start) * 1000
         _record_init(duration_ms, False, e)
         raise HTTPException(
@@ -387,7 +389,7 @@ async def warm_chacha_db_for_user(user_id: int, client_id: str | None = None) ->
         task = asyncio.create_task(_ensure_default_character_async(db_instance, user_id))
         _chacha_default_char_tasks.add(task)
         task.add_done_callback(_chacha_default_char_tasks.discard)
-    except Exception as e:
+    except (HTTPException, OSError, RuntimeError, ValueError, TypeError) as e:
         logger.warning(f"Warm-up for ChaChaNotes user {user_id} failed: {e}")
 
 
@@ -434,10 +436,10 @@ async def get_chacha_db_for_user(current_user: User = Depends(get_request_user))
                     result = await result  # type: ignore[func-returns-value]
                 if isinstance(result, CharactersRAGDB):
                     return result
-            except Exception:
+            except (HTTPException, TypeError, ValueError, RuntimeError, AttributeError):
                 # Fall back to standard resolution on any override execution issue
                 pass
-    except Exception:
+    except (ImportError, AttributeError, RuntimeError):
         # If importing app or inspecting overrides fails, proceed normally
         pass
 
@@ -465,7 +467,7 @@ def close_all_chacha_db_instances():
             try:
                 db_instance.close_all_connections()
                 logger.info(f"Closed ChaChaNotesDB instance for user {user_id}.")
-            except Exception as e:
+            except (CharactersRAGDBError, OSError, RuntimeError, ValueError, TypeError) as e:
                 logger.error(f"Error closing ChaChaNotesDB instance for user {user_id}: {e}", exc_info=True)
         _chacha_db_instances.clear()
         logger.info("All ChaChaNotesDB instances closed and cache cleared.")
@@ -478,7 +480,7 @@ async def _drain_default_character_tasks(timeout: float = 5.0) -> None:
     done, pending = await asyncio.wait(tasks, timeout=timeout)
     if pending:
         logger.warning(
-            "ChaChaNotes shutdown: %d default-character tasks still running; cancelling.",
+            "ChaChaNotes shutdown: {} default-character tasks still running; cancelling.",
             len(pending),
         )
         for task in pending:
@@ -496,7 +498,7 @@ async def _drain_default_character_futures(timeout: float = 5.0) -> None:
     done, pending = await asyncio.wait(futures, timeout=timeout)
     if pending:
         logger.warning(
-            "ChaChaNotes shutdown: %d default-character futures still running; waiting on executor shutdown.",
+            "ChaChaNotes shutdown: {} default-character futures still running; waiting on executor shutdown.",
             len(pending),
         )
     with _chacha_default_char_futures_lock:
@@ -541,7 +543,7 @@ def shutdown_chacha_executor(wait: bool = False) -> None:
         return
     try:
         executor.shutdown(wait=wait, cancel_futures=True)
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         logger.debug(f"ChaChaNotes executor shutdown error: {e}")
 
 

@@ -2,13 +2,16 @@
 # Test case management for Prompt Studio
 
 import uuid
-from typing import List, Dict, Any, Optional, Union
-from datetime import datetime
 from dataclasses import dataclass, field
+from typing import Any, Optional, Union
+
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError, InputError, ConflictError
+    ConflictError,
+    DatabaseError,
+    InputError,
+    PromptStudioDatabase,
 )
 
 ########################################################################################################################
@@ -18,15 +21,15 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
 class TestCase:
     """Test case for prompt evaluation."""
     name: str
-    inputs: Dict[str, Any]
-    expected_outputs: Dict[str, Any]
+    inputs: dict[str, Any]
+    expected_outputs: dict[str, Any]
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     description: str = ""
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     is_golden: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "id": self.id,
@@ -40,7 +43,7 @@ class TestCase:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]):
+    def from_dict(cls, data: dict[str, Any]):
         """Create from dictionary."""
         return cls(**data)
 
@@ -48,11 +51,11 @@ class TestCase:
 class TestResult:
     """Result of running a test case."""
     test_case_id: str
-    actual_outputs: Dict[str, Any]
+    actual_outputs: dict[str, Any]
     passed: bool
     execution_time: float
     error_message: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 ########################################################################################################################
 # Test Case Manager Class
@@ -75,10 +78,10 @@ class TestCaseManager:
     ####################################################################################################################
     # CRUD Operations
 
-    def create_test_case(self, project_id: int, name: Optional[str], inputs: Dict[str, Any],
-                        description: Optional[str] = None, expected_outputs: Optional[Dict[str, Any]] = None,
-                        tags: Optional[List[str]] = None, is_golden: bool = False,
-                        signature_id: Optional[int] = None) -> Dict[str, Any]:
+    def create_test_case(self, project_id: int, name: Optional[str], inputs: dict[str, Any],
+                        description: Optional[str] = None, expected_outputs: Optional[dict[str, Any]] = None,
+                        tags: Optional[list[str]] = None, is_golden: bool = False,
+                        signature_id: Optional[int] = None) -> dict[str, Any]:
         """
         Create a new test case.
 
@@ -116,7 +119,7 @@ class TestCaseManager:
         except Exception as exc:  # noqa: BLE001
             raise DatabaseError(f"Failed to create test case: {exc}") from exc
 
-    def get_test_case(self, test_case_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_test_case(self, test_case_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         """
         Get a test case by ID.
 
@@ -130,10 +133,10 @@ class TestCaseManager:
         return self.db.get_test_case(test_case_id, include_deleted=include_deleted)
 
     def list_test_cases(self, project_id: int, signature_id: Optional[int] = None,
-                       is_golden: Optional[bool] = None, tags: Optional[List[str]] = None,
+                       is_golden: Optional[bool] = None, tags: Optional[list[str]] = None,
                        search: Optional[str] = None, include_deleted: bool = False,
                        page: int = 1, per_page: int = 20,
-                       return_pagination: bool = False) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+                       return_pagination: bool = False) -> Union[dict[str, Any], list[dict[str, Any]]]:
         """Delegate to the database layer for filtered test case retrieval."""
 
         try:
@@ -151,7 +154,7 @@ class TestCaseManager:
         except Exception as exc:  # noqa: BLE001
             raise DatabaseError(f"Failed to list test cases: {exc}") from exc
 
-    def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_test_case(self, test_case_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         """
         Update a test case.
 
@@ -188,8 +191,8 @@ class TestCaseManager:
     ####################################################################################################################
     # Bulk Operations
 
-    def create_bulk_test_cases(self, project_id: int, test_cases: List[Dict[str, Any]],
-                              signature_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    def create_bulk_test_cases(self, project_id: int, test_cases: list[dict[str, Any]],
+                              signature_id: Optional[int] = None) -> list[dict[str, Any]]:
         """
         Create multiple test cases at once.
 
@@ -214,7 +217,7 @@ class TestCaseManager:
     ####################################################################################################################
     # Search and Filter
 
-    def search_test_cases(self, project_id: int, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_test_cases(self, project_id: int, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """
         Search test cases using FTS.
 
@@ -234,10 +237,10 @@ class TestCaseManager:
     # Compatibility method used in integration tests via patching
     async def run_batch_tests(self,
                               prompt_id: int,
-                              test_case_ids: List[int],
+                              test_case_ids: list[int],
                               model: str = "gpt-3.5-turbo",
                               temperature: float = 0.7,
-                              max_tokens: int = 1000) -> List[Dict[str, Any]]:
+                              max_tokens: int = 1000) -> list[dict[str, Any]]:
         """Run multiple test cases (async wrapper).
 
         Delegates to TestRunner.run_multiple_tests. Exists to match test patch targets.
@@ -257,7 +260,7 @@ class TestCaseManager:
             logger.error(f"run_batch_tests failed: {e}")
             return []
 
-    def get_golden_test_cases(self, project_id: int) -> List[Dict[str, Any]]:
+    def get_golden_test_cases(self, project_id: int) -> list[dict[str, Any]]:
         """
         Get all golden test cases for a project.
 
@@ -275,7 +278,7 @@ class TestCaseManager:
         )
         return result["test_cases"]
 
-    def get_test_cases_by_signature(self, signature_id: int) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, signature_id: int) -> list[dict[str, Any]]:
         """
         Get all test cases for a signature.
 
@@ -293,7 +296,7 @@ class TestCaseManager:
     ####################################################################################################################
     # Statistics
 
-    def get_test_case_stats(self, project_id: int) -> Dict[str, Any]:
+    def get_test_case_stats(self, project_id: int) -> dict[str, Any]:
         """
         Get statistics for test cases in a project.
 

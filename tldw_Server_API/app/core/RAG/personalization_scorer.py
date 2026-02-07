@@ -1,13 +1,24 @@
 """
-Personalization Scorer (scaffold)
+Personalization Scorer (Stage 1 scaffold)
 
 Blend BM25, vector score, personal similarity, and recency into a final score.
 Provides optional lightweight explanation signals.
+
+NOTE: This module is currently NOT used by the RAG pipeline. The RAG pipeline
+uses a separate system: ``UserPersonalizationStore`` (JSON file-based document
+boost) in ``user_personalization_store.py``. Two parallel personalization
+systems exist with no integration between them.
+
+TODO(Stage-2): Integrate with unified_pipeline.py reranking step.
+    The ``rerank()`` function below should be called from the RAG pipeline's
+    result post-processing phase to blend personal relevance signals with
+    retrieval scores.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any
 
 
 @dataclass
@@ -18,10 +29,10 @@ class ScoreWeights:
 
 
 def rerank(
-    items: Iterable[Dict[str, Any]],
+    items: Iterable[dict[str, Any]],
     weights: ScoreWeights | None = None,
     with_explanations: bool = False,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]] | None]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
     """Scaffold reranker that passes through items and attaches dummy scores.
 
     Args:
@@ -33,10 +44,10 @@ def rerank(
         (ranked_items, explanations?)
     """
     w = weights or ScoreWeights()
-    ranked: List[Dict[str, Any]] = []
-    expl: List[Dict[str, Any]] = []
+    ranked: list[dict[str, Any]] = []
+    expl: list[dict[str, Any]] = []
 
-    for idx, it in enumerate(items):
+    for _idx, it in enumerate(items):
         base = float(it.get("bm25", 0.0))
         vec = float(it.get("vector", 0.0))
         per = float(it.get("personal", 0.0))

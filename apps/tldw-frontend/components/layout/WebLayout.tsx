@@ -20,6 +20,7 @@ import { useQuickChatStore } from "@/store/quick-chat"
 import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
+import { NotesDockHost } from "@/components/Common/NotesDock"
 import { CurrentChatModelSettings } from "@/components/Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "@/components/Option/Sidebar"
 import { Header } from "@/components/Layouts/Header"
@@ -356,6 +357,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Quick Ingest Modal Host - listens for global open events */}
         <QuickIngestModalHost />
+
+        {/* Notes Dock Host - floating notes panel */}
+        <NotesDockHost />
 
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}

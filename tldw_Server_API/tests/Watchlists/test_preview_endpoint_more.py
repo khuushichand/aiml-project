@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,11 +8,11 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch):
+def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=912, username="wluser", email=None, is_active=True)
 
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs_preview_more"
+    base_dir = tmp_path / "test_user_dbs_preview_more"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
@@ -54,6 +52,37 @@ def test_preview_empty_filters_has_ingestable_items(client_with_user: TestClient
     assert r.status_code == 200, r.text
     data = r.json()
     # With no filters, preview should show ingestable items (TEST_MODE stubs)
+    assert data["total"] >= 1
+    assert data["ingestable"] >= 1
+
+
+def test_preview_empty_filters_site_has_ingestable_items(client_with_user: TestClient):
+    c = client_with_user
+
+    # Create a site source
+    s = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Site",
+            "url": "https://example.com/",
+            "source_type": "site",
+            "settings": {"scrape_rules": {"list_url": "https://example.com/list", "skip_article_fetch": True}},
+        },
+    )
+    assert s.status_code == 200, s.text
+    sid = s.json()["id"]
+
+    # Create a job with empty filters payload
+    j = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "No Filters Site", "scope": {"sources": [sid]}, "job_filters": {"filters": []}},
+    )
+    assert j.status_code == 200, j.text
+    jid = j.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{jid}/preview", params={"limit": 5, "per_source": 5})
+    assert r.status_code == 200, r.text
+    data = r.json()
     assert data["total"] >= 1
     assert data["ingestable"] >= 1
 
@@ -98,3 +127,38 @@ def test_preview_invalid_regex_filter_is_safe_and_gates_when_required(client_wit
     assert data["total"] >= 1
     assert data["ingestable"] == 0
     assert data["filtered"] >= 1
+
+
+def test_preview_invalid_regex_without_require_include_keeps_ingestable_items(client_with_user: TestClient):
+    c = client_with_user
+
+    # Create an RSS source
+    s = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "Feed", "url": "https://example.com/rss.xml", "source_type": "rss"},
+    )
+    assert s.status_code == 200, s.text
+    sid = s.json()["id"]
+
+    # Invalid regex include filter with require_include disabled should not gate all items.
+    j = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Invalid Regex Include No Gating",
+            "scope": {"sources": [sid]},
+            "job_filters": {
+                "filters": [
+                    {"type": "regex", "action": "include", "value": {"pattern": "[broken", "flags": "i"}}
+                ],
+                "require_include": False,
+            },
+        },
+    )
+    assert j.status_code == 200, j.text
+    jid = j.json()["id"]
+
+    r = c.post(f"/api/v1/watchlists/jobs/{jid}/preview", params={"limit": 5, "per_source": 5})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["total"] >= 1
+    assert data["ingestable"] >= 1

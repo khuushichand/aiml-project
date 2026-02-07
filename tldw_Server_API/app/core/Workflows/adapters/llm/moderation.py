@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     ModerationConfig,
     PolicyCheckConfig,
@@ -28,7 +28,7 @@ from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     tags=["moderation", "safety"],
     config_model=ModerationConfig,
 )
-async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_moderation_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Check or redact text content using the moderation service.
 
     Config:
@@ -78,19 +78,20 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
             }
         if action == "redact":
             # Simulate: redact any occurrence of "secret" or "password"
-            redacted = re.sub(r"\b(secret|password|blocked|unsafe)\b", "[REDACTED]", text, flags=re.IGNORECASE)
+            redacted, base_count = re.subn(r"\b(secret|password|blocked|unsafe)\b", "[REDACTED]", text, flags=re.IGNORECASE)
             # Apply custom patterns if provided
             custom_patterns = config.get("patterns")
+            custom_count = 0
             if custom_patterns and isinstance(custom_patterns, list):
                 for pattern_str in custom_patterns:
                     if isinstance(pattern_str, str) and pattern_str.strip():
                         try:
                             pat = re.compile(pattern_str.strip(), flags=re.IGNORECASE)
-                            redacted = pat.sub("[REDACTED]", redacted)
+                            redacted, count = pat.subn("[REDACTED]", redacted)
+                            custom_count += count
                         except re.error:
                             pass  # Skip invalid patterns in TEST_MODE
-            # Count actual redaction markers
-            redaction_count = redacted.count("[REDACTED]")
+            redaction_count = base_count + custom_count
             return {
                 "redacted_text": redacted,
                 "text": redacted,
@@ -131,21 +132,26 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
             }
 
         if action == "redact":
-            redacted = service.redact_text(text, policy)
+            if hasattr(service, "redact_text_with_count"):
+                redacted, base_count = service.redact_text_with_count(text, policy)
+            else:
+                redacted = service.redact_text(text, policy)
+                base_count = redacted.count("[REDACTED]") + redacted.count("[PII]")
 
             # Apply custom patterns if provided
             custom_patterns = config.get("patterns")
+            custom_count = 0
             if custom_patterns and isinstance(custom_patterns, list):
                 for pattern_str in custom_patterns:
                     if isinstance(pattern_str, str) and pattern_str.strip():
                         try:
                             pat = re.compile(pattern_str.strip(), flags=re.IGNORECASE)
-                            redacted = pat.sub(policy.redact_replacement or "[REDACTED]", redacted)
+                            redacted, count = pat.subn(policy.redact_replacement or "[REDACTED]", redacted)
+                            custom_count += count
                         except re.error as pe:
                             logger.warning(f"Invalid custom redaction pattern '{pattern_str}': {pe}")
 
-            # Count redactions by checking differences
-            redaction_count = redacted.count("[REDACTED]") + redacted.count("[PII]")
+            redaction_count = int(base_count or 0) + custom_count
             return {
                 "redacted_text": redacted,
                 "text": redacted,  # Alias for chaining
@@ -169,7 +175,7 @@ async def run_moderation_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["moderation", "pii", "policy"],
     config_model=PolicyCheckConfig,
 )
-async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_policy_check_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Policy/PII gate step.
 
     Config:
@@ -199,10 +205,7 @@ async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, An
             # Minimal dotted lookup
             obj = context
             for part in field.split('.'):
-                if isinstance(obj, dict):
-                    obj = obj.get(part)
-                else:
-                    obj = getattr(obj, part, None)
+                obj = obj.get(part) if isinstance(obj, dict) else getattr(obj, part, None)
             if isinstance(obj, (str, bytes)):
                 text = obj if isinstance(obj, str) else obj.decode("utf-8", errors="ignore")
             else:
@@ -214,7 +217,7 @@ async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, An
     except Exception:
         text = str(text or "")
 
-    flags: Dict[str, Any] = {"pii": {}, "block_words": [], "too_long": False}
+    flags: dict[str, Any] = {"pii": {}, "block_words": [], "too_long": False}
     reasons: list[str] = []
     blocked = False
 
@@ -254,7 +257,7 @@ async def run_policy_check_adapter(config: Dict[str, Any], context: Dict[str, An
     except Exception:
         pass
 
-    out: Dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
+    out: dict[str, Any] = {"flags": flags, "blocked": blocked, "reasons": reasons}
     if redact_preview and text:
         try:
             from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector

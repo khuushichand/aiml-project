@@ -12,9 +12,9 @@ This module includes adapters for LLM operations:
 
 from tldw_Server_API.app.core.Workflows.adapters.llm.llm import (
     run_llm_adapter,
-    run_llm_with_tools_adapter,
     run_llm_compare_adapter,
     run_llm_critique_adapter,
+    run_llm_with_tools_adapter,
 )
 from tldw_Server_API.app.core.Workflows.adapters.llm.moderation import (
     run_moderation_adapter,

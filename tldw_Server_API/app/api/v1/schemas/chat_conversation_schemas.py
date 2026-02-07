@@ -1,28 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
-
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
 
 
 class ConversationListItem(BaseModel):
     id: str = Field(..., description="Conversation ID")
-    character_id: Optional[int] = Field(None, description="Character ID associated with the conversation")
-    title: Optional[str] = Field(None, description="Conversation title")
+    character_id: int | None = Field(None, description="Character ID associated with the conversation")
+    title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state of the conversation")
-    topic_label: Optional[str] = Field(None, description="Primary topic label")
-    bm25_norm: Optional[float] = Field(None, description="Normalized BM25 score (0-1)")
+    topic_label: str | None = Field(None, description="Primary topic label")
+    bm25_norm: float | None = Field(None, description="Normalized BM25 score (0-1)")
     last_modified: datetime = Field(..., description="Last modification timestamp")
     created_at: datetime = Field(..., description="Creation timestamp")
     message_count: int = Field(0, description="Total messages in the conversation")
-    keywords: List[str] = Field(default_factory=list, description="Keyword tags for the conversation")
-    cluster_id: Optional[str] = Field(None, description="Cluster/group identifier")
-    source: Optional[str] = Field(None, description="Source of the conversation")
-    external_ref: Optional[str] = Field(None, description="External reference ID")
+    keywords: list[str] = Field(default_factory=list, description="Keyword tags for the conversation")
+    cluster_id: str | None = Field(None, description="Cluster/group identifier")
+    source: str | None = Field(None, description="Source of the conversation")
+    external_ref: str | None = Field(None, description="External reference ID")
     version: int = Field(1, description="Version number for optimistic locking")
 
 
@@ -34,22 +33,22 @@ class ConversationListPagination(BaseModel):
 
 
 class ConversationListResponse(BaseModel):
-    items: List[ConversationListItem] = Field(..., description="Conversation results")
+    items: list[ConversationListItem] = Field(..., description="Conversation results")
     pagination: ConversationListPagination
 
 
 class ConversationUpdateRequest(BaseModel):
     version: int = Field(..., description="Expected version for optimistic locking")
-    state: Optional[str] = Field(None, description="Lifecycle state for the conversation")
-    topic_label: Optional[str] = Field(None, description="Primary topic label for the conversation")
-    keywords: Optional[List[str]] = Field(None, description="Replace full keyword set (use [] to clear)")
-    cluster_id: Optional[str] = Field(None, description="Cluster/group identifier")
-    source: Optional[str] = Field(None, description="Source of the conversation")
-    external_ref: Optional[str] = Field(None, description="External reference/link")
+    state: str | None = Field(None, description="Lifecycle state for the conversation")
+    topic_label: str | None = Field(None, description="Primary topic label for the conversation")
+    keywords: list[str] | None = Field(None, description="Replace full keyword set (use [] to clear)")
+    cluster_id: str | None = Field(None, description="Cluster/group identifier")
+    source: str | None = Field(None, description="Source of the conversation")
+    external_ref: str | None = Field(None, description="External reference/link")
 
     @field_validator("state")
     @classmethod
-    def _validate_state(cls, value: Optional[str]) -> Optional[str]:
+    def _validate_state(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip().lower()
@@ -61,7 +60,7 @@ class ConversationUpdateRequest(BaseModel):
 
     @field_validator("keywords")
     @classmethod
-    def _normalize_keywords(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+    def _normalize_keywords(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return None
         cleaned = []
@@ -82,9 +81,9 @@ class ConversationUpdateRequest(BaseModel):
 
 class ConversationMetadata(BaseModel):
     id: str = Field(..., description="Conversation ID")
-    title: Optional[str] = Field(None, description="Conversation title")
+    title: str | None = Field(None, description="Conversation title")
     state: str = Field("in-progress", description="Lifecycle state")
-    topic_label: Optional[str] = Field(None, description="Primary topic label")
+    topic_label: str | None = Field(None, description="Primary topic label")
     last_modified: datetime = Field(..., description="Last modification timestamp")
 
 
@@ -93,7 +92,7 @@ class ConversationTreeNode(BaseModel):
     role: str = Field(..., description="Message role (user/assistant/system)")
     content: str = Field("", description="Message content")
     created_at: datetime = Field(..., description="Message timestamp")
-    children: List["ConversationTreeNode"] = Field(default_factory=list)
+    children: list[ConversationTreeNode] = Field(default_factory=list)
     truncated: bool = Field(False, description="True when descendants were omitted")
 
 
@@ -106,14 +105,14 @@ class ConversationTreePagination(BaseModel):
 
 class ConversationTreeResponse(BaseModel):
     conversation: ConversationMetadata
-    root_threads: List[ConversationTreeNode]
+    root_threads: list[ConversationTreeNode]
     pagination: ConversationTreePagination
     depth_cap: int = Field(..., description="Applied depth cap")
 
 
 class ChatAnalyticsBucket(BaseModel):
     bucket_start: datetime = Field(..., description="Bucket start date (UTC)")
-    topic_label: Optional[str] = Field(None, description="Topic label for the bucket")
+    topic_label: str | None = Field(None, description="Topic label for the bucket")
     state: str = Field(..., description="Conversation state for the bucket")
     count: int = Field(..., description="Conversations in bucket")
 
@@ -126,6 +125,6 @@ class ChatAnalyticsPagination(BaseModel):
 
 
 class ChatAnalyticsResponse(BaseModel):
-    buckets: List[ChatAnalyticsBucket]
+    buckets: list[ChatAnalyticsBucket]
     pagination: ChatAnalyticsPagination
     bucket_granularity: Literal["day", "week"]

@@ -14,7 +14,7 @@ from configparser import ConfigParser
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -46,7 +46,7 @@ _USER_DB_BASE_DIR_ALLOWED_ROOT_ENVS = (
     "TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS",
 )
 
-_remote_access_hook: Optional[Callable[[bool], None]] = None
+_remote_access_hook: Callable[[bool], None] | None = None
 
 
 def register_remote_access_hook(callback: Callable[[bool], None]) -> None:
@@ -55,7 +55,7 @@ def register_remote_access_hook(callback: Callable[[bool], None]) -> None:
     _remote_access_hook = callback
 
 
-SECTION_LABELS: Dict[str, str] = {
+SECTION_LABELS: dict[str, str] = {
     "API": "API Providers",
     "Processing": "Processing",
     "Media-Processing": "Media Processing",
@@ -82,7 +82,7 @@ SECTION_LABELS: Dict[str, str] = {
     "MCP-Unified": "MCP Unified",
 }
 
-SECTION_DESCRIPTIONS: Dict[str, str] = {
+SECTION_DESCRIPTIONS: dict[str, str] = {
     "Setup": "Controls the guided setup flow shown on first launch.",
     "AuthNZ": "Configure authentication mode and credentials.",
     "API": "Add API keys for the providers you plan to use.",
@@ -109,7 +109,7 @@ SECTION_DESCRIPTIONS: Dict[str, str] = {
     "TTS-Settings": "Voice synthesis providers, defaults, and output configuration.",
 }
 
-FIELD_HINTS: Dict[Tuple[str, str], str] = {
+FIELD_HINTS: dict[tuple[str, str], str] = {
     ("AuthNZ", "single_user_api_key"): "Strong secret used for X-API-KEY requests in single-user mode.",
     ("AuthNZ", "auth_mode"): "Use 'single_user' for local setups or 'multi_user' for JWT-based auth.",
     ("Setup", "allow_remote_setup_access"): "Permit the setup API outside localhost. Only enable on trusted networks.",
@@ -125,22 +125,22 @@ FIELD_HINTS: Dict[Tuple[str, str], str] = {
 }
 
 
-def _read_config_lines() -> List[str]:
+def _read_config_lines() -> list[str]:
     """Read the raw config file preserving comments for contextual hints."""
     config_path = get_config_file_path()
     with config_path.open("r", encoding="utf-8") as stream:
         return stream.readlines()
 
 
-def _build_comment_index() -> Tuple[Dict[Tuple[str, str], str], Dict[str, str]]:
+def _build_comment_index() -> tuple[dict[tuple[str, str], str], dict[str, str]]:
     """Return mappings of field and section comments gathered from config.txt."""
     lines = _read_config_lines()
-    field_comments: Dict[Tuple[str, str], str] = {}
-    section_comments: Dict[str, str] = {}
+    field_comments: dict[tuple[str, str], str] = {}
+    section_comments: dict[str, str] = {}
 
-    current_section: Optional[str] = None
-    pending_field_comments: List[str] = []
-    pending_section_comments: List[str] = []
+    current_section: str | None = None
+    pending_field_comments: list[str] = []
+    pending_section_comments: list[str] = []
     seen_field_in_section = False
 
     for raw in lines:
@@ -228,11 +228,11 @@ def _normalise_text(value: str) -> str:
     return re.sub(r'\s+', ' ', value.strip()).lower()
 
 
-def _tokenise(text: str) -> List[str]:
+def _tokenise(text: str) -> list[str]:
     return [token for token in re.findall(r'[a-z0-9]+', text.lower()) if len(token) > 2]
 
 
-def _score_entry(query_lower: str, query_tokens: List[str], *candidates: str) -> float:
+def _score_entry(query_lower: str, query_tokens: list[str], *candidates: str) -> float:
     best = 0.0
     for candidate in candidates:
         if not candidate:
@@ -293,10 +293,10 @@ def _infer_type(raw_value: str) -> str:
     return "string"
 
 
-def _split_allowed_roots(raw: str) -> List[str]:
+def _split_allowed_roots(raw: str) -> list[str]:
     if not raw:
         return []
-    parts: List[str] = []
+    parts: list[str] = []
     for chunk in raw.split(os.pathsep):
         for entry in chunk.split(","):
             entry = entry.strip()
@@ -305,7 +305,7 @@ def _split_allowed_roots(raw: str) -> List[str]:
     return parts
 
 
-def _normalize_root_path(raw: str, *, project_root: Path) -> Optional[Path]:
+def _normalize_root_path(raw: str, *, project_root: Path) -> Path | None:
     value = str(raw).strip()
     if not value:
         return None
@@ -313,10 +313,7 @@ def _normalize_root_path(raw: str, *, project_root: Path) -> Optional[Path]:
         candidate = Path(value).expanduser()
     except Exception:
         candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = (project_root / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
+    candidate = (project_root / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
     return candidate
 
 
@@ -339,8 +336,8 @@ def _normalize_user_db_base_dir_candidate(raw: Any, *, project_root: Path) -> Pa
     return candidate
 
 
-def _collect_allowed_user_db_base_roots(parser: ConfigParser, *, project_root: Path) -> List[Path]:
-    roots: List[Path] = []
+def _collect_allowed_user_db_base_roots(parser: ConfigParser, *, project_root: Path) -> list[Path]:
+    roots: list[Path] = []
 
     default_root = (project_root / "Databases").resolve()
     roots.append(default_root)
@@ -391,7 +388,7 @@ def _is_placeholder(value: str) -> bool:
     return value.strip() in PLACEHOLDER_VALUES
 
 
-def get_setup_flags(config: ConfigParser | None = None) -> Dict[str, bool]:
+def get_setup_flags(config: ConfigParser | None = None) -> dict[str, bool]:
     """Return the setup enablement and completion flags."""
     parser = config or _load_config_parser()
 
@@ -410,7 +407,7 @@ def needs_setup() -> bool:
     return get_setup_flags()["needs_setup"]
 
 
-def get_status_snapshot() -> Dict[str, Any]:
+def get_status_snapshot() -> dict[str, Any]:
     """Return high-level status information for the setup API."""
     parser = _load_config_parser()
     flags = get_setup_flags(parser)
@@ -419,7 +416,7 @@ def get_status_snapshot() -> Dict[str, Any]:
     env_override = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
     remote_active = remote_flag or env_override
 
-    placeholder_fields: List[Dict[str, str]] = []
+    placeholder_fields: list[dict[str, str]] = []
     for section in parser.sections():
         for key, value in parser.items(section):
             if _is_placeholder(value):
@@ -441,11 +438,11 @@ def get_status_snapshot() -> Dict[str, Any]:
     }
 
 
-def get_config_snapshot() -> Dict[str, Any]:
+def get_config_snapshot() -> dict[str, Any]:
     """Return the raw configuration structured for the setup UI."""
     parser = _load_config_parser()
     field_comments, section_comments = _build_comment_index()
-    sections: List[Dict[str, Any]] = []
+    sections: list[dict[str, Any]] = []
 
     for section in parser.sections():
         entries = []
@@ -466,7 +463,7 @@ def get_config_snapshot() -> Dict[str, Any]:
             presented_value = "" if is_secret else value
             presented_type = "string" if is_secret else _infer_type(value)
 
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "key": key,
                 "value": presented_value,
                 "type": presented_type,
@@ -493,7 +490,7 @@ def get_config_snapshot() -> Dict[str, Any]:
     }
 
 
-def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = True) -> Path | None:
+def update_config(updates: dict[str, dict[str, Any]], *, create_backup: bool = True) -> Path | None:
     """Apply updates to the configuration file.
 
     Args:
@@ -545,7 +542,7 @@ def update_config(updates: Dict[str, Dict[str, Any]], *, create_backup: bool = T
     return backup_path
 
 
-def _write_config_preserving_comments(config_path: Path, updates: Dict[str, Dict[str, Any]]) -> None:
+def _write_config_preserving_comments(config_path: Path, updates: dict[str, dict[str, Any]]) -> None:
     """Write updated key-values while preserving comments and unrelated formatting.
 
     Strategy:
@@ -561,11 +558,11 @@ def _write_config_preserving_comments(config_path: Path, updates: Dict[str, Dict
         raise
 
     # Prepare a mutable copy of updates: section -> key -> str(value)
-    pending: Dict[str, Dict[str, str]] = {
+    pending: dict[str, dict[str, str]] = {
         section: {k: _coerce_to_string(v) for k, v in items.items()} for section, items in updates.items()
     }
 
-    current_section: Optional[str] = None
+    current_section: str | None = None
     out_lines: list[str] = []
 
     for raw in original_lines:
@@ -627,7 +624,7 @@ def _write_config_preserving_comments(config_path: Path, updates: Dict[str, Dict
     config_path.write_text("".join(out_lines), encoding="utf-8")
 
 
-def _validate_updates(parser: ConfigParser, updates: Dict[str, Dict[str, Any]]) -> None:
+def _validate_updates(parser: ConfigParser, updates: dict[str, dict[str, Any]]) -> None:
     """Validate sections, keys, and basic types for setup updates.
 
     Rules:
@@ -686,7 +683,7 @@ def reset_setup_flags() -> None:
     logger.info("Setup flags reset to defaults")
 
 
-def answer_setup_question(question: str, *, limit: int = 4) -> Dict[str, Any]:
+def answer_setup_question(question: str, *, limit: int = 4) -> dict[str, Any]:
     """Return contextual guidance for setup questions without requiring an external LLM."""
     query = (question or '').strip()
     if not query:
@@ -697,7 +694,7 @@ def answer_setup_question(question: str, *, limit: int = 4) -> Dict[str, Any]:
     query_lower = _normalise_text(query)
     query_tokens = _tokenise(query)
 
-    catalogue: List[Dict[str, Any]] = []
+    catalogue: list[dict[str, Any]] = []
     for section in sections:
         section_name = section.get("name", "")
         section_label = section.get("label", section_name)
@@ -723,7 +720,7 @@ def answer_setup_question(question: str, *, limit: int = 4) -> Dict[str, Any]:
                 "hint": field.get("hint", ""),
             })
 
-    scored_entries: List[Dict[str, Any]] = []
+    scored_entries: list[dict[str, Any]] = []
     for entry in catalogue:
         label = entry.get("label", "")
         hint = entry.get("hint", "")

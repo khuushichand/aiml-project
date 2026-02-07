@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch
 
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
-from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import router as audiobooks_router
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 

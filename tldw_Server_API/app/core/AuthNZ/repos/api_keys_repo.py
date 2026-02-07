@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any
 
 from loguru import logger
 
@@ -60,8 +60,8 @@ class AuthnzApiKeysRepo:
             raise
     async def fetch_active_by_hash_candidates(
         self,
-        hash_candidates: List[str],
-    ) -> Optional[Dict[str, Any]]:
+        hash_candidates: list[str],
+    ) -> dict[str, Any] | None:
         """
         Fetch the most recent active API key whose hash matches any of the
         provided candidates.
@@ -126,7 +126,7 @@ class AuthnzApiKeysRepo:
     async def fetch_active_by_key_id(
         self,
         key_id: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Fetch the most recent active API key by key_id."""
         if not key_id:
             return None
@@ -177,7 +177,7 @@ class AuthnzApiKeysRepo:
             logger.error(f"AuthnzApiKeysRepo.fetch_active_by_key_id failed: {exc}")
             raise
 
-    async def fetch_key_for_user(self, key_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+    async def fetch_key_for_user(self, key_id: int, user_id: int) -> dict[str, Any] | None:
         """Fetch a specific key row for a user (id + user_id match)."""
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -221,7 +221,7 @@ class AuthnzApiKeysRepo:
     async def fetch_key_limits(
         self,
         key_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Fetch LLM budget and org/team limit fields for a specific API key.
 
@@ -272,7 +272,7 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
-        key_identifier: Optional[str],
+        key_identifier: str | None,
         key_prefix: str,
         name: str,
         description: str,
@@ -350,7 +350,7 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         include_revoked: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List API keys for a given user.
 
@@ -401,15 +401,15 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
-        key_identifier: Optional[str],
+        key_identifier: str | None,
         key_prefix: str,
-        name: Optional[str],
-        description: Optional[str],
+        name: str | None,
+        description: str | None,
         scope: str,
-        expires_at: Optional[datetime],
-        rate_limit: Optional[int],
-        allowed_ips: Optional[List[str]],
-        metadata: Optional[Dict[str, Any]],
+        expires_at: datetime | None,
+        rate_limit: int | None,
+        allowed_ips: list[str] | None,
+        metadata: dict[str, Any] | None,
     ) -> int:
         """
         Insert a new API key row and return its id.
@@ -482,26 +482,26 @@ class AuthnzApiKeysRepo:
         *,
         user_id: int,
         key_hash: str,
-        key_identifier: Optional[str],
+        key_identifier: str | None,
         key_prefix: str,
-        name: Optional[str],
-        description: Optional[str],
-        expires_at: Optional[datetime],
-        org_id: Optional[int],
-        team_id: Optional[int],
-        scope: Optional[str],
-        allowed_endpoints: Optional[List[str]],
-        allowed_providers: Optional[List[str]],
-        allowed_models: Optional[List[str]],
-        budget_day_tokens: Optional[int],
-        budget_month_tokens: Optional[int],
-        budget_day_usd: Optional[float],
-        budget_month_usd: Optional[float],
-        parent_key_id: Optional[int],
-        allowed_methods: Optional[List[str]],
-        allowed_paths: Optional[List[str]],
-        max_calls: Optional[int],
-        max_runs: Optional[int],
+        name: str | None,
+        description: str | None,
+        expires_at: datetime | None,
+        org_id: int | None,
+        team_id: int | None,
+        scope: str | None,
+        allowed_endpoints: list[str] | None,
+        allowed_providers: list[str] | None,
+        allowed_models: list[str] | None,
+        budget_day_tokens: int | None,
+        budget_month_tokens: int | None,
+        budget_day_usd: float | None,
+        budget_month_usd: float | None,
+        parent_key_id: int | None,
+        allowed_methods: list[str] | None,
+        allowed_paths: list[str] | None,
+        max_calls: int | None,
+        max_runs: int | None,
     ) -> int:
         """
         Insert a new virtual API key row and return its id.
@@ -510,7 +510,7 @@ class AuthnzApiKeysRepo:
         while centralizing dialect-specific SQL in the repository layer.
         """
         try:
-            meta_dict: Dict[str, Any] = {}
+            meta_dict: dict[str, Any] = {}
             if allowed_methods:
                 meta_dict["allowed_methods"] = [
                     str(x).upper() for x in allowed_methods
@@ -758,15 +758,15 @@ class AuthnzApiKeysRepo:
         user_id: int,
         old_key_id: int,
         new_key_hash: str,
-        new_key_identifier: Optional[str],
+        new_key_identifier: str | None,
         new_key_prefix: str,
-        new_name: Optional[str],
-        new_description: Optional[str],
+        new_name: str | None,
+        new_description: str | None,
         new_scope: str,
-        new_expires_at: Optional[datetime],
-        new_rate_limit: Optional[int],
-        new_allowed_ips: Optional[List[str]],
-        new_metadata: Optional[Dict[str, Any]],
+        new_expires_at: datetime | None,
+        new_rate_limit: int | None,
+        new_allowed_ips: list[str] | None,
+        new_metadata: dict[str, Any] | None,
         rotated_status: str,
         reason: str,
         revoked_at: datetime,
@@ -958,7 +958,7 @@ class AuthnzApiKeysRepo:
         self,
         *,
         key_id: int,
-        ip_address: Optional[str],
+        ip_address: str | None,
     ) -> None:
         """
         Increment usage_count and update last_used_at/last_used_ip for a key.
@@ -1092,8 +1092,8 @@ class AuthnzApiKeysRepo:
         *,
         key_id: int,
         action: str,
-        user_id: Optional[int],
-        details: Optional[Dict[str, Any]],
+        user_id: int | None,
+        details: dict[str, Any] | None,
     ) -> None:
         """
         Insert a row into api_key_audit_log for the given key/action.

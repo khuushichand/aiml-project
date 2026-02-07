@@ -4,11 +4,11 @@ Not suitable for production use.
 """
 
 import asyncio
-from typing import List, Optional, Dict, Any
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 import uuid
 from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -34,11 +34,11 @@ class MemoryBackend(QueueBackend):
             config: Scheduler configuration
         """
         self.config = config
-        self.tasks: Dict[str, Task] = {}
-        self.queues: Dict[str, List[str]] = defaultdict(list)
-        self.idempotency_keys: Dict[str, str] = {}
-        self.leaders: Dict[str, Dict[str, Any]] = {}
-        self.dead_letter_queue: List[Task] = []
+        self.tasks: dict[str, Task] = {}
+        self.queues: dict[str, list[str]] = defaultdict(list)
+        self.idempotency_keys: dict[str, str] = {}
+        self.leaders: dict[str, dict[str, Any]] = {}
+        self.dead_letter_queue: list[Task] = []
         self._schema_version = 1
         self._lock = asyncio.Lock()
 
@@ -83,7 +83,7 @@ class MemoryBackend(QueueBackend):
 
             return task.id
 
-    async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
+    async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """Enqueue multiple tasks."""
         task_ids = []
         for task in tasks:
@@ -214,7 +214,7 @@ class MemoryBackend(QueueBackend):
                     return True
             return False
 
-    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+    async def get_expired_leases(self) -> list[dict[str, Any]]:
         """Get expired leases."""
         expired = []
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -287,7 +287,7 @@ class MemoryBackend(QueueBackend):
             self.queues[queue_name] = []
             return removed
 
-    async def get_dead_letter_queue(self) -> List[Task]:
+    async def get_dead_letter_queue(self) -> list[Task]:
         """Get tasks in the dead letter queue."""
         return list(self.dead_letter_queue)
 
@@ -304,7 +304,7 @@ class MemoryBackend(QueueBackend):
             self.dead_letter_queue.append(task)
             return True
 
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """Get tasks ready to run."""
         ready = []
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -393,7 +393,7 @@ class MemoryBackend(QueueBackend):
         async with self._lock:
             yield self
 
-    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+    async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
         """Not supported for memory backend."""
         raise NotImplementedError("Memory backend does not support raw queries")
 
@@ -401,7 +401,7 @@ class MemoryBackend(QueueBackend):
         """Not supported for memory backend."""
         raise NotImplementedError("Memory backend does not support raw queries")
 
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Not supported for memory backend."""
         raise NotImplementedError("Memory backend does not support raw queries")
 
@@ -409,7 +409,7 @@ class MemoryBackend(QueueBackend):
         """Not supported for memory backend."""
         raise NotImplementedError("Memory backend does not support raw queries")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get backend status."""
         return {
             "type": "memory",

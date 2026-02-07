@@ -37,7 +37,7 @@ export const LandingHub: React.FC = () => {
   }, [setShowLanding])
 
   const handleResearchClick = useCallback(() => {
-    navigate("/workspace-playground")
+    navigate("/knowledge")
   }, [navigate])
 
   const handleAnalysisClick = useCallback(() => {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -35,7 +35,7 @@ class DocumentDiffConfig(BaseAdapterConfig):
 class DocumentMergeConfig(BaseAdapterConfig):
     """Config for document merge adapter."""
 
-    documents: List[str] = Field(..., description="file:// URIs or text content to merge")
+    documents: list[str] = Field(..., description="file:// URIs or text content to merge")
     separator: str = Field("\n\n", description="Separator between merged documents")
     include_headers: bool = Field(False, description="Include document headers/titles")
     output_format: Literal["text", "markdown", "html"] = Field(
@@ -46,8 +46,8 @@ class DocumentMergeConfig(BaseAdapterConfig):
 class ContextBuildConfig(BaseAdapterConfig):
     """Config for context building adapter."""
 
-    sources: List[Dict[str, Any]] = Field(..., description="Context sources (text, files, etc.)")
-    max_tokens: Optional[int] = Field(None, ge=100, description="Maximum context tokens")
+    sources: list[dict[str, Any]] = Field(..., description="Context sources (text, files, etc.)")
+    max_tokens: int | None = Field(None, ge=100, description="Maximum context tokens")
     strategy: Literal["truncate", "summarize", "prioritize"] = Field(
         "truncate", description="Strategy when exceeding max tokens"
     )
@@ -59,9 +59,9 @@ class EmbedConfig(BaseAdapterConfig):
     """Config for embedding generation adapter."""
 
     text: str = Field(..., description="Text to embed (templated)")
-    model: Optional[str] = Field(None, description="Embedding model")
-    provider: Optional[str] = Field(None, description="Embedding provider")
-    dimensions: Optional[int] = Field(None, ge=1, description="Output embedding dimensions")
+    model: str | None = Field(None, description="Embedding model")
+    provider: str | None = Field(None, description="Embedding provider")
+    dimensions: int | None = Field(None, ge=1, description="Output embedding dimensions")
 
 
 class SandboxExecConfig(BaseAdapterConfig):
@@ -73,8 +73,8 @@ class SandboxExecConfig(BaseAdapterConfig):
     )
     timeout_seconds: int = Field(30, ge=1, le=300, description="Execution timeout")
     memory_mb: int = Field(256, ge=64, le=1024, description="Memory limit in MB")
-    env_vars: Optional[Dict[str, str]] = Field(None, description="Environment variables")
-    packages: Optional[List[str]] = Field(None, description="Packages to install")
+    env_vars: dict[str, str] | None = Field(None, description="Environment variables")
+    packages: list[str] | None = Field(None, description="Packages to install")
 
 
 class ScreenshotCaptureConfig(BaseAdapterConfig):
@@ -86,7 +86,7 @@ class ScreenshotCaptureConfig(BaseAdapterConfig):
     full_page: bool = Field(False, description="Capture full page scroll")
     format: Literal["png", "jpg", "webp"] = Field("png", description="Image format")
     wait_ms: int = Field(1000, ge=0, le=30000, description="Wait time before capture")
-    selector: Optional[str] = Field(None, description="CSS selector for specific element")
+    selector: str | None = Field(None, description="CSS selector for specific element")
 
 
 class ScheduleWorkflowConfig(BaseAdapterConfig):
@@ -94,21 +94,21 @@ class ScheduleWorkflowConfig(BaseAdapterConfig):
 
     workflow_id: str = Field(..., description="Workflow ID to schedule")
     schedule: str = Field(..., description="Cron expression or schedule spec")
-    inputs: Optional[Dict[str, Any]] = Field(None, description="Workflow inputs")
+    inputs: dict[str, Any] | None = Field(None, description="Workflow inputs")
     enabled: bool = Field(True, description="Whether schedule is enabled")
     timezone: str = Field("UTC", description="Timezone for schedule")
-    start_date: Optional[str] = Field(None, description="Schedule start date (ISO format)")
-    end_date: Optional[str] = Field(None, description="Schedule end date (ISO format)")
+    start_date: str | None = Field(None, description="Schedule start date (ISO format)")
+    end_date: str | None = Field(None, description="Schedule end date (ISO format)")
 
 
 class TimingStartConfig(BaseAdapterConfig):
     """Config for timing start adapter."""
 
-    name: Optional[str] = Field(None, description="Name for this timing measurement")
+    name: str | None = Field(None, description="Name for this timing measurement")
 
 
 class TimingStopConfig(BaseAdapterConfig):
     """Config for timing stop adapter."""
 
-    name: Optional[str] = Field(None, description="Name of timing measurement to stop")
+    name: str | None = Field(None, description="Name of timing measurement to stop")
     format: Literal["ms", "s", "human"] = Field("ms", description="Duration format")

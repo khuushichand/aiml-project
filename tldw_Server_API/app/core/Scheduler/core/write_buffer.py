@@ -4,14 +4,15 @@ Guarantees no data loss even under concurrent load.
 """
 
 import asyncio
+import contextlib
 import json
-from typing import List, Optional, Any
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
-from ..base import Task, BufferError, BufferClosedError, BufferFlushError
+from ..base import BufferClosedError, BufferFlushError, Task
 from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
 
@@ -44,7 +45,7 @@ class SafeWriteBuffer:
         self.flush_size = config.write_buffer_size
         self.flush_interval = config.write_buffer_flush_interval
 
-        self.buffer: List[Task] = []
+        self.buffer: list[Task] = []
         self.lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
         self._closing = False
@@ -131,7 +132,7 @@ class SafeWriteBuffer:
             self.buffer = tasks_to_flush + self.buffer
 
             # Re-raise to alert caller
-            raise BufferFlushError(f"Flush failed: {e}")
+            raise BufferFlushError(f"Flush failed: {e}") from e
 
     async def _flush_timer(self):
         """
@@ -181,10 +182,8 @@ class SafeWriteBuffer:
         # Cancel timer
         if self._flush_task:
             self._flush_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_task
-            except asyncio.CancelledError:
-                pass
 
         # Final flush with retries
         max_retries = 3
@@ -201,14 +200,14 @@ class SafeWriteBuffer:
                     try:
                         await self.backend.bulk_enqueue(tasks_to_save)
                         logger.info(f"Final flush completed: {len(tasks_to_save)} tasks")
-                    except Exception as e:
+                    except Exception:
                         # Re-add on failure
                         self.buffer = tasks_to_save
                         raise
 
                 break  # Success
 
-            except Exception as e:
+            except Exception:
                 if attempt == max_retries - 1:
                     # Last resort: Write to emergency backup file
                     await self._emergency_backup()
@@ -279,7 +278,7 @@ class SafeWriteBuffer:
             return 0
 
         try:
-            with open(backup_path, 'r') as f:
+            with open(backup_path) as f:
                 backup_data = json.load(f)
 
             tasks = []

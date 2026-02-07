@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
 import asyncio
+import contextlib
 import json
 import threading
 import time
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
 from loguru import logger
 
-from .base import ChatProvider
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
@@ -16,13 +17,9 @@ from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatProviderError,
     ChatRateLimitError,
 )
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
-    _sanitize_payload_for_logging,
-    merge_extra_body,
-    merge_extra_headers,
-)
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
@@ -30,18 +27,24 @@ from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     is_http_status_error,
     is_network_error,
 )
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import (
+    _sanitize_payload_for_logging,
+    merge_extra_body,
+    merge_extra_headers,
+)
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     openai_delta_chunk,
     sse_data,
     sse_done,
 )
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
 
+from .base import ChatProvider
 
-def _summarize_response_for_logging(response: Any) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {}
+
+def _summarize_response_for_logging(response: Any) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
     if not isinstance(response, dict):
         return {"type": type(response).__name__}
     summary["keys"] = list(response.keys())
@@ -70,29 +73,32 @@ def _summarize_response_for_logging(response: Any) -> Dict[str, Any]:
 
 
 def _cohere_request(
-    input_data: List[Dict[str, Any]],
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    temp: Optional[float] = None,
-    streaming: Optional[bool] = False,
-    topp: Optional[float] = None,
-    topk: Optional[int] = None,
-    max_tokens: Optional[int] = None,
-    stop_sequences: Optional[List[str]] = None,
-    seed: Optional[int] = None,
-    num_generations: Optional[int] = None,
-    frequency_penalty: Optional[float] = None,
-    presence_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    custom_prompt_arg: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    base_url: Optional[str] = None,
+    input_data: list[dict[str, Any]],
+    model: str | None = None,
+    api_key: str | None = None,
+    system_prompt: str | None = None,
+    temp: float | None = None,
+    streaming: bool | None = False,
+    topp: float | None = None,
+    topk: int | None = None,
+    max_tokens: int | None = None,
+    stop_sequences: list[str] | None = None,
+    seed: int | None = None,
+    num_generations: int | None = None,
+    frequency_penalty: float | None = None,
+    presence_penalty: float | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    custom_prompt_arg: str | None = None,
+    app_config: dict[str, Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    base_url: str | None = None,
+    timeout: float | None = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
-    loaded_config_data = app_config or load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs() or {}
+    if not isinstance(loaded_config_data, dict):
+        loaded_config_data = {}
     cohere_config = loaded_config_data.get("cohere_api", loaded_config_data.get("API", {}).get("cohere", {}))
 
     final_api_key = api_key or cohere_config.get("api_key")
@@ -128,7 +134,9 @@ def _cohere_request(
     api_base_url = (base_url or cohere_config.get("api_base_url", "https://api.cohere.ai")).rstrip("/")
     COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
 
-    timeout_seconds = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
+    configured_timeout = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
+    request_timeout = _safe_cast(timeout, float) if timeout is not None else None
+    timeout_seconds = request_timeout if request_timeout is not None else configured_timeout
 
     headers = {
         "Authorization": f"Bearer {final_api_key}",
@@ -194,7 +202,7 @@ def _cohere_request(
         elif role == "assistant":
             transformed_history.append({"role": "CHATBOT", "message": str(content)})
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "model": final_model,
         "message": current_user_message_str,
     }
@@ -310,12 +318,9 @@ def _cohere_request(
                             {"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "cohere_stream_error"}}
                         )
                 finally:
-                    for tail in finalize_stream(response_handle, done_already=stream_properly_closed):
-                        yield tail
-                    try:
+                    yield from finalize_stream(response_handle, done_already=stream_properly_closed)
+                    with contextlib.suppress(Exception):
                         session_handle.close()
-                    except Exception:
-                        pass
 
             session = None
             return stream_generator_cohere_text_chunks(response_handle.iter_lines())
@@ -392,7 +397,7 @@ def _cohere_request(
         raise ChatBadRequestError(
             provider="cohere",
             message=f"Key error while preparing or parsing Cohere payload/response: {e}",
-        )
+        ) from e
     except Exception as e:
         if is_http_status_error(e):
             status_code = get_http_status_from_exception(e) or 500
@@ -402,22 +407,22 @@ def _cohere_request(
                 exc_info=False,
             )
             if status_code == 401:
-                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}")
+                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}") from e
             if status_code == 429:
-                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
+                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}") from e
             if 400 <= status_code < 500:
-                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}")
+                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}") from e
             raise ChatProviderError(
                 provider="cohere",
                 message=f"Server error (Status {status_code}). Detail: {error_text[:200]}",
                 status_code=status_code,
-            )
+            ) from e
         if is_network_error(e):
             logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
-            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504)
+            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504) from e
         logging.error(f"Cohere API call: Unexpected error: {e}", exc_info=True)
         if not isinstance(e, ChatAPIError):
-            raise ChatAPIError(provider="cohere", message=f"Unexpected error in Cohere API call: {e}")
+            raise ChatAPIError(provider="cohere", message=f"Unexpected error in Cohere API call: {e}") from e
         raise
     finally:
         if session:
@@ -427,14 +432,20 @@ def _cohere_request(
 class CohereAdapter(ChatProvider):
     name = "cohere"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
             "default_timeout_seconds": 180,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool] = None) -> Dict[str, Any]:
+    def _to_handler_args(
+        self,
+        request: dict[str, Any],
+        *,
+        streaming: bool | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if stream_flag is None:
             stream_flag = request.get("streaming")
@@ -462,24 +473,21 @@ class CohereAdapter(ChatProvider):
             "extra_headers": request.get("extra_headers"),
             "extra_body": request.get("extra_body"),
             "base_url": request.get("base_url"),
+            "timeout": timeout,
         }
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if timeout is not None:
-            logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return _cohere_request(**self._to_handler_args(request, streaming=False))
+        return _cohere_request(**self._to_handler_args(request, streaming=False, timeout=timeout))
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if timeout is not None:
-            logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return _cohere_request(**self._to_handler_args(request, streaming=True))
+        return _cohere_request(**self._to_handler_args(request, streaming=True, timeout=timeout))
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         gen = self.stream(request, timeout=timeout)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()

@@ -4,35 +4,37 @@
 from __future__ import annotations
 
 import contextlib
-import shutil
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
+from configparser import ConfigParser
 from dataclasses import dataclass
 from datetime import datetime
-from configparser import ConfigParser
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any
 
 from loguru import logger
+
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Setup import setup_manager
 from tldw_Server_API.app.core.Setup.install_schema import DEFAULT_WHISPER_MODELS, InstallPlan
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 CONFIG_ROOT = setup_manager.CONFIG_RELATIVE_PATH.parent
 STATUS_FILENAME = 'setup_install_status.json'
 
 
-_LATEST_STATUS_DATA: Optional[Dict[str, Any]] = None
-_INSTALLED_DEPENDENCIES: Set[str] = set()
+_LATEST_STATUS_DATA: dict[str, Any] | None = None
+_INSTALLED_DEPENDENCIES: set[str] = set()
 
 
-def _candidate_status_dirs() -> List[Path]:
-    candidates: List[Path] = []
+def _candidate_status_dirs() -> list[Path]:
+    candidates: list[Path] = []
     override = os.getenv('TLDW_INSTALL_STATE_DIR')
     if override:
         candidates.append(Path(override))
@@ -47,7 +49,7 @@ def _candidate_status_dirs() -> List[Path]:
     return candidates
 
 
-def _resolve_status_file() -> Optional[Path]:
+def _resolve_status_file() -> Path | None:
     """Return a writable path for persisting install status, or ``None`` if unavailable."""
 
     for root in _candidate_status_dirs():
@@ -68,48 +70,38 @@ def _resolve_status_file() -> Optional[Path]:
     return None
 
 
-def _install_dependencies(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
+def _install_dependencies(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     """Install required Python packages for selected backends."""
 
-    processed_backends: Set[str] = set()
+    processed_backends: set[str] = set()
 
     for entry in plan.stt:
         key = f"stt:{entry.engine}"
         if key not in processed_backends:
-            try:
+            with contextlib.suppress(PipInstallBlockedError):
                 _install_backend_dependencies('stt', entry.engine, status, errors)
-            except PipInstallBlockedError:
-                pass
             processed_backends.add(key)
 
     for entry in plan.tts:
         key = f"tts:{entry.engine}"
         if key not in processed_backends:
-            try:
+            with contextlib.suppress(PipInstallBlockedError):
                 _install_backend_dependencies('tts', entry.engine, status, errors)
-            except PipInstallBlockedError:
-                pass
             processed_backends.add(key)
 
     if plan.embeddings.huggingface:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('huggingface', status, errors)
-        except PipInstallBlockedError:
-            pass
     if plan.embeddings.custom:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('custom', status, errors)
-        except PipInstallBlockedError:
-            pass
     if plan.embeddings.onnx:
-        try:
+        with contextlib.suppress(PipInstallBlockedError):
             _install_embedding_dependencies('onnx', status, errors)
-        except PipInstallBlockedError:
-            pass
 
 
-def _install_backend_dependencies(category: str, engine: str, status: InstallationStatus, errors: List[str]) -> None:
-    requirements: List[PipRequirement] = []
+def _install_backend_dependencies(category: str, engine: str, status: InstallationStatus, errors: list[str]) -> None:
+    requirements: list[PipRequirement] = []
     if category == 'stt':
         requirements = STT_DEPENDENCIES.get(engine, [])
     elif category == 'tts':
@@ -134,7 +126,7 @@ def _install_backend_dependencies(category: str, engine: str, status: Installati
         raise
 
 
-def _install_embedding_dependencies(target: str, status: InstallationStatus, errors: List[str]) -> None:
+def _install_embedding_dependencies(target: str, status: InstallationStatus, errors: list[str]) -> None:
     requirements = EMBEDDING_DEPENDENCIES.get(target)
     if not requirements:
         return
@@ -241,7 +233,7 @@ def _ensure_requirement(requirement: PipRequirement) -> None:
     _INSTALLED_DEPENDENCIES.add(package_name)
 
 
-def _select_package(requirement: PipRequirement) -> Optional[str]:
+def _select_package(requirement: PipRequirement) -> str | None:
     package = requirement.package
     if requirement.gpu_package or requirement.cpu_package:
         if _cuda_available() and requirement.gpu_package:
@@ -286,7 +278,7 @@ class InstallationStatus:
     def __init__(self, plan: InstallPlan) -> None:
         self.path = _resolve_status_file()
         self._persist_failed = False
-        self.data: Dict[str, Any] = {
+        self.data: dict[str, Any] = {
             'plan': model_dump_compat(plan),
             'status': 'in_progress',
             'started_at': _utc_now(),
@@ -296,7 +288,7 @@ class InstallationStatus:
         }
         self._save()
 
-    def step(self, name: str, status: str, detail: Optional[str] = None) -> None:
+    def step(self, name: str, status: str, detail: str | None = None) -> None:
         entry = {
             'name': name,
             'status': status,
@@ -367,7 +359,7 @@ def _pip_allowed() -> bool:
     return flag.strip().lower() not in {'1', 'true', 'yes', 'y', 'on'}
 
 
-def _record_latest_status(data: Dict[str, Any]) -> None:
+def _record_latest_status(data: dict[str, Any]) -> None:
     global _LATEST_STATUS_DATA
     _LATEST_STATUS_DATA = json.loads(json.dumps(data))
 
@@ -396,12 +388,10 @@ def _is_requests_network_error(exc: Exception) -> bool:
     if "HTTPError" in name:
         return True
     msg = str(exc).lower()
-    if "timeout" in msg or "connection" in msg or "dns" in msg or "network" in msg:
-        return True
-    return False
+    return bool("timeout" in msg or "connection" in msg or "dns" in msg or "network" in msg)
 
 
-def get_install_status_snapshot() -> Optional[Dict[str, Any]]:
+def get_install_status_snapshot() -> dict[str, Any] | None:
     """Return the most recent install status if available."""
 
     for root in _candidate_status_dirs():
@@ -423,14 +413,14 @@ def get_install_status_snapshot() -> Optional[Dict[str, Any]]:
 def _utc_now() -> str:
     return datetime.utcnow().isoformat() + 'Z'
 
-def execute_install_plan(plan_payload: Dict[str, Any]) -> None:
+def execute_install_plan(plan_payload: dict[str, Any]) -> None:
     """Background entry point to execute an installation plan."""
     try:
         validate = getattr(InstallPlan, 'model_validate', None) or getattr(InstallPlan, 'parse_obj', None)
         if not validate:
             raise TypeError('No compatible Pydantic validation method found on InstallPlan')
         plan = validate(plan_payload)
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Received invalid install plan")
         return
 
@@ -439,7 +429,7 @@ def execute_install_plan(plan_payload: Dict[str, Any]) -> None:
         return
 
     status = InstallationStatus(plan)
-    errors: List[str] = []
+    errors: list[str] = []
 
     try:
         _install_dependencies(plan, status, errors)
@@ -455,7 +445,7 @@ def execute_install_plan(plan_payload: Dict[str, Any]) -> None:
     else:
         status.complete()
 
-def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
+def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     any_stt = False
     for entry in plan.stt:
         any_stt = True
@@ -499,7 +489,7 @@ def _install_stt(plan: InstallPlan, status: InstallationStatus, errors: List[str
             status.step(step_name, "failed", str(exc))
             errors.append(f"silero_vad: {exc}")
 
-def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
+def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     for entry in plan.tts:
         step_name = f"tts:{entry.engine}"
         status.step(step_name, 'in_progress')
@@ -521,7 +511,7 @@ def _install_tts(plan: InstallPlan, status: InstallationStatus, errors: List[str
             status.step(step_name, 'failed', str(exc))
             errors.append(f"{entry.engine}: {exc}")
 
-def _install_embeddings(plan: InstallPlan, status: InstallationStatus, errors: List[str]) -> None:
+def _install_embeddings(plan: InstallPlan, status: InstallationStatus, errors: list[str]) -> None:
     if plan.embeddings.huggingface:
         step_name = 'embeddings:huggingface'
         status.step(step_name, 'in_progress')
@@ -552,7 +542,7 @@ def _install_embeddings(plan: InstallPlan, status: InstallationStatus, errors: L
 
 # --- Individual installers -------------------------------------------------
 
-def _install_faster_whisper(models: List[str]) -> None:
+def _install_faster_whisper(models: list[str]) -> None:
     _ensure_downloads_allowed('faster-whisper checkpoints')
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import WhisperModel
@@ -617,7 +607,9 @@ def _install_qwen2_audio() -> None:
 def _install_nemo_parakeet(variant: str) -> None:
     _ensure_downloads_allowed(f'NeMo Parakeet {variant} weights')
     try:
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import load_parakeet_model
+        from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
+            load_parakeet_model,
+        )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError('nemo_toolkit is required for NeMo installations.') from exc
 
@@ -640,7 +632,7 @@ def _install_nemo_canary() -> None:
         raise RuntimeError('Failed to load NeMo Canary model; verify nemo_toolkit installation.')
 
 
-def _install_kokoro(variants: List[str]) -> None:
+def _install_kokoro(variants: list[str]) -> None:
     targets = set(variants or ['onnx'])
     config = _load_config()
     # Default to v1.0 ONNX layout
@@ -676,7 +668,7 @@ def _install_higgs() -> None:
     _snapshot_repo('bosonai/higgs-audio-v2-tokenizer')
 
 
-def _install_vibevoice(variants: List[str]) -> None:
+def _install_vibevoice(variants: list[str]) -> None:
     _ensure_downloads_allowed('VibeVoice assets')
     selected = set(variants or ['1.5B'])
     if '1.5B' in selected:
@@ -689,13 +681,13 @@ def _install_vibevoice(variants: List[str]) -> None:
         _snapshot_repo('FabioSarracino/VibeVoice-Large-Q8')
 
 
-def _download_huggingface_models(models: List[str]) -> None:
+def _download_huggingface_models(models: list[str]) -> None:
     for model_id in models:
         logger.info('Downloading embedding model %s', model_id)
         _snapshot_repo(model_id)
 
 
-def _append_trusted_embeddings(models: List[str]) -> None:
+def _append_trusted_embeddings(models: list[str]) -> None:
     if not models:
         return
 
@@ -710,7 +702,7 @@ def _append_trusted_embeddings(models: List[str]) -> None:
     setup_manager.update_config({section: {'trusted_hf_remote_code_models': ', '.join(merged)}})
 
 
-def _load_config() -> Dict[str, Dict[str, Any]]:
+def _load_config() -> dict[str, dict[str, Any]]:
     try:
         configs = load_and_log_configs()
         if isinstance(configs, dict):
@@ -810,7 +802,7 @@ def _snapshot_repo(repo_id: str) -> None:
         raise
 
 
-def _run_subprocess(command: List[str]) -> None:
+def _run_subprocess(command: list[str]) -> None:
     logger.info('Running command: %s', ' '.join(command))
     result = subprocess.run(command, check=False, capture_output=True, text=True)
     if result.returncode != 0:
@@ -820,14 +812,14 @@ def _run_subprocess(command: List[str]) -> None:
 @dataclass(frozen=True)
 class PipRequirement:
     package: str
-    import_name: Optional[str] = None
-    gpu_package: Optional[str] = None
-    cpu_package: Optional[str] = None
-    platforms: Optional[Set[str]] = None
+    import_name: str | None = None
+    gpu_package: str | None = None
+    cpu_package: str | None = None
+    platforms: set[str] | None = None
 
 
 # Dependency manifests keyed by backend type
-STT_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
+STT_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     'faster_whisper': [
         PipRequirement(package='faster-whisper>=1.0.0', import_name='faster_whisper', cpu_package='faster-whisper>=1.0.0'),
     ],
@@ -857,7 +849,7 @@ STT_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
     ],
 }
 
-TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
+TTS_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     'kokoro': [
         # PyTorch + ONNX support for Kokoro:
         # - `kokoro` provides KModel/KPipeline (PyTorch backend)
@@ -918,7 +910,7 @@ TTS_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
     ],
 }
 
-EMBEDDING_DEPENDENCIES: Dict[str, List[PipRequirement]] = {
+EMBEDDING_DEPENDENCIES: dict[str, list[PipRequirement]] = {
     'huggingface': [
         PipRequirement(package='sentence-transformers>=2.6.0', import_name='sentence_transformers'),
         PipRequirement(package='torch>=2.2.0', import_name='torch'),

@@ -162,7 +162,7 @@ export const OptimizationProgressPanel: React.FC<
         </span>
       }
       width={650}
-      destroyOnClose
+      destroyOnHidden
     >
       {isLoadingOptimization && <Skeleton paragraph={{ rows: 10 }} />}
 

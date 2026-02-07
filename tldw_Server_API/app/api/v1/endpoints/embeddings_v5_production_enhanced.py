@@ -13,102 +13,136 @@ Key enhancements over v5:
 from __future__ import annotations
 
 import asyncio
-import json
+import atexit
 import base64
 import hashlib
-import time
-import threading
-from datetime import datetime
-from typing import List, Union, Optional, Dict, Any, Tuple
-from enum import Enum
-import numpy as np
-from functools import lru_cache
-import atexit
+import json
 import os
+import threading
+import time
 import uuid
-
-from fastapi import APIRouter, HTTPException, Body, Depends, status, BackgroundTasks, Request, Query, Header, Response
-from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse, StreamingResponse
-import tiktoken
-from loguru import logger
 from asyncio import Lock
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime
+from enum import Enum
+from fnmatch import fnmatch
+from functools import lru_cache
+from typing import Any
+
+import numpy as np
+import redis.asyncio as aioredis
+import tiktoken
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse, StreamingResponse
+from loguru import logger
+
+# Rate limiting
+# Monitoring
+# ============================================================================
+# Metrics and Monitoring
+# ============================================================================
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+from pydantic import BaseModel, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    rbac_rate_limit,
+    require_permissions,
+    require_roles,
+)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.embeddings_models import (
     CreateEmbeddingRequest,
     CreateEmbeddingResponse,
     EmbeddingData,
-    EmbeddingUsage
+    EmbeddingUsage,
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import (
-    backfill_legacy_tokens_to_ledger,
-    log_llm_usage,
-)
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
-from tldw_Server_API.app.core.http_client import (
-    afetch as _http_afetch,
-    create_async_client as _create_async_client,
-    RetryPolicy as _RetryPolicy,
-)
-from pydantic import BaseModel, Field
-
-# Authentication
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
-    User,
-    resolve_user_id_for_request,
-)
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    rbac_rate_limit,
-    require_roles,
-    require_permissions,
-)
-from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE, EMBEDDINGS_ADMIN
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventCategory, AuditEventType
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     ResolvedByokCredentials,
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.permissions import EMBEDDINGS_ADMIN, SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
+from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
+
+# Authentication
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
 
 # Configuration
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.config import load_comprehensive_config
-from pathlib import Path
-import configparser
 
 # Audit logging: unify later via unified audit DI; legacy import removed (unused here)
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 
 # Circuit Breaker
-from tldw_Server_API.app.core.Embeddings.circuit_breaker import (
-    CircuitBreaker,
-    CircuitBreakerError,
-    circuit_breaker,
-    registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker, CircuitBreakerError
+from tldw_Server_API.app.core.Embeddings.circuit_breaker import registry as circuit_breaker_registry
+from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
+from tldw_Server_API.app.core.Embeddings.messages import validate_schema
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    EmbeddingsRateLimitError,
 )
-
-# Rate limiting
-# Monitoring
-from prometheus_client import Counter, Histogram, Gauge
-import redis.asyncio as aioredis
+from tldw_Server_API.app.core.Embeddings.request_batching import (
+    create_embeddings_batch_async as batching_create_embeddings_batch_async,
+)
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import (
+    RetryPolicy as _RetryPolicy,
+)
+from tldw_Server_API.app.core.http_client import (
+    afetch as _http_afetch,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+)
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
     ensure_async_client_closed,
 )
 from tldw_Server_API.app.core.LLM_Calls.embeddings_adapter_registry import get_embeddings_registry
-from tldw_Server_API.app.core.Embeddings.dlq_crypto import decrypt_payload_if_present
-from tldw_Server_API.app.core.Embeddings.messages import validate_schema
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType, AuditEventCategory
-from fnmatch import fnmatch
-from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Usage.usage_tracker import (
+    backfill_legacy_tokens_to_ledger,
+    log_llm_usage,
+)
+
+# Exception buckets to replace broad Exception catches while preserving behavior.
+try:
+    from redis import exceptions as _redis_exceptions
+
+    _REDIS_ERRORS: tuple[type[BaseException], ...] = (_redis_exceptions.RedisError,)
+except ImportError:
+    _REDIS_ERRORS = ()
+
+_EMBEDDINGS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    HTTPException,
+    CircuitBreakerError,
+    EmbeddingsRateLimitError,
+    NetworkError,
+    RetryExhaustedError,
+    AttributeError,
+    ConnectionError,
+    IndexError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    *_REDIS_ERRORS,
+)
 
 # ============================================================================
 # Embeddings Implementation Import (Safe/Lazy)
@@ -117,16 +151,14 @@ from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
-        EmbeddingConfigSchema,
         HFModelCfg,
+        LocalAPICfg,
         ONNXModelCfg,
         OpenAIModelCfg,
-        LocalAPICfg,
-        create_embeddings_batch,
         resolve_model_storage_base_dir,
     )
     EMBEDDINGS_AVAILABLE = True
-except Exception as e:
+except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
     # Do not raise here; allow the API to import and mark the embeddings service as unavailable.
     logger.error(f"Embeddings implementation unavailable: {e}")
     logger.error("Embeddings endpoints will respond 503 until dependencies are installed")
@@ -135,16 +167,6 @@ except Exception as e:
     def resolve_model_storage_base_dir(*_args, **_kwargs):
         return "./models/embedding_models_data/"
 
-from tldw_Server_API.app.core.Embeddings.request_batching import (
-    EmbeddingsRateLimitError,
-    create_embeddings_batch_async as batching_create_embeddings_batch_async,
-)
-
-# ============================================================================
-# Metrics and Monitoring
-# ============================================================================
-
-from prometheus_client import REGISTRY
 
 # Safely get or create metrics
 def get_or_create_counter(name, description, labelnames):
@@ -159,11 +181,11 @@ def get_or_create_counter(name, description, labelnames):
             # If labels don't match, unregister the old one
             REGISTRY.unregister(collector)
         return Counter(name, description, labelnames)
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Try to create new counter, handling any registration issues
         try:
             return Counter(name, description, labelnames)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Return existing if we can't create new
             if name in REGISTRY._names_to_collectors:
                 return REGISTRY._names_to_collectors[name]
@@ -180,11 +202,11 @@ def get_or_create_histogram(name, description, labelnames):
             # If labels don't match, unregister the old one
             REGISTRY.unregister(collector)
         return Histogram(name, description, labelnames)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Try to create new, or return existing
         try:
             return Histogram(name, description, labelnames)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             if name in REGISTRY._names_to_collectors:
                 return REGISTRY._names_to_collectors[name]
             raise
@@ -203,13 +225,13 @@ def get_or_create_gauge(name, description, labelnames=None):
         if labelnames:
             return Gauge(name, description, labelnames)
         return Gauge(name, description)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Try to create new, or return existing
         try:
             if labelnames:
                 return Gauge(name, description, labelnames)
             return Gauge(name, description)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             if name in REGISTRY._names_to_collectors:
                 return REGISTRY._names_to_collectors[name]
             raise
@@ -350,13 +372,13 @@ def _cfg_int(name: str, default_val: int) -> int:
         val = _settings.get(name, None)
         if isinstance(val, (int, float)):
             return int(val)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         env = os.getenv(name)
         if env is not None and str(env).strip() != "":
             return int(env)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return default_val
 
@@ -366,13 +388,13 @@ def _cfg_float(name: str, default_val: float) -> float:
         v = settings.get(name, None)
         if isinstance(v, (int, float)):
             return float(v)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         env = os.getenv(name)
         if env is not None and str(env).strip() != "":
             return float(env)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return float(default_val)
 
@@ -408,7 +430,7 @@ def _tenant_rps_runtime() -> int:
             ):
                 return int(TENANT_RPS)
             return parsed
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return TENANT_RPS
 
@@ -423,7 +445,7 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, floa
     for q in queues:
         try:
             d = await client.xlen(q)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             d = 0
         depths.append(int(d or 0))
         try:
@@ -434,7 +456,7 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, floa
                 ages.append(max(0.0, now - (ts_ms / 1000.0)))
             else:
                 ages.append(0.0)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             ages.append(0.0)
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
 
@@ -460,17 +482,17 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
         # Compatibility path: preserve legacy AUTH_MODE/profile heuristics.
         return _is_multi_user_runtime()
 
-    principal: Optional[AuthPrincipal] = None
+    principal: AuthPrincipal | None = None
     try:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
             principal = ctx.principal
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         principal = None
 
     try:
         single_profile = _is_single_user_profile()
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         single_profile = False
 
     if single_profile:
@@ -480,18 +502,18 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
 
     # Principal-first: if we can see an explicit single-user principal, do not
     # enforce tenant quotas even under multi-user profiles.
-    if principal is not None and is_single_user_principal(principal):
+    if principal is not None and is_single_user_principal(principal):  # noqa: SIM103
         return False
 
     # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
     return True
 
-async def _check_backpressure_and_quotas(request: Request, user: User) -> Optional[HTTPException]:
+async def _check_backpressure_and_quotas(request: Request, user: User) -> HTTPException | None:
     """Return HTTPException(429) if backpressure or tenant quota exceeded; else None."""
     # Orchestrator-based backpressure
     try:
         client = await _get_redis_client()
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         client = None
     try:
         if client is not None:
@@ -502,13 +524,13 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
                     retry_after = min(60, int(max(5, age / 2)))
                 headers = {"Retry-After": str(retry_after)}
                 return HTTPException(status_code=429, detail="Backpressure: queue overload", headers=headers)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     finally:
         try:
             if client is not None:
                     await ensure_async_client_closed(client)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Per-tenant quotas in multi-user mode
@@ -533,14 +555,12 @@ async def _check_backpressure_and_quotas(request: Request, user: User) -> Option
                         try:
                             request.state.rate_limit_limit = tenant_rps
                             request.state.rate_limit_remaining = remaining
-                        except Exception:
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                             pass
             finally:
-                try:
+                with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     await ensure_async_client_closed(client2)
-                except Exception:
-                    pass
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
@@ -583,14 +603,14 @@ EMBEDDINGS_PROVIDERS_REQUIRE_KEY = {
 
 async def _resolve_embeddings_byok(
     provider: str,
-    current_user: Optional[User],
-    request: Optional[Request],
+    current_user: User | None,
+    request: Request | None,
 ) -> ResolvedByokCredentials:
     user_id_int = getattr(current_user, "id_int", None) if current_user else None
     if user_id_int is None and current_user is not None:
         try:
             user_id_int = int(getattr(current_user, "id", None))
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             user_id_int = None
     return await resolve_byok_credentials(
         provider,
@@ -614,7 +634,7 @@ def _is_test_context() -> bool:
     try:
         if os.getenv("PYTEST_CURRENT_TEST"):
             return True
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"} or str(
         os.getenv("TEST_MODE", "")
@@ -623,7 +643,7 @@ def _is_test_context() -> bool:
 
 def _should_skip_missing_key(
     provider: str,
-    credentials: Optional[ResolvedByokCredentials] = None,
+    credentials: ResolvedByokCredentials | None = None,
 ) -> bool:
     if not _is_test_context():
         return False
@@ -667,12 +687,12 @@ PROVIDER_MODELS = {
 }
 
 # Optional allowlists and per-model token limits (override via settings)
-def _get_allowed_providers() -> Optional[List[str]]:
+def _get_allowed_providers() -> list[str] | None:
     try:
         vals = settings.get("ALLOWED_EMBEDDING_PROVIDERS", [])
         if isinstance(vals, list) and vals:
             return [str(v).lower() for v in vals]
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
@@ -684,7 +704,7 @@ def _chroma_manager_for_user(user: User) -> ChromaDBManager:
     return ChromaDBManager(user_id=str(user_id), user_embedding_config=cfg)
 
 
-def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
+def _split_provider_model(model: str) -> tuple[str | None, str]:
     """Split provider-qualified model IDs like 'openai:model'."""
     if not isinstance(model, str):
         return None, str(model)
@@ -697,7 +717,7 @@ def _split_provider_model(model: str) -> Tuple[Optional[str], str]:
     return None, model
 
 
-def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -> Tuple[str, str]:
+def _resolve_model_and_provider(model: str | None, provider: str | None) -> tuple[str, str]:
     cfg = settings.get("EMBEDDING_CONFIG", {}) or {}
     default_model = model or cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
     prefix_provider, stripped_model = _split_provider_model(default_model)
@@ -715,12 +735,12 @@ def _resolve_model_and_provider(model: Optional[str], provider: Optional[str]) -
     return stripped_model, resolved_provider
 
 
-def _get_allowed_models() -> Optional[List[str]]:
+def _get_allowed_models() -> list[str] | None:
     try:
         vals = settings.get("ALLOWED_EMBEDDING_MODELS", [])
         if isinstance(vals, list) and vals:
             return [str(v) for v in vals]
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
@@ -733,7 +753,7 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
             return int(mapping[key1])
         if model in mapping:
             return int(mapping[model])
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     # Reasonable defaults
     if provider == "openai":
@@ -742,7 +762,7 @@ def _get_model_max_tokens(provider: str, model: str) -> int:
     return 8192
 
 
-def _build_user_metadata(user: Optional[User]) -> Optional[Dict[str, Any]]:
+def _build_user_metadata(user: User | None) -> dict[str, Any] | None:
     """Create metadata dict for rate limiter propagation.
 
     In test contexts (TESTING=true), skip attaching user metadata so that
@@ -758,7 +778,7 @@ def _build_user_metadata(user: Optional[User]) -> Optional[Dict[str, Any]]:
         if user_id is None:
             return None
         return {"user_id": str(user_id)}
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         return None
 
 # ============================================================================
@@ -771,15 +791,15 @@ class TTLCache:
     def __init__(self, max_size: int = MAX_CACHE_SIZE, ttl_seconds: int = CACHE_TTL_SECONDS):
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.cache: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self.cleanup_task = None
         # Optional daemon-thread cleanup to decouple from app loop
-        self._cleanup_thread: Optional[threading.Thread] = None
-        self._cleanup_stop: Optional[threading.Event] = None
+        self._cleanup_thread: threading.Thread | None = None
+        self._cleanup_stop: threading.Event | None = None
         try:
             self._use_thread = str(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true")).lower() in ("1", "true", "yes", "on")
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             self._use_thread = True
         self.hits = 0
         self.misses = 0
@@ -794,15 +814,13 @@ class TTLCache:
                 def _runner():
                     try:
                         while self._cleanup_stop and not self._cleanup_stop.is_set():
-                            try:
+                            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                                 self._cleanup_expired_locked()
-                            except Exception:
-                                pass
                             if self._cleanup_stop:
                                 self._cleanup_stop.wait(CACHE_CLEANUP_INTERVAL)
                             else:
                                 time.sleep(CACHE_CLEANUP_INTERVAL)
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         pass
 
                 self._cleanup_thread = threading.Thread(
@@ -824,7 +842,7 @@ class TTLCache:
                 # No need to join daemon thread during interpreter teardown, but attempt a brief join
                 if self._cleanup_thread and self._cleanup_thread.is_alive():
                     self._cleanup_thread.join(timeout=0.5)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
             finally:
                 self._cleanup_thread = None
@@ -832,10 +850,8 @@ class TTLCache:
         else:
             if self.cleanup_task:
                 self.cleanup_task.cancel()
-                try:
+                with suppress(asyncio.CancelledError):
                     await self.cleanup_task
-                except asyncio.CancelledError:
-                    pass
                 self.cleanup_task = None
 
     async def _cleanup_loop(self):
@@ -846,7 +862,7 @@ class TTLCache:
                 self._cleanup_expired_locked()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in cache cleanup: {e}")
 
     def _cleanup_expired_locked(self):
@@ -869,7 +885,7 @@ class TTLCache:
         """Async wrapper for cache cleanup."""
         self._cleanup_expired_locked()
 
-    async def get(self, key: str) -> Optional[Any]:
+    async def get(self, key: str) -> Any | None:
         """Get value from cache if not expired"""
         with self._lock:
             entry = self.cache.get(key)
@@ -896,10 +912,8 @@ class TTLCache:
                     self.cache.keys(),
                     key=lambda k: self.cache[k].get('last_access', 0)
                 )
-                try:
+                with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     logger.debug(f"Embeddings TTLCache evict LRU key={lru_key[:8]}..., size={len(self.cache)}")
-                except Exception:
-                    pass
                 del self.cache[lru_key]
 
             self.cache[key] = {
@@ -917,7 +931,7 @@ class TTLCache:
             self.hits = 0
             self.misses = 0
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         with self._lock:
             total_requests = self.hits + self.misses
@@ -938,7 +952,7 @@ class ConnectionPoolManager:
     """Manages connection pools with proper cleanup"""
 
     def __init__(self):
-        self.pools: Dict[str, Any] = {}
+        self.pools: dict[str, Any] = {}
         self.lock = Lock()
         self._closed = False
 
@@ -960,7 +974,7 @@ class ConnectionPoolManager:
                         close = getattr(existing, "close", None)
                         if callable(close):
                             close()
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     pass
                 existing = None
                 self.pools.pop(provider, None)
@@ -982,7 +996,7 @@ class ConnectionPoolManager:
                         close = getattr(session, "close", None)
                         if callable(close):
                             close()
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     pass
             self.pools.clear()
 
@@ -998,7 +1012,7 @@ class ConnectionPoolManager:
                         close = getattr(self.pools[provider], "close", None)
                         if callable(close):
                             close()
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     pass
                 del self.pools[provider]
 
@@ -1052,7 +1066,7 @@ async def _embeddings_router_lifespan(app):
                         cfg_preload = cfg.get("preload_models", []) or []
                         if isinstance(cfg_preload, list):
                             preload_list.extend([str(m).strip() for m in cfg_preload if str(m).strip()])
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         pass
                     default_model = cfg.get("embedding_model") or cfg.get("default_model_id") or "sentence-transformers/all-MiniLM-L6-v2"
                     default_provider = cfg.get("embedding_provider") or "huggingface"
@@ -1061,19 +1075,23 @@ async def _embeddings_router_lifespan(app):
                             preload_list.append(default_model)
                         else:
                             preload_list.append(f"{default_provider}:{default_model}")
-                    seen = set(); final_models = []
+                    seen = set()
+                    final_models = []
                     for m in preload_list:
                         if m and m not in seen:
-                            seen.add(m); final_models.append(m)
+                            seen.add(m)
+                            final_models.append(m)
                     if final_models:
                         logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
                         for full in final_models:
                             try:
                                 if ":" in full:
                                     prov, mdl = full.split(":", 1)
-                                    provider = prov.strip().lower(); model = mdl.strip()
+                                    provider = prov.strip().lower()
+                                    model = mdl.strip()
                                 else:
-                                    model = full.strip(); provider = guess_provider_for_model(model)
+                                    model = full.strip()
+                                    provider = guess_provider_for_model(model)
                                 if not is_model_allowed(provider, model):
                                     logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
                                     continue
@@ -1082,12 +1100,12 @@ async def _embeddings_router_lifespan(app):
                                     continue
                                 await create_embeddings_batch_async(texts=["ci preload"], provider=provider, model_id=model)
                                 logger.info(f"Preloaded model {provider}:{model}")
-                            except Exception as e:
+                            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                                 logger.warning(f"Failed to preload model {full}: {e}")
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Unexpected error during preload task: {e}")
             asyncio.create_task(_preload_models_on_startup())
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to schedule model preloads: {e}")
     logger.info("Embeddings service started successfully")
 
@@ -1128,11 +1146,9 @@ def cleanup_on_exit():
         except RuntimeError:
             # If a running loop prevents asyncio.run, fall back to best-effort
             pass
-        try:
+        with suppress(RuntimeError):
             asyncio.run(connection_manager.close_all())
-        except RuntimeError:
-            pass
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Swallow any errors during interpreter teardown
         pass
 
@@ -1156,11 +1172,11 @@ def count_tokens(text: str, model_name: str) -> int:
     try:
         encoding = get_tokenizer(model_name)
         return len(encoding.encode(text))
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Token counting failed: {e}, estimating")
         return len(text) // 4
 
-def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int] = None) -> str:
+def get_cache_key(text: str, provider: str, model: str, dimensions: int | None = None) -> str:
     """Generate cache key for embedding"""
     key_parts = [text, provider, model]
     if dimensions:
@@ -1174,8 +1190,8 @@ def get_cache_key(text: str, provider: str, model: str, dimensions: Optional[int
 # ---------------------------------------------------------------------------
 
 class CompactorRunRequest(BaseModel):
-    user_id: Optional[str] = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
-    media_db_path: Optional[str] = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
+    user_id: str | None = Field(default=None, description="Target user_id; defaults to current admin in single-user mode")
+    media_db_path: str | None = Field(default=None, description="Override path to Media_DB_v2.db; defaults to settings")
 
 
 class CompactorRunResponse(BaseModel):
@@ -1196,8 +1212,10 @@ async def run_compactor_once(
 ):
     try:
         # Lazy import to avoid heavy imports on module import
-        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import compact_once as _compact_once  # type: ignore
-    except Exception as exc:
+        from tldw_Server_API.app.core.Embeddings.services.vector_compactor import (
+            compact_once as _compact_once,  # type: ignore
+        )
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception("Compactor module import failed")
         raise HTTPException(status_code=503, detail="Compactor unavailable") from exc
     uid = str(req.user_id or current_user.id)
@@ -1206,7 +1224,7 @@ async def run_compactor_once(
         return CompactorRunResponse(user_id=uid, collections_touched=int(touched or 0), ts=datetime.utcnow().timestamp())
     except HTTPException:
         raise
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(
             "Compactor run failed for user '{}' with db_path_override={}",
             uid,
@@ -1219,9 +1237,9 @@ async def run_compactor_once(
 # ============================================================================
 
 def tokens_to_texts(
-    tokens_input: Union[List[int], List[List[int]]],
+    tokens_input: list[int] | list[list[int]],
     model_name: str
-) -> Tuple[List[str], int, List[int]]:
+) -> tuple[list[str], int, list[int]]:
     """Convert token arrays to text using model tokenizer when possible.
 
     Returns (texts, total_token_count, per_input_token_counts).
@@ -1229,12 +1247,12 @@ def tokens_to_texts(
     """
     try:
         enc = get_tokenizer(model_name)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         enc = tiktoken.get_encoding("cl100k_base")
 
-    texts: List[str] = []
+    texts: list[str] = []
     total_tokens = 0
-    token_counts: List[int] = []
+    token_counts: list[int] = []
     # Single token array
     if tokens_input and isinstance(tokens_input, list) and tokens_input and isinstance(tokens_input[0], int):
         arr = tokens_input  # type: ignore[assignment]
@@ -1242,7 +1260,7 @@ def tokens_to_texts(
         token_counts.append(len(arr))
         try:
             texts.append(enc.decode(arr))
-        except Exception as exc:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(
                 "Failed to decode token array for model '{}' (index 0, tokens={}): {}",
                 model_name,
@@ -1263,7 +1281,7 @@ def tokens_to_texts(
             token_counts.append(len(arr))
             try:
                 texts.append(enc.decode(arr))
-            except Exception as exc:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(
                     "Failed to decode token array for model '{}' (index {}, tokens={}): {}",
                     model_name,
@@ -1282,7 +1300,7 @@ def _dimension_policy() -> str:
         val = os.getenv("EMBEDDINGS_DIMENSION_POLICY", "reduce").lower()
         if val in ("reduce", "pad", "ignore"):
             return val
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return "reduce"
 
@@ -1292,13 +1310,13 @@ def _supports_openai_dimensions(model: str) -> bool:
     model_key = (model or "").split(":", 1)[-1]
     return model_key.startswith("text-embedding-3")
 
-def _validate_dimensions_request(provider: str, model: str, dimensions: Optional[int]) -> Optional[int]:
+def _validate_dimensions_request(provider: str, model: str, dimensions: int | None) -> int | None:
     """Validate requested dimensions for the provider/model pair."""
     if dimensions is None:
         return None
     try:
         dim = int(dimensions)
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="dimensions must be an integer",
@@ -1334,15 +1352,15 @@ def _validate_dimensions_request(provider: str, model: str, dimensions: Optional
     return dim
 
 def adjust_dimensions(
-    vectors: List[List[float]],
-    target_dim: Optional[int],
+    vectors: list[list[float]],
+    target_dim: int | None,
     provider: str,
     model: str
-) -> List[List[float]]:
+) -> list[list[float]]:
     if not target_dim or target_dim <= 0:
         return vectors
     policy = _dimension_policy()
-    adjusted: List[List[float]] = []
+    adjusted: list[list[float]] = []
     for v in vectors:
         if not isinstance(v, (list, tuple)):
             adjusted.append(v)
@@ -1370,10 +1388,10 @@ def adjust_dimensions(
     return adjusted
 
 def decide_and_apply_l2(
-    embedding: Union[List[float], np.ndarray],
+    embedding: list[float] | np.ndarray,
     encoding_format: str,
     embeddings_from_adapter: bool,
-) -> Tuple[np.ndarray, bool]:
+) -> tuple[np.ndarray, bool]:
     """Decide and apply L2-normalization policy.
 
     Policy:
@@ -1389,11 +1407,11 @@ def decide_and_apply_l2(
     # Default: normalize for numeric outputs; never for base64
     do_l2 = encoding_format != "base64"
 
-    normalize_requested: Optional[bool] = None
+    normalize_requested: bool | None = None
     try:
         env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
         normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         # Preserve default behavior on error; log with context
         logger.warning(
             "Error reading env var LLM_EMBEDDINGS_L2_NORMALIZE in decide_and_apply_l2; "
@@ -1403,10 +1421,7 @@ def decide_and_apply_l2(
 
     # Adapter vectors: preserve as-is unless normalization explicitly requested
     if embeddings_from_adapter:
-        if normalize_requested is True:
-            do_l2 = encoding_format != "base64"
-        else:
-            do_l2 = False
+        do_l2 = encoding_format != "base64" if normalize_requested is True else False
 
     try:
         arr = np.asarray(embedding, dtype=np.float32)
@@ -1415,7 +1430,7 @@ def decide_and_apply_l2(
             if norm > 0:
                 arr = arr / norm
         return arr, do_l2
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         # Log error and return original values (converted to float32 if possible)
         logger.error(
             "Error applying L2 policy in decide_and_apply_l2 "
@@ -1424,12 +1439,12 @@ def decide_and_apply_l2(
         )
         try:
             arr = np.asarray(embedding, dtype=np.float32)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Last resort: best-effort array without dtype guarantee
             arr = np.array(embedding)
         return arr, False
 
-def _should_enforce_policy(user: Optional[User] = None) -> bool:
+def _should_enforce_policy(user: User | None = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
     if env_val is not None:
@@ -1442,18 +1457,18 @@ def _should_enforce_policy(user: Optional[User] = None) -> bool:
         cfg_val = settings.get("EMBEDDINGS_ENFORCE_POLICY", None)
         if isinstance(cfg_val, bool):
             return cfg_val
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     # 4) Admin bypass unless strict enforcement requested
     try:
         if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
             return False
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     # Default: do not enforce
     return False
 
-def resolve_fallback_chain(primary_provider: str) -> List[str]:
+def resolve_fallback_chain(primary_provider: str) -> list[str]:
     # Configurable chain; else default
     try:
         mapping = settings.get("EMBEDDINGS_FALLBACK_CHAIN", {}) or {}
@@ -1461,7 +1476,7 @@ def resolve_fallback_chain(primary_provider: str) -> List[str]:
             chain = mapping.get(primary_provider, None)
             if isinstance(chain, list) and chain:
                 return [primary_provider] + [p for p in chain if isinstance(p, str)]
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     defaults = {
         "openai": ["openai", "huggingface", "onnx", "local_api"],
@@ -1471,7 +1486,7 @@ def resolve_fallback_chain(primary_provider: str) -> List[str]:
     }
     return defaults.get(primary_provider, [primary_provider])
 
-def _fallback_model_map() -> Dict[str, Dict[str, str]]:
+def _fallback_model_map() -> dict[str, dict[str, str]]:
     """Return mapping for provider-specific model fallbacks.
 
     Shape: {"<src_provider>:<src_model>": {"<dst_provider>": "<dst_model>"}}
@@ -1480,7 +1495,7 @@ def _fallback_model_map() -> Dict[str, Dict[str, str]]:
         m = settings.get("EMBEDDINGS_FALLBACK_MODEL_MAP", None)
         if isinstance(m, dict) and m:
             return m
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     # Sensible defaults for common OpenAI → HF mapping
     return {
@@ -1514,7 +1529,7 @@ def map_model_for_provider(src_provider: str, dst_provider: str, model_id: str) 
         mapped = dst_map.get(dst_provider)
         if isinstance(mapped, str) and mapped:
             return mapped
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     return model_id
 
@@ -1527,7 +1542,7 @@ def _hf_trusts_remote_code(model_name: str) -> bool:
                 logger.info(f"HF trust_remote_code enabled for model '{model_name}' (matched '{pat}')")
                 return True
         return False
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to evaluate TRUSTED_HF_REMOTE_CODE_MODELS for '{model_name}': {e}")
         return False
 
@@ -1560,9 +1575,9 @@ async def get_embeddings_providers_config(current_user: User = Depends(get_reque
             "default_model": cfg.default_model,
             "providers": providers,
         }
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to read embeddings providers config: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load embeddings configuration")
+        raise HTTPException(status_code=500, detail="Failed to load embeddings configuration") from e
 
 # ============================================================================
 # Models and Warmup/Download Utilities
@@ -1582,19 +1597,18 @@ def is_model_allowed(provider: str, model: str) -> bool:
         return False
     return True
 
-def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None) -> str:
+def guess_provider_for_model(model: str, explicit_provider: str | None = None) -> str:
     if explicit_provider:
         return explicit_provider.lower()
     if ":" in model:
         p, _ = model.split(":", 1)
         return p.lower()
     # Heuristic for HF-style ids
-    if "/" in model or model.startswith((
+    if ("/" in model or model.startswith((
         "sentence-transformers/","BAAI/","thenlper/","intfloat/","hkunlp/","Qwen/","microsoft/",
         "google/","facebook/","all-MiniLM-","all-mpnet-","bert-","roberta-","xlm-","distilbert-"
-    )):
-        if model not in ["text-embedding-3-small","text-embedding-3-large","text-embedding-ada-002"]:
-            return "huggingface"
+    ))) and model not in ["text-embedding-3-small","text-embedding-3-large","text-embedding-ada-002"]:
+        return "huggingface"
     return "openai"
 
 # ============================================================================
@@ -1603,11 +1617,11 @@ def guess_provider_for_model(model: str, explicit_provider: Optional[str] = None
 
 def build_provider_config(
     provider: EmbeddingProvider,
-    model: Optional[str],
-    api_key: Optional[str] = None,
-    api_url: Optional[str] = None,
-    dimensions: Optional[int] = None
-) -> Dict[str, Any]:
+    model: str | None,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    dimensions: int | None = None
+) -> dict[str, Any]:
     """Build provider-specific configuration"""
     if not model:
         raise ValueError(f"model is required for provider {provider.value}")
@@ -1684,13 +1698,13 @@ def build_provider_config(
 # ============================================================================
 
 async def create_embeddings_with_circuit_breaker(
-    texts: List[str],
+    texts: list[str],
     provider: str,
     model_id: str,
-    config: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None,
-    dimensions: Optional[int] = None,
-) -> List[List[float]]:
+    config: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+    dimensions: int | None = None,
+) -> list[list[float]]:
     """Create embeddings with circuit breaker protection"""
     breaker = get_or_create_circuit_breaker(provider)
 
@@ -1749,7 +1763,7 @@ async def create_embeddings_with_circuit_breaker(
                     if status_code >= 400:
                         try:
                             detail = resp.text
-                        except Exception:
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                             detail = ""
                         raise HTTPException(status_code=status_code, detail=f"Cohere error: {detail}")
                     data = resp.json()
@@ -1767,7 +1781,7 @@ async def create_embeddings_with_circuit_breaker(
                         embs = data["embeddings"]
                     elif isinstance(data.get("embeddings"), dict) and "float" in data["embeddings"]:
                         embs = data["embeddings"]["float"]
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     embs = None
                 if not embs:
                     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Cohere response format")
@@ -1797,7 +1811,7 @@ async def create_embeddings_with_circuit_breaker(
                     if status_code >= 400:
                         try:
                             detail = resp.text
-                        except Exception:
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                             detail = ""
                         raise HTTPException(status_code=status_code, detail=f"Google Embeddings error: {detail}")
                     data = resp.json()
@@ -1819,7 +1833,7 @@ async def create_embeddings_with_circuit_breaker(
                         if not isinstance(vec, list):
                             raise ValueError("invalid embedding vector")
                         embs.append(vec)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     embs = []
                 if not embs or len(embs) != len(texts):
                     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Invalid Google embeddings response format")
@@ -1842,7 +1856,7 @@ async def create_embeddings_with_circuit_breaker(
                     return [item.get("embedding", []) for item in data]
                 except HTTPException:
                     raise
-                except Exception as exc:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
                     raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"MLX embeddings error: {exc}") from exc
             else:
                 raise ValueError(f"Unknown provider: {provider}")
@@ -1875,20 +1889,20 @@ async def create_embeddings_with_circuit_breaker(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service temporarily unavailable for provider {provider}. Please try again later."
-        )
-    except Exception as e:
+        ) from e
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create embeddings with {provider}: {e}")
         raise
 
 async def create_embeddings_batch_async(
-    texts: List[str],
+    texts: list[str],
     provider: str,
-    model_id: Optional[str] = None,
-    dimensions: Optional[int] = None,
-    api_key: Optional[str] = None,
-    api_url: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-) -> List[List[float]]:
+    model_id: str | None = None,
+    dimensions: int | None = None,
+    api_key: str | None = None,
+    api_url: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> list[list[float]]:
     """Async wrapper for embeddings with caching and circuit breaker"""
     provider = (provider or "").strip().lower()
 
@@ -1931,7 +1945,7 @@ async def create_embeddings_batch_async(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
-            )
+            ) from None
 
         try:
             _validate_dimensions_request(provider, model_id or "", dimensions)
@@ -1997,7 +2011,7 @@ async def create_embeddings_batch_async(
                     ) from e
                 except HTTPException:
                     raise
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to create embeddings for batch: {e}")
 
                     # Try to close and recreate connection for this provider
@@ -2006,7 +2020,7 @@ async def create_embeddings_batch_async(
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail=f"Embedding service error: {str(e)}"
-                    )
+                    ) from e
 
         if len(all_new_embeddings) != len(uncached_texts):
             raise HTTPException(
@@ -2044,7 +2058,7 @@ async def create_embedding_endpoint(
     embedding_request: CreateEmbeddingRequest = Body(...),
     current_user: User = Depends(get_request_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-    x_provider: Optional[str] = Header(None, alias="x-provider"),
+    x_provider: str | None = Header(None, alias="x-provider"),
     response: Response = None
 ):
     """Create embeddings with circuit breaker protection and enhanced error recovery"""
@@ -2059,8 +2073,8 @@ async def create_embedding_endpoint(
     start_time = time.time()
 
     user_metadata = _build_user_metadata(current_user)
-    rg_handle_id: Optional[str] = None
-    rg_commit_op_id: Optional[str] = None
+    rg_handle_id: str | None = None
+    rg_commit_op_id: str | None = None
     rg_reserved_units: int = 0
     rg_actual_units: int = 0
     rg_governor = None
@@ -2114,20 +2128,20 @@ async def create_embedding_endpoint(
         provider = (provider or "").lower()
 
         try:
-            provider_enum = EmbeddingProvider(provider)
+            EmbeddingProvider(provider)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
-            )
+            ) from None
 
         _validate_dimensions_request(provider, model, embedding_request.dimensions)
 
         # Parse and validate input FIRST (before policy checks)
-        texts_to_embed: List[str] = []
+        texts_to_embed: list[str] = []
         provided_token_arrays = False
         provided_token_count = 0
-        token_lengths: Optional[List[int]] = None
+        token_lengths: list[int] | None = None
 
         if isinstance(embedding_request.input, str):
             if not embedding_request.input.strip():
@@ -2153,7 +2167,7 @@ async def create_embedding_endpoint(
                     texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="single").inc()
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             elif all(isinstance(item, list) for item in embedding_request.input):
                 if len(embedding_request.input) > 2048:
@@ -2163,7 +2177,7 @@ async def create_embedding_endpoint(
                     texts_to_embed, provided_token_count, token_lengths = tokens_to_texts(embedding_request.input, model)
                     provided_token_arrays = True
                     embedding_token_inputs_total.labels(mode="batch").inc()
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid token array input") from e
             else:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid input type")
@@ -2172,7 +2186,7 @@ async def create_embedding_endpoint(
 
         # Enforce per-model token length limits (fail-fast)
         max_tokens = _get_model_max_tokens(provider, model)
-        too_long: List[Tuple[int, int]] = []  # (index, token_count)
+        too_long: list[tuple[int, int]] = []  # (index, token_count)
         token_total = 0
         if provided_token_arrays and token_lengths is not None:
             for idx, tok in enumerate(token_lengths):
@@ -2197,7 +2211,6 @@ async def create_embedding_endpoint(
             )
 
         # Provider/model allowlist enforcement (after input validation)
-        import os as _os
         # Enforce allowlists based on config/env; admin may bypass unless STRICT is set
         enforce_policy = _should_enforce_policy(current_user)
         allowed_providers = _get_allowed_providers()
@@ -2220,15 +2233,15 @@ async def create_embedding_endpoint(
 
         # Guard: return 501 for unsupported/unstyled providers (prevents silent fallback)
         try:
-            prov_enum = EmbeddingProvider(provider)
-        except Exception:
+            EmbeddingProvider(provider)
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Unknown provider is handled as 400 elsewhere, keep behavior consistent
             pass
         else:
             if provider.lower() not in IMPLEMENTED_PROVIDERS:
                 raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=f"Provider '{provider}' not implemented")
 
-        byok_cache: Dict[str, ResolvedByokCredentials] = {}
+        byok_cache: dict[str, ResolvedByokCredentials] = {}
 
         async def _resolve_provider_credentials(name: str) -> ResolvedByokCredentials:
             key = (name or "").strip().lower()
@@ -2245,7 +2258,7 @@ async def create_embedding_endpoint(
         try:
             rg_governor = getattr(request.app.state, "rg_governor", None)
             rg_loader = getattr(request.app.state, "rg_policy_loader", None)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             rg_governor = None
             rg_loader = None
 
@@ -2261,7 +2274,7 @@ async def create_embedding_endpoint(
                 entity = derive_entity_key(request)
                 try:
                     entity_scope, entity_value = entity.split(":", 1)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     user_id = resolve_user_id_for_request(
                         current_user,
                         error_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2272,7 +2285,7 @@ async def create_embedding_endpoint(
                 try:
                     pol = rg_loader.get_policy(policy_id) or {}
                     daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     daily_cap = 0
                 if daily_cap > 0:
                     await backfill_legacy_tokens_to_ledger(
@@ -2313,7 +2326,7 @@ async def create_embedding_endpoint(
                                         "X-RateLimit-Tokens-Remaining": "0",
                                     }
                                 )
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         pass
                     raise HTTPException(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -2323,7 +2336,7 @@ async def create_embedding_endpoint(
                 rg_handle_id = hid
             except HTTPException:
                 raise
-            except Exception as rg_exc:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as rg_exc:
                 logger.debug(f"RG tokens reserve skipped: {rg_exc}")
                 rg_handle_id = None
 
@@ -2335,7 +2348,7 @@ async def create_embedding_endpoint(
             and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true"
         )
 
-        embeddings: List[List[float]] = []
+        embeddings: list[list[float]] = []
         embeddings_from_adapter = False
 
         original_provider = provider
@@ -2348,7 +2361,7 @@ async def create_embedding_endpoint(
         # configuration in tests and production.
         try:
             adapters_enabled = str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             adapters_enabled = False
         if adapters_enabled:
             try:
@@ -2361,9 +2374,9 @@ async def create_embedding_endpoint(
                 if provider in EMBEDDINGS_PROVIDERS_REQUIRE_KEY and not byok_resolution.api_key:
                     if not _should_skip_missing_key(provider, byok_resolution):
                         _raise_missing_embeddings_key(provider)
-                _api_key: Optional[str] = byok_resolution.api_key
+                _api_key: str | None = byok_resolution.api_key
 
-                adapter_request: Dict[str, Any] = {
+                adapter_request: dict[str, Any] = {
                     "input": texts_to_embed if len(texts_to_embed) > 1 else texts_to_embed[0],
                     "model": model,
                     "api_key": _api_key,
@@ -2376,7 +2389,7 @@ async def create_embedding_endpoint(
                     adapter_request["dimensions"] = embedding_request.dimensions
                 result = adapter.embed(adapter_request) if adapter else None
                 if isinstance(result, dict) and isinstance(result.get("data"), list):
-                    embs: List[List[float]] = []
+                    embs: list[list[float]] = []
                     for item in result["data"]:
                         vec = item.get("embedding") if isinstance(item, dict) else None
                         if isinstance(vec, list):
@@ -2384,7 +2397,7 @@ async def create_embedding_endpoint(
                     if embs and len(embs) == len(texts_to_embed):
                         # Adapter-provided vectors may already be normalized. Preserve them as-is
                         # unless LLM_EMBEDDINGS_L2_NORMALIZE explicitly requests normalization.
-                        processed: List[List[float]] = []
+                        processed: list[list[float]] = []
                         for v in embs:
                             arr, did_l2 = decide_and_apply_l2(
                                 v,
@@ -2403,7 +2416,7 @@ async def create_embedding_endpoint(
                 ):
                     raise
                 logger.debug(f"Embeddings adapter path failed; falling back to legacy: {he}")
-            except Exception as _e:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as _e:
                 # Log and fall back silently; adapter path is optional
                 logger.debug(f"Embeddings adapter path failed; falling back to legacy: {_e}")
 
@@ -2424,19 +2437,19 @@ async def create_embedding_endpoint(
                 embeddings.append(vec.tolist())
         elif not embeddings:
             # Try provider with fallback chain on failure
-            last_error: Optional[Exception] = None
+            last_error: Exception | None = None
             # Fallback policy when explicit provider header is present:
             # Strict by default: do NOT fallback when `x-provider` header is set.
             # To allow fallback even with header, set EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
             try:
                 allow_hdr = os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER", "").lower() in ("1", "true", "yes", "on")
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 allow_hdr = False
             fallback_disabled = (x_provider is not None and not allow_hdr)
             chain = [provider] if fallback_disabled else resolve_fallback_chain(provider)
             if enforce_policy and allowed_providers is not None:
                 chain = [p for p in chain if p.lower() in allowed_providers or p == provider]
-            fallback_from: Optional[str] = None
+            fallback_from: str | None = None
             for p in chain:
                 try:
                     if p != provider:
@@ -2469,7 +2482,7 @@ async def create_embedding_endpoint(
                             response.headers['X-Embeddings-Provider'] = provider
                             if fallback_from and fallback_from != provider:
                                 response.headers['X-Embeddings-Fallback-From'] = fallback_from
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         pass
                     break
                 except HTTPException as he:
@@ -2486,7 +2499,7 @@ async def create_embedding_endpoint(
                     embedding_provider_failures.labels(provider=p, model=model, reason=f"http_{he.status_code or 'unknown'}").inc()
                     last_error = he
                     continue
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     embedding_provider_failures.labels(provider=p, model=model, reason="exception").inc()
                     last_error = e
                     continue
@@ -2498,7 +2511,7 @@ async def create_embedding_endpoint(
             final_credentials = byok_cache.get(provider.lower())
             if final_credentials:
                 await final_credentials.touch_last_used()
-        except Exception as exc:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"BYOK touch_last_used failed for {provider}: {exc}")
 
         # Optional dimension adjustment (post-process)
@@ -2509,18 +2522,18 @@ async def create_embedding_endpoint(
                 try:
                     import numpy as _np
                     target = int(embedding_request.dimensions)
-                    adjusted: List[List[float]] = []
+                    adjusted: list[list[float]] = []
                     for v in embeddings:
                         try:
                             arr = _np.asarray(v, dtype=_np.float32)
                             if arr.shape[0] > target:
                                 arr = arr[:target]
                             adjusted.append(arr.tolist())
-                        except Exception:
+                        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                             adjusted.append(v)
                     embeddings = adjusted
                     dims_policy_used = "reduce"
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     # Fallback to normal policy if anything goes wrong
                     dims_policy_used = _dimension_policy()
                     embeddings = adjust_dimensions(embeddings, embedding_request.dimensions, provider, model)
@@ -2531,7 +2544,7 @@ async def create_embedding_endpoint(
             try:
                 if response is not None and dims_policy_used:
                     response.headers['X-Embeddings-Dimensions-Policy'] = dims_policy_used
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Format response
@@ -2593,7 +2606,7 @@ async def create_embedding_endpoint(
             try:
                 if request is not None and hasattr(request, 'state'):
                     api_key_id = getattr(request.state, 'api_key_id', None)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 api_key_id = None
             await log_llm_usage(
                 user_id=user_id,
@@ -2609,16 +2622,16 @@ async def create_embedding_endpoint(
                 total_tokens=int(num_tokens or 0),
                 request_id=getattr(getattr(request, "state", None), "request_id", None) or request.headers.get('X-Request-ID'),
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Attach quota headers if set
         try:
             if hasattr(request, 'state') and response is not None:
                 if getattr(request.state, 'rate_limit_limit', None) is not None:
-                    response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
-                    response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
-        except Exception:
+                    response.headers["X-RateLimit-Limit"] = str(request.state.rate_limit_limit)
+                    response.headers["X-RateLimit-Remaining"] = str(request.state.rate_limit_remaining)
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
         return CreateEmbeddingResponse(
@@ -2640,20 +2653,20 @@ async def create_embedding_endpoint(
                     actuals={"tokens": int(actual)},
                     op_id=rg_commit_op_id,
                 )
-        except Exception as rg_commit_exc:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as rg_commit_exc:
             logger.debug(f"RG tokens commit skipped/failed: {rg_commit_exc}")
         active_embedding_requests.dec()
 
 class EmbeddingsBatchRequest(BaseModel):
-    texts: List[str] = Field(..., min_length=1, description="Texts to embed")
-    model: Optional[str] = Field(None, description="Embedding model identifier")
-    provider: Optional[str] = Field(None, description="Embedding provider override")
-    dimensions: Optional[int] = Field(None, description="Requested output dimensions if supported")
-    batch_size: Optional[int] = Field(None, description="Hint for provider batch sizing")
+    texts: list[str] = Field(..., min_length=1, description="Texts to embed")
+    model: str | None = Field(None, description="Embedding model identifier")
+    provider: str | None = Field(None, description="Embedding provider override")
+    dimensions: int | None = Field(None, description="Requested output dimensions if supported")
+    batch_size: int | None = Field(None, description="Hint for provider batch sizing")
 
 
 class EmbeddingsBatchResponse(BaseModel):
-    embeddings: List[List[float]]
+    embeddings: list[list[float]]
     model: str
     provider: str
     count: int
@@ -2662,7 +2675,8 @@ class EmbeddingsBatchResponse(BaseModel):
 @router.post(
     "/embeddings/batch",
     response_model=EmbeddingsBatchResponse,
-    summary="Create embeddings for a batch of texts"
+    summary="Create embeddings for a batch of texts",
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))],
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,
@@ -2719,7 +2733,7 @@ async def create_embeddings_batch_endpoint(
                 raise exc
     except HTTPException:
         raise
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
 
     user_metadata = _build_user_metadata(current_user)
@@ -2746,9 +2760,9 @@ async def create_embeddings_batch_endpoint(
     try:
         if hasattr(request, 'state') and response is not None:
             if getattr(request.state, 'rate_limit_limit', None) is not None:
-                response.headers["X-RateLimit-Limit"] = str(getattr(request.state, 'rate_limit_limit'))
-                response.headers["X-RateLimit-Remaining"] = str(getattr(request.state, 'rate_limit_remaining'))
-    except Exception:
+                response.headers["X-RateLimit-Limit"] = str(request.state.rate_limit_limit)
+                response.headers["X-RateLimit-Remaining"] = str(request.state.rate_limit_remaining)
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
 
     return EmbeddingsBatchResponse(
@@ -2771,7 +2785,7 @@ async def list_embedding_models():
     default_provider = cfg.get("embedding_provider", "openai")
 
     # Collect known models from provider table + default
-    known: List[Dict[str, Any]] = []
+    known: list[dict[str, Any]] = []
     seen = set()
     # static provider models
     for prov, lst in PROVIDER_MODELS.items():
@@ -2804,7 +2818,7 @@ async def list_embedding_models():
 async def get_embedding_model_info(
     model_id: str,
     request: Request,
-    provider: Optional[str] = Query(None, description="Provider override"),
+    provider: str | None = Query(None, description="Provider override"),
     current_user: User = Depends(get_request_user),
 ):
     model = model_id
@@ -2829,9 +2843,9 @@ async def get_embedding_model_info(
         await credentials.touch_last_used()
     except HTTPException:
         raise
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Model info probe failed for {resolved_provider}:{model}: {exc}")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable") from exc
 
     dimension = None
     if vectors and vectors[0]:
@@ -2852,14 +2866,14 @@ async def get_embedding_model_info(
 
 class TenantQuotaResponse(BaseModel):
     limit_rps: int
-    remaining: Optional[int] = None
+    remaining: int | None = None
 
 
 def _is_single_user_profile() -> bool:
     """Check if profile indicates single-user deployment."""
     try:
         return is_single_user_profile_mode()
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Failed to resolve profile for runtime mode: {}", exc)
         return False
 
@@ -2868,7 +2882,7 @@ def _is_multi_user_runtime() -> bool:
     """Detect whether the current runtime should be treated as multi-user."""
     try:
         return not _is_single_user_profile()
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         return True
 
 
@@ -2887,20 +2901,20 @@ async def get_tenant_quotas(
         val = await client.get(key)
         used = int(val or 0)
         return TenantQuotaResponse(limit_rps=tenant_rps, remaining=max(0, tenant_rps - used))
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         return TenantQuotaResponse(limit_rps=tenant_rps, remaining=None)
     finally:
         try:
             if client is not None:
                 await ensure_async_client_closed(client)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
 
 class PriorityBumpRequest(BaseModel):
     job_id: str
     priority: str = Field(..., description="one of: high|normal|low")
-    ttl_seconds: Optional[int] = Field(default=600, ge=1, le=86400)
+    ttl_seconds: int | None = Field(default=600, ge=1, le=86400)
 
 
 @router.post(
@@ -2914,7 +2928,7 @@ class PriorityBumpRequest(BaseModel):
 async def bump_job_priority(
     req: PriorityBumpRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     pr = (req.priority or "").strip().lower()
     if pr not in ("high", "normal", "low"):
         raise HTTPException(status_code=400, detail="priority must be one of: high|normal|low")
@@ -2928,10 +2942,10 @@ async def bump_job_priority(
                 "priority": pr,
             },
         )
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Logging must not interfere with admin operations
         pass
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         client = await _get_redis_client()
         key = f"embeddings:priority:override:{req.job_id}"
@@ -2943,39 +2957,39 @@ async def bump_job_priority(
             "priority": pr,
             "ttl_seconds": int(req.ttl_seconds or 600),
         }
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail=f"Failed to set priority override: {e}") from e
     finally:
         try:
             if client is not None:
                 await ensure_async_client_closed(client)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Connection cleanup must never interfere with HTTP error semantics
             pass
 
 
 class ModelActionRequest(BaseModel):
     model: str
-    provider: Optional[str] = None
+    provider: str | None = None
 
 
 class CollectionCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Collection name")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Collection metadata")
-    embedding_model: Optional[str] = Field(default=None, description="Embedding model to associate")
-    provider: Optional[str] = Field(default=None, description="Provider override for dimension detection")
+    metadata: dict[str, Any] | None = Field(default=None, description="Collection metadata")
+    embedding_model: str | None = Field(default=None, description="Embedding model to associate")
+    provider: str | None = Field(default=None, description="Provider override for dimension detection")
 
 
 class CollectionResponse(BaseModel):
     name: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CollectionStatsResponse(BaseModel):
     name: str
     count: int
-    embedding_dimension: Optional[int] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    embedding_dimension: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post(
@@ -3002,9 +3016,9 @@ async def warmup_model(
         return {"status": "ok", "provider": provider, "model": payload.model, "warmed": True}
     except HTTPException:
         raise
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Warmup failed for {provider}:{payload.model}: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}") from e
 
 
 @router.post(
@@ -3032,9 +3046,9 @@ async def download_model(
         return {"status": "ok", "provider": provider, "model": payload.model, "downloaded": True}
     except HTTPException:
         raise
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Download failed for {provider}:{payload.model}: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Download failed: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Download failed: {e}") from e
 
 @router.delete(
     "/embeddings/cache",
@@ -3050,7 +3064,7 @@ async def clear_cache(
     await embedding_cache.clear()
 
     logger.info(
-        f"Cache cleared by admin",
+        "Cache cleared by admin",
         extra={
             "admin_id": current_user.id,
             "entries_cleared": cache_stats['size']
@@ -3087,7 +3101,7 @@ async def create_collection(
 
     try:
         manager.client.get_collection(name=name)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
     else:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Collection '{name}' already exists")
@@ -3111,7 +3125,7 @@ async def create_collection(
             first = vectors[0]
             if isinstance(first, (list, tuple, np.ndarray)):
                 dimension = len(first)
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Collection dimension probe failed for {name}: {exc}")
 
     if dimension:
@@ -3124,13 +3138,13 @@ async def create_collection(
 
 @router.get(
     "/embeddings/collections",
-    response_model=List[CollectionResponse],
+    response_model=list[CollectionResponse],
     summary="List ChromaDB collections"
 )
-async def list_collections(current_user: User = Depends(get_request_user)) -> List[CollectionResponse]:
+async def list_collections(current_user: User = Depends(get_request_user)) -> list[CollectionResponse]:
     manager = _chroma_manager_for_user(current_user)
     collections = manager.client.list_collections()
-    response: List[CollectionResponse] = []
+    response: list[CollectionResponse] = []
     for collection in collections:
         metadata = getattr(collection, "metadata", {}) or {}
         response.append(CollectionResponse(name=collection.name, metadata=metadata))
@@ -3150,9 +3164,9 @@ async def delete_collection(
     manager = _chroma_manager_for_user(current_user)
     try:
         manager.client.delete_collection(name=collection_name)
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to delete collection {collection_name}: {exc}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found") from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -3168,16 +3182,16 @@ async def get_collection_stats(
     manager = _chroma_manager_for_user(current_user)
     try:
         collection = manager.client.get_collection(name=collection_name)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found") from None
 
     try:
         count = int(collection.count())
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         try:
             data = collection.get(limit=0, include=[])
             count = len(data.get("ids") or [])
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             count = 0
 
     metadata = getattr(collection, "metadata", {}) or {}
@@ -3196,7 +3210,7 @@ async def get_collection_stats(
                     candidate = bucket
             if candidate is not None and hasattr(candidate, "__len__"):
                 dimension = len(candidate)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
     return CollectionStatsResponse(
@@ -3228,11 +3242,11 @@ async def health_check():
 
     try:
         hyde_enabled = bool(settings.get("HYDE_ENABLED", False))
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         hyde_enabled = False
     try:
         hyde_questions = int(settings.get("HYDE_QUESTIONS_PER_CHUNK", 0) or 0)
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         hyde_questions = 0
     hyde_info = {
         "enabled": hyde_enabled,
@@ -3246,16 +3260,12 @@ async def health_check():
         hyde_info["model"] = hyde_model
     hyde_weight = settings.get("HYDE_WEIGHT_QUESTION_MATCH")
     if hyde_weight is not None:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             hyde_info["weight"] = float(hyde_weight)
-        except Exception:
-            pass
     hyde_k_fraction = settings.get("HYDE_K_FRACTION")
     if hyde_k_fraction is not None:
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             hyde_info["k_fraction"] = float(hyde_k_fraction)
-        except Exception:
-            pass
 
     health_status = {
         "status": "healthy" if EMBEDDINGS_AVAILABLE else "degraded",
@@ -3310,7 +3320,7 @@ async def reset_circuit_breaker(
     breaker.reset()
 
     logger.info(
-        f"Circuit breaker reset by admin",
+        "Circuit breaker reset by admin",
         extra={
             "admin_id": current_user.id,
             "provider": provider
@@ -3341,13 +3351,13 @@ async def get_metrics(
                     if s.name.endswith('_total') or s.name == metric.name:
                         total += float(s.value)
             return int(total)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _safe_gauge_value(g):
         try:
             return g._value.get()
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _details(metric):
@@ -3356,13 +3366,11 @@ async def get_metrics(
             for m in metric.collect():
                 for s in m.samples:
                     entry = {"name": s.name, "value": float(s.value)}
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         entry.update(s.labels)
-                    except Exception:
-                        pass
                     samples.append(entry)
             return samples
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             return []
 
     payload = {
@@ -3405,13 +3413,13 @@ async def get_metrics(
 class DLQItem(BaseModel):
     entry_id: str = Field(..., description="Redis stream entry ID")
     queue: str = Field(..., description="DLQ stream name")
-    job_id: Optional[str] = None
-    error: Optional[str] = None
-    failed_at: Optional[str] = None
-    payload: Optional[Dict[str, Any]] = None
-    fields: Dict[str, Any] = Field(default_factory=dict)
-    dlq_state: Optional[str] = None
-    operator_note: Optional[str] = None
+    job_id: str | None = None
+    error: str | None = None
+    failed_at: str | None = None
+    payload: dict[str, Any] | None = None
+    fields: dict[str, Any] = Field(default_factory=dict)
+    dlq_state: str | None = None
+    operator_note: str | None = None
 
 
 def _redact_obj(obj: Any, depth: int = 0) -> Any:
@@ -3430,9 +3438,8 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
         return out
     if isinstance(obj, list):
         return [_redact_obj(x, depth + 1) for x in obj]
-    if isinstance(obj, str):
-        if len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
-            return "***REDACTED***"
+    if isinstance(obj, str) and len(obj) > 12 and any(x in obj.lower() for x in ("sk-", "api_key", "bearer ")):
+        return "***REDACTED***"
     return obj
 
 
@@ -3444,20 +3451,20 @@ def _redact_obj(obj: Any, depth: int = 0) -> Any:
 async def list_dlq_items(
     stage: str = Query("embedding", description="Stage: chunking|embedding|storage|content"),
     count: int = Query(50, ge=1, le=500, description="Max items to return"),
-    job_id: Optional[str] = Query(None, description="Optional job_id to filter"),
+    job_id: str | None = Query(None, description="Optional job_id to filter"),
     _current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """List DLQ items for a stage.
 
     _current_user is included to enforce authentication via dependencies.
     """
     stream = _dlq_stream_name(stage)
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         client = await _get_redis_client()
         # Reverse range: most recent first
         entries = await client.xrevrange(stream, "+", "-", count=count)
-        items: List[DLQItem] = []
+        items: list[DLQItem] = []
         for entry_id, fields in entries:
             # fields is a dict[str,str]
             payload = None
@@ -3467,7 +3474,7 @@ async def list_dlq_items(
                     payload = json.loads(raw_payload)
                 elif fields.get("payload_enc"):
                     payload = decrypt_payload_if_present(fields.get("payload_enc"))
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 payload = None
             if payload is not None:
                 payload = _redact_obj(payload)
@@ -3483,7 +3490,7 @@ async def list_dlq_items(
                 if isinstance(state_map, dict):
                     dlq_state = state_map.get("state") or fields.get("dlq_state")
                     operator_note = state_map.get("operator_note")
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 # Fallback to inline DLQ state fields if available
                 dlq_state = fields.get("dlq_state")
 
@@ -3501,13 +3508,13 @@ async def list_dlq_items(
         return {"stream": stream, "count": len(items), "items": [i.model_dump() for i in items]}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}") from e
     finally:
         try:
             if client is not None:
                 await ensure_async_client_closed(client)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Connection cleanup must never interfere with HTTP error semantics
             pass
 
@@ -3516,7 +3523,7 @@ class DLQRequeueRequest(BaseModel):
     stage: str = Field(..., description="Stage: chunking|embedding|storage|content")
     entry_id: str = Field(..., description="Redis stream entry ID")
     delete_from_dlq: bool = Field(default=True)
-    override_fields: Optional[Dict[str, Any]] = Field(default=None, description="Optional field overrides before requeue")
+    override_fields: dict[str, Any] | None = Field(default=None, description="Optional field overrides before requeue")
 
 
 @router.post(
@@ -3527,7 +3534,7 @@ class DLQRequeueRequest(BaseModel):
 async def requeue_dlq_item(
     req: DLQRequeueRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
@@ -3542,7 +3549,7 @@ async def requeue_dlq_item(
         try:
             st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{entry_id}")
             effective_state = st_map.get("state") or fields.get("dlq_state")
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             effective_state = fields.get("dlq_state")
         if effective_state and effective_state not in ("approved_for_requeue",):
             dlq_requeued_total.labels(queue_name=dlq_stream, status="blocked").inc()
@@ -3556,14 +3563,14 @@ async def requeue_dlq_item(
             if raw:
                 try:
                     original = json.loads(raw)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     original = None
                 if isinstance(original, dict):
                     try:
                         validate_schema(req.stage, original)
-                    except Exception as ve:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as ve:
                         warning = f"payload schema validation failed: {ve}"
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         # Remove DLQ-specific fields
         for k in ["consumer_group", "worker_id", "failed_at", "error", "payload"]:
@@ -3574,10 +3581,8 @@ async def requeue_dlq_item(
         await client.xadd(live_stream, requeue_fields)
         # Optionally delete from DLQ
         if req.delete_from_dlq:
-            try:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 await client.xdel(dlq_stream, entry_id)
-            except Exception:
-                pass
         dlq_requeued_total.labels(queue_name=dlq_stream, status="success").inc()
         out = {"message": "requeued", "from": dlq_stream, "to": live_stream, "entry_id": entry_id}
         if warning:
@@ -3599,24 +3604,24 @@ async def requeue_dlq_item(
                 action="requeue",
                 metadata={"from": dlq_stream, "to": live_stream, "stage": req.stage, "warning": bool(warning)},
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         return out
     except HTTPException:
         dlq_requeued_total.labels(queue_name=dlq_stream, status="not_found").inc()
         raise
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
-        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}") from e
     finally:
         await ensure_async_client_closed(client)
 
 
 class DLQRequeueBulkRequest(BaseModel):
     stage: str
-    entry_ids: List[str]
+    entry_ids: list[str]
     delete_from_dlq: bool = True
-    override_fields: Optional[Dict[str, Any]] = None
+    override_fields: dict[str, Any] | None = None
 
 
 @router.post(
@@ -3627,11 +3632,11 @@ class DLQRequeueBulkRequest(BaseModel):
 async def requeue_dlq_bulk(
     req: DLQRequeueBulkRequest,
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     dlq_stream = _dlq_stream_name(req.stage)
     live_stream = _live_stream_name(req.stage)
     client = await _get_redis_client()
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     try:
         for eid in req.entry_ids:
             status = "success"
@@ -3645,7 +3650,7 @@ async def requeue_dlq_bulk(
                     try:
                         st_map = await client.hgetall(f"dlqstate:{dlq_stream}:{eid_found}")
                         effective_state = st_map.get("state") or fields.get("dlq_state")
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         effective_state = fields.get("dlq_state")
                     if effective_state and effective_state not in ("approved_for_requeue",):
                         status = f"blocked:{effective_state}"
@@ -3658,14 +3663,14 @@ async def requeue_dlq_bulk(
                         if raw:
                             try:
                                 original = json.loads(raw)
-                            except Exception:
+                            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                                 original = None
                             if isinstance(original, dict):
                                 try:
                                     validate_schema(req.stage, original)
-                                except Exception as ve:
+                                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as ve:
                                     warning = f"payload schema validation failed: {ve}"
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         pass
                     for k in ["consumer_group", "worker_id", "failed_at", "error"]:
                         requeue_fields.pop(k, None)
@@ -3674,11 +3679,9 @@ async def requeue_dlq_bulk(
                         requeue_fields.update(req.override_fields)
                     await client.xadd(live_stream, requeue_fields)
                     if req.delete_from_dlq:
-                        try:
+                        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             await client.xdel(dlq_stream, eid)
-                        except Exception:
-                            pass
-            except Exception as e:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 status = f"error:{type(e).__name__}"
                 dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
             else:
@@ -3713,7 +3716,7 @@ async def requeue_dlq_bulk(
                 action="bulk_requeue",
                 metadata={"stage": req.stage, **counts, "total": len(req.entry_ids)},
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         return {"from": dlq_stream, "to": live_stream, "results": results}
     finally:
@@ -3736,12 +3739,12 @@ async def get_dlq_stats(
         for q in queues:
             try:
                 depths[q] = await client.xlen(q)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 depths[q] = 0
             dq = f"{q}:dlq"
             try:
                 dlq_depths[dq] = await client.xlen(dq)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 dlq_depths[dq] = 0
         total_dlq = sum(dlq_depths.values())
 
@@ -3770,11 +3773,11 @@ async def get_dlq_stats(
                         if stage in stages:
                             stages[stage]["processed"] += proc
                             stages[stage]["failed"] += fail
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         continue
                 if cursor == 0:
                     break
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
         return {"queues": depths, "dlq": dlq_depths, "total_dlq": total_dlq, "stages": stages}
@@ -3790,7 +3793,7 @@ class DLQStateSetRequest(BaseModel):
     stage: str
     entry_id: str
     state: str  # quarantined | approved_for_requeue | ignored
-    operator_note: Optional[str] = None
+    operator_note: str | None = None
 
 
 def _dlq_state_key(stream: str, entry_id: str) -> str:
@@ -3839,7 +3842,7 @@ async def set_dlq_state(req: DLQStateSetRequest, current_user: User = Depends(ge
                 action="quarantine_state",
                 metadata={"stage": req.stage, "state": st, "operator_note": req.operator_note or ""},
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         return {"ok": True, "stream": dlq_stream, "entry_id": req.entry_id, "state": st}
     finally:
@@ -3921,7 +3924,7 @@ async def control_stage(req: StageControlRequest, current_user: User = Depends(g
                 action=req.action,
                 metadata={"stages": stages, "action": req.action},
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         return {"ok": True, "stages": stages, "action": req.action}
     finally:
@@ -3934,7 +3937,7 @@ async def control_stage(req: StageControlRequest, current_user: User = Depends(g
 
 class JobSkipRequest(BaseModel):
     job_id: str
-    ttl_seconds: Optional[int] = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
+    ttl_seconds: int | None = Field(default=7 * 24 * 3600, ge=60, description="TTL for skip registry entry")
 
 
 def _skip_key(job_id: str) -> str:
@@ -3967,7 +3970,7 @@ async def mark_job_skipped(req: JobSkipRequest, current_user: User = Depends(get
                 action="skip",
                 metadata={"ttl_seconds": int(req.ttl_seconds or 0)},
             )
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
         return {"ok": True, "job_id": req.job_id, "ttl_seconds": req.ttl_seconds}
     finally:
@@ -3994,11 +3997,11 @@ async def get_job_skip_status(job_id: str = Query(..., description="Job ID to ch
 
 class LedgerEntry(BaseModel):
     key: str
-    status: Optional[str] = None
-    ts: Optional[int] = None
-    job_id: Optional[str] = None
-    raw: Optional[Union[Dict[str, Any], str]] = None
-    ttl_seconds: Optional[int] = None
+    status: str | None = None
+    ts: int | None = None
+    job_id: str | None = None
+    raw: dict[str, Any] | str | None = None
+    ttl_seconds: int | None = None
 
 
 @router.get(
@@ -4007,10 +4010,10 @@ class LedgerEntry(BaseModel):
     dependencies=[Depends(require_permissions(EMBEDDINGS_ADMIN))],
 )
 async def get_ledger_status(
-    idempotency_key: Optional[str] = Query(default=None),
-    dedupe_key: Optional[str] = Query(default=None),
+    idempotency_key: str | None = Query(default=None),
+    dedupe_key: str | None = Query(default=None),
     _current_user: User = Depends(get_request_user),
-) -> Dict[str, Optional[LedgerEntry]]:
+) -> dict[str, LedgerEntry | None]:
     """Return current ledger values for provided keys.
 
     _current_user is included to enforce authentication and RBAC via dependencies.
@@ -4024,7 +4027,7 @@ async def get_ledger_status(
         raise HTTPException(status_code=400, detail="Provide idempotency_key and/or dedupe_key")
     client = await _get_redis_client()
     try:
-        out: Dict[str, Optional[LedgerEntry]] = {"idempotency": None, "dedupe": None}
+        out: dict[str, LedgerEntry | None] = {"idempotency": None, "dedupe": None}
         if idempotency_key:
             k = f"embeddings:ledger:idemp:{idempotency_key}"
             raw = await client.get(k)
@@ -4037,7 +4040,7 @@ async def get_ledger_status(
                     entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
                     entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
                     entry.raw = obj if isinstance(obj, dict) else raw
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     entry.raw = raw
                     entry.status = str(raw)
             out["idempotency"] = entry
@@ -4053,7 +4056,7 @@ async def get_ledger_status(
                     entry.ts = int(obj.get("ts")) if isinstance(obj, dict) and obj.get("ts") is not None else None
                     entry.job_id = str(obj.get("job_id")) if isinstance(obj, dict) else None
                     entry.raw = obj if isinstance(obj, dict) else raw
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     entry.raw = raw
                     entry.status = str(raw)
             out["dedupe"] = entry
@@ -4068,19 +4071,19 @@ async def get_ledger_status(
 
 class ReembedScheduleRequest(BaseModel):
     media_id: int = Field(..., description="Target media_id to re-embed")
-    user_id: Optional[str] = Field(default=None, description="Owner user id; defaults to current admin")
-    idempotency_key: Optional[str] = Field(default=None, description="Optional idempotency key to dedupe creation")
-    dedupe_key: Optional[str] = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
-    operation_id: Optional[str] = Field(default=None, description="Optional operation id for replay prevention")
-    priority: Optional[int] = Field(default=50, ge=0, le=100)
-    user_tier: Optional[str] = Field(default="free")
-    embedder_name: Optional[str] = None
-    embedder_version: Optional[str] = None
+    user_id: str | None = Field(default=None, description="Owner user id; defaults to current admin")
+    idempotency_key: str | None = Field(default=None, description="Optional idempotency key to dedupe creation")
+    dedupe_key: str | None = Field(default=None, description="Optional dedupe key; defaults to idempotency_key if not provided")
+    operation_id: str | None = Field(default=None, description="Optional operation id for replay prevention")
+    priority: int | None = Field(default=50, ge=0, le=100)
+    user_tier: str | None = Field(default="free")
+    embedder_name: str | None = None
+    embedder_version: str | None = None
 
 
 class ReembedScheduleResponse(BaseModel):
     id: int
-    uuid: Optional[str] = None
+    uuid: str | None = None
     status: str
     domain: str
     queue: str
@@ -4119,7 +4122,6 @@ async def schedule_reembed(
     }
     # Construct default idempotency/dedupe if not provided
     idempotency_key = req.idempotency_key or f"reembed:{uid}:{int(req.media_id)}:{req.embedder_name or ''}:{req.embedder_version or ''}"
-    dedupe_key = req.dedupe_key or idempotency_key
 
     # Create job via JobManager
     try:
@@ -4163,16 +4165,14 @@ async def schedule_reembed(
                 force_regenerate=False,
                 require_redis=not redis_pipeline.allow_stub(),
             )
-        except Exception:
-            try:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 jm.fail_job(
                     int(root_row["id"]),
                     error="Failed to enqueue re-embed job to Redis",
                     retryable=False,
                     enforce=False,
                 )
-            except Exception:
-                pass
             raise
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="reembed", traceparent=tp).info(
             "Scheduled re-embed job: root_id=%s stream_id=%s media_id=%s",
@@ -4188,15 +4188,15 @@ async def schedule_reembed(
             queue=str(root_row.get("queue")),
             job_type=str(root_row.get("job_type")),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
+        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}") from e
 
 
 # ---------------------------------------------------------------------------
 # Orchestrator snapshot + SSE (admin only)
 # ---------------------------------------------------------------------------
 
-async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[float] = None) -> Dict[str, Any]:
+async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: float | None = None) -> dict[str, Any]:
     """Compute a single orchestrator snapshot.
 
     Returns dict with keys: queues, dlq, ages, stages, flags, ts
@@ -4207,16 +4207,16 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
 
     # Build the same structure as get_dlq_stats and add queue ages and stage flags
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
-    depths: Dict[str, int] = {}
-    dlq_depths: Dict[str, int] = {}
-    ages: Dict[str, float] = {}
+    depths: dict[str, int] = {}
+    dlq_depths: dict[str, int] = {}
+    ages: dict[str, float] = {}
     # Optional per-priority depths when priority routing is enabled
     priority_enabled = str(os.getenv("EMBEDDINGS_PRIORITY_ENABLED", "false")).lower() in ("1", "true", "yes")
-    priority_depths: Dict[str, Dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
+    priority_depths: dict[str, dict[str, int]] = {"chunking": {}, "embedding": {}, "storage": {}, "content": {}}
     for q in queues:
         try:
             depths[q] = await client.xlen(q)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             depths[q] = 0
         # Expose per-priority sub-queue depths (high/normal/low)
         if priority_enabled:
@@ -4225,7 +4225,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
                 sub = f"{q}:{pr}"
                 try:
                     dsub = await client.xlen(sub)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     dsub = 0
                 depths[sub] = dsub
                 priority_depths[stage][pr] = dsub
@@ -4238,20 +4238,18 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
                 ages[q] = max(0.0, (now_ts * 1000 - ts_ms) / 1000.0)
             else:
                 ages[q] = 0.0
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             ages[q] = 0.0
         dq = f"{q}:dlq"
         try:
             dlq_depths[dq] = await client.xlen(dq)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             dlq_depths[dq] = 0
-        try:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             embedding_queue_age_current_seconds.labels(queue_name=q).set(float(ages.get(q, 0.0)))
-        except Exception:
-            pass
 
     # stage counters (aggregate from worker snapshots)
-    stages: Dict[str, Dict[str, int]] = {
+    stages: dict[str, dict[str, int]] = {
         "chunking": {"processed": 0, "failed": 0},
         "embedding": {"processed": 0, "failed": 0},
         "storage": {"processed": 0, "failed": 0},
@@ -4276,15 +4274,15 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
                     if st in stages:
                         stages[st]["processed"] += int(m.get("jobs_processed", 0) or 0)
                         stages[st]["failed"] += int(m.get("jobs_failed", 0) or 0)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     continue
             if cursor == 0:
                 break
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # stage flags
-    flags: Dict[str, Dict[str, bool]] = {}
+    flags: dict[str, dict[str, bool]] = {}
     for st in ("chunking", "embedding", "storage", "content"):
         p = await client.get(f"embeddings:stage:{st}:paused")
         d = await client.get(f"embeddings:stage:{st}:drain")
@@ -4295,7 +4293,7 @@ async def _build_orchestrator_snapshot(client: aioredis.Redis, now_ts: Optional[
         try:
             embedding_stage_flag.labels(stage=st, flag="paused").set(1.0 if flags[st]["paused"] else 0.0)
             embedding_stage_flag.labels(stage=st, flag="drain").set(1.0 if flags[st]["drain"] else 0.0)
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
     return {"queues": depths, "dlq": dlq_depths, "ages": ages, "stages": stages, "flags": flags, "priority": priority_depths if priority_enabled else {}, "ts": now_ts}
@@ -4314,12 +4312,12 @@ async def _sse_orchestrator_stream(client: aioredis.Redis):
             yield ":\n\n"
             # Jittered interval around 5s
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
-        except Exception as e:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Keep the stream alive; emit a sanitized error and log details server-side
             try:
                 logger.exception("Orchestrator stream error")
                 yield f"event: error\ndata: {json.dumps({'error': 'Temporary service error'})}\n\n"
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
             await _asyncio.sleep(_random.uniform(4.5, 5.5))
 
@@ -4336,7 +4334,7 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
             "Embeddings orchestrator SSE connection initiated",
             extra={"user_id": getattr(_current_user, "id", None)},
         )
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Audit logging is best-effort and must not break the SSE stream
         pass
     client = await _get_redis_client()
@@ -4352,7 +4350,7 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
                 try:
                     orchestrator_sse_connections.dec()
                     orchestrator_sse_disconnects_total.inc()
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     pass
                 await ensure_async_client_closed(client)
         return StreamingResponse(_gen(), media_type="text/event-stream")
@@ -4375,7 +4373,7 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
                     try:
                         payload = await _build_orchestrator_snapshot(client)
                         await stream.send_event("summary", payload)
-                    except Exception as e:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         # Emit a non-fatal sanitized error frame and continue; log details server-side
                         logger.exception("Provider error during orchestrator snapshot")
                         await stream.error("provider_error", "Temporary service error", data=None, close=False)
@@ -4389,27 +4387,21 @@ async def orchestrator_events(_current_user: User = Depends(get_request_user)):
             except asyncio.CancelledError:
                 # Client cancelled: cancel producer promptly and re-raise
                 if not producer.done():
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         producer.cancel()
-                    except Exception:
-                        pass
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         await asyncio.gather(producer, return_exceptions=True)
-                    except Exception:
-                        pass
                 raise
             else:
                 # Normal shutdown: ensure producer completes without forced cancel
                 if not producer.done():
-                    try:
+                    with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         await asyncio.gather(producer, return_exceptions=True)
-                    except Exception:
-                        pass
         finally:
             try:
                 orchestrator_sse_connections.dec()
                 orchestrator_sse_disconnects_total.inc()
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
             await ensure_async_client_closed(client)
 
@@ -4430,34 +4422,28 @@ async def orchestrator_summary(current_user: User = Depends(get_request_user)):
 
     Includes: queues, dlq, ages, stages, flags, ts
     """
-    client: Optional[aioredis.Redis] = None
-    def _zero_snapshot() -> Dict[str, Any]:
+    client: aioredis.Redis | None = None
+    def _zero_snapshot() -> dict[str, Any]:
         return {"queues": {}, "dlq": {}, "ages": {}, "stages": {}, "flags": {}, "ts": datetime.utcnow().timestamp()}
 
     try:
         client = await _get_redis_client()
         if getattr(client, "_tldw_is_stub", False):
-            try:
+            with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 orchestrator_summary_failures_total.inc()
-            except Exception:
-                pass
             snapshot = _zero_snapshot()
             await ensure_async_client_closed(client)
             client = None
             return snapshot
-    except Exception:
-        try:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             orchestrator_summary_failures_total.inc()
-        except Exception:
-            pass
         return _zero_snapshot()
     try:
         return await _build_orchestrator_snapshot(client)
-    except Exception:
-        try:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+        with suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
             orchestrator_summary_failures_total.inc()
-        except Exception:
-            pass
         return _zero_snapshot()
     finally:
         await ensure_async_client_closed(client)

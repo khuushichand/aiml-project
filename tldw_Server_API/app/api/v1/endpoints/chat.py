@@ -4,42 +4,22 @@
 # Imports
 from __future__ import annotations
 
-import os
-
-# ---------------------------------------------------------------------------
-# Imports
-# ---------------------------------------------------------------------------
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
-    get_request_user,
-    User,
-    resolve_user_id_for_request,
-)
-from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
-from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
-    validate_provider_override,
-    get_override_default_model,
-    get_override_credentials,
-    get_llm_provider_override,
-    get_llm_provider_overrides_snapshot,
-)
-from tldw_Server_API.app.core.Utils.image_validation import (
-    validate_image_url,
-    get_max_base64_bytes,
-)
 import asyncio
-import sys
-import math
 import json
+import math
+import os
+import re
+import sys
+import threading
 import time
 import uuid
-from functools import partial, lru_cache
 from collections import defaultdict, deque
-from typing import Any, Callable, Dict, List, Optional, Tuple, Literal
-from datetime import date, datetime, timezone, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache, partial
+from typing import Any, Callable, Literal
 from unittest.mock import Mock
 from weakref import WeakKeyDictionary
-import threading
-import re
 
 from fastapi import (
     APIRouter,
@@ -53,6 +33,27 @@ from fastapi import (
     status,
 )
 
+from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
+from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
+    get_llm_provider_override,
+    get_llm_provider_overrides_snapshot,
+    get_override_credentials,
+    get_override_default_model,
+    validate_provider_override,
+)
+
+# ---------------------------------------------------------------------------
+# Imports
+# ---------------------------------------------------------------------------
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
+    User,
+    get_request_user,
+    resolve_user_id_for_request,
+)
+from tldw_Server_API.app.core.Utils.image_validation import (
+    get_max_base64_bytes,
+    validate_image_url,
+)
 
 # Import new modules for integration
 
@@ -63,138 +64,163 @@ def is_authentication_required() -> bool:
     function on the chat module to simulate authentication-disabled scenarios.
     """
     return True
-from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
-from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
-from tldw_Server_API.app.core.Chat.request_queue import get_request_queue, RequestPriority
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    AuditEventType,
-    AuditContext,
-)
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
 from loguru import logger
 from starlette.responses import JSONResponse
 
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
     get_chacha_db_for_user,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
+    ChatAnalyticsBucket,
+    ChatAnalyticsPagination,
+    ChatAnalyticsResponse,
+    ConversationListItem,
+    ConversationListPagination,
+    ConversationListResponse,
+    ConversationMetadata,
+    ConversationTreeNode,
+    ConversationTreePagination,
+    ConversationTreeResponse,
+    ConversationUpdateRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
+    KnowledgeSaveRequest,
+    KnowledgeSaveResponse,
+)
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    API_KEYS as SCHEMAS_API_KEYS,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
+    DEFAULT_LLM_PROVIDER,
     ChatCompletionRequest,
     ChatCompletionSystemMessageParam,
-    DEFAULT_LLM_PROVIDER,
-    API_KEYS as SCHEMAS_API_KEYS,
-    get_api_keys,
     RagContext,
-    RagContextDocument,
 )
+from tldw_Server_API.app.api.v1.schemas.chat_validators import (
+    validate_character_id,
+    validate_conversation_id,
+    validate_max_tokens,
+    validate_request_size,
+    validate_temperature,
+    validate_tool_definitions,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventType,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    map_sender_to_role,
+)
+from tldw_Server_API.app.core.Chat.chat_exceptions import (
+    ChatDatabaseError,
+    ChatErrorCode,
+    ChatModuleException,
+    set_request_id,
+)
+
+# Note: streaming utilities are handled inside chat_service. No direct import needed here.
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    validate_request_payload,
+)
+from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
+from tldw_Server_API.app.core.Chat.chat_service import (
+    apply_prompt_templating,
+    build_call_params_from_request,
+    build_context_and_messages,
+    estimate_tokens_from_json,
+    execute_non_stream_call,
+    execute_streaming_call,
+    moderate_input_messages,
+    perform_chat_api_call,
+    queue_is_active,
+    resolve_provider_and_model,
+    resolve_provider_api_key,
+)
+from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
+from tldw_Server_API.app.core.Chat.rate_limiter import get_rate_limiter
+from tldw_Server_API.app.core.Chat.request_queue import RequestPriority, get_request_queue
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
     InputError,
 )
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.transaction_utils import (
     db_transaction,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_knowledge_schemas import (
-    KnowledgeSaveRequest,
-    KnowledgeSaveResponse,
+from tldw_Server_API.app.core.Skills.context_integration import (
+    add_skill_tool_to_tools_list,
+    build_system_message_with_skills,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_conversation_schemas import (
-    ConversationListResponse,
-    ConversationListItem,
-    ConversationListPagination,
-    ConversationUpdateRequest,
-    ConversationTreeResponse,
-    ConversationTreeNode,
-    ConversationTreePagination,
-    ConversationMetadata,
-    ChatAnalyticsResponse,
-    ChatAnalyticsBucket,
-    ChatAnalyticsPagination,
-)
-# Note: streaming utilities are handled inside chat_service. No direct import needed here.
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    validate_request_payload,
-)
-from tldw_Server_API.app.core.Chat.chat_exceptions import (
-    set_request_id,
-    ChatModuleException,
-    ChatDatabaseError,
-    ChatErrorCode,
-)
-from tldw_Server_API.app.api.v1.schemas.chat_validators import (
-    validate_conversation_id,
-    validate_character_id,
-    validate_tool_definitions,
-    validate_temperature,
-    validate_max_tokens,
-    validate_request_size,
-)
-from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
-from tldw_Server_API.app.core.Chat.chat_service import (
-    perform_chat_api_call,
-    resolve_provider_and_model,
-    resolve_provider_api_key,
-    build_call_params_from_request,
-    estimate_tokens_from_json,
-    moderate_input_messages,
-    build_context_and_messages,
-    apply_prompt_templating,
-    execute_streaming_call,
-    execute_non_stream_call,
-    queue_is_active,
-)
-from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
-    map_sender_to_role,
-)
+from tldw_Server_API.app.core.Utils.chunked_image_processor import get_image_processor
+
 _ORIGINAL_PERFORM_CHAT_API_CALL = perform_chat_api_call
-from tldw_Server_API.app.core.config import loaded_config_data
-from tldw_Server_API.app.core.Chat.prompt_template_manager import (
-    load_template,
-    apply_template_to_string,
-)
-from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    rbac_rate_limit,
-    require_token_scope,
-    require_permissions,
-    get_auth_principal,
-)
-from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
-from pydantic import BaseModel, Field, ConfigDict
-from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
-    ResolvedByokCredentials,
-    record_byok_missing_credentials,
-    resolve_byok_credentials,
-)
-from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    get_usage_event_logger,
-    UsageEventLogger,
-)
 from fastapi.encoders import jsonable_encoder
-from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
-from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
-from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
-from tldw_Server_API.app.core.Chat import command_router
-from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandsListResponse, ChatCommandInfo
+from pydantic import BaseModel, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_auth_principal,
+    rbac_rate_limit,
+    require_permissions,
+    require_token_scope,
+)
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_commands_schemas import ChatCommandInfo, ChatCommandsListResponse
 from tldw_Server_API.app.api.v1.schemas.chat_dictionary_schemas import (
     ValidateDictionaryRequest,
     ValidateDictionaryResponse,
     ValidationIssue,
 )
-from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
-from . import chat_dictionaries, chat_documents
-from .chat_dictionaries import (
-    add_dictionary_entry,
-    get_chat_dictionary,
-    update_dictionary_entry,
-    list_chat_dictionaries,
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    ResolvedByokCredentials,
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
 )
+from tldw_Server_API.app.core.AuthNZ.llm_budget_guard import enforce_llm_budget
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
+from tldw_Server_API.app.core.Chat import command_router
+from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
+from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
+
+from . import chat_dictionaries, chat_documents
+
+_CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    HTTPException,
+    ChatModuleException,
+    ChatDatabaseError,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 #######################################################################################################################
 #
 # ---------------------------------------------------------------------------
@@ -221,7 +247,9 @@ def _chat_connectors_enabled() -> bool:
     )
 
 # Load configuration values from config
-from tldw_Server_API.app.core.config import load_comprehensive_config, load_and_log_configs
+import contextlib
+
+from tldw_Server_API.app.core.config import load_and_log_configs, load_comprehensive_config
 
 _config = load_comprehensive_config()
 # ConfigParser uses sections, check if Chat-Module section exists
@@ -232,7 +260,7 @@ _chat_commands_config = {}
 if _config and _config.has_section('Chat-Commands'):
     try:
         _chat_commands_config = dict(_config.items('Chat-Commands'))
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         _chat_commands_config = {}
 
 # Use centralized image limits/utilities (config-aware)
@@ -265,7 +293,7 @@ def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
     try:
         raw = _chat_commands_config.get(cfg_key) if _chat_commands_config else None
         return str(raw).strip().lower() in {"1", "true", "yes", "on"} if raw is not None else fallback
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return fallback
 
 # Feature flag: queued execution of chat calls via workers (default disabled)
@@ -275,7 +303,7 @@ try:
         (_env_queued.strip().lower() in {"1", "true", "yes", "on"}) if _env_queued is not None
         else _chat_config.get('queued_execution', 'False').lower() == 'true'
     )
-except Exception:
+except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
     QUEUED_EXECUTION = False
 
 def _to_bool(val: str) -> bool:
@@ -321,7 +349,7 @@ else:
         if _config and _config.has_section('Auto-Save'):
             try:
                 auto_save_default = _config.get('Auto-Save', 'save_character_chats', fallback=None)
-            except Exception:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                 auto_save_default = None
         DEFAULT_SAVE_TO_DB = _to_bool(auto_save_default) if auto_save_default is not None else False
 
@@ -331,9 +359,20 @@ _RECENT_CALLS_WINDOW_SEC = 0.25
 _RECENT_CALLS_MIN_CONCURRENT = 3
 _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
-_active_request_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = WeakKeyDictionary()
+_active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
-_system_message_locks: "WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = WeakKeyDictionary()
+
+
+@dataclass
+class _SystemMessageLockEntry:
+    lock: asyncio.Lock
+    ref_count: int = 0
+
+
+_system_message_locks: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[str, _SystemMessageLockEntry],
+] = WeakKeyDictionary()
 _system_message_guard = threading.Lock()
 
 
@@ -352,18 +391,65 @@ def _get_active_request_lock() -> asyncio.Lock:
 
 
 def _get_system_message_lock(conversation_id: str) -> asyncio.Lock:
-    """Return an asyncio.Lock scoped to the current loop + conversation_id."""
+    """Return an asyncio.Lock scoped to the current loop + conversation_id.
+
+    Callers must pair this with `_release_system_message_lock` once done.
+    """
     loop = asyncio.get_running_loop()
     with _system_message_guard:
         per_loop = _system_message_locks.get(loop)
         if per_loop is None:
             per_loop = {}
             _system_message_locks[loop] = per_loop
-        lock = per_loop.get(conversation_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            per_loop[conversation_id] = lock
-    return lock
+        entry = per_loop.get(conversation_id)
+        if entry is None:
+            entry = _SystemMessageLockEntry(lock=asyncio.Lock())
+            per_loop[conversation_id] = entry
+        entry.ref_count += 1
+    return entry.lock
+
+
+def _release_system_message_lock(conversation_id: str) -> None:
+    """Release a system-message lock reference and prune cache entries."""
+    loop = asyncio.get_running_loop()
+    with _system_message_guard:
+        per_loop = _system_message_locks.get(loop)
+        if not per_loop:
+            return
+        entry = per_loop.get(conversation_id)
+        if entry is None:
+            return
+        if entry.ref_count > 0:
+            entry.ref_count -= 1
+        if entry.ref_count == 0 and not entry.lock.locked():
+            per_loop.pop(conversation_id, None)
+        if not per_loop:
+            _system_message_locks.pop(loop, None)
+
+
+def _schedule_audit_background_task(awaitable: Any, *, task_name: str) -> asyncio.Task[Any] | None:
+    """Schedule audit work and observe failures to avoid silent task exceptions."""
+    try:
+        task = asyncio.create_task(awaitable)
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to schedule audit task {}: {}", task_name, exc)
+        return None
+
+    def _consume(completed: asyncio.Task[Any]) -> None:
+        if completed.cancelled():
+            return
+        try:
+            exc = completed.exception()
+        except asyncio.CancelledError:
+            return
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as observe_exc:
+            logger.debug("Audit task {} observation failed: {}", task_name, observe_exc)
+            return
+        if exc is not None:
+            logger.debug("Audit task {} failed: {}", task_name, exc)
+
+    task.add_done_callback(_consume)
+    return task
 
 
 async def _increment_active_request(user_id: str) -> int:
@@ -396,9 +482,9 @@ async def _decrement_active_request(user_id: str) -> None:
 
 
 async def _maybe_rg_shadow_chat_decision(
-    request: Optional[Request],
+    request: Request | None,
     limiter_user_id: str,
-    limiter_conversation_id: Optional[str],  # noqa: ARG001 - intentionally unused (reserved for future use)
+    limiter_conversation_id: str | None,  # noqa: ARG001 - intentionally unused (reserved for future use)
     estimated_tokens: int,
     legacy_allowed: bool,
 ) -> None:
@@ -423,20 +509,20 @@ async def _maybe_rg_shadow_chat_decision(
     try:
         if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
             return
-    except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
         logger.debug("RG shadow: env flag check failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: rg_enabled import failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         if not bool(_rg_enabled_flag(False)):  # type: ignore[arg-type]
             return
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: rg_enabled check failed, skipping shadow comparison: {}", exc)
         return
 
@@ -444,23 +530,23 @@ async def _maybe_rg_shadow_chat_decision(
         gov = getattr(request.app.state, "rg_governor", None)
         if gov is None:
             return
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: governor lookup failed, skipping shadow comparison: {}", exc)
         return
 
     try:
         entity = derive_entity_key(request)
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: entity derivation failed, falling back to limiter_user_id: {}", exc)
         entity = f"user:{limiter_user_id}"
 
     path = request.url.path or "/api/v1/chat/completions"
 
     # Build RG request mirroring chat policy (requests + optional tokens)
-    cats: Dict[str, Dict[str, int]] = {"requests": {"units": 1}}
+    cats: dict[str, dict[str, int]] = {"requests": {"units": 1}}
     try:
         est_tokens = int(estimated_tokens or 0)
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: estimated_tokens cast failed, treating as 0: {}", exc)
         est_tokens = 0
     if est_tokens > 0:
@@ -482,7 +568,7 @@ async def _maybe_rg_shadow_chat_decision(
                 elif path == s:
                     policy_id = str(pol)
                     break
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: policy lookup failed, defaulting to chat.default: {}", exc)
         policy_id = "chat.default"
 
@@ -494,7 +580,7 @@ async def _maybe_rg_shadow_chat_decision(
                 tags={"policy_id": policy_id, "endpoint": path},
             )
         )
-    except Exception as exc:  # noqa: BLE001 - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
         logger.debug("RG shadow: check failed, skipping shadow comparison: {}", exc)
         return
 
@@ -512,7 +598,7 @@ async def _maybe_rg_shadow_chat_decision(
                 legacy=legacy_dec,
                 rg=rg_dec,
             )
-        except Exception as exc:  # noqa: BLE001 - defensive
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive
             # Metrics must never affect control flow
             logger.debug("RG shadow: mismatch metric recording failed: {}", exc)
 
@@ -593,7 +679,7 @@ async def list_chat_commands(
             if not has_perm_claim:
                 try:
                     has_perm_db = user_has_permission(int(getattr(current_user, "id", 0) or 0), perm)
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     has_perm_db = False
 
             if has_perm_claim or has_perm_db:
@@ -604,7 +690,7 @@ async def list_chat_commands(
                         required_permission=perm,
                     )
                 )
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         # Fallback: unfiltered list if registry not accessible
         for c in command_router.list_commands():
             items.append(
@@ -634,6 +720,7 @@ async def list_chat_commands(
     dependencies=[
         Depends(rbac_rate_limit("chat.dictionaries.validate")),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.dictionaries.validate")),
+        Depends(get_request_user),
     ],
 )
 async def validate_chat_dictionary(
@@ -653,13 +740,13 @@ async def validate_chat_dictionary(
 # --- Helper Functions ---
 
 @lru_cache(maxsize=1)
-def _config_default_llm_provider() -> Optional[str]:
+def _config_default_llm_provider() -> str | None:
     """Read default provider from config.txt (llm_api_settings/API sections)."""
     cfg = load_and_log_configs()
     if not isinstance(cfg, dict):
         return None
 
-    def _extract(section: str) -> Optional[str]:
+    def _extract(section: str) -> str | None:
         data = cfg.get(section)
         if isinstance(data, dict):
             default_api = data.get("default_api")
@@ -719,7 +806,7 @@ async def _process_content_for_db_sync(
             if hasattr(part, "model_dump"):
                 try:
                     part = part.model_dump(exclude_none=True)
-                except Exception as e:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(
                         "model_dump failed for part type=%s, falling back to string: %s",
                         type(part).__name__,
@@ -736,7 +823,7 @@ async def _process_content_for_db_sync(
                     if hasattr(image_url_obj, "model_dump"):
                         try:
                             image_url_obj = image_url_obj.model_dump(exclude_none=True)
-                        except Exception as e:
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug("model_dump failed for image_url_obj, setting to None: %s", e)
                             image_url_obj = None
                     if not isinstance(image_url_obj, dict):
@@ -762,7 +849,7 @@ async def _process_content_for_db_sync(
                 if hasattr(url_dict, "model_dump"):
                     try:
                         url_dict = url_dict.model_dump(exclude_none=True)
-                    except Exception:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                         url_dict = {}
                 if not isinstance(url_dict, dict):
                     url_dict = {"url": getattr(url_dict, "url", "")}
@@ -811,11 +898,11 @@ def _jsonify_metadata_payload(value: Any) -> Any:
         return None
     try:
         encoded = jsonable_encoder(value)
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         encoded = value
     try:
         return json.loads(json.dumps(encoded, default=str))
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             "Failed to normalize metadata payload of type %s: %s",
             type(value).__name__,
@@ -845,10 +932,10 @@ def _summarize_tool_calls(tool_calls: Any) -> str:
             return "[tool_call]"
         suffix = "…" if len(names) > 5 else ""
         return "[tool_call: {}{}]".format(", ".join(names[:5]), suffix)
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return "[tool_call]"
 
-def _normalize_message_timestamp(value: Any) -> Optional[str]:
+def _normalize_message_timestamp(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -882,10 +969,10 @@ def _normalize_message_timestamp(value: Any) -> Optional[str]:
 
 def _persist_message_sync(
     db: CharactersRAGDB,
-    payload: Dict[str, Any],
-    tool_calls: Optional[Any],
-    extra_metadata: Optional[Dict[str, Any]],
-) -> Optional[str]:
+    payload: dict[str, Any],
+    tool_calls: Any | None,
+    extra_metadata: dict[str, Any] | None,
+) -> str | None:
     """Persist a message and optional metadata synchronously."""
     message_id = db.add_message(payload)
     if tool_calls is not None or extra_metadata is not None:
@@ -899,9 +986,9 @@ def _persist_message_sync(
 async def _save_message_turn_to_db(
     db: CharactersRAGDB,
     conversation_id: str,
-    message_obj: Dict[str, Any],
+    message_obj: dict[str, Any],
     use_transaction: bool = False
-) -> Optional[str]:
+) -> str | None:
     """
     Persist a single user/assistant message.
     - Validates size/format.
@@ -931,15 +1018,15 @@ async def _save_message_turn_to_db(
             for img_bytes, _ in images:
                 try:
                     size = len(img_bytes) if img_bytes is not None else 0
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     size = 0
                 metrics.track_image_processing(
                     size_bytes=size,
                     validation_time=image_processing_time
                 )
-    except Exception as e_proc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e_proc:
         error = ChatDatabaseError(
-            message=f"Failed to process message content for saving",
+            message="Failed to process message content for saving",
             operation="message_content_processing",
             details={"conversation_id": conversation_id, "role": role},
             cause=e_proc
@@ -950,7 +1037,7 @@ async def _save_message_turn_to_db(
     tool_calls_raw = message_obj.get("tool_calls")
     function_call_raw = message_obj.get("function_call")
     serialized_tool_calls = _jsonify_metadata_payload(tool_calls_raw) if tool_calls_raw else None
-    serialized_extra: Optional[Dict[str, Any]] = None
+    serialized_extra: dict[str, Any] | None = None
     if function_call_raw is not None:
         serialized_extra = {"function_call": _jsonify_metadata_payload(function_call_raw)}
     tool_call_id_raw = message_obj.get("tool_call_id")
@@ -965,13 +1052,13 @@ async def _save_message_turn_to_db(
                 serialized_extra = {}
             serialized_extra["tool_name"] = _jsonify_metadata_payload(tool_name)
     # Preserve sender role/name separately to avoid role misclassification when sender is custom.
-    sender_meta: Dict[str, Any] = {}
+    sender_meta: dict[str, Any] = {}
     if role in ("user", "assistant", "system", "tool"):
         sender_meta["sender_role"] = _jsonify_metadata_payload(role)
     sender_name_raw = message_obj.get("name")
     if role in ("user", "assistant", "system") and sender_name_raw:
         sender_meta["sender_name"] = _jsonify_metadata_payload(sender_name_raw)
-    placeholder_reason: Optional[str] = None
+    placeholder_reason: str | None = None
 
     if not text_parts and not images:
         if serialized_tool_calls is not None:
@@ -982,7 +1069,7 @@ async def _save_message_turn_to_db(
             function_name = None
             try:
                 function_name = serialized_extra.get("function_call", {}).get("name")  # type: ignore[union-attr]
-            except Exception:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                 function_name = None
             display = f"[function_call: {function_name}]" if function_name else "[function_call]"
             text_parts = [display]
@@ -1007,8 +1094,8 @@ async def _save_message_turn_to_db(
         serialized_extra = None
 
     # Persist the primary image via the schema-supported columns.
-    primary_image_data: Optional[bytes] = None
-    primary_image_mime: Optional[str] = None
+    primary_image_data: bytes | None = None
+    primary_image_mime: str | None = None
     normalized_images: list[dict[str, Any]] = []
     if images:
         for img_bytes, img_mime in images:
@@ -1044,7 +1131,7 @@ async def _save_message_turn_to_db(
     try:
         async with metrics.track_database_operation("save_message"):
             if use_transaction:
-                def _persist_with_transaction() -> tuple[Optional[str], int]:
+                def _persist_with_transaction() -> tuple[str | None, int]:
                     retries = 0
                     max_retries = 3
                     while True:
@@ -1074,7 +1161,7 @@ async def _save_message_turn_to_db(
                     metrics.track_transaction(success=True, retries=retries)
                     metrics.track_message_saved(conversation_id, role)
                     return result
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     metrics.track_transaction(success=False, retries=0)
                     raise
             else:
@@ -1090,7 +1177,7 @@ async def _save_message_turn_to_db(
                 return result
     except (InputError, ConflictError, CharactersRAGDBError) as e_db:
         error = ChatDatabaseError(
-            message=f"Database error saving message",
+            message="Database error saving message",
             operation="save_message",
             details={
                 "conversation_id": conversation_id,
@@ -1101,10 +1188,10 @@ async def _save_message_turn_to_db(
         )
         error.log()
         return None
-    except Exception as e_unexpected_db:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e_unexpected_db:
         error = ChatModuleException(
             code=ChatErrorCode.INT_UNEXPECTED_ERROR,
-            message=f"Unexpected error saving message to database",
+            message="Unexpected error saving message to database",
             details={"conversation_id": conversation_id},
             cause=e_unexpected_db
         )
@@ -1116,53 +1203,57 @@ async def _persist_system_message_if_needed(
     *,
     db: CharactersRAGDB,
     conversation_id: str,
-    system_message: Optional[str],
+    system_message: str | None,
     save_message_fn: Callable[..., Any],
     loop: asyncio.AbstractEventLoop,
-) -> Optional[str]:
+) -> str | None:
     if not system_message or not system_message.strip():
         return None
-    async with _get_system_message_lock(conversation_id):
-        try:
-            # Best-effort guard; serialize within a process to avoid duplicates.
-            has_system = await loop.run_in_executor(
-                None,
-                db.has_system_message_for_conversation,
-                conversation_id,
-            )
-        except (CharactersRAGDBError, RuntimeError) as exc:
-            logger.debug(
-                "System message presence check failed for conv=%s: %s",
-                conversation_id,
-                exc,
-            )
-            has_system = False
-        if has_system:
-            return None
-        try:
-            conv_created_at = None
+    lock = _get_system_message_lock(conversation_id)
+    try:
+        async with lock:
             try:
-                conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
-                if conv:
-                    conv_created_at = conv.get("created_at")
-            except (CharactersRAGDBError, RuntimeError):
+                # Best-effort guard; serialize within a process to avoid duplicates.
+                has_system = await loop.run_in_executor(
+                    None,
+                    db.has_system_message_for_conversation,
+                    conversation_id,
+                )
+            except (CharactersRAGDBError, RuntimeError) as exc:
+                logger.debug(
+                    "System message presence check failed for conv=%s: %s",
+                    conversation_id,
+                    exc,
+                )
+                has_system = False
+            if has_system:
+                return None
+            try:
                 conv_created_at = None
-            system_payload: Dict[str, Any] = {"role": "system", "content": system_message.strip()}
-            if conv_created_at:
-                system_payload["timestamp"] = conv_created_at
-            return await save_message_fn(
-                db,
-                conversation_id,
-                system_payload,
-                use_transaction=True,
-            )
-        except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
-            logger.warning(
-                "Failed to persist system message for conv=%s: %s",
-                conversation_id,
-                exc,
-            )
-            return None
+                try:
+                    conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+                    if conv:
+                        conv_created_at = conv.get("created_at")
+                except (CharactersRAGDBError, RuntimeError):
+                    conv_created_at = None
+                system_payload: dict[str, Any] = {"role": "system", "content": system_message.strip()}
+                if conv_created_at:
+                    system_payload["timestamp"] = conv_created_at
+                return await save_message_fn(
+                    db,
+                    conversation_id,
+                    system_payload,
+                    use_transaction=True,
+                )
+            except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
+                logger.warning(
+                    "Failed to persist system message for conv=%s: %s",
+                    conversation_id,
+                    exc,
+                )
+                return None
+    finally:
+        _release_system_message_lock(conversation_id)
 
 
 @router.post(
@@ -1258,13 +1349,19 @@ async def create_chat_completion(
 
     try:
         logger.debug("Provider/model resolution: {}", provider_debug)
-    except Exception as log_err:  # pragma: no cover - defensive
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_err:  # pragma: no cover - defensive
         logger.debug("Provider/model resolution logging skipped: {}", log_err)
 
     client_id = getattr(chat_db, 'client_id', 'unknown_client')
 
     # Get user ID for rate limiting and audit (use authenticated user)
     user_id = str(current_user.id) if current_user and getattr(current_user, 'id', None) is not None else client_id
+    user_base_dir = None
+    if current_user and getattr(current_user, "id", None) is not None:
+        try:
+            user_base_dir = DatabasePaths.get_user_base_directory(current_user.id)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            user_base_dir = None
 
     # Initialize audit context for logging
     context = None
@@ -1290,7 +1387,7 @@ async def create_chat_completion(
                     "conversation_id": request_data.conversation_id
                 }
             )
-        except Exception as log_error:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as log_error:
             logger.warning(f"Failed to log audit event: {log_error}")
             # Continue without logging rather than failing the request
 
@@ -1301,7 +1398,7 @@ async def create_chat_completion(
             tags=[provider, model],
             metadata={"message_count": len(request_data.messages), "stream": bool(request_data.stream)},
         )
-    except Exception as _usage_log_err:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _usage_log_err:
         logger.debug(f"Usage event logging failed: {_usage_log_err}")
 
     # Start tracking the request
@@ -1358,6 +1455,13 @@ async def create_chat_completion(
                 validated_tools = validate_tool_definitions(tools_as_dicts, provider=provider_hint)
                 # Keep the validated tools as dicts since that's what the LLM API expects
                 request_data.tools = validated_tools
+            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+                request_data.tools = add_skill_tool_to_tools_list(
+                    request_data.tools,
+                    user_id=current_user.id,
+                    base_path=user_base_dir,
+                    db=chat_db,
+                )
             if request_data.temperature is not None:
                 request_data.temperature = validate_temperature(request_data.temperature)
             if request_data.max_tokens is not None:
@@ -1432,7 +1536,7 @@ async def create_chat_completion(
                             try:
                                 if request is not None and hasattr(request, "state"):
                                     req_user_id = getattr(request.state, "user_id", None)
-                            except Exception:
+                            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                                 req_user_id = None
                             policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
                             action, redacted, matched, category = moderation.evaluate_action(content_text, policy, 'input')
@@ -1446,26 +1550,24 @@ async def create_chat_completion(
                                 elif action == 'block':
                                     inj_mod['blocked'] = True
                             # Track moderation for metrics
-                            try:
+                            with contextlib.suppress(_CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS):
                                 metrics.track_moderation_input(str(req_user_id or client_id), inj_mod['action'], category=(inj_mod.get('category') or "default"))
-                            except Exception:
-                                pass
                             # Audit moderation decision
                             try:
                                 if audit_service and context:
-                                    import asyncio as _asyncio
-                                    _asyncio.create_task(
+                                    _schedule_audit_background_task(
                                         audit_service.log_event(
                                             event_type=AuditEventType.SECURITY_VIOLATION,
                                             context=context,
                                             action="moderation.input",
                                             result=("failure" if inj_mod['blocked'] else "success"),
                                             metadata={"phase": "input", "action": inj_mod['action'], "pattern": inj_mod.get('pattern'), "category": inj_mod.get('category')},
-                                        )
+                                        ),
+                                        task_name="chat.command.moderation.input.audit",
                                     )
-                            except Exception:
+                            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                                 pass
-                        except Exception as _mod_err:
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _mod_err:
                             logger.debug(f"Slash command moderation step skipped due to error: {_mod_err}")
 
                         # Update injection metadata with moderation outcome prior to audit logging
@@ -1473,7 +1575,7 @@ async def create_chat_completion(
                             inj_meta['moderation'] = inj_mod
                             if inj_mod.get('blocked'):
                                 inj_meta['result_ok'] = False
-                        except Exception:
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                             pass
 
                         # Audit the command execution (with moderation outcome attached)
@@ -1486,7 +1588,7 @@ async def create_chat_completion(
                                     result=("success" if (result.ok and not inj_mod.get('blocked')) else "failure"),
                                     metadata=inj_meta,
                                 )
-                        except Exception as _ae:
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _ae:
                             logger.debug(f"Slash command audit log skipped: {_ae}")
 
                         # Mutate request messages for injection (use moderated/sanitized text) when not blocked
@@ -1533,14 +1635,12 @@ async def create_chat_completion(
                                         name="system-command",
                                     )
                                     # Attach metadata if possible
-                                    try:
-                                        setattr(sys_msg, "metadata", {"tldw_injection": inj_meta, "moderation": inj_mod})
-                                    except Exception:
-                                        pass
+                                    with contextlib.suppress(_CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                                        sys_msg.metadata = {"tldw_injection": inj_meta, "moderation": inj_mod}
                                     request_data.messages.append(sys_msg)
-                                except Exception as inj_err:
+                                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as inj_err:
                                     logger.debug(f"Failed to append system injection message: {inj_err}")
-        except Exception as _cmd_err:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _cmd_err:
             logger.debug(f"Slash command handling skipped due to error: {_cmd_err}")
 
         # Recompute request payload after slash command injection and revalidate/rate-limit
@@ -1591,7 +1691,7 @@ async def create_chat_completion(
         # when not running in TEST_MODE.
         try:
             _is_test_mode = _to_bool(os.getenv("TEST_MODE", ""))
-        except Exception:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             _is_test_mode = False
 
         rg_active = False
@@ -1599,7 +1699,7 @@ async def create_chat_completion(
             from tldw_Server_API.app.core.config import rg_enabled as _rg_enabled_flag
 
             rg_active = bool(_rg_enabled_flag(False))
-        except Exception as exc:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Chat RG: rg_enabled lookup failed; disabling RG path: {}",
                 exc,
@@ -1615,7 +1715,7 @@ async def create_chat_completion(
             try:
                 rg_gov = getattr(request.app.state, "rg_governor", None)
                 rg_loader = getattr(request.app.state, "rg_policy_loader", None)
-            except Exception as exc:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(
                     "Chat RG: governor/policy_loader lookup failed; disabling RG path: {}",
                     exc,
@@ -1639,7 +1739,7 @@ async def create_chat_completion(
                     from tldw_Server_API.app.core.Chat.rate_limiter import initialize_rate_limiter
                     # Passing None lets initialize_rate_limiter read TEST_MODE env overrides
                     rate_limiter = initialize_rate_limiter()  # type: ignore[arg-type]
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     rate_limiter = None
 
         if rg_ready:
@@ -1655,7 +1755,7 @@ async def create_chat_completion(
                 entity = derive_entity_key(request)
                 try:
                     entity_scope, entity_value = entity.split(":", 1)
-                except Exception as exc:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Chat RG: entity split failed, using user fallback: {}",
                         exc,
@@ -1673,7 +1773,7 @@ async def create_chat_completion(
                 try:
                     pol = rg_loader.get_policy(policy_id) or {}
                     daily_cap = int((pol.get("tokens") or {}).get("daily_cap") or 0)
-                except Exception as exc:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Chat RG: tokens.daily_cap lookup failed for policy_id={}: {}",
                         policy_id,
@@ -1689,7 +1789,7 @@ async def create_chat_completion(
                             entity_scope=str(entity_scope),
                             entity_value=str(entity_value),
                         )
-                    except Exception as exc:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Chat RG: legacy tokens backfill failed for entity_scope={} entity_value={}: {}",
                             entity_scope,
@@ -1700,7 +1800,7 @@ async def create_chat_completion(
                 completion_budget = 0
                 try:
                     completion_budget = int(getattr(request_data, "max_tokens", 0) or 0)
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     completion_budget = 0
 
                 reserve_units = max(1, int(estimated_tokens or 0) + max(0, completion_budget))
@@ -1738,7 +1838,7 @@ async def create_chat_completion(
                                         "X-RateLimit-Tokens-Remaining": "0",
                                     }
                                 )
-                    except Exception as exc:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Chat RG: header enrichment from policy failed for policy_id={}: {}",
                             policy_id,
@@ -1752,7 +1852,7 @@ async def create_chat_completion(
                 _rg_handle_id = hid
             except HTTPException:
                 raise
-            except Exception as rg_exc:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as rg_exc:
                 logger.debug(f"RG tokens reserve skipped: {rg_exc}")
 
         elif rate_limiter:
@@ -1786,14 +1886,14 @@ async def create_chat_completion(
                             dq.popleft()
                         dq.append(now_ts)
                         concurrent_burst = len(dq) >= _RECENT_CALLS_MIN_CONCURRENT
-                    except Exception:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                         concurrent_burst = False
 
                 limiter_user_id = user_id
                 if enable_burst_suppression and concurrent_burst:
                     try:
                         limiter_user_id = f"{user_id}:{request_id}"
-                    except Exception:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                         limiter_user_id = user_id
 
                 allowed, rate_error = await rate_limiter.check_rate_limit(
@@ -1812,7 +1912,7 @@ async def create_chat_completion(
                             estimated_tokens=int(estimated_tokens or 0),
                             legacy_allowed=bool(allowed),
                         )
-                    except Exception as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive: RG shadow must not affect rate limiting
                         # Shadow path must never affect primary rate-limiting behavior.
                         logger.debug(
                             "RG shadow helper failed; ignoring and continuing: {}",
@@ -1845,7 +1945,7 @@ async def create_chat_completion(
                                     estimated_tokens=estimated_tokens,
                                     timeout=5.0,
                                 )
-                            except Exception:
+                            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                                 allowed_after_wait = False
                             if not allowed_after_wait:
                                 raise HTTPException(
@@ -1866,12 +1966,44 @@ async def create_chat_completion(
             finally:
                 await _decrement_active_request(user_id)
 
+        # Guardian & self-monitoring integration
+        _supervised_engine = None
+        _self_mon_service = None
+        _dep_user_id = None
+        try:
+            from tldw_Server_API.app.core.feature_flags import is_guardian_enabled, is_self_monitoring_enabled
+
+            if current_user and getattr(current_user, "id", None) is not None:
+                try:
+                    _uid_int = int(current_user.id)
+                except Exception:
+                    import hashlib as _hashlib
+                    _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()
+                    _uid_int = int.from_bytes(_digest[:4], byteorder="big", signed=False)
+                _guardian_db_path = DatabasePaths.get_guardian_db_path(_uid_int)
+
+                _guardian_db = None
+                if is_guardian_enabled() or is_self_monitoring_enabled():
+                    from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB as _GuardianDB
+                    _guardian_db = _GuardianDB(str(_guardian_db_path))
+
+                if is_guardian_enabled() and _guardian_db:
+                    from tldw_Server_API.app.core.Moderation.supervised_policy import get_supervised_policy_engine
+                    _supervised_engine = get_supervised_policy_engine(_guardian_db)
+                    _dep_user_id = str(current_user.id)
+
+                if is_self_monitoring_enabled() and _guardian_db:
+                    from tldw_Server_API.app.core.Monitoring.self_monitoring_service import get_self_monitoring_service
+                    _self_mon_service = get_self_monitoring_service(_guardian_db)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            pass
+
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
             moderation = get_moderation_service()
             try:
                 mon = get_topic_monitoring_service()
-            except Exception:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                 mon = None
             await moderate_input_messages(
                 request_data=request_data,
@@ -1883,10 +2015,13 @@ async def create_chat_completion(
                 audit_context=context,
                 client_id=client_id,
                 audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                supervised_policy_engine=_supervised_engine,
+                self_monitoring_service=_self_mon_service,
+                dependent_user_id=_dep_user_id,
             )
         except HTTPException:
             raise
-        except Exception as e:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Moderation input processing error: {e}")
 
         # Normalize provider/model on the request for downstream logic (already resolved)
@@ -1903,8 +2038,8 @@ async def create_chat_completion(
             f"Stream={request_data.stream}, ConvID={request_data.conversation_id}, CharID={request_data.character_id}"
         )
 
-        character_card_for_context: Optional[Dict[str, Any]] = None
-        final_conversation_id: Optional[str] = request_data.conversation_id
+        character_card_for_context: dict[str, Any] | None = None
+        final_conversation_id: str | None = request_data.conversation_id
 
         try:
             # In TEST_MODE or when explicitly enabled via config/env, allow
@@ -1926,9 +2061,9 @@ async def create_chat_completion(
                     provider = "openai"
 
             target_api_provider = provider  # Already determined (possibly adjusted above)
-            byok_cache: Dict[str, ResolvedByokCredentials] = {}
+            byok_cache: dict[str, ResolvedByokCredentials] = {}
 
-            def _fallback_resolver(name: str) -> Optional[str]:
+            def _fallback_resolver(name: str) -> str | None:
                 key_val, _ = resolve_provider_api_key(
                     name,
                     prefer_module_keys_in_tests=True,
@@ -1944,7 +2079,7 @@ async def create_chat_completion(
                 if user_id_int is None:
                     try:
                         user_id_int = int(getattr(current_user, "id", None))
-                    except Exception:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                         user_id_int = None
                 resolved = await resolve_byok_credentials(
                     provider_key,
@@ -1976,7 +2111,7 @@ async def create_chat_completion(
             # Centralized provider capabilities
             try:
                 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-            except Exception:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                 def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
                     return True
             # Allow explicit mock forcing in tests even if provider key is absent
@@ -2017,8 +2152,15 @@ async def create_chat_completion(
                 character_card=character_card_for_context or {},
                 llm_payload_messages=llm_payload_messages,
             )
+            if user_base_dir is not None and current_user and getattr(current_user, "id", None) is not None:
+                final_system_message = build_system_message_with_skills(
+                    final_system_message,
+                    current_user.id,
+                    user_base_dir,
+                    db=chat_db,
+                )
 
-            system_message_id: Optional[str] = None
+            system_message_id: str | None = None
             if should_persist and final_conversation_id:
                 system_message_id = await _persist_system_message_if_needed(
                     db=chat_db,
@@ -2039,7 +2181,7 @@ async def create_chat_completion(
             )
             cleaned_args["request"] = request
 
-            def _get_default_model_for_provider_name(target_provider: str) -> Optional[str]:
+            def _get_default_model_for_provider_name(target_provider: str) -> str | None:
                 override_default = get_override_default_model(target_provider)
                 if override_default:
                     return override_default
@@ -2081,7 +2223,7 @@ async def create_chat_completion(
             if override_error:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
-            async def rebuild_call_params_for_provider(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+            async def rebuild_call_params_for_provider(target_provider: str) -> tuple[dict[str, Any], str | None]:
                 refreshed_resolution = await _resolve_byok(target_provider)
                 provider_api_key_new = refreshed_resolution.api_key
                 if provider_requires_api_key(target_provider) and not provider_api_key_new:
@@ -2117,9 +2259,7 @@ async def create_chat_completion(
                         raw_prefix = raw_model_str.split("/", 1)[0].strip().lower()
                     # If the original model was unprefixed (or missing), prefer the
                     # fallback provider's default model to avoid cross-provider mismatches.
-                    if not raw_model_str or raw_prefix is None:
-                        use_default_model = True
-                    elif raw_prefix != target_provider.lower():
+                    if not raw_model_str or raw_prefix is None or raw_prefix != target_provider.lower():
                         use_default_model = True
                 if use_default_model:
                     default_model = _get_default_model_for_provider_name(target_provider)
@@ -2175,7 +2315,7 @@ async def create_chat_completion(
                     model = refreshed_model or model
                 except HTTPException:
                     raise
-                except Exception as refresh_exc:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as refresh_exc:
                     logger.error(
                         "Failed to rebuild call params for fallback provider '%s': %s",
                         selected_provider,
@@ -2184,14 +2324,14 @@ async def create_chat_completion(
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail="Fallback provider initialization failed. Please retry.",
-                    )
+                    ) from refresh_exc
 
             # Request Queue Integration (Admission control / backpressure)
             # ------------------------------------------------------------------------
             is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             try:
                 queue_candidate = get_request_queue()
-            except Exception:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                 queue_candidate = None
 
             queue = None
@@ -2207,8 +2347,10 @@ async def create_chat_completion(
                         or queue_module.startswith("pytest.")
                     )
                     try:
-                        from tldw_Server_API.app.core.Chat.request_queue import RequestQueue as _RequestQueue  # type: ignore
-                    except Exception:  # pragma: no cover
+                        from tldw_Server_API.app.core.Chat.request_queue import (
+                            RequestQueue as _RequestQueue,  # type: ignore
+                        )
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
                         _RequestQueue = None
                     is_real_queue = bool(_RequestQueue) and isinstance(queue_candidate, _RequestQueue)
                     if allow_queue_env or allow_queue_override or allow_queue_stub or not is_real_queue:
@@ -2255,12 +2397,12 @@ async def create_chat_completion(
                         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                         detail="Rate limit exceeded. Please retry.",
                     ) from e
-                except Exception as e:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                     # Treat unexpected queue errors as service unavailable
                     logger.error(
                         "Queue admission error for request_id=%s: %s", request_id, e
                     )
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.") from e
             # The request queue system has been initialized in main.py but is not yet
             # integrated here. Once the central scheduling/queue module is built, this
             # endpoint should enqueue requests rather than processing them directly.
@@ -2302,7 +2444,7 @@ async def create_chat_completion(
                 and perform_chat_api_call is _ORIGINAL_PERFORM_CHAT_API_CALL
             )
 
-            def _build_mock_response(messages_payload: List[Dict[str, Any]]) -> str:
+            def _build_mock_response(messages_payload: list[dict[str, Any]]) -> str:
                 for msg in reversed(messages_payload):
                     if isinstance(msg, dict) and msg.get("role") == "user":
                         content = msg.get("content")
@@ -2365,6 +2507,17 @@ async def create_chat_completion(
             else:
                 llm_call_func = partial(perform_chat_api_call, **cleaned_args)
 
+            # Build moderation getter that overlays guardian policies on output
+            def _get_moderation_with_guardian():
+                base = get_moderation_service()
+                if not _supervised_engine or not _dep_user_id:
+                    return base
+                try:
+                    from tldw_Server_API.app.core.Moderation.supervised_policy import GuardianModerationProxy
+                    return GuardianModerationProxy(base, _supervised_engine, _dep_user_id)
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                    return base
+
             if request_data.stream:
                 return await execute_streaming_call(
                     current_loop=current_loop,
@@ -2390,7 +2543,7 @@ async def create_chat_completion(
                     enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    moderation_getter=get_moderation_service,
+                    moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
@@ -2427,7 +2580,7 @@ async def create_chat_completion(
                     enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    moderation_getter=get_moderation_service,
+                    moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                 )
                 # Track response size and return
@@ -2451,11 +2604,11 @@ async def create_chat_completion(
                             total = int((usage or {}).get("total_tokens") or 0) if usage else 0
                             if total > 0:
                                 actual = {"tokens": total}
-                        except Exception:
+                        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                             actual = None
                         await gov.commit(_rg_handle_id, actuals=actual)
                         rg_finalized = True
-                except Exception as _rg_commit_err:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_commit_err:
                     logger.debug(f"RG tokens commit skipped/failed: {_rg_commit_err}")
                 return JSONResponse(content=encoded_payload)
 
@@ -2496,12 +2649,12 @@ async def create_chat_completion(
             }
             if e_http.status_code in allowed_statuses:
                 # Re-raise expected/intentional HTTP errors
-                raise e_http
+                raise
             # For unexpected HTTP statuses (e.g., from mocked upstream), coerce to 500
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected internal server error occurred."
-            )
+            ) from e_http
 
         except ChatModuleException as e_chat:
             # Our custom exceptions with structured error handling
@@ -2561,9 +2714,9 @@ async def create_chat_completion(
             raise HTTPException(
                 status_code=http_status,
                 detail=safe_detail
-            )
+            ) from e_chat
 
-        except Exception as e_chat:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e_chat:
             # Do not leak raw HTTPException details from underlying call sites.
             # For unexpected HTTPException from lower layers (e.g., provider shims),
             # normalize to a generic 500 to match test expectations.
@@ -2571,7 +2724,7 @@ async def create_chat_completion(
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unexpected internal server error occurred."
-                )
+                ) from e_chat
             # Special-case DB errors here, because a generic Exception handler precedes
             # the DB-specific except block below. Map to precise HTTP statuses.
             if isinstance(e_chat, (InputError, ConflictError, CharactersRAGDBError)):
@@ -2592,7 +2745,7 @@ async def create_chat_completion(
                     client_detail = "Conflict."
                 else:
                     client_detail = "A database error occurred. Please try again later."
-                raise HTTPException(status_code=db_status, detail=client_detail)
+                raise HTTPException(status_code=db_status, detail=client_detail) from e_chat
             # Handle legacy chat library exceptions robustly, even if class identity differs.
             # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
             is_chat_lib_error = (
@@ -2667,7 +2820,7 @@ async def create_chat_completion(
                             "ALERT: Critical error in chat module - Request ID: {}",
                             request_id,
                         )
-                except Exception:
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     pass
             # Standardize error messages - never expose internal details for 5xx errors
             if err_status < 500:
@@ -2699,7 +2852,7 @@ async def create_chat_completion(
                     client_detail = "An unexpected internal server error occurred."
                 else:
                     client_detail = "An internal server error occurred."
-            raise HTTPException(status_code=err_status, detail=client_detail)
+            raise HTTPException(status_code=err_status, detail=client_detail) from e_chat
 
 
     finally:
@@ -2710,7 +2863,7 @@ async def create_chat_completion(
                 if gov is not None:
                     await gov.commit(_rg_handle_id, actuals={"tokens": 0})
                     rg_finalized = True
-            except Exception as _rg_refund_err:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as _rg_refund_err:
                 logger.debug(f"RG tokens refund skipped/failed: {_rg_refund_err}")
         await _track_request_cm.__aexit__(exc_type, exc_value, exc_tb)
 
@@ -2730,14 +2883,14 @@ async def get_chat_queue_status():
     """Expose raw chat request queue metrics for diagnostics."""
     try:
         queue = get_request_queue()
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         queue = None
     if queue is None:
         return {"enabled": False, "message": "Queue not initialized in this context"}
     try:
         queue_status = queue.get_queue_status()
         return {"enabled": True, **queue_status}
-    except Exception as e:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.exception("Chat queue status inspection failed")
         return {"enabled": True, "error": "Queue status unavailable"}
 
@@ -2757,20 +2910,20 @@ async def get_chat_queue_activity(
     """Expose a rolling sample of recent queue activity (last N jobs)."""
     try:
         limit = int(limit)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be an integer")
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be an integer") from None
     if limit < 1 or limit > 1000:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be between 1 and 1000")
     try:
         queue = get_request_queue()
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         queue = None
     if queue is None:
         return {"enabled": False, "message": "Queue not initialized in this context"}
     try:
         activity = queue.get_recent_activity(limit=limit)
         return {"enabled": True, "limit": limit, "activity": activity}
-    except Exception as e:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.exception("Chat queue activity inspection failed")
         return {"enabled": True, "error": "Queue activity unavailable"}
 
@@ -2783,7 +2936,7 @@ def _sanitize_json_for_rate_limit(request_json: str) -> str:
     try:
         pattern = re.compile(r"(\"url\"\s*:\s*\"data:image[^,]*,)[^\"\s]+")
         return pattern.sub(r"\1<omitted>", request_json)
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return request_json
 
 
@@ -2792,11 +2945,11 @@ def _estimate_tokens_for_queue(request_json: str) -> int:
     try:
         sanitized = _sanitize_json_for_rate_limit(request_json)
         return max(1, len(sanitized) // 4)
-    except Exception:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return 1
 
 
-def _coerce_datetime(value: Any) -> Optional[datetime]:
+def _coerce_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -2830,14 +2983,14 @@ def _parse_iso_datetime(value: str, field_name: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _normalize_weights(w_bm25: float, w_recency: float) -> Tuple[float, float]:
+def _normalize_weights(w_bm25: float, w_recency: float) -> tuple[float, float]:
     total = (w_bm25 or 0.0) + (w_recency or 0.0)
     if total <= 0:
         return 0.65, 0.35
     return (w_bm25 / total), (w_recency / total)
 
 
-def _calculate_recency(dt_value: Optional[datetime], half_life_days: float) -> float:
+def _calculate_recency(dt_value: datetime | None, half_life_days: float) -> float:
     if dt_value is None or half_life_days <= 0:
         return 0.0
     now = datetime.now(timezone.utc)
@@ -2849,7 +3002,7 @@ def _verify_conversation_ownership(
     db: CharactersRAGDB,
     conversation_id: str,
     current_user: User,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     conversation = db.get_conversation_by_id(conversation_id)
     if not conversation or conversation.get("deleted"):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
@@ -2862,14 +3015,14 @@ def _verify_conversation_ownership(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
     except (TypeError, ValueError):
         if str(conv_client_id) != str(user_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
     return conversation
 
 
 def _replace_conversation_keywords(
     db: CharactersRAGDB,
     conversation_id: str,
-    keywords: List[str],
+    keywords: list[str],
 ) -> None:
     existing = db.get_keywords_for_conversation(conversation_id)
     existing_map = {str(k.get("keyword") or "").strip().lower(): int(k.get("id")) for k in existing if k.get("id")}
@@ -2880,7 +3033,7 @@ def _replace_conversation_keywords(
         if key not in target_map:
             try:
                 db.unlink_conversation_from_keyword(conversation_id, kw_id)
-            except Exception as exc:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("Failed to unlink keyword %s from %s: %s", kw_id, conversation_id, exc)
 
     for key, original in target_map.items():
@@ -2893,7 +3046,7 @@ def _replace_conversation_keywords(
                 kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
             if kw and kw.get("id") is not None:
                 db.link_conversation_to_keyword(conversation_id, int(kw["id"]))
-        except Exception as exc:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Failed to link keyword %s to %s: %s", original, conversation_id, exc)
 
 
@@ -2941,19 +3094,16 @@ async def save_chat_knowledge(
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Message is not in conversation")
 
         export_status = "not_requested"
-        export_job_id: Optional[str] = None
+        export_job_id: str | None = None
         if payload.export_to != "none":
-            if _chat_connectors_enabled():
-                export_status = "queued"
-            else:
-                export_status = "skipped_disabled"
+            export_status = "queued" if _chat_connectors_enabled() else "skipped_disabled"
 
         conv_title = conversation.get("title") or f"Conversation {payload.conversation_id}"
         safe_title = conv_title[:200]
         note_title = f"Snippet: {safe_title}" if not safe_title.lower().startswith("snippet") else safe_title
 
-        note_id: Optional[int] = None
-        flashcard_id: Optional[str] = None
+        note_id: int | None = None
+        flashcard_id: str | None = None
 
         # Ensure note, keyword links, and optional flashcard are created atomically.
         async with db_transaction(db):
@@ -2973,7 +3123,7 @@ async def save_chat_knowledge(
                             kw = db.get_keyword_by_id(kw_id) if kw_id is not None else None
                         if kw and kw.get("id") is not None and note_id is not None:
                             db.link_note_to_keyword(note_id, int(kw["id"]))
-                    except Exception as kw_err:
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as kw_err:
                         logger.warning(f"Keyword attach failed for '{tag}' on note {note_id}: {kw_err}")
 
             if payload.make_flashcard:
@@ -3000,7 +3150,7 @@ async def save_chat_knowledge(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to save chat knowledge snippet: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save snippet") from exc
 
@@ -3027,14 +3177,14 @@ async def save_chat_knowledge(
     include_in_schema=False,
 )
 async def list_chat_conversations(
-    query: Optional[str] = Query(None, description="Search term for conversation title"),
-    state: Optional[str] = Query(None, description="Conversation state"),
-    topic_label: Optional[str] = Query(None, description="Topic label filter (use * for prefix)"),
-    keywords: Optional[List[str]] = Query(None, description="Keyword filters (repeatable)"),
-    cluster_id: Optional[str] = Query(None, description="Cluster ID filter"),
-    character_id: Optional[int] = Query(None, description="Character ID filter"),
-    start_date: Optional[str] = Query(None, description="ISO-8601 start date"),
-    end_date: Optional[str] = Query(None, description="ISO-8601 end date"),
+    query: str | None = Query(None, description="Search term for conversation title"),
+    state: str | None = Query(None, description="Conversation state"),
+    topic_label: str | None = Query(None, description="Topic label filter (use * for prefix)"),
+    keywords: list[str] | None = Query(None, description="Keyword filters (repeatable)"),
+    cluster_id: str | None = Query(None, description="Cluster ID filter"),
+    character_id: int | None = Query(None, description="Character ID filter"),
+    start_date: str | None = Query(None, description="ISO-8601 start date"),
+    end_date: str | None = Query(None, description="ISO-8601 end date"),
     date_field: Literal["last_modified", "created_at"] = Query("last_modified", description="Date field for filtering"),
     order_by: Literal["bm25", "recency", "hybrid", "topic"] = Query("recency", description="Ranking mode"),
     limit: int = Query(50, ge=1, le=200, description="Items per page"),
@@ -3126,7 +3276,7 @@ async def list_chat_conversations(
         conv_ids = [row.get("id") for row in page_rows if row.get("id")]
         keyword_map = db.get_keywords_for_conversations(conv_ids) if conv_ids else {}
         message_counts = db.count_messages_for_conversations(conv_ids) if conv_ids else {}
-        items: List[ConversationListItem] = []
+        items: list[ConversationListItem] = []
         for row in page_rows:
             conv_id = row.get("id") or ""
             keyword_rows = keyword_map.get(conv_id, [])
@@ -3164,7 +3314,7 @@ async def list_chat_conversations(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Conversation list failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list conversations") from exc
 
@@ -3246,7 +3396,7 @@ async def update_chat_conversation(
                 from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_conversation_clustering
 
                 schedule_conversation_clustering(db)
-            except Exception as exc:
+            except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Conversation clustering skipped after manual topic update: %s", exc)
 
         updated = db.get_conversation_by_id(conversation_id) or conversation
@@ -3254,7 +3404,7 @@ async def update_chat_conversation(
         keywords_list = [k.get("keyword") for k in keyword_rows if k.get("keyword")]
         try:
             message_count = db.count_messages_for_conversation(conversation_id)
-        except Exception:
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             message_count = 0
 
         return ConversationListItem(
@@ -3279,7 +3429,7 @@ async def update_chat_conversation(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Conversation update failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update conversation") from exc
 
@@ -3328,9 +3478,9 @@ async def get_conversation_tree(
             order_by_timestamp="ASC",
         )
 
-        nodes: Dict[str, ConversationTreeNode] = {}
-        roots: List[ConversationTreeNode] = []
-        node_depths: Dict[str, int] = {}
+        nodes: dict[str, ConversationTreeNode] = {}
+        roots: list[ConversationTreeNode] = []
+        node_depths: dict[str, int] = {}
 
         for msg in root_rows:
             msg_id = msg.get("id")
@@ -3360,7 +3510,7 @@ async def get_conversation_tree(
             )
             if not children:
                 break
-            next_parent_ids: List[str] = []
+            next_parent_ids: list[str] = []
             next_depth = current_depth + 1
             for child in children:
                 child_id = child.get("id")
@@ -3407,7 +3557,7 @@ async def get_conversation_tree(
         message_cap = min(max(TREE_MESSAGE_CAP_DEFAULT, 1), TREE_MESSAGE_CAP_MAX)
         count = 0
 
-        def prune_node(node: ConversationTreeNode, depth: int) -> Optional[ConversationTreeNode]:
+        def prune_node(node: ConversationTreeNode, depth: int) -> ConversationTreeNode | None:
             nonlocal count
             if count >= message_cap:
                 return None
@@ -3419,7 +3569,7 @@ async def get_conversation_tree(
                 elif node.truncated:
                     node.children = []
                 return node
-            pruned_children: List[ConversationTreeNode] = []
+            pruned_children: list[ConversationTreeNode] = []
             for child in node.children:
                 if count >= message_cap:
                     node.truncated = True
@@ -3435,7 +3585,7 @@ async def get_conversation_tree(
             node.children = pruned_children
             return node
 
-        pruned_roots: List[ConversationTreeNode] = []
+        pruned_roots: list[ConversationTreeNode] = []
         for root in root_page:
             if count >= message_cap:
                 break
@@ -3466,7 +3616,7 @@ async def get_conversation_tree(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Conversation tree failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load conversation tree") from exc
 
@@ -3509,17 +3659,14 @@ async def get_chat_analytics(
             date_field="last_modified",
         )
 
-        buckets: Dict[Tuple[datetime, Optional[str], str], int] = {}
+        buckets: dict[tuple[datetime, str | None, str], int] = {}
         for row in rows:
             dt = _coerce_datetime(row.get("last_modified")) or _coerce_datetime(row.get("created_at"))
             if not dt:
                 continue
             if dt < start_dt or dt > end_dt:
                 continue
-            if bucket_granularity == "week":
-                bucket_date = (dt - timedelta(days=dt.weekday())).date()
-            else:
-                bucket_date = dt.date()
+            bucket_date = (dt - timedelta(days=dt.weekday())).date() if bucket_granularity == "week" else dt.date()
             bucket_start = datetime.combine(bucket_date, datetime.min.time(), tzinfo=timezone.utc)
             state_val = row.get("state") or "in-progress"
             topic_val = row.get("topic_label")
@@ -3555,7 +3702,7 @@ async def get_chat_analytics(
         )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Chat analytics failed: {exc}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch analytics") from exc
 
@@ -3577,7 +3724,7 @@ class RagContextPersistResponse(BaseModel):
 
     success: bool = Field(..., description="Whether the operation succeeded")
     message_id: str = Field(..., description="The message ID that was updated")
-    error: Optional[str] = Field(None, description="Error message if operation failed")
+    error: str | None = Field(None, description="Error message if operation failed")
 
 
 class MessageWithRagContextResponse(BaseModel):
@@ -3586,16 +3733,16 @@ class MessageWithRagContextResponse(BaseModel):
     id: str
     conversation_id: str
     sender: str
-    content: Optional[str] = None
-    timestamp: Optional[str] = None
-    rag_context: Optional[Dict[str, Any]] = None
+    content: str | None = None
+    timestamp: str | None = None
+    rag_context: dict[str, Any] | None = None
 
 
 class ConversationCitationsResponse(BaseModel):
     """Response containing all citations from a conversation."""
 
     conversation_id: str
-    citations: List[Dict[str, Any]] = Field(
+    citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="All unique citations from the conversation"
     )
@@ -3665,7 +3812,7 @@ async def persist_rag_context(
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to persist RAG context for message {message_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3675,7 +3822,7 @@ async def persist_rag_context(
 
 @router.get(
     "/messages/{message_id}/rag-context",
-    response_model=Dict[str, Any],
+    response_model=dict[str, Any],
     summary="Get RAG context for a message",
     description="Retrieve the RAG context stored with a message, including citations and search settings.",
     tags=["chat", "rag"],
@@ -3707,7 +3854,7 @@ async def get_rag_context(
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to get RAG context for message {message_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3717,7 +3864,7 @@ async def get_rag_context(
 
 @router.get(
     "/conversations/{conversation_id}/messages-with-context",
-    response_model=List[Dict[str, Any]],
+    response_model=list[dict[str, Any]],
     summary="Get conversation messages with RAG context",
     description="""
     Retrieve messages from a conversation with their RAG context attached.
@@ -3760,7 +3907,7 @@ async def get_messages_with_rag_context(
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to get messages with RAG context for conversation {conversation_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -3810,7 +3957,7 @@ async def get_conversation_citations(
 
     except HTTPException:
         raise
-    except Exception as exc:
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to get citations for conversation {conversation_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

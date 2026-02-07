@@ -3,22 +3,16 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 import os
-from typing import Any, Dict, Optional, Set
+from typing import Any, Optional
+
 #
 # Third-party Imports
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-)
+
+from ..realtime_session import RealtimeSessionConfig, RealtimeTTSSession
 from ..tts_exceptions import (
     TTSProviderInitializationError,
     TTSProviderNotConfiguredError,
@@ -26,7 +20,18 @@ from ..tts_exceptions import (
 )
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
-from ..realtime_session import RealtimeSessionConfig, RealtimeTTSSession
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
+
 #
 #######################################################################################################################
 #
@@ -43,7 +48,7 @@ class VibeVoiceRealtimeAdapter(TTSAdapter):
     """
 
     PROVIDER_KEY = "vibevoice_realtime"
-    SUPPORTED_FORMATS: Set[AudioFormat] = {
+    SUPPORTED_FORMATS: set[AudioFormat] = {
         AudioFormat.PCM,
         AudioFormat.WAV,
         AudioFormat.MP3,
@@ -54,7 +59,7 @@ class VibeVoiceRealtimeAdapter(TTSAdapter):
     MAX_TEXT_LENGTH = 8192
     DEFAULT_SAMPLE_RATE = 24000
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
         extra_cfg = cfg.get("extra_params") if isinstance(cfg.get("extra_params"), dict) else {}
@@ -167,7 +172,7 @@ class VibeVoiceRealtimeAdapter(TTSAdapter):
         return session
 
     @staticmethod
-    def _coerce_headers(raw: Any) -> Optional[Dict[str, str]]:
+    def _coerce_headers(raw: Any) -> Optional[dict[str, str]]:
         if raw is None:
             return None
         if isinstance(raw, dict):
@@ -187,7 +192,7 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
         self,
         *,
         ws_url: str,
-        ws_headers: Optional[Dict[str, str]],
+        ws_headers: Optional[dict[str, str]],
         ws_timeout: float,
         config: RealtimeSessionConfig,
     ) -> None:
@@ -240,10 +245,8 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             await self._send_json({"type": "final"})
-        except Exception:
-            pass
         await self._close()
 
     async def audio_stream(self):
@@ -266,7 +269,7 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
         }
         await self._send_json(payload)
 
-    async def _send_json(self, payload: Dict[str, Any]) -> None:
+    async def _send_json(self, payload: dict[str, Any]) -> None:
         if not self._ws:
             return
         await self._ws.send_json(payload)
@@ -300,14 +303,10 @@ class _VibeVoiceRealtimeWebSocketSession(RealtimeTTSSession):
 
     async def _close(self) -> None:
         if self._ws:
-            try:
+            with contextlib.suppress(Exception):
                 await self._ws.close()
-            except Exception:
-                pass
             self._ws = None
         if self._session:
-            try:
+            with contextlib.suppress(Exception):
                 await self._session.close()
-            except Exception:
-                pass
             self._session = None

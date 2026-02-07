@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -25,10 +25,10 @@ class SlidesSourceTooLargeError(SlidesGenerationError):
         self,
         message: str,
         *,
-        max_source_tokens: Optional[int] = None,
-        max_source_chars: Optional[int] = None,
-        actual_tokens: Optional[int] = None,
-        actual_chars: Optional[int] = None,
+        max_source_tokens: int | None = None,
+        max_source_chars: int | None = None,
+        actual_tokens: int | None = None,
+        actual_chars: int | None = None,
     ) -> None:
         super().__init__(message)
         self.max_source_tokens = max_source_tokens
@@ -66,7 +66,7 @@ _SYSTEM_PROMPT = (
 _SUMMARY_SYSTEM_PROMPT = "Summarize the following content for slide generation."
 
 
-def _normalize_provider(provider: Optional[str]) -> str:
+def _normalize_provider(provider: str | None) -> str:
     value = (provider or "").strip()
     return value.lower() if value else ""
 
@@ -84,7 +84,7 @@ def _extract_json_block(text: str) -> str:
     return text
 
 
-def _chunk_by_words(text: str, chunk_size: int) -> List[str]:
+def _chunk_by_words(text: str, chunk_size: int) -> list[str]:
     if chunk_size <= 0:
         return [text]
     words = text.split()
@@ -93,10 +93,10 @@ def _chunk_by_words(text: str, chunk_size: int) -> List[str]:
     return [" ".join(words[i : i + chunk_size]) for i in range(0, len(words), chunk_size)]
 
 
-def _chunk_by_chars(text: str, chunk_size: int) -> List[str]:
+def _chunk_by_chars(text: str, chunk_size: int) -> list[str]:
     if chunk_size <= 0:
         return [text]
-    chunks: List[str] = []
+    chunks: list[str] = []
     for idx in range(0, len(text), chunk_size):
         chunks.append(text[idx : idx + chunk_size])
     return chunks
@@ -106,7 +106,7 @@ class SlidesGenerator:
     def __init__(
         self,
         *,
-        llm_call: Optional[Callable[..., Any]] = None,
+        llm_call: Callable[..., Any] | None = None,
     ) -> None:
         self._llm_call = llm_call or perform_chat_api_call
 
@@ -114,18 +114,18 @@ class SlidesGenerator:
         self,
         *,
         source_text: str,
-        title_hint: Optional[str],
+        title_hint: str | None,
         provider: str,
-        model: Optional[str],
-        api_key: Optional[str],
-        temperature: Optional[float],
-        max_tokens: Optional[int],
-        max_source_tokens: Optional[int],
-        max_source_chars: Optional[int],
+        model: str | None,
+        api_key: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
+        max_source_tokens: int | None,
+        max_source_chars: int | None,
         enable_chunking: bool,
-        chunk_size_tokens: Optional[int],
-        summary_tokens: Optional[int],
-    ) -> Dict[str, Any]:
+        chunk_size_tokens: int | None,
+        summary_tokens: int | None,
+    ) -> dict[str, Any]:
         if not source_text or not source_text.strip():
             raise SlidesGenerationInputError("source_text_required")
 
@@ -186,11 +186,11 @@ class SlidesGenerator:
         *,
         source_text: str,
         provider: str,
-        model: Optional[str],
-        api_key: Optional[str],
-        temperature: Optional[float],
-        chunk_size_tokens: Optional[int],
-        summary_tokens: Optional[int],
+        model: str | None,
+        api_key: str | None,
+        temperature: float | None,
+        chunk_size_tokens: int | None,
+        summary_tokens: int | None,
     ) -> str:
         chunk_size = chunk_size_tokens or 1000
         mode = str(settings.get("TOKEN_ESTIMATOR_MODE") or "whitespace").lower()
@@ -208,7 +208,7 @@ class SlidesGenerator:
             return ""
 
         summary_target = summary_tokens or 200
-        summaries: List[str] = []
+        summaries: list[str] = []
         for chunk in chunks:
             prompt = "Summarize this content for slide generation:\n\n" + chunk
             summary = self._call_llm(
@@ -227,10 +227,10 @@ class SlidesGenerator:
         self,
         *,
         provider: str,
-        model: Optional[str],
-        api_key: Optional[str],
-        temperature: Optional[float],
-        max_tokens: Optional[int],
+        model: str | None,
+        api_key: str | None,
+        temperature: float | None,
+        max_tokens: int | None,
         system_prompt: str,
         user_prompt: str,
     ) -> str:
@@ -256,7 +256,7 @@ class SlidesGenerator:
             raise SlidesGenerationOutputError("empty_llm_response")
         return content
 
-    def _parse_json(self, raw_text: str) -> Dict[str, Any]:
+    def _parse_json(self, raw_text: str) -> dict[str, Any]:
         candidate = _extract_json_block(raw_text)
         try:
             parsed = json.loads(candidate)
@@ -266,11 +266,11 @@ class SlidesGenerator:
             raise SlidesGenerationOutputError("json_output_not_object")
         return parsed
 
-    def _normalize_payload(self, payload: Dict[str, Any], title_hint: Optional[str]) -> Dict[str, Any]:
+    def _normalize_payload(self, payload: dict[str, Any], title_hint: str | None) -> dict[str, Any]:
         slides = payload.get("slides")
         if not isinstance(slides, list) or not slides:
             raise SlidesGenerationOutputError("slides_missing")
-        normalized_slides: List[Dict[str, Any]] = []
+        normalized_slides: list[dict[str, Any]] = []
         for idx, slide in enumerate(slides):
             if not isinstance(slide, dict):
                 raise SlidesGenerationOutputError("slide_entry_invalid")

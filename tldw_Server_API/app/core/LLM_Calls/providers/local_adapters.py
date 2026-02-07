@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List, Union, Callable
+from collections.abc import AsyncIterator, Iterable
+from typing import Any, Callable
 
-from .base import ChatProvider, apply_tool_choice
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
 )
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.config import load_settings
+from tldw_Server_API.app.core.http_client import (
+    RetryPolicy as _HC_RetryPolicy,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_client as _hc_create_client,
+)
+from tldw_Server_API.app.core.http_client import (
+    fetch as _hc_fetch,
+)
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
@@ -34,15 +46,56 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
 )
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_settings
-from tldw_Server_API.app.core.http_client import (
-    create_client as _hc_create_client,
-    fetch as _hc_fetch,
-    RetryPolicy as _HC_RetryPolicy,
-)
+
+from .base import ChatProvider, apply_tool_choice
+
+_LOCAL_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+try:
+    import httpx as _local_httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _local_httpx = None
+else:  # pragma: no cover - imported in runtime when available
+    _LOCAL_HTTP_EXCEPTIONS = _LOCAL_HTTP_EXCEPTIONS + (
+        _local_httpx.HTTPError,
+        _local_httpx.RequestError,
+        _local_httpx.HTTPStatusError,
+    )
+
+try:
+    import requests as _local_requests  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _local_requests = None
+else:  # pragma: no cover - imported in runtime when available
+    _LOCAL_HTTP_EXCEPTIONS = _LOCAL_HTTP_EXCEPTIONS + (
+        _local_requests.exceptions.RequestException,
+        _local_requests.exceptions.HTTPError,
+    )
+
+_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    ChatBadRequestError,
+    ChatConfigurationError,
+    ChatProviderError,
+) + _LOCAL_HTTP_EXCEPTIONS
 
 
-def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]], provider_name: str, msg_index: int) -> str:
+def _extract_text_from_message_content(content: str | list[dict[str, Any]], provider_name: str, msg_index: int) -> str:
     """Extracts and concatenates text parts from a message's content, logging warnings for images."""
     text_parts = []
     has_image = False
@@ -69,39 +122,37 @@ def _extract_text_from_message_content(content: Union[str, List[Dict[str, Any]]]
 
 def _chat_with_openai_compatible_local_server(
         api_base_url: str,
-        model_name: Optional[str],
-        input_data: List[Dict[str, Any]],  # This is messages_payload
-        api_key: Optional[str] = None,
-        temp: Optional[float] = None,
-        system_message: Optional[str] = None, # This will be prepended to messages by this function
-        streaming: Optional[bool] = False,
-        max_tokens: Optional[int] = None,
-        top_p: Optional[float] = None,
-        top_k: Optional[int] = None,
-        min_p: Optional[float] = None,
-        n: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        seed: Optional[int] = None,
-        response_format: Optional[Dict[str, str]] = None, # e.g. {"type": "json_object"}
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        logprobs: Optional[bool] = None,
-        top_logprobs: Optional[int] = None,
-        user_identifier: Optional[str] = None, # maps to 'user' in OpenAI spec
+        model_name: str | None,
+        input_data: list[dict[str, Any]],  # This is messages_payload
+        api_key: str | None = None,
+        temp: float | None = None,
+        system_message: str | None = None, # This will be prepended to messages by this function
+        streaming: bool | None = False,
+        max_tokens: int | None = None,
+        top_p: float | None = None,
+        top_k: int | None = None,
+        min_p: float | None = None,
+        n: int | None = None,
+        stop: str | list[str] | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        logit_bias: dict[str, float] | None = None,
+        seed: int | None = None,
+        response_format: dict[str, str] | None = None, # e.g. {"type": "json_object"}
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        logprobs: bool | None = None,
+        top_logprobs: int | None = None,
+        user_identifier: str | None = None, # maps to 'user' in OpenAI spec
         provider_name: str = "Local OpenAI-Compatible Server",
         timeout: int = 120,
         api_retries: int = 1,
         api_retry_delay: int = 1,
         filter_unknown_params: bool = False,
-        http_client_factory: Optional[Callable[[int], Any]] = None,
-        http_fetcher: Optional[
-            Callable[..., Any]
-        ] = None,  # Mirrors signature of _hc_fetch(method=..., url=..., ...)
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        http_client_factory: Callable[[int], Any] | None = None,
+        http_fetcher: Callable[..., Any] | None = None,  # Mirrors signature of _hc_fetch(method=..., url=..., ...)
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
 ):
     logging.debug(f"{provider_name}: Chat request starting. API Base: {api_base_url}, Model: {model_name}")
 
@@ -128,32 +179,48 @@ def _chat_with_openai_compatible_local_server(
         logging.info(f"{provider_name}: Multimodal content (images) detected in messages payload. "
                      f"Ensure the target model ({model_name or 'default model'}) and server support vision.")
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "messages": api_messages,
         "stream": streaming,
     }
-    if model_name: payload["model"] = model_name
-    if temp is not None: payload["temperature"] = temp
-    if top_p is not None: payload["top_p"] = top_p
-    if top_k is not None: payload["top_k"] = top_k # OpenAI spec doesn't have top_k for chat, but some servers might
-    if min_p is not None: payload["min_p"] = min_p # Not standard OpenAI, but some servers might support
-    if max_tokens is not None: payload["max_tokens"] = max_tokens
-    if n is not None: payload["n"] = n
-    if stop is not None: payload["stop"] = stop
-    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
-    if logit_bias is not None: payload["logit_bias"] = logit_bias
-    if seed is not None: payload["seed"] = seed
-    if response_format is not None: payload["response_format"] = response_format
-    if tools is not None: payload["tools"] = tools
+    if model_name:
+        payload["model"] = model_name
+    if temp is not None:
+        payload["temperature"] = temp
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k # OpenAI spec doesn't have top_k for chat, but some servers might
+    if min_p is not None:
+        payload["min_p"] = min_p # Not standard OpenAI, but some servers might support
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if n is not None:
+        payload["n"] = n
+    if stop is not None:
+        payload["stop"] = stop
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        payload["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if seed is not None:
+        payload["seed"] = seed
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if tools is not None:
+        payload["tools"] = tools
     apply_tool_choice(payload, tools, tool_choice)
-    if logprobs is not None: payload["logprobs"] = logprobs
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
     if top_logprobs is not None: # Can only be used if logprobs is true
         if logprobs:
             payload["top_logprobs"] = top_logprobs
         else:
             logging.warning(f"{provider_name}: top_logprobs provided without logprobs=True. Ignoring top_logprobs.")
-    if user_identifier is not None: payload["user"] = user_identifier
+    if user_identifier is not None:
+        payload["user"] = user_identifier
 
     if tool_choice is not None and not tools:
         raise ChatBadRequestError(provider=provider_name, message="tool_choice requires tools")
@@ -237,13 +304,13 @@ def _chat_with_openai_compatible_local_server(
                                     if normalized is None:
                                         continue
                                     yield normalized
-                            except Exception as e_stream:
+                            except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_stream:
                                 logging.error(f"{provider_name}: Error during stream iteration: {e_stream}", exc_info=True)
                                 yield sse_data({"error": {"message": f"Stream iteration error: {str(e_stream)}", "type": "stream_error", "code": "iteration_error"}})
                             finally:
                                 for tail in finalize_stream(response, done_already=done_sent):
                                     yield tail
-                    except Exception as e_stream_outer:
+                    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_stream_outer:
                         if is_http_status_error(e_stream_outer):
                             logging.error(
                                 "{}: HTTP Error during stream setup: {} - {}",
@@ -291,10 +358,8 @@ def _chat_with_openai_compatible_local_server(
                         for tail in finalize_stream(response_obj, done_already=done_sent):
                             yield tail
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         session.close()
-                    except Exception:
-                        pass
             return stream_generator()
         else:
             if is_test:
@@ -305,28 +370,31 @@ def _chat_with_openai_compatible_local_server(
                     logging.debug(f"{provider_name}: Non-streaming request successful.")
                     return data
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         response.close()
-                    except Exception:
-                        pass
             else:
                 # Centralized client fetch with retries for prod
                 attempts = max(1, int(api_retries)) + 1
                 base_ms = max(50, int(api_retry_delay * 1000))
                 policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
                 fetch_impl = http_fetcher or _hc_fetch
-                response = fetch_impl(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
+                response = fetch_impl(
+                    method="POST",
+                    url=full_api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
                 try:
                     response.raise_for_status()
                     data = response.json()
                     logging.debug(f"{provider_name}: Non-streaming request successful.")
                     return data
                 finally:
-                    try:
+                    with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                         response.close()
-                    except Exception:
-                        pass
-    except Exception as e_http:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_http:
         if is_http_status_error(e_http):
             logging.error(
                 "{}: HTTP Error: {} - {}",
@@ -344,53 +412,51 @@ def _chat_with_openai_compatible_local_server(
         if is_network_error(e_http):
             # Network/connectivity, DNS, timeouts prior to receiving a response
             logging.error(f"{provider_name}: Request error: {e_http}", exc_info=False)
-            raise ChatProviderError(provider=provider_name, message=str(e_http), status_code=504)
+            raise ChatProviderError(provider=provider_name, message=str(e_http), status_code=504) from e_http
         raise
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
-        raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
+        raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}") from e_data
     finally:
         if not streaming:
-            try:
+            with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
                 session.close()
-            except Exception:
-                pass
 
 
 def _local_llm_request(
-        input_data: List[Dict[str, Any]],
-        temp: Optional[float] = None,
-        temperature: Optional[float] = None,
-        system_message: Optional[str] = None,
-        streaming: Optional[bool] = None,
-        stream: Optional[bool] = None,
-        model: Optional[str] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[float] = None,
-        min_p: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        input_data: list[dict[str, Any]],
+        temp: float | None = None,
+        temperature: float | None = None,
+        system_message: str | None = None,
+        streaming: bool | None = None,
+        stream: bool | None = None,
+        model: str | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+        min_p: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        stop: str | list[str] | None = None,
         # Note: custom_prompt_arg is legacy-only; OpenAI-compatible servers expect prompts in messages.
         # It's better handled by the `chat` function by prepending to the user message if needed.
         # For now, we assume it's already part of input_data or handled by system_message.
-        custom_prompt_arg: Optional[str] = None, # Mapped from 'prompt'
+        custom_prompt_arg: str | None = None, # Mapped from 'prompt'
          # Adding other OpenAI compatible params from your map if this server type is meant to be generic OpenAI
-        response_format: Optional[Dict[str, str]] = None,
-        n: Optional[int] = None,
-        user_identifier: Optional[str] = None,
-        logit_bias: Optional[Dict[str, float]] = None,
-        presence_penalty: Optional[float] = None,
-        frequency_penalty: Optional[float] = None,
-        logprobs: Optional[bool] = None,
-        top_logprobs: Optional[int] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-        app_config: Optional[Dict[str, Any]] = None,
-        http_client_factory: Optional[Callable[[int], Any]] = None,
-        http_fetcher: Optional[Callable[..., Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        response_format: dict[str, str] | None = None,
+        n: int | None = None,
+        user_identifier: str | None = None,
+        logit_bias: dict[str, float] | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        logprobs: bool | None = None,
+        top_logprobs: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        app_config: dict[str, Any] | None = None,
+        http_client_factory: Callable[[int], Any] | None = None,
+        http_fetcher: Callable[..., Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -401,7 +467,8 @@ def _local_llm_request(
         if streaming is not None and streaming != stream:
             logging.warning("local_llm: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg_section = 'local_llm' # Generic section for "local-llm" type
     cfg = loaded_config_data.get(cfg_section, {})
@@ -434,48 +501,50 @@ def _local_llm_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("local_llm: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
 
     if custom_prompt_arg:
@@ -519,35 +588,35 @@ def _local_llm_request(
 
 
 def _llama_request(
-        input_data: List[Dict[str, Any]],
-        api_key: Optional[str] = None, # from map
-        custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
-        temp: Optional[float] = None, # from map, generic name is 'temperature'
-        temperature: Optional[float] = None,
-        system_prompt: Optional[str] = None,  # from map, Mapped from 'system_message'
-        streaming: Optional[bool] = None, # from map
-        stream: Optional[bool] = None, # alias from provider map
-        model: Optional[str] = None, # from map
-        top_k: Optional[int] = None, # from map
-        top_p: Optional[float] = None, # from map
-        min_p: Optional[float] = None, # from map
-        n_predict: Optional[int] = None, # from map, mapped from max_tokens
-        seed: Optional[int] = None, # from map
-        stop: Optional[Union[str, List[str]]] = None, # from map
-        response_format: Optional[Dict[str, str]] = None, # from map
-        logit_bias: Optional[Dict[str, float]] = None, # from map
-        n: Optional[int] = None, # from map, number of completions to request
-        presence_penalty: Optional[float] = None, # from map
-        frequency_penalty: Optional[float] = None, # from map
+        input_data: list[dict[str, Any]],
+        api_key: str | None = None, # from map
+        custom_prompt: str | None = None,  # from map, Mapped from 'prompt'
+        temp: float | None = None, # from map, generic name is 'temperature'
+        temperature: float | None = None,
+        system_prompt: str | None = None,  # from map, Mapped from 'system_message'
+        streaming: bool | None = None, # from map
+        stream: bool | None = None, # alias from provider map
+        model: str | None = None, # from map
+        top_k: int | None = None, # from map
+        top_p: float | None = None, # from map
+        min_p: float | None = None, # from map
+        n_predict: int | None = None, # from map, mapped from max_tokens
+        seed: int | None = None, # from map
+        stop: str | list[str] | None = None, # from map
+        response_format: dict[str, str] | None = None, # from map
+        logit_bias: dict[str, float] | None = None, # from map
+        n: int | None = None, # from map, number of completions to request
+        presence_penalty: float | None = None, # from map
+        frequency_penalty: float | None = None, # from map
         # api_url is tricky. Your notes say "positional argument".
         # If chat_api_call is the sole entry, this needs to be passed via kwargs if mapped,
         # or loaded from config if not passed. Let's assume it's primarily from config for now.
-        api_url: Optional[str] = None, # Used by legacy dispatch when special handling exists
-        app_config: Optional[Dict[str, Any]] = None,
-        http_client_factory: Optional[Callable[[int], Any]] = None,
-        http_fetcher: Optional[Callable[..., Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        api_url: str | None = None, # Used by legacy dispatch when special handling exists
+        app_config: dict[str, Any] | None = None,
+        http_client_factory: Callable[[int], Any] | None = None,
+        http_fetcher: Callable[..., Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -558,7 +627,8 @@ def _llama_request(
         if streaming is not None and streaming != stream:
             logging.warning("Llama.cpp: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('llama_api', {})
 
@@ -589,42 +659,43 @@ def _llama_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Llama.cpp: Failed to coerce n='%s' to int; sending as-is", current_n)
     if custom_prompt:
         logging.info("Llama.cpp: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt' by the calling function.")
@@ -666,24 +737,25 @@ def _llama_request(
 # System prompts not supported through API requests.
 # https://lite.koboldai.net/koboldcpp_api#/api%2Fv1/post_api_v1_generate
 def _kobold_request(
-        input_data: List[Dict[str, Any]],
-        api_key: Optional[str] = None,
-        custom_prompt_input: Optional[str] = None, # Mapped from 'prompt'
-        temp: Optional[float] = None, # Mapped from 'temp'
-        system_message: Optional[str] = None, # Mapped
-        streaming: Optional[bool] = False, # Mapped
-        model: Optional[str] = None, # Mapped
-        top_k: Optional[int] = None, # Mapped
-        top_p: Optional[float] = None, # Mapped
-        max_length: Optional[int] = None, # Mapped from 'max_tokens'
-        stop_sequence: Optional[Union[str, List[str]]] = None, # Mapped from 'stop'
-        num_responses: Optional[int] = None, # Mapped from 'n'
-        seed: Optional[int] = None, # Mapped from 'seed'
-        app_config: Optional[Dict[str, Any]] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
+        input_data: list[dict[str, Any]],
+        api_key: str | None = None,
+        custom_prompt_input: str | None = None, # Mapped from 'prompt'
+        temp: float | None = None, # Mapped from 'temp'
+        system_message: str | None = None, # Mapped
+        streaming: bool | None = False, # Mapped
+        model: str | None = None, # Mapped
+        top_k: int | None = None, # Mapped
+        top_p: float | None = None, # Mapped
+        max_length: int | None = None, # Mapped from 'max_tokens'
+        stop_sequence: str | list[str] | None = None, # Mapped from 'stop'
+        num_responses: int | None = None, # Mapped from 'n'
+        seed: int | None = None, # Mapped from 'seed'
+        app_config: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: dict[str, Any] | None = None,
 ):
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     logging.debug("KoboldAI (Native): Chat request starting...")
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('kobold_api', {})
@@ -719,26 +791,26 @@ def _kobold_request(
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_num_responses, str):
             current_num_responses = int(current_num_responses)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce num_responses='%s' to int; sending as-is", current_num_responses)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Kobold: Failed to coerce seed='%s' to int; sending as-is", current_seed)
 
     max_context_length = int(cfg.get('max_context_length', 2048)) # Kobold uses max_context_length for context window
-    timeout = int(cfg.get('api_timeout', 180))
+    int(cfg.get('api_timeout', 180))
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
@@ -765,10 +837,11 @@ def _kobold_request(
     final_prompt_string = "\n\n".join(filter(None, full_prompt_parts)).strip() # filter(None,...) removes empty strings
 
     headers = {'Content-Type': 'application/json'}
-    if current_api_key: headers['X-Api-Key'] = current_api_key # Some Kobold forks might use this
+    if current_api_key:
+        headers['X-Api-Key'] = current_api_key # Some Kobold forks might use this
     headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "prompt": final_prompt_string,
         "max_context_length": max_context_length, # Context window size
         "max_length": current_max_length,         # Max tokens to generate
@@ -779,13 +852,17 @@ def _kobold_request(
         # "stream": current_streaming, # Will be False due to above logic
     }
     # Add other params if they are not None
-    if current_stop_sequence is not None: payload['stop_sequence'] = current_stop_sequence # List of strings
-    if current_num_responses is not None: payload['n'] = current_num_responses # Number of responses
-    if current_seed is not None: payload['seed'] = current_seed
+    if current_stop_sequence is not None:
+        payload['stop_sequence'] = current_stop_sequence # List of strings
+    if current_num_responses is not None:
+        payload['n'] = current_num_responses # Number of responses
+    if current_seed is not None:
+        payload['seed'] = current_seed
     payload = merge_extra_body(payload, {"extra_body": extra_body})
 
     # Kobold specific params (can be added from cfg if needed and supported)
-    if cfg.get('rep_pen') is not None: payload['rep_pen'] = float(cfg['rep_pen'])
+    if cfg.get('rep_pen') is not None:
+        payload['rep_pen'] = float(cfg['rep_pen'])
     # Other kobold params: typical_p, tfs, top_a, etc. could be added from cfg
 
     logging.debug(
@@ -819,7 +896,7 @@ def _kobold_request(
             )
             raise ChatProviderError(provider="kobold", message=f"Unexpected response structure from KoboldAI (Native): {str(response_data)[:200]}")
 
-    except Exception as e_http:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS as e_http:
         if is_http_status_error(e_http):
             log_http_400_body("kobold", e_http)
             logging.error(
@@ -835,43 +912,43 @@ def _kobold_request(
                 provider="kobold",
                 message=f"Network error calling KoboldAI (Native): {e_http}",
                 status_code=503,
-            )
+            ) from e_http
         raise
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"KoboldAI (Native): Data or configuration error: {e_data}", exc_info=True)
-        raise ChatBadRequestError(provider="kobold", message=f"KoboldAI (Native) config/data error: {e_data}")
+        raise ChatBadRequestError(provider="kobold", message=f"KoboldAI (Native) config/data error: {e_data}") from e_data
 
 
 # https://github.com/oobabooga/text-generation-webui/wiki/12-%E2%80%90-OpenAI-API
 # Oobabooga with OpenAI extension
 def _ooba_request(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None, # from map
-    custom_prompt: Optional[str] = None,  # from map, Mapped from 'prompt'
-    temp: Optional[float] = None, # from map, generic name 'temperature'
-    temperature: Optional[float] = None,
-    system_prompt: Optional[str] = None,  # from map, Mapped from 'system_message'
-    streaming: Optional[bool] = None, # from map
-    stream: Optional[bool] = None,
-    model: Optional[str] = None, # from map
-    top_k: Optional[int] = None, # from map
-    top_p: Optional[float] = None, # from map (ooba might use 'top_p')
-    min_p: Optional[float] = None, # from map
-    max_tokens: Optional[int] = None, # from map
-    seed: Optional[int] = None, # from map
-    stop: Optional[Union[str, List[str]]] = None, # from map
-    response_format: Optional[Dict[str, str]] = None, # from map
-    n: Optional[int] = None, # from map
-    user_identifier: Optional[str] = None, # from map
-    logit_bias: Optional[Dict[str, float]] = None, # from map
-    presence_penalty: Optional[float] = None, # from map
-    frequency_penalty: Optional[float] = None, # from map
-    api_url: Optional[str] = None, # Specific, not from generic map unless handled
-    app_config: Optional[Dict[str, Any]] = None,
-    http_client_factory: Optional[Callable[[int], Any]] = None,
-    http_fetcher: Optional[Callable[..., Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    input_data: list[dict[str, Any]],
+    api_key: str | None = None, # from map
+    custom_prompt: str | None = None,  # from map, Mapped from 'prompt'
+    temp: float | None = None, # from map, generic name 'temperature'
+    temperature: float | None = None,
+    system_prompt: str | None = None,  # from map, Mapped from 'system_message'
+    streaming: bool | None = None, # from map
+    stream: bool | None = None,
+    model: str | None = None, # from map
+    top_k: int | None = None, # from map
+    top_p: float | None = None, # from map (ooba might use 'top_p')
+    min_p: float | None = None, # from map
+    max_tokens: int | None = None, # from map
+    seed: int | None = None, # from map
+    stop: str | list[str] | None = None, # from map
+    response_format: dict[str, str] | None = None, # from map
+    n: int | None = None, # from map
+    user_identifier: str | None = None, # from map
+    logit_bias: dict[str, float] | None = None, # from map
+    presence_penalty: float | None = None, # from map
+    frequency_penalty: float | None = None, # from map
+    api_url: str | None = None, # Specific, not from generic map unless handled
+    app_config: dict[str, Any] | None = None,
+    http_client_factory: Callable[[int], Any] | None = None,
+    http_fetcher: Callable[..., Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -882,7 +959,8 @@ def _ooba_request(
         if streaming is not None and streaming != stream:
             logging.warning("Oobabooga: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ooba_api', {})
 
@@ -913,37 +991,38 @@ def _ooba_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Oobabooga: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Oobabooga: 'custom_prompt' received. Ensure it's incorporated into 'input_data' or 'system_prompt'.")
@@ -984,38 +1063,38 @@ def _ooba_request(
 
 # TabbyAPI (seems OpenAI compatible)
 def _tabbyapi_request(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None, # from map
-    custom_prompt_input: Optional[str] = None, # from map ('prompt')
-    temp: Optional[float] = None, # from map (mapped to 'temperature' in generic)
-    temperature: Optional[float] = None,
-    system_message: Optional[str] = None, # from map
-    streaming: Optional[bool] = None, # from map
-    stream: Optional[bool] = None,
-    model: Optional[str] = None, # from map
-    top_k: Optional[int] = None, # from map
-    top_p: Optional[float] = None, # from map
-    min_p: Optional[float] = None, # from map
-    max_tokens: Optional[int] = None, # from map
-    seed: Optional[int] = None, # from map
-    stop: Optional[Union[str, List[str]]] = None, # from map
-    app_config: Optional[Dict[str, Any]] = None,
+    input_data: list[dict[str, Any]],
+    api_key: str | None = None, # from map
+    custom_prompt_input: str | None = None, # from map ('prompt')
+    temp: float | None = None, # from map (mapped to 'temperature' in generic)
+    temperature: float | None = None,
+    system_message: str | None = None, # from map
+    streaming: bool | None = None, # from map
+    stream: bool | None = None,
+    model: str | None = None, # from map
+    top_k: int | None = None, # from map
+    top_p: float | None = None, # from map
+    min_p: float | None = None, # from map
+    max_tokens: int | None = None, # from map
+    seed: int | None = None, # from map
+    stop: str | list[str] | None = None, # from map
+    app_config: dict[str, Any] | None = None,
     # Additional OpenAI-compatible params (pass-through if supported by server)
-    response_format: Optional[Dict[str, str]] = None,
-    n: Optional[int] = None,
-    user_identifier: Optional[str] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
-    presence_penalty: Optional[float] = None,
-    frequency_penalty: Optional[float] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    api_url: Optional[str] = None,
-    http_client_factory: Optional[Callable[[int], Any]] = None,
-    http_fetcher: Optional[Callable[..., Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    response_format: dict[str, str] | None = None,
+    n: int | None = None,
+    user_identifier: str | None = None,
+    logit_bias: dict[str, float] | None = None,
+    presence_penalty: float | None = None,
+    frequency_penalty: float | None = None,
+    logprobs: bool | None = None,
+    top_logprobs: int | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    api_url: str | None = None,
+    http_client_factory: Callable[[int], Any] | None = None,
+    http_fetcher: Callable[..., Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
 ):
     if temperature is not None:
         if temp is not None and temp != temperature:
@@ -1026,7 +1105,8 @@ def _tabbyapi_request(
         if streaming is not None and streaming != stream:
             logging.warning("TabbyAPI: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('tabby_api', {})
 
@@ -1062,47 +1142,48 @@ def _tabbyapi_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("TabbyAPI: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
     if custom_prompt_input:
         logging.info("TabbyAPI: 'custom_prompt_input' received. Ensure incorporated if needed.")
@@ -1146,39 +1227,39 @@ def _tabbyapi_request(
 
 # vLLM (OpenAI compatible)
 def _vllm_request(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None, # from map
-    custom_prompt_input: Optional[str] = None, # from map ('prompt')
-    temp: Optional[float] = None,
+    input_data: list[dict[str, Any]],
+    api_key: str | None = None, # from map
+    custom_prompt_input: str | None = None, # from map ('prompt')
+    temp: float | None = None,
     # vLLM's map has 'temp':'temperature', 'system_prompt':'system_message' etc.
     # These are the provider-specific names this function receives.
-    temperature: Optional[float] = None, # from map (mapped from generic 'temp')
-    system_prompt: Optional[str] = None,   # from map (mapped from generic 'system_message')
-    streaming: Optional[bool] = None,   # from map
-    stream: Optional[bool] = None,
-    model: Optional[str] = None,         # from map
-    top_k: Optional[int] = None,         # from map
-    top_p: Optional[float] = None,         # from map (mapped from generic 'topp')
-    min_p: Optional[float] = None,         # from map (mapped from generic 'minp')
-    max_tokens: Optional[int] = None,      # from map
-    seed: Optional[int] = None,          # from map
-    stop: Optional[Union[str, List[str]]] = None, # from map
-    response_format: Optional[Dict[str, str]] = None, # from map
-    n: Optional[int] = None,             # from map
-    logit_bias: Optional[Dict[str, float]] = None, # from map
-    presence_penalty: Optional[float] = None, # from map
-    frequency_penalty: Optional[float] = None, # from map
-    logprobs: Optional[bool] = None,     # from map
-    user_identifier: Optional[str] = None, # from map
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    top_logprobs: Optional[int] = None,
-    vllm_api_url: Optional[str] = None, # Specific config, not from generic map typically
-    app_config: Optional[Dict[str, Any]] = None,
-    http_client_factory: Optional[Callable[[int], Any]] = None,
-    http_fetcher: Optional[Callable[..., Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    temperature: float | None = None, # from map (mapped from generic 'temp')
+    system_prompt: str | None = None,   # from map (mapped from generic 'system_message')
+    streaming: bool | None = None,   # from map
+    stream: bool | None = None,
+    model: str | None = None,         # from map
+    top_k: int | None = None,         # from map
+    top_p: float | None = None,         # from map (mapped from generic 'topp')
+    min_p: float | None = None,         # from map (mapped from generic 'minp')
+    max_tokens: int | None = None,      # from map
+    seed: int | None = None,          # from map
+    stop: str | list[str] | None = None, # from map
+    response_format: dict[str, str] | None = None, # from map
+    n: int | None = None,             # from map
+    logit_bias: dict[str, float] | None = None, # from map
+    presence_penalty: float | None = None, # from map
+    frequency_penalty: float | None = None, # from map
+    logprobs: bool | None = None,     # from map
+    user_identifier: str | None = None, # from map
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    top_logprobs: int | None = None,
+    vllm_api_url: str | None = None, # Specific config, not from generic map typically
+    app_config: dict[str, Any] | None = None,
+    http_client_factory: Callable[[int], Any] | None = None,
+    http_fetcher: Callable[..., Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
                                        # Could be loaded from cfg or passed if chat_api_call handles it
 ):
     if temp is not None:
@@ -1189,7 +1270,8 @@ def _vllm_request(
         if streaming is not None and streaming != stream:
             logging.warning("vLLM: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('vllm_api', {})
 
@@ -1227,49 +1309,51 @@ def _vllm_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_n, str):
             current_n = int(current_n)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce n='%s' to int; sending as-is", current_n)
     try:
         if isinstance(current_top_logprobs, str):
             current_top_logprobs = int(current_top_logprobs)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     if custom_prompt_input:
         logging.info("vLLM: 'custom_prompt_input' received. Ensure incorporated if needed.")
 
@@ -1312,38 +1396,38 @@ def _vllm_request(
 
 # Aphrodite (seems to be an OpenAI compatible engine)
 def _aphrodite_request(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None, # from map
-    custom_prompt: Optional[str] = None,  # from map ('prompt')
+    input_data: list[dict[str, Any]],
+    api_key: str | None = None, # from map
+    custom_prompt: str | None = None,  # from map ('prompt')
     # Aphrodite's map uses 'temp':'temperature', etc.
-    temp: Optional[float] = None,
-    temperature: Optional[float] = None, # from map (mapped from generic 'temp')
-    system_message: Optional[str] = None, # from map
-    streaming: Optional[bool] = None,   # from map
-    stream: Optional[bool] = None,
-    model: Optional[str] = None,         # from map
-    top_k: Optional[int] = None,         # from map
-    top_p: Optional[float] = None,         # from map (mapped from generic 'topp')
-    min_p: Optional[float] = None,         # from map (mapped from generic 'minp')
-    max_tokens: Optional[int] = None,      # from map
-    seed: Optional[int] = None,          # from map
-    stop: Optional[Union[str, List[str]]] = None, # from map
-    response_format: Optional[Dict[str, str]] = None, # from map
-    n: Optional[int] = None,             # from map
-    logit_bias: Optional[Dict[str, float]] = None, # from map
-    presence_penalty: Optional[float] = None, # legacy alias
-    frequency_penalty: Optional[float] = None, # legacy alias
-    logprobs: Optional[bool] = None,     # from map
-    user_identifier: Optional[str] = None, # from map
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    top_logprobs: Optional[int] = None,
-    api_url: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    http_client_factory: Optional[Callable[[int], Any]] = None,
-    http_fetcher: Optional[Callable[..., Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    temp: float | None = None,
+    temperature: float | None = None, # from map (mapped from generic 'temp')
+    system_message: str | None = None, # from map
+    streaming: bool | None = None,   # from map
+    stream: bool | None = None,
+    model: str | None = None,         # from map
+    top_k: int | None = None,         # from map
+    top_p: float | None = None,         # from map (mapped from generic 'topp')
+    min_p: float | None = None,         # from map (mapped from generic 'minp')
+    max_tokens: int | None = None,      # from map
+    seed: int | None = None,          # from map
+    stop: str | list[str] | None = None, # from map
+    response_format: dict[str, str] | None = None, # from map
+    n: int | None = None,             # from map
+    logit_bias: dict[str, float] | None = None, # from map
+    presence_penalty: float | None = None, # legacy alias
+    frequency_penalty: float | None = None, # legacy alias
+    logprobs: bool | None = None,     # from map
+    user_identifier: str | None = None, # from map
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    top_logprobs: int | None = None,
+    api_url: str | None = None,
+    app_config: dict[str, Any] | None = None,
+    http_client_factory: Callable[[int], Any] | None = None,
+    http_fetcher: Callable[..., Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
     # top_logprobs, tools, tool_choice not in Aphrodite's map currently
 ):
     if temp is not None:
@@ -1354,7 +1438,8 @@ def _aphrodite_request(
         if streaming is not None and streaming != stream:
             logging.warning("Aphrodite: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('aphrodite_api', {})
 
@@ -1393,38 +1478,40 @@ def _aphrodite_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_min_p, str):
             current_min_p = float(current_min_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce min_p='%s' to float; sending as-is", current_min_p)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Aphrodite: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     if custom_prompt:
         logging.info("Aphrodite: 'custom_prompt' received. Ensure incorporated if needed.")
@@ -1467,44 +1554,44 @@ def _aphrodite_request(
 
 # Ollama (with OpenAI compatible endpoint)
 def _ollama_request(
-    input_data: List[Dict[str, Any]],
-    api_key: Optional[str] = None, # from map, Ollama doesn't use key but map has it
-    custom_prompt: Optional[str] = None,  # from map ('prompt')
+    input_data: list[dict[str, Any]],
+    api_key: str | None = None, # from map, Ollama doesn't use key but map has it
+    custom_prompt: str | None = None,  # from map ('prompt')
     # Ollama map: 'temp':'temperature', 'system_message':'system_message', 'topp':'top_p', etc.
-    temp: Optional[float] = None,
-    temperature: Optional[float] = None,  # from map (mapped from generic 'temp')
-    system_message: Optional[str] = None, # from map
+    temp: float | None = None,
+    temperature: float | None = None,  # from map (mapped from generic 'temp')
+    system_message: str | None = None, # from map
     # Back-compat alias if any caller passed 'system'
-    system: Optional[str] = None,
-    model: Optional[str] = None,          # from map
-    streaming: Optional[bool] = None,    # from map
-    stream: Optional[bool] = None,
-    top_p: Optional[float] = None,          # from map (mapped from generic 'topp')
-    top_k: Optional[int] = None,          # from map
+    system: str | None = None,
+    model: str | None = None,          # from map
+    streaming: bool | None = None,    # from map
+    stream: bool | None = None,
+    top_p: float | None = None,          # from map (mapped from generic 'topp')
+    top_k: int | None = None,          # from map
     # Ollama specific params from map, ensure they are OpenAI compatible if passed to generic func
-    num_predict: Optional[int] = None,      # from map (mapped from generic 'max_tokens')
+    num_predict: int | None = None,      # from map (mapped from generic 'max_tokens')
     # Back-compat alias from some direct callers
-    max_tokens: Optional[int] = None,
-    seed: Optional[int] = None,             # from map
-    stop: Optional[Union[str, List[str]]] = None, # from map
-    format_str: Optional[Union[str, Dict[str, Any]]] = None,       # from map (mapped from generic 'response_format', e.g. "json" or {'type': 'json_object'})
+    max_tokens: int | None = None,
+    seed: int | None = None,             # from map
+    stop: str | list[str] | None = None, # from map
+    format_str: str | dict[str, Any] | None = None,       # from map (mapped from generic 'response_format', e.g. "json" or {'type': 'json_object'})
     # Back-compat alias if any caller passed 'format'
-    format: Optional[str] = None,
+    format: str | None = None,
                                             # _chat_with_openai_compatible_local_server expects dict {"type": "json_object"}
-    presence_penalty: Optional[float] = None, # from map
-    frequency_penalty: Optional[float] = None, # from map
+    presence_penalty: float | None = None, # from map
+    frequency_penalty: float | None = None, # from map
     # api_url is specific for Ollama if passed directly, else from config
-    api_url: Optional[str] = None,
-    user_identifier: Optional[str] = None,
-    logprobs: Optional[bool] = None,
-    top_logprobs: Optional[int] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    app_config: Optional[Dict[str, Any]] = None,
-    http_client_factory: Optional[Callable[[int], Any]] = None,
-    http_fetcher: Optional[Callable[..., Any]] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    api_url: str | None = None,
+    user_identifier: str | None = None,
+    logprobs: bool | None = None,
+    top_logprobs: int | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    app_config: dict[str, Any] | None = None,
+    http_client_factory: Callable[[int], Any] | None = None,
+    http_fetcher: Callable[..., Any] | None = None,
+    extra_headers: dict[str, str] | None = None,
+    extra_body: dict[str, Any] | None = None,
     # _chat_with_openai_compatible_local_server supports extra OpenAI fields (logit_bias, n, tools, etc.).
     # Add to this signature if Ollama supports them.
 ):
@@ -1519,7 +1606,8 @@ def _ollama_request(
     # Harmonize system alias
     if (system_message is None) and (system is not None):
         system_message = system
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ollama_api', {})
 
@@ -1553,9 +1641,9 @@ def _ollama_request(
 
     # Handle response_format for Ollama:
     # Ollama's format string ("json") maps to OpenAI's response_format {"type": "json_object"}.
-    ollama_response_format_dict: Optional[Dict[str, str]] = None
+    ollama_response_format_dict: dict[str, str] | None = None
     # Prefer explicit format_str argument, then alias 'format', then config key
-    actual_format_value: Optional[Union[str, Dict[str, Any]]] = (
+    actual_format_value: str | dict[str, Any] | None = (
         format_str if format_str is not None else (format if format is not None else cfg.get('format'))
     )
     if isinstance(actual_format_value, dict):
@@ -1582,32 +1670,33 @@ def _ollama_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types for Ollama's JSON schema
     try:
         if isinstance(current_top_p, str):
             current_top_p = float(current_top_p)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce top_p='%s' to float; sending as-is", current_top_p)
     try:
         if isinstance(current_top_k, str):
             current_top_k = int(current_top_k)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce top_k='%s' to int; sending as-is", current_top_k)
     try:
         if isinstance(current_presence_penalty, str):
             current_presence_penalty = float(current_presence_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce presence_penalty='%s' to float; sending as-is", current_presence_penalty)
     try:
         if isinstance(current_frequency_penalty, str):
             current_frequency_penalty = float(current_frequency_penalty)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce frequency_penalty='%s' to float; sending as-is", current_frequency_penalty)
     try:
         if isinstance(current_seed, str):
             current_seed = int(current_seed)
-    except Exception:
+    except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("Ollama: Failed to coerce seed='%s' to int; sending as-is", current_seed)
     if custom_prompt:
         logging.info("Ollama: 'custom_prompt' received. Ensure incorporated if needed.")
@@ -1655,11 +1744,11 @@ class _LocalAdapterBase(ChatProvider):
     supports_streaming = True
     supports_tools = False
     default_timeout_seconds = 120
-    max_output_tokens_default: Optional[int] = 4096
+    max_output_tokens_default: int | None = 4096
     accepts_internal_http_hooks = True
     _handler = None
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": bool(self.supports_streaming),
             "supports_tools": bool(self.supports_tools),
@@ -1667,15 +1756,15 @@ class _LocalAdapterBase(ChatProvider):
             "max_output_tokens_default": self.max_output_tokens_default,
         }
 
-    def _split_internal(self, request: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    def _split_internal(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         sanitized = dict(request or {})
-        internal: Dict[str, Any] = {}
+        internal: dict[str, Any] = {}
         for key in ("http_client_factory", "http_fetcher"):
             if key in sanitized:
                 internal[key] = sanitized.pop(key)
         return sanitized, internal
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         raise NotImplementedError
 
     def _wrap_non_streaming(self, response: Any) -> Iterable[str]:
@@ -1684,7 +1773,7 @@ class _LocalAdapterBase(ChatProvider):
             yield openai_delta_chunk(content)
         yield sse_done()
 
-    def _call_handler(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Any:
+    def _call_handler(self, request: dict[str, Any], *, streaming: bool | None) -> Any:
         sanitized, internal = self._split_internal(request or {})
         sanitized = validate_payload(self.name, sanitized)
         args = self._to_handler_args(sanitized, streaming=streaming)
@@ -1696,19 +1785,19 @@ class _LocalAdapterBase(ChatProvider):
             raise RuntimeError(f"{self.name} adapter missing handler")
         return handler(**args)
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return self._call_handler(request, streaming=False)
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         result = self._call_handler(request, streaming=True)
         if not isinstance(result, (dict, str, bytes, bytearray)) and hasattr(result, "__iter__"):
             return result
         return self._wrap_non_streaming(result)
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
@@ -1718,7 +1807,7 @@ class LocalLLMAdapter(_LocalAdapterBase):
     supports_tools = True
     _handler = staticmethod(_local_llm_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1756,7 +1845,7 @@ class LlamaCppAdapter(_LocalAdapterBase):
     supports_tools = False
     _handler = staticmethod(_llama_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1792,7 +1881,7 @@ class KoboldAdapter(_LocalAdapterBase):
     supports_tools = False
     _handler = staticmethod(_kobold_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1821,7 +1910,7 @@ class OobaAdapter(_LocalAdapterBase):
     supports_tools = False
     _handler = staticmethod(_ooba_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1857,7 +1946,7 @@ class TabbyAPIAdapter(_LocalAdapterBase):
     supports_tools = True
     _handler = staticmethod(_tabbyapi_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1897,7 +1986,7 @@ class VLLMAdapter(_LocalAdapterBase):
     supports_tools = True
     _handler = staticmethod(_vllm_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1937,7 +2026,7 @@ class OllamaAdapter(_LocalAdapterBase):
     supports_tools = True
     _handler = staticmethod(_ollama_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming
@@ -1974,7 +2063,7 @@ class AphroditeAdapter(_LocalAdapterBase):
     supports_tools = True
     _handler = staticmethod(_aphrodite_request)
 
-    def _to_handler_args(self, request: Dict[str, Any], *, streaming: Optional[bool]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if streaming is not None:
             stream_flag = streaming

@@ -68,6 +68,9 @@ Response (202):
 }
 ```
 
+Request validation note:
+- `max_rows` in the request body is validated to `1..DATA_TABLES_MAX_ROWS` (default `2000`).
+
 ## List
 
 `GET /api/v1/data-tables`
@@ -123,6 +126,8 @@ Request (simplified):
 
 - `GET /api/v1/data-tables/jobs/{job_id}` - status
 - `DELETE /api/v1/data-tables/jobs/{job_id}` - cancel
+- Generate/regenerate jobs are enqueued on `DATA_TABLES_JOBS_QUEUE` (default `default`).
+- `wait_for_completion=true` treats `completed`, `failed`, `cancelled`, and `quarantined` as terminal job states.
 
 ## Notes
 

@@ -3,14 +3,11 @@ User and rate limit management commands for tldw Evaluations CLI.
 """
 
 import sys
-from typing import Dict, Any
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_table, print_json
-)
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_json, print_success, print_table
 
 
 @click.group()
@@ -29,7 +26,6 @@ def list_users(ctx, output_format):
     try:
         cli_context.load_config()
 
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user
 
         # Get user list (simplified - would need proper user management)
         users_data = []  # This would come from actual user database
@@ -89,7 +85,7 @@ def set_user_tier(ctx, user_id, tier):
     try:
         cli_context.load_config()
 
-        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import get_user_rate_limiter_for_user, UserTier
+        from tldw_Server_API.app.core.Evaluations.user_rate_limiter import UserTier, get_user_rate_limiter_for_user
 
         tier_enum = UserTier(tier)
         limiter = get_user_rate_limiter_for_user(int(user_id))

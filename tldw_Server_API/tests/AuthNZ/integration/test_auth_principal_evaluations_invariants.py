@@ -82,7 +82,7 @@ def _install_eval_principal_bridge(app: FastAPI) -> Any:
     from typing import Optional
     from fastapi import Depends, Header
     from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
     original_get_eval_request_user = eval_auth.get_eval_request_user
 
@@ -214,7 +214,7 @@ def test_evaluations_list_jwt_principal_and_state_alignment(
         assert state["org_ids"] == principal["org_ids"]
         assert state["team_ids"] == principal["team_ids"]
     finally:
-        from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+        from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
         app.dependency_overrides.pop(eval_auth.get_eval_request_user, None)
         eval_auth.get_eval_request_user = original_eval_user  # type: ignore[assignment]
@@ -368,7 +368,7 @@ def test_evaluations_admin_cleanup_jwt_principal_and_state_alignment(
         assert state["org_ids"] == principal["org_ids"]
         assert state["team_ids"] == principal["team_ids"]
     finally:
-        from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+        from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
         app.dependency_overrides.pop(eval_auth.get_eval_request_user, None)
         eval_auth.get_eval_request_user = original_eval_user  # type: ignore[assignment]
@@ -493,7 +493,7 @@ def test_evaluations_admin_cleanup_api_key_principal_and_state_alignment(
     #    so that the claim-first principal resolver drives identity while the
     #    legacy helper acts as a simple compatibility shim.
     from tldw_Server_API.app.main import app as fastapi_app
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
     app = fastapi_app
     captured, original = _install_auth_capture(app)

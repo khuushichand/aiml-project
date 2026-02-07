@@ -5,22 +5,20 @@ This module provides a unified interface for all metric operations,
 supporting both OpenTelemetry and fallback implementations.
 """
 
-import time
-import asyncio
 import os
 import re
+import statistics
 import threading
-from typing import Dict, Any, Optional, List, Callable, Union, Tuple
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
+import time
 from collections import defaultdict, deque
 from contextlib import contextmanager
-import statistics
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
-from .telemetry import get_telemetry_manager, OTEL_AVAILABLE
+from .telemetry import OTEL_AVAILABLE, get_telemetry_manager
 
 if OTEL_AVAILABLE:
     from opentelemetry.metrics import CallbackOptions, Observation
@@ -41,8 +39,8 @@ class MetricDefinition:
     type: MetricType
     description: str
     unit: str = ""
-    labels: List[str] = field(default_factory=list)
-    buckets: Optional[List[float]] = None  # For histograms
+    labels: list[str] = field(default_factory=list)
+    buckets: Optional[list[float]] = None  # For histograms
 
 
 @dataclass
@@ -50,7 +48,7 @@ class MetricValue:
     """A metric value with metadata."""
     value: float
     timestamp: float = field(default_factory=time.time)
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 class MetricsRegistry:
@@ -74,16 +72,26 @@ class MetricsRegistry:
             buffer_maxlen = 10000
         if buffer_maxlen <= 0:
             buffer_maxlen = None
+        raw_series_cap = os.getenv("METRICS_CUMULATIVE_SERIES_MAX_PER_METRIC", "10000")
+        try:
+            cumulative_series_cap = int(raw_series_cap)
+        except ValueError:
+            cumulative_series_cap = 10000
+        if cumulative_series_cap <= 0:
+            cumulative_series_cap = None
 
         self._lock = threading.RLock()
-        self.metrics: Dict[str, MetricDefinition] = {}
-        self.instruments: Dict[str, Any] = {}
+        self.metrics: dict[str, MetricDefinition] = {}
+        self.instruments: dict[str, Any] = {}
         # Rolling window of metric samples; size configurable via METRICS_RING_BUFFER_MAXLEN_OR_UNBOUNDED.
-        self.values: Dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
+        self.values: dict[str, deque] = defaultdict(lambda: deque(maxlen=buffer_maxlen))
         # Cumulative aggregates for Prometheus export (monotonic counters, full histograms).
-        self._cumulative_counters: Dict[str, Dict[Tuple[Tuple[str, str], ...], float]] = defaultdict(dict)
-        self._cumulative_histograms: Dict[str, Dict[Tuple[Tuple[str, str], ...], Dict[str, Any]]] = defaultdict(dict)
-        self.callbacks: Dict[str, List[Callable]] = defaultdict(list)
+        self._cumulative_counters: dict[str, dict[tuple[tuple[str, str], ...], float]] = defaultdict(dict)
+        self._cumulative_histograms: dict[str, dict[tuple[tuple[str, str], ...], dict[str, Any]]] = defaultdict(dict)
+        self._cumulative_series_cap: int | None = cumulative_series_cap
+        self._cumulative_series_dropped: dict[str, int] = defaultdict(int)
+        self._cumulative_series_warned: set[str] = set()
+        self.callbacks: dict[str, list[Callable]] = defaultdict(list)
         self._legacy_cb_alias_metrics = {
             "circuit_breaker_state",
             "circuit_breaker_failures_total",
@@ -132,11 +140,11 @@ class MetricsRegistry:
         return normalized
 
     @classmethod
-    def _normalize_labels(cls, labels: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    def _normalize_labels(cls, labels: Optional[dict[str, Any]]) -> dict[str, str]:
         """Normalize label keys and coerce values to strings."""
         if not labels:
             return {}
-        normalized: Dict[str, str] = {}
+        normalized: dict[str, str] = {}
         for key, value in labels.items():
             normalized_key = cls._normalize_label_name(str(key))
             normalized_value = "" if value is None else str(value)
@@ -146,10 +154,10 @@ class MetricsRegistry:
         return normalized
 
     @classmethod
-    def _normalize_label_key(cls, labels: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
+    def _normalize_label_key(cls, labels: dict[str, Any]) -> tuple[tuple[str, str], ...]:
         """Return a stable, sortable label key from the label dict."""
         if not labels:
-            return tuple()
+            return ()
         normalized = cls._normalize_labels(labels)
         return tuple(sorted(normalized.items()))
 
@@ -159,7 +167,7 @@ class MetricsRegistry:
         return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
     @classmethod
-    def _format_label_str(cls, labels: Dict[str, Any]) -> str:
+    def _format_label_str(cls, labels: dict[str, Any]) -> str:
         """Format labels for Prometheus exposition with proper escaping."""
         if not labels:
             return ""
@@ -293,7 +301,7 @@ class MetricsRegistry:
                 name="llm_tokens_used_total",
                 type=MetricType.COUNTER,
                 description="Total number of tokens used",
-                labels=["provider", "model", "type"]  # type: prompt/completion
+                labels=["provider", "model", "type"]  # label type: prompt/completion
             )
         )
 
@@ -662,6 +670,48 @@ class MetricsRegistry:
                 type=MetricType.COUNTER,
                 description="Total RAG cache misses",
                 labels=["cache_type"]
+            )
+        )
+
+        # RAG retrieval quality histograms
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_precision",
+                type=MetricType.HISTOGRAM,
+                description="Precision@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_recall",
+                type=MetricType.HISTOGRAM,
+                description="Recall@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_mrr",
+                type=MetricType.HISTOGRAM,
+                description="MRR of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_ndcg",
+                type=MetricType.HISTOGRAM,
+                description="NDCG@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="rag_retrieval_f1",
+                type=MetricType.HISTOGRAM,
+                description="F1@K of RAG retrieval results",
+                buckets=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
             )
         )
 
@@ -1364,6 +1414,80 @@ class MetricsRegistry:
             )
         )
 
+        # FVA (Falsification-Verification Alignment) metrics
+        self.register_metric(
+            MetricDefinition(
+                name="fva_falsification_triggered_total",
+                type=MetricType.COUNTER,
+                description="Total claims where falsification was triggered",
+                labels=["reason"],  # low_confidence, sparse_evidence, forced, uncertain
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_status_changes_total",
+                type=MetricType.COUNTER,
+                description="Total claim status changes after FVA adjudication",
+                labels=["from_status", "to_status"],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_anti_context_docs",
+                type=MetricType.HISTOGRAM,
+                description="Number of anti-context documents retrieved per claim",
+                buckets=[0, 1, 2, 3, 5, 10, 20],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_processing_duration_seconds",
+                type=MetricType.HISTOGRAM,
+                description="FVA pipeline processing duration",
+                unit="s",
+                labels=["phase"],  # total, retrieval, adjudication
+                buckets=[0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_wasted_falsification_total",
+                type=MetricType.COUNTER,
+                description="Falsifications that found no anti-context (wasted effort)",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_claims_processed_total",
+                type=MetricType.COUNTER,
+                description="Total claims processed through FVA pipeline",
+                labels=["final_status"],  # verified, contested, refuted, unverified
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_adjudication_scores",
+                type=MetricType.HISTOGRAM,
+                description="Adjudication score distribution",
+                labels=["score_type"],  # support, contradict, contestation
+                buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_timeout_total",
+                type=MetricType.COUNTER,
+                description="Total FVA falsification timeouts",
+            )
+        )
+        self.register_metric(
+            MetricDefinition(
+                name="fva_budget_exhausted_total",
+                type=MetricType.COUNTER,
+                description="Total times FVA budget was exhausted",
+            )
+        )
+
     def register_metric(self, definition: MetricDefinition) -> bool:
         """
         Register a new metric definition.
@@ -1461,7 +1585,7 @@ class MetricsRegistry:
 
         try:
             # Group latest value by label set
-            latest_by_labels: Dict[Tuple[Tuple[str, str], ...], MetricValue] = {}
+            latest_by_labels: dict[tuple[tuple[str, str], ...], MetricValue] = {}
             with self._lock:
                 if metric_name in self.values:
                     for mv in self.values[metric_name]:
@@ -1480,7 +1604,7 @@ class MetricsRegistry:
         self,
         metric_name: str,
         value: float,
-        labels: Optional[Dict[str, str]] = None,
+        labels: Optional[dict[str, str]] = None,
         _emit_legacy_alias: bool = True,
     ):
         """
@@ -1495,7 +1619,7 @@ class MetricsRegistry:
         metric_name = self._normalize_metric_name(metric_name)
         labels = self._normalize_labels(labels)
         instrument = None
-        callbacks: List[Callable] = []
+        callbacks: list[Callable] = []
 
         with self._lock:
             if metric_name not in self.metrics:
@@ -1513,19 +1637,50 @@ class MetricsRegistry:
 
             label_key = self._normalize_label_key(labels)
             if definition.type in (MetricType.COUNTER, MetricType.UP_DOWN_COUNTER):
-                current = self._cumulative_counters[metric_name].get(label_key, 0.0)
-                self._cumulative_counters[metric_name][label_key] = current + value
+                series = self._cumulative_counters[metric_name]
+                if (
+                    label_key not in series
+                    and self._cumulative_series_cap is not None
+                    and len(series) >= self._cumulative_series_cap
+                ):
+                    self._cumulative_series_dropped[metric_name] += 1
+                    if metric_name not in self._cumulative_series_warned:
+                        logger.warning(
+                            "Cumulative series cap reached for metric {} (cap={}); dropping new label sets",
+                            metric_name,
+                            self._cumulative_series_cap,
+                        )
+                        self._cumulative_series_warned.add(metric_name)
+                else:
+                    current = series.get(label_key, 0.0)
+                    series[label_key] = current + value
             elif definition.type == MetricType.HISTOGRAM:
-                hist = self._cumulative_histograms[metric_name].get(label_key)
-                if not hist:
-                    hist = {"count": 0, "sum": 0.0, "buckets": defaultdict(int)}
-                    self._cumulative_histograms[metric_name][label_key] = hist
-                hist["count"] += 1
-                hist["sum"] += value
-                if definition.buckets:
-                    for bucket in definition.buckets:
-                        if value <= bucket:
-                            hist["buckets"][bucket] += 1
+                series = self._cumulative_histograms[metric_name]
+                hist = series.get(label_key)
+                if hist is None:
+                    if (
+                        self._cumulative_series_cap is not None
+                        and len(series) >= self._cumulative_series_cap
+                    ):
+                        self._cumulative_series_dropped[metric_name] += 1
+                        if metric_name not in self._cumulative_series_warned:
+                            logger.warning(
+                                "Cumulative series cap reached for metric {} (cap={}); dropping new label sets",
+                                metric_name,
+                                self._cumulative_series_cap,
+                            )
+                            self._cumulative_series_warned.add(metric_name)
+                        hist = None
+                    else:
+                        hist = {"count": 0, "sum": 0.0, "buckets": defaultdict(int)}
+                        series[label_key] = hist
+                if hist is not None:
+                    hist["count"] += 1
+                    hist["sum"] += value
+                    if definition.buckets:
+                        for bucket in definition.buckets:
+                            if value <= bucket:
+                                hist["buckets"][bucket] += 1
 
             instrument = self.instruments.get(metric_name)
             callbacks = list(self.callbacks.get(metric_name, []))
@@ -1557,7 +1712,7 @@ class MetricsRegistry:
         if _emit_legacy_alias:
             self._emit_circuit_breaker_alias(metric_name, value, labels)
 
-    def _emit_circuit_breaker_alias(self, metric_name: str, value: float, labels: Dict[str, str]):
+    def _emit_circuit_breaker_alias(self, metric_name: str, value: float, labels: dict[str, str]):
         if metric_name not in self._legacy_cb_alias_metrics:
             return
         category = labels.get("category")
@@ -1570,7 +1725,7 @@ class MetricsRegistry:
         legacy_labels["service"] = f"{category}:{service}"
         self.record(metric_name, value, legacy_labels, _emit_legacy_alias=False)
 
-    def increment(self, metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def increment(self, metric_name: str, value: float = 1, labels: Optional[dict[str, str]] = None):
         """
         Increment a counter metric.
 
@@ -1581,7 +1736,7 @@ class MetricsRegistry:
         """
         self.record(metric_name, value, labels)
 
-    def set_gauge(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def set_gauge(self, metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
         """
         Set a gauge metric value.
 
@@ -1592,7 +1747,7 @@ class MetricsRegistry:
         """
         self.record(metric_name, value, labels)
 
-    def observe(self, metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def observe(self, metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
         """
         Observe a value for histogram metric.
 
@@ -1604,7 +1759,7 @@ class MetricsRegistry:
         self.record(metric_name, value, labels)
 
     @contextmanager
-    def timer(self, metric_name: str, labels: Optional[Dict[str, str]] = None):
+    def timer(self, metric_name: str, labels: Optional[dict[str, str]] = None):
         """
         Context manager to time an operation.
 
@@ -1634,14 +1789,14 @@ class MetricsRegistry:
         with self._lock:
             self.callbacks[metric_name].append(callback)
 
-    def get_cumulative_counter(self, metric_name: str, labels: Optional[Dict[str, Any]] = None) -> float:
+    def get_cumulative_counter(self, metric_name: str, labels: Optional[dict[str, Any]] = None) -> float:
         """Get the cumulative counter value for a metric/label set."""
         metric_name = self._normalize_metric_name(metric_name)
         label_key = self._normalize_label_key(labels or {})
         with self._lock:
             return self._cumulative_counters.get(metric_name, {}).get(label_key, 0.0)
 
-    def get_metric_stats(self, metric_name: str, labels: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def get_metric_stats(self, metric_name: str, labels: Optional[dict[str, str]] = None) -> dict[str, Any]:
         """
         Get statistics for a metric.
 
@@ -1681,7 +1836,7 @@ class MetricsRegistry:
             "latest_timestamp": values[-1].timestamp
         }
 
-    def get_all_metrics(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_metrics(self) -> dict[str, dict[str, Any]]:
         """
         Get all current metric values and statistics.
 
@@ -1819,6 +1974,8 @@ class MetricsRegistry:
             self.values.clear()
             self._cumulative_counters.clear()
             self._cumulative_histograms.clear()
+            self._cumulative_series_dropped.clear()
+            self._cumulative_series_warned.clear()
 
 
 # Global metrics registry instance
@@ -1842,28 +1999,28 @@ def get_metrics_registry() -> MetricsRegistry:
 
 
 # Convenience functions for common operations
-def record_metric(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def record_metric(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Record a metric value."""
     get_metrics_registry().record(metric_name, value, labels)
 
 
-def increment_counter(metric_name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
+def increment_counter(metric_name: str, value: float = 1, labels: Optional[dict[str, str]] = None):
     """Increment a counter metric."""
     get_metrics_registry().increment(metric_name, value, labels)
 
 
-def set_gauge(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def set_gauge(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Set a gauge metric value."""
     get_metrics_registry().set_gauge(metric_name, value, labels)
 
 
-def observe_histogram(metric_name: str, value: float, labels: Optional[Dict[str, str]] = None):
+def observe_histogram(metric_name: str, value: float, labels: Optional[dict[str, str]] = None):
     """Observe a value for histogram metric."""
     get_metrics_registry().observe(metric_name, value, labels)
 
 
 @contextmanager
-def time_operation(metric_name: str, labels: Optional[Dict[str, str]] = None):
+def time_operation(metric_name: str, labels: Optional[dict[str, str]] = None):
     """Time an operation and record to histogram metric."""
     with get_metrics_registry().timer(metric_name, labels):
         yield

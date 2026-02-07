@@ -17,23 +17,21 @@ Configuration (env or config dict under 'monitoring.notifications'):
 This scaffolding records intent locally so operators can forward to their systems.
 """
 
+import contextlib
 import json
 import os
+import smtplib
 import threading
-from dataclasses import asdict
 from datetime import datetime, timezone
+from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-import threading
-import smtplib
-from email.mime.text import MIMEText
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
 from tldw_Server_API.app.core.config import load_and_log_configs
-
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
 
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
@@ -72,10 +70,8 @@ class NotificationService:
         self.smtp_password = os.getenv("MONITORING_NOTIFY_SMTP_PASSWORD", (ncfg or {}).get("smtp_password", ""))
         self.email_from = os.getenv("MONITORING_NOTIFY_EMAIL_FROM", (ncfg or {}).get("email_from", self.smtp_user or ""))
         self._lock = threading.RLock()
-        try:
+        with contextlib.suppress(OSError):
             Path(self.file_path).parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
 
     @staticmethod
     def _coerce_int(value: Any, default: int) -> int:
@@ -96,18 +92,18 @@ class NotificationService:
                     from tldw_Server_API.app.core.Utils.Utils import get_project_root as _gpr
                     root = Path(_gpr()).resolve()
                     fp = root / fp
-                except Exception:
+                except (AttributeError, ImportError, OSError, RuntimeError, TypeError, ValueError):
                     root = _find_project_root(Path(__file__).resolve())
                     if root is None:
                         root = Path(__file__).resolve().parent
                     fp = root / fp
             return str(fp)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             fallback_root = _find_project_root(Path(__file__).resolve()) or Path(__file__).resolve().parent
             return str(fallback_root / str(raw_file))
 
     @staticmethod
-    def _parse_email_recipients(raw: Optional[str]) -> list[str]:
+    def _parse_email_recipients(raw: str | None) -> list[str]:
         if not raw:
             return []
         if isinstance(raw, (list, tuple, set)):
@@ -119,7 +115,7 @@ class NotificationService:
         """Return the path to the notification JSONL file."""
         return self.file_path or None
 
-    def get_settings(self) -> Dict[str, Any]:
+    def get_settings(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
             "min_severity": self.min_severity,
@@ -136,18 +132,18 @@ class NotificationService:
     def update_settings(
         self,
         *,
-        enabled: Optional[bool] = None,
-        min_severity: Optional[str] = None,
-        file: Optional[str] = None,
-        webhook_url: Optional[str] = None,
-        email_to: Optional[str] = None,
-        smtp_host: Optional[str] = None,
-        smtp_port: Optional[int] = None,
-        smtp_starttls: Optional[bool] = None,
-        smtp_user: Optional[str] = None,
-        smtp_password: Optional[str] = None,
-        email_from: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        enabled: bool | None = None,
+        min_severity: str | None = None,
+        file: str | None = None,
+        webhook_url: str | None = None,
+        email_to: str | None = None,
+        smtp_host: str | None = None,
+        smtp_port: int | None = None,
+        smtp_starttls: bool | None = None,
+        smtp_user: str | None = None,
+        smtp_password: str | None = None,
+        email_from: str | None = None,
+    ) -> dict[str, Any]:
         # Update runtime settings (non-persistent). Best-effort.
         if enabled is not None:
             self.enabled = bool(enabled)
@@ -158,7 +154,7 @@ class NotificationService:
                 resolved = self._resolve_file_path(file)
                 Path(resolved).parent.mkdir(parents=True, exist_ok=True)
                 self.file_path = resolved
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to update MONITORING_NOTIFY_FILE: {e}")
         if webhook_url is not None:
             self.webhook_url = webhook_url
@@ -178,13 +174,13 @@ class NotificationService:
             self.email_from = email_from
         return self.get_settings()
 
-    def _meets_threshold(self, severity: Optional[str]) -> bool:
+    def _meets_threshold(self, severity: str | None) -> bool:
         if not self.enabled:
             return False
         sev = (severity or "info").lower()
         try:
             return _SEVERITY_ORDER.get(sev, 0) >= _SEVERITY_ORDER.get(self.min_severity, 2)
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             return False
 
     def notify(self, alert: TopicAlert) -> str:
@@ -194,7 +190,7 @@ class NotificationService:
         """
         if not self._meets_threshold(alert.rule_severity):
             return "skipped"
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "type": "topic_alert",
             "user_id": alert.user_id,
@@ -216,43 +212,42 @@ class NotificationService:
         # Always append to JSONL file (local-first scaffold)
         file_written = True
         try:
-            with self._lock:
-                with open(self.file_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-        except Exception as e:
+            with self._lock, open(self.file_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             file_written = False
             logger.warning(f"Notification file sink failed: {e}")
         # Best-effort asynchronous sends (non-blocking)
         try:
             if self.webhook_url:
                 threading.Thread(target=self._send_webhook_safe, args=(payload,), daemon=True).start()
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.debug(f"Webhook thread start failed: {e}")
         try:
             # Email optional and only if SMTP configured and recipients provided
             recipients = self._parse_email_recipients(self.email_to)
             if recipients and self.smtp_host and self.email_from:
                 threading.Thread(target=self._send_email_safe, args=(alert,), daemon=True).start()
-        except Exception as e:
+        except (OSError, RuntimeError) as e:
             logger.debug(f"Email thread start failed: {e}")
         return "logged" if file_written else "failed"
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
-    def _send_webhook(self, payload: Dict[str, Any]) -> None:
+    def _send_webhook(self, payload: dict[str, Any]) -> None:
         from tldw_Server_API.app.core.http_client import create_client, fetch
         # 3s connect, 5s read/write aligns with defaults but explicit here
         try:
             with create_client(timeout=5.0) as client:
                 headers = {"Content-Type": "application/json"}
                 fetch(method="POST", url=self.webhook_url, client=client, headers=headers, json=payload, timeout=5.0)
-        except Exception as e:
+        except Exception:
             # Let retry decorator handle; raise to trigger retry
-            raise e
+            raise
 
-    def _send_webhook_safe(self, payload: Dict[str, Any]) -> None:
+    def _send_webhook_safe(self, payload: dict[str, Any]) -> None:
         try:
             self._send_webhook(payload)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.info(f"Webhook notify failed: {e}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=False)
@@ -277,10 +272,8 @@ class NotificationService:
 
         with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
             if self.smtp_starttls:
-                try:
+                with contextlib.suppress(OSError, RuntimeError, smtplib.SMTPException):
                     server.starttls()
-                except Exception:
-                    pass
             if self.smtp_user:
                 server.login(self.smtp_user, self.smtp_password or "")
             server.sendmail(self.email_from, recipients, msg.as_string())
@@ -288,11 +281,11 @@ class NotificationService:
     def _send_email_safe(self, alert: TopicAlert) -> None:
         try:
             self._send_email(alert)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, smtplib.SMTPException) as e:
             logger.info(f"Email notify failed: {e}")
 
 
-_notify_singleton: Optional[NotificationService] = None
+_notify_singleton: NotificationService | None = None
 
 
 def get_notification_service() -> NotificationService:

@@ -6,24 +6,20 @@ across service boundaries and async operations.
 """
 
 import asyncio
-import functools
-import time
-import traceback
-from typing import Any, Dict, Optional, Callable, TypeVar, Union
-from contextlib import contextmanager, asynccontextmanager
-from dataclasses import dataclass
-import uuid
-import json
 import contextvars
+import functools
+import json
+from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
+from typing import Any, Callable, Optional, TypeVar
 
 from loguru import logger
 
-from .telemetry import get_telemetry_manager, OTEL_AVAILABLE
+from .telemetry import OTEL_AVAILABLE, get_telemetry_manager
 
 if OTEL_AVAILABLE:
-    from opentelemetry import trace, context, baggage
-    from opentelemetry.trace import Status, StatusCode, Link, SpanKind
-    from opentelemetry.trace.propagation import set_span_in_context
+    from opentelemetry import baggage, context, trace
+    from opentelemetry.trace import SpanKind, Status, StatusCode
 else:
     Status = None  # type: ignore
     StatusCode = None  # type: ignore
@@ -39,9 +35,9 @@ class TraceContext:
     trace_id: str
     span_id: str
     parent_span_id: Optional[str] = None
-    baggage: Dict[str, str] = None
+    baggage: dict[str, str] = None
 
-    def to_headers(self) -> Dict[str, str]:
+    def to_headers(self) -> dict[str, str]:
         """Convert trace context to HTTP headers."""
         headers = {
             "traceparent": f"00-{self.trace_id}-{self.span_id}-01"
@@ -54,7 +50,7 @@ class TraceContext:
         return headers
 
     @classmethod
-    def from_headers(cls, headers: Dict[str, str]) -> Optional['TraceContext']:
+    def from_headers(cls, headers: dict[str, str]) -> Optional['TraceContext']:
         """Extract trace context from HTTP headers."""
         traceparent = headers.get("traceparent")
         if not traceparent:
@@ -95,14 +91,14 @@ class TracingManager:
         self.tracer = self.telemetry.get_tracer("tldw_server.tracing")
         self.active_spans = {}
         # Local baggage store when OpenTelemetry baggage is unavailable
-        self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default={})
+        self._local_baggage = contextvars.ContextVar("tldw_local_baggage", default=None)
 
     @contextmanager
     def span(
         self,
         name: str,
         kind: Optional['SpanKind'] = None,
-        attributes: Optional[Dict[str, Any]] = None,
+        attributes: Optional[dict[str, Any]] = None,
         links: Optional[list] = None
     ):
         """
@@ -153,7 +149,7 @@ class TracingManager:
         self,
         name: str,
         kind: Optional['SpanKind'] = None,
-        attributes: Optional[Dict[str, Any]] = None,
+        attributes: Optional[dict[str, Any]] = None,
         links: Optional[list] = None
     ):
         """
@@ -205,7 +201,7 @@ class TracingManager:
             return None
         return trace.get_current_span()
 
-    def add_event(self, name: str, attributes: Optional[Dict[str, Any]] = None):
+    def add_event(self, name: str, attributes: Optional[dict[str, Any]] = None):
         """
         Add an event to the current span.
 
@@ -229,7 +225,7 @@ class TracingManager:
         if span:
             span.set_attribute(key, value)
 
-    def set_attributes(self, attributes: Dict[str, Any]):
+    def set_attributes(self, attributes: dict[str, Any]):
         """
         Set multiple attributes on the current span.
 
@@ -298,7 +294,7 @@ class TracingManager:
             return baggage.get_baggage(key)
         return (self._local_baggage.get() or {}).get(key)
 
-    def extract_context(self, carrier: Dict[str, str]) -> Optional[TraceContext]:
+    def extract_context(self, carrier: dict[str, str]) -> Optional[TraceContext]:
         """
         Extract trace context from a carrier (e.g., HTTP headers).
 
@@ -310,7 +306,7 @@ class TracingManager:
         """
         return TraceContext.from_headers(carrier)
 
-    def inject_context(self, carrier: Dict[str, str]):
+    def inject_context(self, carrier: dict[str, str]):
         """
         Inject current trace context into a carrier.
 
@@ -358,7 +354,7 @@ def get_tracing_manager() -> TracingManager:
 def trace_operation(
     name: Optional[str] = None,
     kind: Optional['SpanKind'] = None,
-    attributes: Optional[Dict[str, Any]] = None,
+    attributes: Optional[dict[str, Any]] = None,
     record_args: bool = False,
     record_result: bool = False
 ) -> Callable[[F], F]:
@@ -459,7 +455,7 @@ def trace_operation(
 def trace_method(
     name: Optional[str] = None,
     kind: Optional['SpanKind'] = None,
-    attributes: Optional[Dict[str, Any]] = None
+    attributes: Optional[dict[str, Any]] = None
 ) -> Callable[[F], F]:
     """
     Decorator to trace a class method.
@@ -501,7 +497,7 @@ def start_async_span(name: str, **kwargs):
     return get_tracing_manager().async_span(name, **kwargs)
 
 
-def add_span_event(name: str, attributes: Optional[Dict[str, Any]] = None):
+def add_span_event(name: str, attributes: Optional[dict[str, Any]] = None):
     """Add an event to the current span."""
     get_tracing_manager().add_event(name, attributes)
 
@@ -511,7 +507,7 @@ def set_span_attribute(key: str, value: Any):
     get_tracing_manager().set_attribute(key, value)
 
 
-def set_span_attributes(attributes: Dict[str, Any]):
+def set_span_attributes(attributes: dict[str, Any]):
     """Set multiple attributes on the current span."""
     get_tracing_manager().set_attributes(attributes)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
@@ -11,9 +11,21 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_d
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
 
+_HEALTH_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 try:
     from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService as _UnifiedAuditService
-except Exception:  # pragma: no cover - defensive import guard for optional dependencies
+except ImportError:  # pragma: no cover - defensive import guard for optional dependencies
     _UnifiedAuditService = None  # type: ignore[assignment]
 
 # Expose symbol for tests to monkeypatch (see test_security_health_thresholds.py)
@@ -44,7 +56,7 @@ def _check_workflows_db() -> dict:
                 try:
                     status["schema_version"] = int(db._get_backend_schema_version(conn))  # type: ignore[attr-defined]
                     status["expected_version"] = int(db._CURRENT_SCHEMA_VERSION)  # type: ignore[attr-defined]
-                except Exception:
+                except _HEALTH_NONCRITICAL_EXCEPTIONS:
                     pass
         else:
             # SQLite: best-effort probe
@@ -52,7 +64,7 @@ def _check_workflows_db() -> dict:
             status["schema_version"] = None
             status["expected_version"] = None
         status["ok"] = True
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"/readyz DB check failed: {e}")
         status["error"] = str(e)
     return status
@@ -63,7 +75,7 @@ async def healthz():
     """Basic liveness check with lightweight engine stats."""
     try:
         qd = WorkflowScheduler.instance().queue_depth()
-    except Exception:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS:
         qd = None
     return {
         "status": "ok",
@@ -77,7 +89,7 @@ async def readyz():
     """Readiness check: engine stats + DB connectivity and schema version (backend)."""
     try:
         stats = WorkflowScheduler.instance().stats()
-    except Exception:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS:
         stats = {"queue_depth": None, "active_tenants": None, "active_workflows": None}
     db = _check_workflows_db()
     ready = bool(db.get("ok")) and (
@@ -115,7 +127,7 @@ async def api_health():
         checks["database"] = dbh
         if dbh.get("status") != "healthy":
             overall = "degraded"
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         checks["database"] = {"status": "unhealthy", "error": str(e)}
         overall = "unhealthy"
 
@@ -128,7 +140,7 @@ async def api_health():
         checks["metrics"] = {"status": "healthy" if metrics_ok else "unhealthy"}
         if not metrics_ok and overall == "ok":
             overall = "degraded"
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         checks["metrics"] = {"status": "unhealthy", "error": str(e)}
         overall = "unhealthy"
 
@@ -140,7 +152,7 @@ async def api_health():
         checks["chacha_notes"] = chacha
         if chacha.get("status") not in {"healthy", "ok"} and overall == "ok":
             overall = "degraded"
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"ChaChaNotes health snapshot failed: {e}")
         checks["chacha_notes"] = {"status": "unhealthy", "error": str(e)}
         overall = "degraded"
@@ -166,7 +178,7 @@ async def api_health():
             _key = getattr(_s, "SINGLE_USER_API_KEY", None)
             if _key:
                 body.setdefault("test_api_key", _key)
-    except Exception:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS:
         # Never fail health on settings import issues
         pass
     # Include Resource Governor policy snapshot metadata when available (mirrors top-level /health)
@@ -182,6 +194,7 @@ async def api_health():
             # Fallback: read from configured policy file if available
             import os as _os
             from pathlib import Path as _Path
+
             import yaml as _yaml
 
             p = _os.getenv("RG_POLICY_PATH")
@@ -192,9 +205,9 @@ async def api_health():
                     body["rg_policy_version"] = int(_data.get("version") or 1)
                     body["rg_policy_store"] = _os.getenv("RG_POLICY_STORE", "file")
                     body["rg_policy_count"] = len((_data.get("policies") or {}).keys())
-                except Exception as exc:
+                except _HEALTH_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to read RG policy file for /health: {exc}")
-    except Exception:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS:
         pass
     code = status.HTTP_200_OK if overall == "ok" else (206 if overall == "degraded" else 503)
     return JSONResponse(body, status_code=code)
@@ -215,7 +228,7 @@ async def api_readiness():
         import json as _json
 
         data = _json.loads(body)
-    except Exception:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS:
         data = {"ready": False}
     status_txt = "ready" if data.get("ready") else "not_ready"
     return JSONResponse({"status": status_txt, **data}, status_code=(200 if data.get("ready") else 503))
@@ -246,7 +259,7 @@ async def api_health_metrics():
             "percent": float(du.percent),
         }
         return {"cpu": cpu, "memory": mem, "disk": disk}
-    except Exception as e:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"health/metrics unavailable: {e}")
         return {
             "cpu": {"percent": 0.0},
@@ -267,7 +280,7 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-def _calculate_security_status(summary: Dict[str, Any]) -> Dict[str, Any]:
+def _calculate_security_status(summary: dict[str, Any]) -> dict[str, Any]:
     """Derive human-readable security posture from the audit summary."""
     thresholds = {
         "critical_high_risk_min": _int_env("AUDIT_SEC_CRITICAL_HIGH_RISK_MIN", 1),
@@ -297,7 +310,7 @@ def _calculate_security_status(summary: Dict[str, Any]) -> Dict[str, Any]:
 @router.get("/health/security", tags=["health"], summary="Security posture overview")
 async def api_security_health():
     """Summarize recent security audit activity and map to a risk posture."""
-    response: Dict[str, Any] = {
+    response: dict[str, Any] = {
         "timestamp": _utcnow_iso(),
         "risk_level": "unknown",
         "status": "unknown",
@@ -331,7 +344,7 @@ async def api_security_health():
         response["summary"] = summary
         status_bits = _calculate_security_status(summary)
         response.update(status_bits)
-    except Exception as exc:
+    except _HEALTH_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"health/security failed: {exc}")
         response.update(
             {
@@ -344,7 +357,7 @@ async def api_security_health():
         if callable(shutdown):
             try:
                 await shutdown()
-            except Exception as exc:
+            except _HEALTH_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"UnifiedAuditService stop() ignored: {exc}")
 
     return JSONResponse(response, status_code=200)

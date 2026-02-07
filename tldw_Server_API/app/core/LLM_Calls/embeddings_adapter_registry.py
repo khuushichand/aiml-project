@@ -7,9 +7,10 @@ Lightweight registry to lazily construct embeddings adapters and expose
 capability discovery for diagnostics.
 """
 
-from typing import Any, Dict, Optional, Type
-from loguru import logger
 import importlib
+from typing import Any
+
+from loguru import logger
 
 from .providers.base import EmbeddingsProvider
 
@@ -17,7 +18,7 @@ from .providers.base import EmbeddingsProvider
 class EmbeddingsProviderRegistry:
     """Registry for embeddings providers and their adapters."""
 
-    DEFAULT_ADAPTERS: Dict[str, str] = {
+    DEFAULT_ADAPTERS: dict[str, str] = {
         # Seed with OpenAI; extended with HF/Google
         "openai": "tldw_Server_API.app.core.LLM_Calls.providers.openai_embeddings_adapter.OpenAIEmbeddingsAdapter",
         "huggingface": "tldw_Server_API.app.core.LLM_Calls.providers.huggingface_embeddings_adapter.HuggingFaceEmbeddingsAdapter",
@@ -25,10 +26,10 @@ class EmbeddingsProviderRegistry:
         "mlx": "tldw_Server_API.app.core.LLM_Calls.providers.mlx_provider.MLXEmbeddingsAdapter",
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         self._config = config or {}
-        self._adapters: Dict[str, EmbeddingsProvider] = {}
-        self._adapter_specs: Dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
+        self._adapters: dict[str, EmbeddingsProvider] = {}
+        self._adapter_specs: dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
 
     def register_adapter(self, name: str, adapter: Any) -> None:
         self._adapter_specs[name] = adapter
@@ -38,7 +39,7 @@ class EmbeddingsProviderRegistry:
             n = str(adapter)
         logger.info(f"Registered Embeddings adapter {n} for provider '{name}'")
 
-    def _resolve_adapter_class(self, spec: Any) -> Type[EmbeddingsProvider]:
+    def _resolve_adapter_class(self, spec: Any) -> type[EmbeddingsProvider]:
         if isinstance(spec, str):
             module_path, _, class_name = spec.rpartition(".")
             if not module_path:
@@ -48,7 +49,7 @@ class EmbeddingsProviderRegistry:
             return cls
         return spec
 
-    def get_adapter(self, name: str) -> Optional[EmbeddingsProvider]:
+    def get_adapter(self, name: str) -> EmbeddingsProvider | None:
         if name in self._adapters:
             return self._adapters[name]
         spec = self._adapter_specs.get(name)
@@ -67,8 +68,8 @@ class EmbeddingsProviderRegistry:
             logger.error(f"Failed to initialize embeddings adapter for '{name}': {e}")
             return None
 
-    def get_all_capabilities(self) -> Dict[str, Dict[str, Any]]:
-        out: Dict[str, Dict[str, Any]] = {}
+    def get_all_capabilities(self) -> dict[str, dict[str, Any]]:
+        out: dict[str, dict[str, Any]] = {}
         for name in list(self._adapter_specs.keys()):
             adapter = self.get_adapter(name)
             if not adapter:
@@ -80,7 +81,7 @@ class EmbeddingsProviderRegistry:
         return out
 
 
-_emb_registry: Optional[EmbeddingsProviderRegistry] = None
+_emb_registry: EmbeddingsProviderRegistry | None = None
 
 
 def get_embeddings_registry() -> EmbeddingsProviderRegistry:

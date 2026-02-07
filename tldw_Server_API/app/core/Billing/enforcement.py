@@ -6,21 +6,45 @@ Provides dependencies for checking and enforcing subscription limits.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import threading
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 
 # Environment variable for cache TTL (default 60 seconds)
 BILLING_CACHE_TTL_SECONDS = float(os.environ.get("BILLING_CACHE_TTL_SECONDS", "60.0"))
 
 from tldw_Server_API.app.core.Billing.plan_limits import SOFT_LIMIT_PERCENT
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
+
+_BILLING_ENFORCEMENT_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+
+_BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class LimitCategory(str, Enum):
@@ -51,8 +75,8 @@ class LimitCheckResult:
     limit: int
     percent_used: float
     unlimited: bool = False
-    message: Optional[str] = None
-    retry_after: Optional[int] = None  # For rate limits
+    message: str | None = None
+    retry_after: int | None = None  # For rate limits
 
     @property
     def should_block(self) -> bool:
@@ -92,16 +116,16 @@ class BillingEnforcer:
         *,
         soft_limit_percent: float = SOFT_LIMIT_PERCENT,
         grace_period_days: int = 3,
-        cache_ttl: Optional[float] = None,
+        cache_ttl: float | None = None,
     ):
         self.soft_limit_percent = soft_limit_percent
         self.grace_period_days = grace_period_days
-        self._usage_cache: Dict[int, Tuple[UsageSummary, float]] = {}
-        self._limits_cache: Dict[int, Tuple[Dict[str, Any], float]] = {}
+        self._usage_cache: dict[int, tuple[UsageSummary, float]] = {}
+        self._limits_cache: dict[int, tuple[dict[str, Any], float]] = {}
         # Use provided TTL, env var, or default to 60s
         self._cache_ttl = cache_ttl if cache_ttl is not None else BILLING_CACHE_TTL_SECONDS
 
-    async def get_org_limits(self, org_id: int) -> Dict[str, Any]:
+    async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get subscription limits for an organization with caching."""
         now = time.time()
 
@@ -118,7 +142,7 @@ class BillingEnforcer:
             limits = await service.get_org_limits(org_id)
             self._limits_cache[org_id] = (limits, now)
             return limits
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Failed to get org limits for {org_id}: {exc}")
             # Return permissive defaults on failure
             return {
@@ -172,7 +196,7 @@ class BillingEnforcer:
             # Cache the result
             self._usage_cache[org_id] = (summary, now)
 
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             # Log at ERROR level since this affects billing enforcement
             logger.error(f"Failed to get org usage for {org_id}: {exc}")
             # Try to return cached value if available (even if expired)
@@ -218,7 +242,7 @@ class BillingEnforcer:
                     result = row[0] if row else 0
 
                 return int(result or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get API calls for org {org_id}: {exc}")
             return 0
 
@@ -308,7 +332,7 @@ class BillingEnforcer:
                     result = row[0] if row else 0
 
                 return int(result or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get LLM tokens for org {org_id}: {exc}")
             return 0
 
@@ -339,7 +363,7 @@ class BillingEnforcer:
                 offset += batch_size
 
             return total_members
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get team members for org {org_id}: {exc}")
             return 0
 
@@ -360,7 +384,7 @@ class BillingEnforcer:
             pool = await get_db_pool()
             repo = AuthnzOrgsTeamsRepo(db_pool=pool)
 
-            member_ids: Set[str] = set()
+            member_ids: set[str] = set()
             offset = 0
             batch_size = 500
 
@@ -406,7 +430,7 @@ class BillingEnforcer:
                     continue
 
             return int(total_active)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get concurrent jobs for org {org_id}: {exc}")
             return 0
 
@@ -422,7 +446,7 @@ class BillingEnforcer:
             offset = 0
             batch_size = 500  # keep below SQLite's max parameter count
 
-            def _chunks(values: List[int], size: int) -> List[List[int]]:
+            def _chunks(values: list[int], size: int) -> list[list[int]]:
                 return [values[i:i + size] for i in range(0, len(values), size)]
 
             while True:
@@ -461,7 +485,7 @@ class BillingEnforcer:
 
             # Convert MB to bytes
             return int(total_mb * 1024 * 1024)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get storage for org {org_id}: {exc}")
             return 0
 
@@ -487,7 +511,7 @@ class BillingEnforcer:
             )
 
             return int(window.get("total", 0)) if window else 0
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get transcription minutes for org {org_id}: {exc}")
             return 0
 
@@ -514,7 +538,7 @@ class BillingEnforcer:
             )
 
             return int(total or 0)
-        except Exception as exc:
+        except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to get RAG queries for org {org_id}: {exc}")
             return 0
 
@@ -557,7 +581,7 @@ class BillingEnforcer:
             if limit_value_raw is None or isinstance(limit_value_raw, bool):
                 raise TypeError("invalid limit value")
             limit_value = int(limit_value_raw)
-        except Exception:
+        except _BILLING_ENFORCEMENT_COERCE_EXCEPTIONS:
             logger.warning(
                 f"Invalid limit value for {category.value} (org_id={org_id}): "
                 f"{limit_value_raw!r}; treating as unlimited"
@@ -631,7 +655,7 @@ class BillingEnforcer:
         limits = await self.get_org_limits(org_id)
         return bool(limits.get(feature, False))
 
-    def invalidate_cache(self, org_id: Optional[int] = None) -> None:
+    def invalidate_cache(self, org_id: int | None = None) -> None:
         """Invalidate usage/limits cache for an org or all orgs."""
         if org_id is not None:
             self._usage_cache.pop(org_id, None)
@@ -653,7 +677,7 @@ class BillingEnforcer:
         """
         try:
             delta = int(units)
-        except Exception:
+        except _BILLING_ENFORCEMENT_COERCE_EXCEPTIONS:
             return False
 
         if delta <= 0:
@@ -690,7 +714,7 @@ class BillingEnforcer:
 
 
 # Singleton instance with thread-safe initialization
-_billing_enforcer: Optional[BillingEnforcer] = None
+_billing_enforcer: BillingEnforcer | None = None
 _billing_enforcer_lock = threading.Lock()
 
 
@@ -720,8 +744,8 @@ async def create_billing_rg_request(
     org_id: int,
     category: LimitCategory,
     units: int = 1,
-    endpoint: Optional[str] = None,
-) -> "RGRequest":
+    endpoint: str | None = None,
+) -> RGRequest:
     """
     Create a Resource Governor request for billing enforcement.
 
@@ -730,7 +754,7 @@ async def create_billing_rg_request(
     try:
         from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
     except ImportError:
-        raise RuntimeError("Resource Governor not available")
+        raise RuntimeError("Resource Governor not available") from None
 
     return RGRequest(
         entity=f"org:{org_id}",
@@ -756,10 +780,7 @@ async def check_billing_with_rg(
     Falls back to direct enforcement if RG is not available.
     """
     try:
-        from tldw_Server_API.app.core.Resource_Governance.governor import (
-            ResourceGovernor,
-            MemoryResourceGovernor,
-        )
+        importlib.import_module("tldw_Server_API.app.core.Resource_Governance.governor")
 
         # Try to get RG from app state (if we're in a request context)
         # Otherwise use a local instance
@@ -772,7 +793,7 @@ async def check_billing_with_rg(
         enforcer = get_billing_enforcer()
         result = await enforcer.check_limit(org_id, category, requested_units=units)
         return not result.should_block
-    except Exception as exc:
+    except _BILLING_ENFORCEMENT_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Billing RG check failed, allowing: {exc}")
         return True  # Fail open
 

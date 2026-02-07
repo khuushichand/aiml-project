@@ -175,3 +175,88 @@ def test_search_web_brave_builds_expected_request(monkeypatch: pytest.MonkeyPatc
     assert captured["params"]["count"] == 5
     assert captured["params"]["freshness"] == "w"
     assert captured["params"]["exclude_sites"] == "example.com,test.com"
+
+
+def test_generate_and_search_propagates_searx_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_searx(search_query: str, **kwargs: Any) -> Dict[str, Any]:
+        captured["search_query"] = search_query
+        captured.update(kwargs)
+        return {"results": []}
+
+    monkeypatch.setattr(web_search, "search_web_searx", fake_search_web_searx)
+
+    result = web_search.generate_and_search(
+        "test query",
+        {
+            "engine": "searx",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 1,
+            "searx_url": "https://custom.searx.local",
+            "searx_json_mode": True,
+        },
+    )
+
+    assert "web_search_results_dict" in result
+    assert captured.get("search_query") == "test query"
+    assert captured.get("searx_url") == "https://custom.searx.local"
+    assert captured.get("json_mode") is True
+
+
+def test_perform_websearch_tavily_forwards_site_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_search_web_tavily(search_query: str, result_count: int = 10, site_whitelist=None, site_blacklist=None) -> Dict[str, Any]:
+        captured["search_query"] = search_query
+        captured["result_count"] = result_count
+        captured["site_whitelist"] = site_whitelist
+        captured["site_blacklist"] = site_blacklist
+        return {"results": []}
+
+    monkeypatch.setattr(web_search, "search_web_tavily", fake_search_web_tavily)
+
+    result = web_search.perform_websearch(
+        search_engine="tavily",
+        search_query="test query",
+        content_country="US",
+        search_lang="en",
+        output_lang="en",
+        result_count=3,
+        site_whitelist=["allowed.example"],
+        site_blacklist=["blocked.example"],
+    )
+
+    assert captured.get("search_query") == "test query"
+    assert captured.get("result_count") == 3
+    assert captured.get("site_whitelist") == ["allowed.example"]
+    assert captured.get("site_blacklist") == ["blocked.example"]
+    assert result.get("search_engine") == "tavily"
+
+
+def test_generate_and_search_propagates_include_domains_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {}
+
+    def fake_perform_websearch(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return {"results": [], "total_results_found": 0, "search_time": 0.0}
+
+    monkeypatch.setattr(web_search, "perform_websearch", fake_perform_websearch)
+
+    result = web_search.generate_and_search(
+        "test query",
+        {
+            "engine": "google",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 1,
+            "include_domains": ["allowed.example"],
+        },
+    )
+
+    assert "web_search_results_dict" in result
+    assert captured.get("site_whitelist") == ["allowed.example"]
+    assert result["web_search_results_dict"].get("site_whitelist") == ["allowed.example"]

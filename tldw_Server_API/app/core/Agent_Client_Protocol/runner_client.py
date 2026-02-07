@@ -4,8 +4,9 @@ import asyncio
 import time
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Any, Callable, Coroutine, Deque, Dict, List, Optional, Set
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -19,7 +20,6 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import (
     ACPStdioClient,
 )
 
-
 # Permission timeout in seconds (5 minutes)
 PERMISSION_TIMEOUT_SECONDS = 300
 
@@ -30,22 +30,22 @@ class PendingPermission:
     request_id: str
     session_id: str
     tool_name: str
-    tool_arguments: Dict[str, Any]
+    tool_arguments: dict[str, Any]
     acp_message_id: Any  # The original ACP message ID for responding
     created_at: float = field(default_factory=time.monotonic)
     # Future is created when permission request is processed, not at dataclass init
     # This avoids the deprecated asyncio.get_event_loop() call
-    future: Optional[asyncio.Future] = field(default=None)
+    future: asyncio.Future | None = field(default=None)
 
 
 @dataclass
 class SessionWebSocketRegistry:
     """Tracks WebSocket connections and state per session."""
     session_id: str
-    websockets: Set[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = field(default_factory=set)
-    pending_permissions: Dict[str, PendingPermission] = field(default_factory=dict)
+    websockets: set[Callable[[dict[str, Any]], Coroutine[Any, Any, None]]] = field(default_factory=set)
+    pending_permissions: dict[str, PendingPermission] = field(default_factory=dict)
     # Tiers that are batch-approved for this session
-    batch_approved_tiers: Set[str] = field(default_factory=set)
+    batch_approved_tiers: set[str] = field(default_factory=set)
 
 
 class ACPRunnerClient:
@@ -59,18 +59,18 @@ class ACPRunnerClient:
         )
         self._client.set_notification_handler(self._handle_notification)
         self._client.set_request_handler(self._handle_request)
-        self._updates: Dict[str, Deque[Dict[str, Any]]] = defaultdict(deque)
-        self._agent_capabilities: Dict[str, Any] = {}
+        self._updates: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
+        self._agent_capabilities: dict[str, Any] = {}
         # WebSocket registry per session
-        self._ws_registry: Dict[str, SessionWebSocketRegistry] = {}
+        self._ws_registry: dict[str, SessionWebSocketRegistry] = {}
         self._ws_registry_lock = asyncio.Lock()
 
     @classmethod
-    def from_config(cls) -> "ACPRunnerClient":
+    def from_config(cls) -> ACPRunnerClient:
         return cls(load_acp_runner_config())
 
     @property
-    def agent_capabilities(self) -> Dict[str, Any]:
+    def agent_capabilities(self) -> dict[str, Any]:
         return self._agent_capabilities
 
     @property
@@ -85,7 +85,7 @@ class ACPRunnerClient:
         else:
             await self.initialize()
 
-    async def initialize(self) -> Dict[str, Any]:
+    async def initialize(self) -> dict[str, Any]:
         response = await self._client.call(
             "initialize",
             {
@@ -108,10 +108,10 @@ class ACPRunnerClient:
     async def create_session(
         self,
         cwd: str,
-        mcp_servers: Optional[List[Dict[str, Any]]] = None,
-        agent_type: Optional[str] = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+        agent_type: str | None = None,
     ) -> str:
-        params: Dict[str, Any] = {"cwd": cwd}
+        params: dict[str, Any] = {"cwd": cwd}
         if mcp_servers:
             params["mcpServers"] = mcp_servers
         if agent_type:
@@ -123,7 +123,11 @@ class ACPRunnerClient:
             raise ACPResponseError("Missing sessionId in response")
         return session_id
 
-    async def prompt(self, session_id: str, prompt: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def list_agents(self) -> dict[str, Any]:
+        response = await self._client.call("agent/list", {})
+        return response.result or {}
+
+    async def prompt(self, session_id: str, prompt: list[dict[str, Any]]) -> dict[str, Any]:
         response = await self._client.call(
             "session/prompt",
             {
@@ -140,7 +144,7 @@ class ACPRunnerClient:
         await self._client.call("_tldw/session/close", {"sessionId": session_id})
         self._updates.pop(session_id, None)
 
-    def pop_updates(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def pop_updates(self, session_id: str, limit: int = 100) -> list[dict[str, Any]]:
         updates = []
         queue = self._updates.get(session_id)
         if not queue:
@@ -159,7 +163,7 @@ class ACPRunnerClient:
     async def register_websocket(
         self,
         session_id: str,
-        send_callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]],
+        send_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, None]],
     ) -> None:
         """Register a WebSocket send callback for a session."""
         async with self._ws_registry_lock:
@@ -171,7 +175,7 @@ class ACPRunnerClient:
     async def unregister_websocket(
         self,
         session_id: str,
-        send_callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]],
+        send_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, None]],
     ) -> None:
         """Unregister a WebSocket send callback for a session."""
         async with self._ws_registry_lock:
@@ -184,7 +188,7 @@ class ACPRunnerClient:
         registry = self._ws_registry.get(session_id)
         return registry is not None and len(registry.websockets) > 0
 
-    async def _broadcast_to_session(self, session_id: str, message: Dict[str, Any]) -> None:
+    async def _broadcast_to_session(self, session_id: str, message: dict[str, Any]) -> None:
         """Broadcast a message to all WebSockets connected to a session."""
         registry = self._ws_registry.get(session_id)
         if not registry:
@@ -211,7 +215,7 @@ class ACPRunnerClient:
         session_id: str,
         request_id: str,
         approved: bool,
-        batch_approve_tier: Optional[str] = None,
+        batch_approve_tier: str | None = None,
     ) -> bool:
         """Respond to a pending permission request.
 
@@ -393,13 +397,28 @@ class ACPRunnerClient:
             )
 
 
-_runner_client: Optional[ACPRunnerClient] = None
+_runner_client: ACPRunnerClient | None = None
 _runner_lock = asyncio.Lock()
+_sandbox_client: Any | None = None
 
 
 async def get_runner_client() -> ACPRunnerClient:
     global _runner_client
+    global _sandbox_client
     async with _runner_lock:
+        try:
+            from tldw_Server_API.app.core.Agent_Client_Protocol.config import load_acp_sandbox_config
+            sb_cfg = load_acp_sandbox_config()
+        except Exception:
+            sb_cfg = None
+        if sb_cfg and getattr(sb_cfg, "enabled", False):
+            if _sandbox_client is None or not getattr(_sandbox_client, "is_running", True):
+                from tldw_Server_API.app.core.Agent_Client_Protocol.sandbox_runner_client import (
+                    ACPSandboxRunnerManager,
+                )
+                _sandbox_client = ACPSandboxRunnerManager(sb_cfg)
+                await _sandbox_client.start()
+            return _sandbox_client  # type: ignore[return-value]
         if _runner_client is None or not _runner_client.is_running:
             _runner_client = ACPRunnerClient.from_config()
             await _runner_client.start()

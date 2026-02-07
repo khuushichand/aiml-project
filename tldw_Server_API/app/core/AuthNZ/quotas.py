@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.repos.quotas_repo import AuthnzQuotasRepo
 
@@ -10,9 +8,9 @@ async def increment_and_check_jwt_quota(
     db_pool: DatabasePool,
     jti: str,
     counter_type: str,
-    limit: Optional[int],
-    bucket: Optional[str] = None,
-) -> Tuple[bool, int]:
+    limit: int | None,
+    bucket: str | None = None,
+) -> tuple[bool, int]:
     """
     Atomically increment JWT (by jti) quota counter and compare to ``limit``.
 
@@ -34,9 +32,9 @@ async def increment_and_check_api_key_quota(
     db_pool: DatabasePool,
     api_key_id: int,
     counter_type: str,
-    limit: Optional[int],
-    bucket: Optional[str] = None,
-) -> Tuple[bool, int]:
+    limit: int | None,
+    bucket: str | None = None,
+) -> tuple[bool, int]:
     """
     Atomically increment API Key quota counter and compare to ``limit``.
 

@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.email_service import get_email_service
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
 
 @dataclass
 class NotificationResult:
     channel: str
     status: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class NotificationsService:
@@ -24,11 +23,11 @@ class NotificationsService:
     Unified notifications helper to send watchlist outputs via email or persist them to Chatbook.
     """
 
-    def __init__(self, *, user_id: int, user_email: Optional[str] = None) -> None:
+    def __init__(self, *, user_id: int, user_email: str | None = None) -> None:
         self.user_id = int(user_id)
         self.user_email = user_email
         self._email_service = get_email_service()
-        self._doc_service: Optional[DocumentGeneratorService] = None
+        self._doc_service: DocumentGeneratorService | None = None
 
     def _ensure_doc_service(self) -> DocumentGeneratorService:
         if self._doc_service is None:
@@ -42,9 +41,9 @@ class NotificationsService:
         *,
         subject: str,
         html_body: str,
-        text_body: Optional[str],
-        recipients: Optional[List[str]],
-        attachments: Optional[List[Dict[str, Any]]] = None,
+        text_body: str | None,
+        recipients: list[str] | None,
+        attachments: list[dict[str, Any]] | None = None,
         fallback_to_user_email: bool = True,
     ) -> NotificationResult:
         recips = [r.strip() for r in (recipients or []) if r and r.strip()]
@@ -57,7 +56,7 @@ class NotificationsService:
                 details={"reason": "no_recipients"},
             )
 
-        deliveries: List[Dict[str, Any]] = []
+        deliveries: list[dict[str, Any]] = []
         for addr in recips:
             try:
                 ok = await self._email_service.send_email(
@@ -89,12 +88,12 @@ class NotificationsService:
         *,
         title: str,
         content: str,
-        description: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        description: str | None = None,
+        metadata: dict[str, Any] | None = None,
         document_type: DocumentType = DocumentType.BRIEFING,
         provider: str = "watchlists",
         model: str = "watchlists",
-        conversation_id: Optional[int] = None,
+        conversation_id: int | None = None,
     ) -> NotificationResult:
         try:
             svc = self._ensure_doc_service()

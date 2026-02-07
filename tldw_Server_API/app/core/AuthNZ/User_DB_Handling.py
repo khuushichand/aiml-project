@@ -2,49 +2,78 @@
 # Description: Handles user authentication and identification based on application mode.
 #
 # Imports
-import hmac
+import contextlib
 import os
+from typing import Any, Optional, Union
 from uuid import UUID
-from typing import Optional, List, Dict, Any, Union
+
 #
 # 3rd-Party Libraries
-from fastapi import Depends, HTTPException, status, Header, Request
-from pydantic import BaseModel, ValidationError, Field
-#
-# Local Imports
-# New unified settings
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import Depends, Header, HTTPException, Request, status
+
+# Utils
+from loguru import logger
+from pydantic import BaseModel, Field, ValidationError
+
+# API Dependencies
+from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
 )
+
 # New JWT service
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.AuthNZ.org_rbac import apply_scoped_permissions
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
     list_memberships_for_user,
     list_org_memberships_for_user,
 )
-from tldw_Server_API.app.core.AuthNZ.org_rbac import apply_scoped_permissions
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
-from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
+#
+# Local Imports
+# New unified settings
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-# Utils
-from loguru import logger
-# API Dependencies
-from tldw_Server_API.app.api.v1.API_Deps.v1_endpoint_deps import oauth2_scheme
-from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
+from tldw_Server_API.app.core.exceptions import InactiveUserError
+
+_USER_DB_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    HTTPException,
+    InvalidTokenError,
+    TokenExpiredError,
+    ValidationError,
+)
 
 #######################################################################################################################
 
 def is_single_user_mode() -> bool:
     """Compatibility helper for tests and legacy callers."""
-    return get_settings().AUTH_MODE == "single_user"
+    try:
+        return get_settings().AUTH_MODE == "single_user"
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
+        return False
 
 
 def is_multi_user_mode() -> bool:
@@ -63,7 +92,7 @@ def get_effective_permissions(user_id: int) -> list[str]:
     repo = AuthnzRbacRepo(client_id="authnz_effective_permissions")
     try:
         return list(repo.get_effective_permissions(int(user_id)))
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to resolve effective permissions for user_id={}", user_id)
         return []
 
@@ -97,7 +126,7 @@ def _enrich_user_with_rbac(
                     roles.append(role_str)
         if "admin" in roles:
             is_admin_flag = True
-    except Exception as rb_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as rb_exc:
         if pii_redact_logs:
             logger.debug("RBAC enrichment failed for user roles (details redacted)")
         else:
@@ -108,7 +137,7 @@ def _enrich_user_with_rbac(
         nonlocal base_perms
         try:
             role_row_id = repo.get_role_id_by_name(str(role_name))
-        except Exception as rb_exc_lookup:  # pragma: no cover - best-effort lookup
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as rb_exc_lookup:  # pragma: no cover - best-effort lookup
             role_row_id = None
             if pii_redact_logs:
                 logger.debug("RBAC role permission lookup failed [redacted]")
@@ -123,7 +152,7 @@ def _enrich_user_with_rbac(
             for pname in role_perms.get("all_permissions", []):
                 if pname:
                     base_perms.add(str(pname))
-        except Exception as rb_exc_role:  # pragma: no cover - best-effort
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as rb_exc_role:  # pragma: no cover - best-effort
             if pii_redact_logs:
                 logger.debug("RBAC role permission expansion failed [redacted]")
             else:
@@ -134,7 +163,7 @@ def _enrich_user_with_rbac(
     # Effective permissions from RBAC helper (roles + user overrides)
     try:
         base_perms = set(get_effective_permissions(int(user_id)))
-    except Exception as rb_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as rb_exc:
         if pii_redact_logs:
             logger.debug("RBAC enrichment failed for permissions (details redacted)")
         else:
@@ -156,7 +185,7 @@ def _enrich_user_with_rbac(
                 if rname == "admin":
                     is_admin_flag = True
                 _merge_role_permissions(rname)
-            except Exception as rb_exc_outer:  # pragma: no cover - guard against unexpected shapes
+            except _USER_DB_NONCRITICAL_EXCEPTIONS as rb_exc_outer:  # pragma: no cover - guard against unexpected shapes
                 if pii_redact_logs:
                     logger.debug("RBAC fallback (role column) outer failure [redacted]")
                 else:
@@ -171,10 +200,10 @@ def _enrich_user_with_rbac(
     return roles, perms, is_admin_flag
 
 
-def _coerce_int_list(raw: Any) -> List[int]:
+def _coerce_int_list(raw: Any) -> list[int]:
     if not isinstance(raw, (list, tuple, set)):
         return []
-    out: List[int] = []
+    out: list[int] = []
     for value in raw:
         try:
             out.append(int(value))
@@ -183,7 +212,7 @@ def _coerce_int_list(raw: Any) -> List[int]:
     return out
 
 
-def _normalize_active_id(raw: Any, ids: List[int]) -> Optional[int]:
+def _normalize_active_id(raw: Any, ids: list[int]) -> Optional[int]:
     if raw is None:
         return ids[0] if len(ids) == 1 else None
     try:
@@ -209,8 +238,8 @@ class User(BaseModel):
     # Optional tenant field for multi-tenant-aware endpoints/tests
     tenant_id: Optional[str] = None
     # RBAC/claims exposure
-    roles: List[str] = Field(default_factory=list)
-    permissions: List[str] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=list)
+    permissions: list[str] = Field(default_factory=list)
     is_admin: bool = False
 
     # Convenience properties for downstream code that expects int ids
@@ -218,14 +247,14 @@ class User(BaseModel):
     def id_int(self) -> Optional[int]:
         try:
             return int(self.id)  # type: ignore[arg-type]
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             return None
 
     @property
     def id_str(self) -> str:
         try:
             return str(self.id)
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             return ""
 
 # --- Single User "Dummy" Object ---
@@ -263,15 +292,15 @@ def get_single_user_instance() -> User:
 # Eagerly initialize for environments/tests that mutate the module-level reference directly.
 try:
     _single_user_instance = get_single_user_instance()
-except Exception:
+except _USER_DB_NONCRITICAL_EXCEPTIONS:
     _single_user_instance = None
 
 
-def is_single_user_mode() -> bool:
+def is_single_user_mode() -> bool:  # noqa: F811
     """Compatibility shim for tests that expect this helper in User_DB_Handling."""
     try:
         return get_settings().AUTH_MODE == "single_user"
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -280,7 +309,7 @@ def _is_test_context() -> bool:
     try:
         if getattr(get_settings(), "TEST_MODE", False):
             return True
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         pass
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
@@ -306,8 +335,33 @@ def _is_strict_test_bypass_context() -> bool:
     try:
         if getattr(get_settings(), "TEST_MODE", False):
             return True
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         pass
+    return False
+
+
+def _is_production_like_env() -> bool:
+    """
+    Detect production-like runtime from common deployment environment variables.
+
+    This intentionally checks multiple keys because not all deployments set
+    `tldw_production`.
+    """
+    truthy = {"1", "true", "yes", "on", "y"}
+    if os.getenv("tldw_production", "").strip().lower() in truthy:
+        return True
+
+    production_values = {"production", "prod", "live"}
+    for key in (
+        "ENVIRONMENT",
+        "APP_ENV",
+        "DEPLOYMENT_ENV",
+        "FASTAPI_ENV",
+        "TLDW_ENV",
+    ):
+        value = os.getenv(key, "").strip().lower()
+        if value in production_values:
+            return True
     return False
 
 
@@ -350,7 +404,7 @@ def resolve_user_id_value(
     if as_int:
         try:
             return int(user_id)  # type: ignore[arg-type]
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             if is_single_user_mode():
                 return DatabasePaths.get_single_user_id()
             _raise_user_id_error(invalid_detail, status_code=error_status, raise_http=raise_http)
@@ -358,7 +412,7 @@ def resolve_user_id_value(
     if not allow_test_user_ids:
         try:
             int(user_id)  # type: ignore[arg-type]
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             if is_single_user_mode():
                 return str(DatabasePaths.get_single_user_id())
             _raise_user_id_error(invalid_detail, status_code=error_status, raise_http=raise_http)
@@ -417,7 +471,7 @@ async def verify_single_user_api_key(
             scheme, _, credential = authorization.partition(" ")
             if scheme.lower() == "bearer":
                 provided = credential.strip()
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             provided = ""
 
     if not provided:
@@ -437,8 +491,8 @@ async def verify_single_user_api_key(
     try:
         user_id_val = getattr(user, "id_int", None)
         if user_id_val is None:
-            user_id_val = int(getattr(user, "id"))
-    except Exception:
+            user_id_val = int(user.id)
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         user_id_val = None
 
     if user_id_val != expected_user_id:
@@ -475,7 +529,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="AuthNZ user lookup is unavailable.",
-        )
+        ) from None
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -510,10 +564,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         token_active_team_id = payload.get("active_team_id")
     except (InvalidTokenError, TokenExpiredError) as e:
         logger.warning(f"Token validation failed: {e}")
-        raise credentials_exception
-    except Exception as e:
+        raise credentials_exception from e
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error decoding token: {e}")
-        raise credentials_exception
+        raise credentials_exception from e
 
     # Enforce scope checks for scoped tokens to prevent privilege expansion.
     try:
@@ -527,7 +581,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             "schedule_id",
         )
         has_scoped_claim = any(payload.get(claim) is not None for claim in scoped_claims)
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         has_scoped_claim = False
 
     if has_scoped_claim:
@@ -544,13 +598,13 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
                     if getattr(call, "_tldw_token_scope", False):
                         return True
                     stack.extend(getattr(dep, "dependencies", []) or [])
-            except Exception:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS:
                 return False
             return False
 
         try:
             scope_enforced = bool(getattr(request.state, "_token_scope_enforced", False))
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             scope_enforced = False
         if not scope_enforced and not _route_declares_scope_enforcement(request):
             if pii_redact_logs:
@@ -575,9 +629,9 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             raise credentials_exception
     except HTTPException:
         raise
-    except Exception as exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Error checking token blacklist: {exc}")
-        raise credentials_exception
+        raise credentials_exception from exc
 
     # --- Fetch and Validate User Data ---
     subject_identifier = user_id_int if user_id_int is not None else raw_subject
@@ -613,7 +667,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
         if pii_redact_logs:
             logger.error("Error fetching user (details redacted) from AuthNZ user store", exc_info=True)
         else:
@@ -624,7 +678,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving user information."
-        )
+        ) from e
 
     # Prepare numeric ID (if available) for downstream lookups
     subject_db_id_raw = user_data.get("id")
@@ -649,8 +703,8 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing user data: Invalid format - {e}"
-        )
-    except Exception as e:  # Catch other potential errors during model creation
+        ) from e
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:  # Catch other potential errors during model creation
         if pii_redact_logs:
             logger.error("Unexpected error creating User model for authenticated user (details redacted)", exc_info=True)
         else:
@@ -658,7 +712,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error processing user data."
-        )
+        ) from e
 
     # --- Final User Status Check ---
     if not user.is_active:
@@ -669,19 +723,21 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise InactiveUserError("Inactive user")
 
     # Attach user id for downstream context (usage logging, RBAC rate limits)
-    try:
+    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
         request.state.user_id = user.id
-    except Exception:
-        pass
 
-    team_ids: List[int] = []
-    org_ids: List[int] = []
+    team_ids: list[int] = []
+    org_ids: list[int] = []
     active_team_id: Optional[int] = None
     active_org_id: Optional[int] = None
+    membership_error_detail = "Token membership could not be validated"
     try:
         membership_lookup_id = user.id_int
         if membership_lookup_id is None:
-            raise ValueError("User ID is non-numeric; skipping membership lookup.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=membership_error_detail,
+            )
 
         memberships = await list_memberships_for_user(membership_lookup_id)
         member_team_ids = _coerce_int_list(
@@ -772,17 +828,41 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         active_org_id = _normalize_active_id(token_active_org_id, org_ids)
     except HTTPException:
         raise
-    except Exception:
-        pass
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as membership_exc:
+        if pii_redact_logs:
+            logger.warning("JWT membership validation failed (details redacted)")
+        else:
+            logger.warning(
+                f"JWT membership validation failed for subject {subject_identifier}: {membership_exc}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=membership_error_detail,
+        ) from membership_exc
 
-    scoped_result = await apply_scoped_permissions(
-        user_id=user.id_int,
-        base_permissions=list(user.permissions or []),
-        org_ids=org_ids,
-        team_ids=team_ids,
-        active_org_id=active_org_id,
-        active_team_id=active_team_id,
-    )
+    try:
+        scoped_result = await apply_scoped_permissions(
+            user_id=user.id_int,
+            base_permissions=list(user.permissions or []),
+            org_ids=org_ids,
+            team_ids=team_ids,
+            active_org_id=active_org_id,
+            active_team_id=active_team_id,
+        )
+    except HTTPException:
+        raise
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as scope_exc:
+        if pii_redact_logs:
+            logger.warning("JWT scoped permission application failed (details redacted)")
+        else:
+            logger.warning(
+                f"JWT scoped permission application failed for subject {subject_identifier}: {scope_exc}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=membership_error_detail,
+        ) from scope_exc
+
     user.permissions = list(scoped_result.permissions or [])
     active_org_id = scoped_result.active_org_id
     active_team_id = scoped_result.active_team_id
@@ -791,7 +871,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         request.state.org_ids = org_ids
         request.state.active_team_id = active_team_id
         request.state.active_org_id = active_org_id
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -803,7 +883,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             active_team_id=active_team_id,
             is_admin=bool(user.is_admin),
         )
-    except Exception as scope_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as scope_exc:
         if pii_redact_logs:
             logger.debug(f"Failed to set scope context for authenticated user (redacted): {scope_exc}")
         else:
@@ -839,7 +919,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
             user_agent=user_agent,
             request_id=request_id,
         )
-    except Exception:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
         logger.exception("Unable to populate AuthContext in verify_jwt_and_fetch_user")
 
     if pii_redact_logs:
@@ -907,17 +987,15 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                     request.state.api_key_id = None
                     request.state.team_ids = []
                     request.state.org_ids = []
-                except Exception:
+                except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     pass
-                try:
+                with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
                     set_scope(
                         user_id=user.id_int,
                         org_ids=[],
                         team_ids=[],
                         is_admin=True,
                     )
-                except Exception:
-                    pass
                 try:
                     principal = AuthPrincipal(
                         kind="user",
@@ -952,17 +1030,15 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                         request_id=request_id,
                     )
                     request.state._auth_user = user
-                    try:
+                    with contextlib.suppress(_USER_DB_NONCRITICAL_EXCEPTIONS):
                         request.state.user_id = user.id_int
-                    except Exception:
-                        pass
-                except Exception:
+                except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Unable to populate AuthContext for single-user API key")
                 return user
     except HTTPException:
         # Preserve explicit auth failures (e.g., IP allowlist rejection).
         raise
-    except Exception as single_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as single_exc:
         logger.debug(
             "authenticate_api_key_user: single-user API key path failed; falling back to multi-user flow: {}",
             single_exc,
@@ -993,7 +1069,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         try:
             users_repo = await AuthnzUsersRepo.from_pool()
             user_data = await users_repo.get_user_by_id(user_id)
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             if not _is_test_context():
                 raise
 
@@ -1004,7 +1080,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 )
 
                 user_data = await legacy_get_user_by_id(user_id)
-            except Exception:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS:
                 user_data = None
         if not user_data:
             raise HTTPException(
@@ -1062,7 +1138,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 if row:
                     key_org_id = _coerce_int(row.get("org_id"))
                     key_team_id = _coerce_int(row.get("team_id"))
-            except Exception as exc:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("API key scope fallback lookup failed: {}", exc)
 
         # Attach context for downstream consumers
@@ -1077,21 +1153,21 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                     request.state.org_id = key_org_id
                 if key_team_id is not None:
                     request.state.team_id = key_team_id
-            except Exception as e:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Unable to attach org/team context: {e}")
-        except Exception as ctx_state_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as ctx_state_exc:
             logger.debug(f"Unable to attach user/api_key context to request.state: {ctx_state_exc}")
 
         user_obj = User(**user_data)
 
-        team_ids: List[int] = []
-        org_ids: List[int] = []
+        team_ids: list[int] = []
+        org_ids: list[int] = []
         active_team_id: Optional[int] = None
         active_org_id: Optional[int] = None
-        memberships: List[Dict[str, Any]] = []
+        memberships: list[dict[str, Any]] = []
         try:
             memberships = await list_memberships_for_user(int(user_id))
-        except Exception as memberships_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as memberships_exc:
             logger.debug(f"Membership lookup failed for user {user_id}: {memberships_exc}")
 
         member_team_ids = [
@@ -1136,7 +1212,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                         for m in org_memberships
                         if m.get("org_id") is not None
                     }
-                except Exception:
+                except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     org_membership_ids = set()
                 if key_org_id not in org_membership_ids:
                     raise HTTPException(
@@ -1176,7 +1252,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 request.state.org_id = org_ids[0]
             if team_ids:
                 request.state.team_id = team_ids[0]
-        except Exception as team_ctx_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as team_ctx_exc:
             logger.debug(f"Unable to attach team/org ids to request.state: {team_ctx_exc}")
 
         try:
@@ -1188,7 +1264,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                 active_team_id=active_team_id,
                 is_admin=bool(user_obj.is_admin),
             )
-        except Exception as scope_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as scope_exc:
             logger.debug(
                 f"Scope context setup failed for API key user {user_id}: {scope_exc}"
             )
@@ -1200,7 +1276,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             if raw_key_id is not None:
                 try:
                     api_key_id_val = int(raw_key_id)
-                except Exception:
+                except _USER_DB_NONCRITICAL_EXCEPTIONS:
                     api_key_id_val = None
 
             subject_val: Optional[str] = None
@@ -1209,7 +1285,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
                     single_id = getattr(settings, "SINGLE_USER_FIXED_ID", None)
                     if single_id is not None and user_obj.id_int == int(single_id):
                         subject_val = "single_user"
-            except Exception:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS:
                 subject_val = None
 
             principal = AuthPrincipal(
@@ -1250,9 +1326,9 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
             # Cache the resolved user for downstream adapters
             try:
                 request.state._auth_user = user_obj
-            except Exception as cache_exc:
+            except _USER_DB_NONCRITICAL_EXCEPTIONS as cache_exc:
                 logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
-        except Exception as ctx_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as ctx_exc:
             logger.debug(
                 f"Unable to populate AuthContext in authenticate_api_key_user: {ctx_exc}"
             )
@@ -1260,7 +1336,7 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         return user_obj
     except HTTPException:
         raise
-    except Exception as e:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
         # Avoid logging exception messages directly to prevent leaking secrets
         # from API key validation paths; log only the exception type.
         logger.error(
@@ -1292,7 +1368,7 @@ async def get_request_user(
     # Test-mode bypasses are disabled in production for safety
     try:
         import os as _os
-        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        _prod = _is_production_like_env()
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
         if (
             not _prod
@@ -1305,7 +1381,7 @@ async def get_request_user(
                 "bypassing auth, returning single-user test instance"
             )
             return get_single_user_instance()
-    except Exception as env_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as env_exc:
         logger.debug(
             f"get_request_user: test-mode bypass env detection failed; continuing with normal auth: {env_exc}"
         )
@@ -1313,18 +1389,17 @@ async def get_request_user(
     # Warn if test flags are present in production deployments
     try:
         import os as _os
-        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        _prod = _is_production_like_env()
         if _prod and (
             _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-        ):
-            if not getattr(get_request_user, "_warned_testflags_prod", False):
-                logger.warning(
-                    "TEST flags detected while tldw_production=true; "
-                    "test-only auth bypasses are disabled."
-                )
-                setattr(get_request_user, "_warned_testflags_prod", True)
-    except Exception as warn_exc:
+        ) and not getattr(get_request_user, "_warned_testflags_prod", False):
+            logger.warning(
+                "TEST flags detected while tldw_production=true; "
+                "test-only auth bypasses are disabled."
+            )
+            get_request_user._warned_testflags_prod = True
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as warn_exc:
         logger.debug(
             f"get_request_user: production test-flag warning emission failed; continuing without warning: {warn_exc}"
         )
@@ -1337,7 +1412,7 @@ async def get_request_user(
         if isinstance(existing_ctx, AuthContext) and isinstance(cached_user, User):
             logger.debug("get_request_user: Reusing cached AuthPrincipal/_auth_user from request.state.")
             return cached_user
-    except Exception as fastpath_exc:
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as fastpath_exc:
         # Fall through to normal auth paths on any issues, but make failures observable.
         logger.debug(
             f"get_request_user fast-path reuse failed; falling back to normal auth: {fastpath_exc}"
@@ -1350,7 +1425,7 @@ async def get_request_user(
     if token:
         try:
             settings = get_settings()
-        except Exception:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
             settings = None
         token_is_jwt = _looks_like_jwt(token)
         if settings is not None and getattr(settings, "AUTH_MODE", None) == "single_user":
@@ -1370,7 +1445,7 @@ async def get_request_user(
         # verify_jwt_and_fetch_user already sets request.state.auth; cache user for fast-path reuse.
         try:
             request.state._auth_user = user
-        except Exception as cache_exc:
+        except _USER_DB_NONCRITICAL_EXCEPTIONS as cache_exc:
             logger.debug(f"Failed to cache _auth_user on request.state: {cache_exc}")
         return user
 

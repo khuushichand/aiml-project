@@ -18,34 +18,30 @@ This module includes adapters for content operations:
 - diagram_generate: Generate diagrams
 """
 
-from tldw_Server_API.app.core.Workflows.adapters.content.summarize import (
-    run_summarize_adapter,
-)
-
 from tldw_Server_API.app.core.Workflows.adapters.content.citations import (
-    run_citations_adapter,
     run_bibliography_generate_adapter,
+    run_citations_adapter,
 )
-
+from tldw_Server_API.app.core.Workflows.adapters.content.generation import (
+    run_diagram_generate_adapter,
+    run_flashcard_generate_adapter,
+    run_glossary_extract_adapter,
+    run_mindmap_generate_adapter,
+    run_newsletter_generate_adapter,
+    run_outline_generate_adapter,
+    run_quiz_generate_adapter,
+    run_report_generate_adapter,
+    run_slides_generate_adapter,
+)
 from tldw_Server_API.app.core.Workflows.adapters.content.image import (
-    run_image_gen_adapter,
     run_image_describe_adapter,
+    run_image_gen_adapter,
 )
-
 from tldw_Server_API.app.core.Workflows.adapters.content.rerank import (
     run_rerank_adapter,
 )
-
-from tldw_Server_API.app.core.Workflows.adapters.content.generation import (
-    run_flashcard_generate_adapter,
-    run_quiz_generate_adapter,
-    run_outline_generate_adapter,
-    run_mindmap_generate_adapter,
-    run_glossary_extract_adapter,
-    run_slides_generate_adapter,
-    run_report_generate_adapter,
-    run_newsletter_generate_adapter,
-    run_diagram_generate_adapter,
+from tldw_Server_API.app.core.Workflows.adapters.content.summarize import (
+    run_summarize_adapter,
 )
 
 __all__ = [

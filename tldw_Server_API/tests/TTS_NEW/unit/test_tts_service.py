@@ -13,7 +13,9 @@ from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 from tldw_Server_API.app.core.TTS.adapters.base import (
     TTSRequest,
     TTSResponse,
-    AudioFormat
+    AudioFormat,
+    TTSCapabilities,
+    VoiceInfo,
 )
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
@@ -111,6 +113,78 @@ class TestTextGeneration:
         adapter = tts_service._factory.get_adapter("openai")
         await tts_service.generate(basic_tts_request)
         adapter.generate.assert_called_once()
+
+    @pytest.mark.unit
+    async def test_token_defaults_applied(self):
+        """Service applies min/max token defaults when not provided."""
+        service = TTSServiceV2()
+        request = TTSRequest(text="Hello world", format=AudioFormat.MP3)
+
+        service._apply_token_defaults(request)
+
+        assert "max_new_tokens" in request.extra_params
+        assert "min_new_tokens" in request.extra_params
+        assert request.extra_params["max_new_tokens"] >= request.extra_params["min_new_tokens"]
+
+    @pytest.mark.unit
+    async def test_chunked_retry_metadata(self):
+        """Chunked requests retry per segment and return metadata."""
+        service = TTSServiceV2()
+        adapter = MagicMock()
+
+        async def mock_caps():
+            return TTSCapabilities(
+                provider_name="mock",
+                supported_languages={"en"},
+                supported_voices=[VoiceInfo(id="v", name="v")],
+                supported_formats={AudioFormat.PCM, AudioFormat.MP3},
+                max_text_length=1000,
+                supports_streaming=False,
+            )
+
+        adapter.get_capabilities = AsyncMock(side_effect=mock_caps)
+
+        call_count = {"n": 0}
+
+        async def mock_generate(request):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise TTSRateLimitError("rate limited", provider="mock")
+            return TTSResponse(
+                audio_data=b"\x00\x00" * 200,
+                format=AudioFormat.PCM,
+                sample_rate=24000,
+                provider="mock",
+            )
+
+        adapter.generate = AsyncMock(side_effect=mock_generate)
+
+        text = "Sentence one is long enough to split. Sentence two is also long enough to split."
+        req = TTSRequest(
+            text=text,
+            format=AudioFormat.MP3,
+            stream=False,
+            extra_params={
+                "chunking": True,
+                "chunk_max_chars": 30,
+                "segment_retry_max": 1,
+                "segment_retry_backoff_ms": 1,
+            },
+        )
+
+        response = await service._generate_chunked_response(
+            adapter=adapter,
+            request=req,
+            provider_key="mock",
+            target_chars=20,
+            max_chars=30,
+            min_chars=10,
+            crossfade_ms=10,
+        )
+
+        assert response is not None
+        assert response.metadata.get("chunked") is True
+        assert response.metadata.get("segments")
 
 # ========================================================================
 # Streaming Generation Tests

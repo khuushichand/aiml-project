@@ -11,7 +11,7 @@ modules.
 
 import asyncio
 import functools
-from typing import Any, Dict, List
+from typing import Any
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
     process_audio_files,
@@ -19,15 +19,29 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files impor
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
 
 
+def _dedupe_errors_preserve_order(errors: list[Any]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        if not error:
+            continue
+        error_text = str(error)
+        if error_text in seen:
+            continue
+        seen.add(error_text)
+        deduped.append(error_text)
+    return deduped
+
+
 async def run_audio_batch(
-    all_inputs: List[str],
+    all_inputs: list[str],
     *,
     form_data: Any,
     temp_dir: str,
-    temp_path_to_original_name: Dict[str, str],
-    saved_files: List[Dict[str, Any]],
-    file_errors_raw: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    temp_path_to_original_name: dict[str, str],
+    saved_files: list[dict[str, Any]],
+    file_errors_raw: list[dict[str, Any]],
+) -> dict[str, Any]:
     """
     Execute the audio processing library and merge results with file errors.
 
@@ -45,7 +59,7 @@ async def run_audio_batch(
     """
     loop = asyncio.get_running_loop()
 
-    batch_result: Dict[str, Any] = {
+    batch_result: dict[str, Any] = {
         "processed_count": 0,
         "errors_count": 0,
         "errors": [],
@@ -103,8 +117,7 @@ async def run_audio_batch(
     if not all_inputs:
         # No additional processing to perform. Ensure top-level errors list is
         # de-duplicated before returning.
-        unique_errors = list({str(e) for e in batch_result["errors"] if e})
-        batch_result["errors"] = unique_errors
+        batch_result["errors"] = _dedupe_errors_preserve_order(batch_result["errors"])
         return batch_result
 
     # -------------------------------
@@ -210,7 +223,7 @@ async def run_audio_batch(
         batch_result["errors"].extend(processing_output.get("errors", []))
 
         processed_items = processing_output.get("results", [])
-        adapted_processed_items: List[Dict[str, Any]] = []
+        adapted_processed_items: list[dict[str, Any]] = []
         for item in processed_items:
             # Prefer mapping based on the library's processing_source (temp path)
             # but fall back to the original input_ref when no mapping exists.
@@ -253,7 +266,7 @@ async def run_audio_batch(
     elif processing_output is not None:
         # Handle unexpected output format from the library more gracefully.
         logger.error(
-            "process_audio_files returned unexpected format: Type=%s; Value=%s",
+            "process_audio_files returned unexpected format: Type={}; Value={}",
             type(processing_output),
             processing_output,
         )
@@ -312,8 +325,7 @@ async def run_audio_batch(
     batch_result["processed_count"] = final_processed_count
     batch_result["errors_count"] = final_error_count
 
-    unique_errors = list({str(e) for e in batch_result["errors"] if e})
-    batch_result["errors"] = unique_errors
+    batch_result["errors"] = _dedupe_errors_preserve_order(batch_result["errors"])
 
     return batch_result
 

@@ -2,23 +2,15 @@
 # Description: Supertonic ONNX TTS adapter implementation
 #
 import asyncio
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-    VoiceInfo,
-)
+
 from ..streaming_audio_writer import AudioNormalizer
 from ..tts_exceptions import (
     TTSGenerationError,
@@ -31,6 +23,19 @@ from ..tts_exceptions import (
     TTSVoiceNotFoundError,
 )
 from ..tts_validation import validate_tts_request
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+    VoiceInfo,
+)
+
 #
 #######################################################################################################################
 #
@@ -46,7 +51,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
     MAX_TEXT_LENGTH = 15000
     DEFAULT_SAMPLE_RATE = 24000
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
         extras = cfg.get("extra_params", {}) or {}
@@ -54,7 +59,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
         self.onnx_dir = Path(cfg.get("model_path", "models/supertonic/onnx")).expanduser()
         self.voice_styles_dir = Path(extras.get("voice_styles_dir", "models/supertonic/voice_styles")).expanduser()
         self.default_voice = extras.get("default_voice", "supertonic_m1")
-        self.voice_files: Dict[str, str] = extras.get("voice_files", {}) or {}
+        self.voice_files: dict[str, str] = extras.get("voice_files", {}) or {}
         self.default_total_step = int(extras.get("default_total_step", 5))
         self.default_speed = float(extras.get("default_speed", 1.05))
         self.n_test = int(extras.get("n_test", 1))
@@ -74,8 +79,8 @@ class SupertonicOnnxAdapter(TTSAdapter):
 
         self._engine: Optional[Any] = None
         self._load_voice_style = None
-        self._voice_to_path: Dict[str, Path] = {}
-        self._voice_infos: List[VoiceInfo] = []
+        self._voice_to_path: dict[str, Path] = {}
+        self._voice_infos: list[VoiceInfo] = []
         self._audio_normalizer = AudioNormalizer()
         self._engine_lock = asyncio.Lock()
 
@@ -149,6 +154,19 @@ class SupertonicOnnxAdapter(TTSAdapter):
 
         self._engine = engine
         self._load_voice_style = vendor.load_voice_style
+        try:
+            from ..tts_resource_manager import get_resource_manager
+            resource_manager = await get_resource_manager()
+            register_result = resource_manager.register_model(
+                provider=self.PROVIDER_KEY,
+                model_instance=self._engine,
+                cleanup_callback=lambda: setattr(self, "_engine", None),
+                model_key=str(self.onnx_dir),
+            )
+            if asyncio.iscoroutine(register_result):
+                await register_result
+        except Exception:
+            pass
 
         # Sample rate from engine if available
         try:
@@ -170,10 +188,10 @@ class SupertonicOnnxAdapter(TTSAdapter):
         )
         return True
 
-    def _load_voice_mappings(self) -> Tuple[Dict[str, Path], List[VoiceInfo]]:
+    def _load_voice_mappings(self) -> tuple[dict[str, Path], list[VoiceInfo]]:
         """Build mapping of voice IDs to style files and VoiceInfo entries."""
-        voice_map: Dict[str, Path] = {}
-        voices: List[VoiceInfo] = []
+        voice_map: dict[str, Path] = {}
+        voices: list[VoiceInfo] = []
         missing_default = False
 
         for voice_id, filename in self.voice_files.items():
@@ -355,10 +373,7 @@ class SupertonicOnnxAdapter(TTSAdapter):
             )
 
         try:
-            if isinstance(duration, (list, tuple, np.ndarray)):
-                dur_val = float(duration[0])
-            else:
-                dur_val = float(duration)
+            dur_val = float(duration[0]) if isinstance(duration, (list, tuple, np.ndarray)) else float(duration)
             end_idx = int(self.sample_rate * dur_val)
             if end_idx > 0:
                 arr = arr[:end_idx]

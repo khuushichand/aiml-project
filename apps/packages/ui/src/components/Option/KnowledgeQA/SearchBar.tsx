@@ -20,7 +20,15 @@ type SearchBarProps = {
 }
 
 export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
-  const { query, setQuery, search, isSearching, clearResults } = useKnowledgeQA()
+  const {
+    query,
+    setQuery,
+    search,
+    isSearching,
+    clearResults,
+    settings,
+    updateSetting,
+  } = useKnowledgeQA()
   const inputRef = useRef<HTMLInputElement>(null)
   const [placeholderIndex, setPlaceholderIndex] = useState(0)
   const [isFocused, setIsFocused] = useState(false)
@@ -159,12 +167,28 @@ export function SearchBar({ className, autoFocus = true }: SearchBarProps) {
         </button>
       </div>
 
-      {/* Keyboard hint */}
-      <div className="flex justify-center mt-2 text-xs text-text-muted">
-        <span>
+      {/* Keyboard hint + quick controls */}
+      <div className="mt-2 flex items-center justify-between gap-3 text-xs text-text-muted">
+        <span className="truncate">
           Press <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">/</kbd> to focus,{" "}
           <kbd className="px-1.5 py-0.5 bg-muted rounded font-mono">Cmd+K</kbd> for new search
         </span>
+        <button
+          type="button"
+          onClick={() =>
+            updateSetting("enable_web_fallback", !settings.enable_web_fallback)
+          }
+          className={cn(
+            "px-2 py-1 rounded-md border transition-colors whitespace-nowrap",
+            settings.enable_web_fallback
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border hover:bg-muted"
+          )}
+          aria-pressed={settings.enable_web_fallback}
+          title="Toggle web search fallback"
+        >
+          Web search {settings.enable_web_fallback ? "on" : "off"}
+        </button>
       </div>
     </form>
   )

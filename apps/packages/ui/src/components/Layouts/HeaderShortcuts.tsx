@@ -227,7 +227,7 @@ export function HeaderShortcuts({
             ? t("option:header.hideShortcuts", "Hide shortcuts")
             : t("option:header.showShortcuts", "Show shortcuts")}
           {!shortcutsExpanded && (
-            <span className="ml-1.5 text-[10px] font-normal normal-case tracking-normal text-text-subtle">
+            <span className="ml-1.5 text-xs font-normal normal-case tracking-normal text-text-subtle">
               {t("option:header.shortcutsKeyHintInline", "(Press ?)")}
             </span>
           )}

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any
 
 from loguru import logger
 
@@ -53,12 +53,12 @@ class AuthnzUserProviderSecretsRepo:
         user_id: int,
         provider: str,
         encrypted_blob: str,
-        key_hint: Optional[str],
-        metadata: Optional[Dict[str, Any]],
+        key_hint: str | None,
+        metadata: dict[str, Any] | None,
         updated_at: datetime,
-        created_by: Optional[int] = None,
-        updated_by: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        created_by: int | None = None,
+        updated_by: int | None = None,
+    ) -> dict[str, Any]:
         provider_norm = normalize_provider_name(provider)
         metadata_json = json.dumps(metadata) if metadata is not None else None
         try:
@@ -139,7 +139,7 @@ class AuthnzUserProviderSecretsRepo:
         provider: str,
         *,
         include_revoked: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         provider_norm = normalize_provider_name(provider)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -175,7 +175,7 @@ class AuthnzUserProviderSecretsRepo:
         user_id: int,
         *,
         include_revoked: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
             if getattr(self.db_pool, "pool", None) is not None:
@@ -200,7 +200,7 @@ class AuthnzUserProviderSecretsRepo:
                     """,
                     (user_id,),
                 )
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row.keys()} for row in rows]
+            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzUserProviderSecretsRepo.list_secrets_for_user failed: {exc}")
             raise
@@ -210,8 +210,8 @@ class AuthnzUserProviderSecretsRepo:
         user_id: int,
         provider: str,
         *,
-        revoked_by: Optional[int] = None,
-        revoked_at: Optional[datetime] = None,
+        revoked_by: int | None = None,
+        revoked_at: datetime | None = None,
     ) -> bool:
         provider_norm = normalize_provider_name(provider)
         revoked_ts = revoked_at or datetime.now(timezone.utc)

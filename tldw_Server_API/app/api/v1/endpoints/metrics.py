@@ -1,17 +1,29 @@
 # metrics.py
 # Metrics endpoint for Prometheus and health monitoring
 
-from fastapi import APIRouter, Response, HTTPException, status, Depends
-from typing import Dict, Any, Optional
 from datetime import datetime, timezone
+from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 from tldw_Server_API.app.core.Chat.chat_metrics import get_chat_metrics
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
 
 router = APIRouter(tags=["metrics"])
+
+_METRICS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 # Note: Avoid path conflict with the JSON metrics in main.py (`/api/v1/metrics`).
@@ -48,49 +60,23 @@ async def get_prometheus_metrics() -> Response:
                         d = await client.get(f"embeddings:stage:{_st}:drain")
                         _emb.embedding_stage_flag.labels(stage=_st, flag="paused").set(1.0 if str(p).lower() in ("1","true","yes") else 0.0)
                         _emb.embedding_stage_flag.labels(stage=_st, flag="drain").set(1.0 if str(d).lower() in ("1","true","yes") else 0.0)
-                    except Exception:
-                        logger.debug("metrics: failed to refresh stage gauge for %s", _st)
+                    except _METRICS_NONCRITICAL_EXCEPTIONS:
+                        logger.debug("metrics: failed to refresh stage gauge for {}", _st)
                 try:
                     await client.close()
-                except Exception:
+                except _METRICS_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics: failed to close redis client")
-            except Exception:
+            except _METRICS_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics: redis not available for stage flags")
-        except Exception:
+        except _METRICS_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics: embeddings modules not available for import")
         prometheus_text = registry.export_prometheus_format() or ""
         try:
-            from prometheus_client import REGISTRY as PC_REGISTRY, generate_latest as pc_generate_latest
+            from prometheus_client import REGISTRY as PC_REGISTRY
+            from prometheus_client import generate_latest as pc_generate_latest
             prometheus_text = (prometheus_text + "\n" + pc_generate_latest(PC_REGISTRY).decode('utf-8')).strip() + "\n"
-        except Exception:
+        except _METRICS_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics: failed to augment with prometheus_client registry")
-        # Append explicit stage flag gauge lines (best-effort) to satisfy text scrapers
-        try:
-            import tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced as _emb
-            # Read current values via gauge collectors if present; otherwise fetch from Redis directly
-            lines = ["# HELP embedding_stage_flag Per-stage control flags as gauges (1=true,0=false)",
-                     "# TYPE embedding_stage_flag gauge"]
-            try:
-                # Prefer Redis source for authoritative values
-                client = await _emb._get_redis_client()
-                for _st in ("chunking", "embedding", "storage"):
-                    p = await client.get(f"embeddings:stage:{_st}:paused")
-                    d = await client.get(f"embeddings:stage:{_st}:drain")
-                    pv = 1.0 if str(p).lower() in ("1","true","yes") else 0.0
-                    dv = 1.0 if str(d).lower() in ("1","true","yes") else 0.0
-                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"paused\"}} {pv}")
-                    lines.append(f"embedding_stage_flag{{stage=\"{_st}\",flag=\"drain\"}} {dv}")
-                try:
-                    await client.close()
-                except Exception:
-                    logger.debug("metrics: failed closing redis client (gauge lines)")
-            except Exception:
-                # Fallback: if Redis unavailable, skip explicit lines
-                lines = []
-            if lines:
-                prometheus_text = (prometheus_text.rstrip("\n") + "\n" + "\n".join(lines) + "\n")
-        except Exception:
-            logger.debug("metrics: failed to append explicit gauge lines")
         return Response(
             content=prometheus_text,
             media_type="text/plain; version=0.0.4",
@@ -100,18 +86,18 @@ async def get_prometheus_metrics() -> Response:
                 "Expires": "0"
             }
         )
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error exporting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to export metrics"
-        )
+        ) from e
 
 
 @router.get("/metrics/json",
             summary="Get metrics in JSON format",
-            response_model=Dict[str, Any])
-async def get_json_metrics() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def get_json_metrics() -> dict[str, Any]:
     """
     Get all metrics in JSON format.
 
@@ -130,18 +116,18 @@ async def get_json_metrics() -> Dict[str, Any]:
             "active_operations": active_operations,
             "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve metrics"
-        )
+        ) from e
 
 
 @router.get("/metrics/health",
             summary="Health check with metrics",
-            response_model=Dict[str, Any])
-async def health_check_with_metrics() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def health_check_with_metrics() -> dict[str, Any]:
     """
     Health check endpoint with basic metrics.
 
@@ -167,11 +153,11 @@ async def health_check_with_metrics() -> Dict[str, Any]:
             "active_transactions": active["active_transactions"],
             "message": "Service is operational"
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Metrics Health check failed: {e}")
         return {
             "status": "unhealthy",
-            "message": f"Metrics Health check failed: ERROR - SEE LOGS",
+            "message": "Metrics Health check failed: ERROR - SEE LOGS",
             "active_requests": -1,
             "active_streams": -1,
             "active_transactions": -1
@@ -180,8 +166,8 @@ async def health_check_with_metrics() -> Dict[str, Any]:
 
 @router.get("/metrics/chat",
             summary="Get chat-specific metrics",
-            response_model=Dict[str, Any])
-async def get_chat_metrics_endpoint() -> Dict[str, Any]:
+            response_model=dict[str, Any])
+async def get_chat_metrics_endpoint() -> dict[str, Any]:
     """
     Get detailed chat-specific metrics.
 
@@ -222,27 +208,27 @@ async def get_chat_metrics_endpoint() -> Dict[str, Any]:
             "metrics": chat_stats,
             "token_costs": chat_metrics.token_costs  # Model pricing info
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve chat metrics"
-        )
+        ) from e
 
 
 @router.post(
     "/metrics/reset",
-    summary="Reset metrics (admin only)",
-    response_model=Dict[str, str],
+    summary="Reset registry metrics (admin only)",
+    response_model=dict[str, str],
     dependencies=[Depends(require_roles("admin"))],
 )
-async def reset_metrics() -> Dict[str, str]:
+async def reset_metrics() -> dict[str, str]:
     """
-    Reset all metrics to their initial state.
+    Reset registry-backed metrics to their initial state.
 
-    WARNING: This will clear all historical metrics data.
-    This endpoint should be protected with admin authentication
-    in production.
+    WARNING: This clears in-process registry aggregates only. It does not reset
+    Prometheus client metrics or OpenTelemetry exporters.
+    This endpoint should be protected with admin authentication in production.
     """
     try:
         # Reinitialize metrics
@@ -253,19 +239,17 @@ async def reset_metrics() -> Dict[str, str]:
         registry.reset()
 
         # Reset active counters
-        chat_metrics.active_requests = 0
-        chat_metrics.active_streams = 0
-        chat_metrics.active_transactions = 0
+        chat_metrics.reset_active_metrics()
 
         logger.info("Metrics reset by admin")
 
         return {
             "status": "success",
-            "message": "All metrics have been reset"
+            "message": "Registry metrics have been reset"
         }
-    except Exception as e:
+    except _METRICS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error resetting metrics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset metrics"
-        )
+        ) from e

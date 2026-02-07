@@ -108,3 +108,61 @@ async def test_revoke_session_blacklists_tokens(monkeypatch):
     refresh_event = next(evt for evt in revoke_events if evt[4] == "refresh")
     assert access_event[1] == session_record["access_jti"]
     assert refresh_event[1] == session_record["refresh_jti"]
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_user_sessions_returns_count_and_forwards_reason(monkeypatch):
+    settings = Settings(AUTH_MODE="multi_user", JWT_SECRET_KEY="rotation-new-secret-1234567890abcd")
+    manager = SessionManager(settings=settings)
+    manager._initialized = True
+    manager.redis_client = None
+
+    captured: Dict[str, Any] = {}
+
+    class _StubRepo:
+        def __init__(self, _db_pool):
+            return None
+
+        async def revoke_all_sessions_for_user(self, *, user_id: int, except_session_id: Optional[int] = None) -> int:
+            captured["repo_user_id"] = user_id
+            captured["repo_except_session_id"] = except_session_id
+            return 4
+
+    class _StubBlacklistAll:
+        async def revoke_all_user_tokens(
+            self,
+            user_id: int,
+            reason: str = "User requested logout from all devices",
+            revoked_by: Optional[int] = None,
+            ip_address: Optional[str] = None,
+        ) -> int:
+            captured["blacklist_user_id"] = user_id
+            captured["blacklist_reason"] = reason
+            captured["blacklist_revoked_by"] = revoked_by
+            captured["blacklist_ip_address"] = ip_address
+            return 8
+
+    async def _fake_ensure_db_pool():
+        return object()
+
+    monkeypatch.setattr(manager, "_ensure_db_pool", _fake_ensure_db_pool)
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.session_manager.AuthnzSessionsRepo",
+        _StubRepo,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.session_manager.get_token_blacklist",
+        lambda: _StubBlacklistAll(),
+    )
+
+    count = await manager.revoke_all_user_sessions(
+        user_id=999,
+        except_session_id=55,
+        reason="unit-test-revoke-all",
+    )
+
+    assert count == 4
+    assert captured["repo_user_id"] == 999
+    assert captured["repo_except_session_id"] == 55
+    assert captured["blacklist_user_id"] == 999
+    assert captured["blacklist_reason"] == "unit-test-revoke-all"

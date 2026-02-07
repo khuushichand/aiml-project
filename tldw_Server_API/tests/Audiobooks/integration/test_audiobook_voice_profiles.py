@@ -2,7 +2,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints.audiobooks import router as audiobooks_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import router as audiobooks_router
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 pytestmark = pytest.mark.integration

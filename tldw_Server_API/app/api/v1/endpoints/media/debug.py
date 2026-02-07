@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
@@ -33,9 +31,9 @@ async def debug_schema(
             cursor = conn.cursor()
 
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables: List[str] = [row[0] for row in cursor.fetchall()]
+            tables: list[str] = [row[0] for row in cursor.fetchall()]
 
-            def _table_columns(name: str) -> List[str]:
+            def _table_columns(name: str) -> list[str]:
                 try:
                     cursor.execute(f"PRAGMA table_info({name})")
                     return [col[1] for col in cursor.fetchall()]

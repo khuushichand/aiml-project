@@ -2,24 +2,18 @@
 # Description: Base adapter classes and interfaces for TTS providers
 #
 # Imports
+import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import (
-    AsyncGenerator,
-    Dict,
-    List,
-    Optional,
-    Any,
-    Set,
-    Tuple,
-    Union
-)
-import asyncio
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
+
 #
 # Local Imports
 #
@@ -58,16 +52,16 @@ class VoiceInfo:
     age: Optional[str] = None
     description: Optional[str] = None
     preview_url: Optional[str] = None
-    styles: List[str] = field(default_factory=list)
-    use_case: List[str] = field(default_factory=list)
+    styles: list[str] = field(default_factory=list)
+    use_case: list[str] = field(default_factory=list)
 
 @dataclass
 class TTSCapabilities:
     """Capabilities of a TTS provider"""
     provider_name: str
-    supported_languages: Set[str]
-    supported_voices: List[VoiceInfo]
-    supported_formats: Set[AudioFormat]
+    supported_languages: set[str]
+    supported_voices: list[VoiceInfo]
+    supported_formats: set[AudioFormat]
     max_text_length: int
     supports_streaming: bool
     supports_voice_cloning: bool = False
@@ -123,7 +117,7 @@ class TTSRequest:
     provider: Optional[str] = None
     model: Optional[str] = None
     # Multi-speaker dialogue support
-    speakers: Optional[Dict[str, str]] = None  # Speaker ID to voice mapping
+    speakers: Optional[dict[str, str]] = None  # Speaker ID to voice mapping
 
     # Advanced generation parameters (especially for VibeVoice)
     seed: Optional[int] = None  # For reproducible generation
@@ -136,7 +130,7 @@ class TTSRequest:
     # Structured voice settings (e.g., ElevenLabs)
     voice_settings: Optional[VoiceSettings] = None
     # Additional provider-specific parameters
-    extra_params: Dict[str, Any] = field(default_factory=dict)
+    extra_params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # Clamp speed into a broadly accepted range
@@ -174,7 +168,7 @@ class TTSRequest:
             # If coercion fails, leave as-is; validation layer may catch it later
             pass
 
-    def dict(self) -> Dict[str, Any]:
+    def dict(self) -> dict[str, Any]:
         """Return a dictionary representation (compat with tests)."""
         from dataclasses import asdict
         return asdict(self)
@@ -196,7 +190,7 @@ class TTSResponse:
     voice_used: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         # Keep audio_data and audio_content in sync for compatibility
@@ -210,7 +204,7 @@ class TTSResponse:
         elif self.duration is None and self.duration_seconds is not None:
             self.duration = self.duration_seconds
 
-    def dict(self) -> Dict[str, Any]:
+    def dict(self) -> dict[str, Any]:
         from dataclasses import asdict
         return asdict(self)
 
@@ -220,8 +214,10 @@ class TTSAdapter(ABC):
     Abstract base class for TTS provider adapters.
     All TTS providers must implement this interface.
     """
+    # Adapters can opt out of service-level chunking if they handle it internally.
+    handles_text_chunking: bool = False
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize the adapter with configuration.
 
@@ -293,7 +289,7 @@ class TTSAdapter(ABC):
         """
         pass
 
-    async def validate_request(self, request: TTSRequest) -> Tuple[bool, Optional[str]]:
+    async def validate_request(self, request: TTSRequest) -> tuple[bool, Optional[str]]:
         """
         Validate if the request can be handled by this provider.
 
@@ -384,10 +380,7 @@ class TTSAdapter(ABC):
             Converted audio as bytes
         """
         # This will use the existing StreamingAudioWriter
-        from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-            StreamingAudioWriter,
-            AudioNormalizer
-        )
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
@@ -424,7 +417,7 @@ class TTSAdapter(ABC):
         except Exception as e:
             logger.error(f"Error closing {self.provider_name} adapter: {e}")
 
-    async def _cleanup_resources(self):
+    async def _cleanup_resources(self):  # noqa: B027
         """Override this method for adapter-specific cleanup"""
         pass
 
@@ -457,7 +450,7 @@ class TTSAdapter(ABC):
         # Subclasses can override for provider-specific needs
         return text.strip()
 
-    def parse_dialogue(self, text: str) -> List[Tuple[str, str]]:
+    def parse_dialogue(self, text: str) -> list[tuple[str, str]]:
         """
         Parse multi-speaker dialogue from text.
 

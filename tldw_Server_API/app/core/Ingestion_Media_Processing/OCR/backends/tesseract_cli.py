@@ -3,7 +3,6 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 
@@ -22,7 +21,7 @@ class TesseractCLIBackend(OCRBackend):
     def available(cls) -> bool:
         return shutil.which("tesseract") is not None
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         lang = lang or "eng"
         # Write bytes to a temp PNG and call: tesseract input.png stdout -l <lang>
         with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as img_tmp:

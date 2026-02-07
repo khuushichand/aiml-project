@@ -9,6 +9,7 @@ import React, {
   useCallback,
   useMemo,
   useEffect,
+  useRef,
   type ReactNode,
 } from "react"
 import type {
@@ -30,6 +31,17 @@ import {
   type RagPresetName,
 } from "@/services/rag/unified-rag"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
+import { useAntdMessage } from "@/hooks/useAntdMessage"
+import { KNOWLEDGE_QA_KEYWORD } from "./constants"
+
+const LOCAL_THREAD_PREFIX = "local-"
+const DEFAULT_CHARACTER_NAME = "Helpful AI Assistant"
+const KNOWLEDGE_QA_SETTINGS_OVERRIDES: Partial<RagSettings> = {
+  enable_web_fallback: true,
+  parent_context_size: 100,
+  agentic_time_budget_sec: 30,
+  agentic_max_redundancy: 1,
+}
 
 // Initial state
 const initialState: KnowledgeQAState = {
@@ -45,7 +57,7 @@ const initialState: KnowledgeQAState = {
   threads: [],
 
   preset: "balanced",
-  settings: DEFAULT_RAG_SETTINGS,
+  settings: { ...DEFAULT_RAG_SETTINGS, ...KNOWLEDGE_QA_SETTINGS_OVERRIDES },
   expertMode: false,
 
   searchHistory: [],
@@ -54,6 +66,9 @@ const initialState: KnowledgeQAState = {
   settingsPanelOpen: false,
   focusedSourceIndex: null,
 }
+
+const isLocalThreadId = (id: string | null | undefined) =>
+  Boolean(id && id.startsWith(LOCAL_THREAD_PREFIX))
 
 // Action types
 type Action =
@@ -107,12 +122,24 @@ function reducer(state: KnowledgeQAState, action: Action): KnowledgeQAState {
       return { ...state, threads: action.payload }
     case "ADD_THREAD":
       return { ...state, threads: [action.payload, ...state.threads] }
-    case "SET_PRESET":
+    case "SET_PRESET": {
+      const presetSettings =
+        action.payload === "custom"
+          ? state.settings
+          : applyRagPreset(action.payload as Exclude<RagPresetName, "custom">)
       return {
         ...state,
         preset: action.payload,
-        settings: action.payload === "custom" ? state.settings : applyRagPreset(action.payload as Exclude<RagPresetName, "custom">),
+        settings:
+          action.payload === "custom"
+            ? state.settings
+            : {
+                ...presetSettings,
+                ...KNOWLEDGE_QA_SETTINGS_OVERRIDES,
+                enable_web_fallback: state.settings.enable_web_fallback,
+              },
       }
+    }
     case "SET_SETTINGS":
       return { ...state, settings: action.payload, preset: "custom" }
     case "UPDATE_SETTING":
@@ -161,85 +188,157 @@ function parseCitations(answer: string, results: RagResult[]): CitationRef[] {
 // Provider component
 export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const message = useAntdMessage()
+  const defaultCharacterIdRef = useRef<number | null>(null)
+  const defaultCharacterPromiseRef = useRef<Promise<number | null> | null>(null)
 
   // Initialize client
   useEffect(() => {
     tldwClient.initialize().catch(console.error)
   }, [])
 
+  const resolveDefaultCharacterId = useCallback(async (): Promise<number | null> => {
+    if (defaultCharacterIdRef.current != null) {
+      return defaultCharacterIdRef.current
+    }
+    if (defaultCharacterPromiseRef.current) {
+      return await defaultCharacterPromiseRef.current
+    }
+
+    const resolver = (async () => {
+      try {
+        await tldwClient.initialize()
+        const searchResults = await tldwClient
+          .searchCharacters(DEFAULT_CHARACTER_NAME, { limit: 5 })
+          .catch(() => [])
+        const match =
+          searchResults.find(
+            (c: any) =>
+              typeof c?.name === "string" &&
+              c.name.toLowerCase() === DEFAULT_CHARACTER_NAME.toLowerCase()
+          ) || searchResults[0]
+        if (match && typeof match.id === "number") {
+          defaultCharacterIdRef.current = match.id
+          return match.id
+        }
+
+        const listResults = await tldwClient.listCharacters({ limit: 10 }).catch(() => [])
+        const fallback =
+          listResults.find(
+            (c: any) =>
+              typeof c?.name === "string" &&
+              c.name.toLowerCase() === DEFAULT_CHARACTER_NAME.toLowerCase()
+          ) || listResults[0]
+        if (fallback && typeof fallback.id === "number") {
+          defaultCharacterIdRef.current = fallback.id
+          return fallback.id
+        }
+      } catch (error) {
+        console.warn("Failed to resolve default character:", error)
+      }
+      return null
+    })()
+
+    defaultCharacterPromiseRef.current = resolver
+    try {
+      return await resolver
+    } finally {
+      defaultCharacterPromiseRef.current = null
+    }
+  }, [])
+
+  const tagConversationKeyword = useCallback(
+    async (conversationId: string, version?: number | null): Promise<void> => {
+      if (!conversationId || version == null) return
+      try {
+        const conversationResponse = await tldwClient.fetchWithAuth(
+          `/api/v1/chat/conversations/${conversationId}`
+        )
+        const conversationData = await conversationResponse.json()
+        const currentKeywords = Array.isArray(conversationData?.keywords)
+          ? conversationData.keywords
+          : Array.isArray(conversationData?.conversation?.keywords)
+            ? conversationData.conversation.keywords
+            : []
+        const mergedKeywords: string[] = []
+        const seenKeywords = new Set<string>()
+        for (const keyword of [...currentKeywords, KNOWLEDGE_QA_KEYWORD]) {
+          const normalized = String(keyword ?? "").trim()
+          if (!normalized) continue
+          const normalizedKey = normalized.toLowerCase()
+          if (seenKeywords.has(normalizedKey)) continue
+          seenKeywords.add(normalizedKey)
+          mergedKeywords.push(normalized)
+        }
+
+        await tldwClient.fetchWithAuth(`/api/v1/chat/conversations/${conversationId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            version,
+            keywords: mergedKeywords,
+          }),
+        })
+      } catch (error) {
+        console.warn("Failed to tag Knowledge QA conversation:", error)
+      }
+    },
+    []
+  )
+
   // Actions
   const setQuery = useCallback((query: string) => {
     dispatch({ type: "SET_QUERY", payload: query })
   }, [])
 
-  const search = useCallback(async () => {
-    const trimmedQuery = state.query.trim()
-    if (!trimmedQuery) return
-
-    dispatch({ type: "SET_SEARCHING", payload: true })
-
+  const createNewThread = useCallback(async (title?: string): Promise<string> => {
     try {
-      const { options } = buildRagSearchRequest({
-        ...state.settings,
-        query: trimmedQuery,
-      })
-
-      const response = await tldwClient.ragSearch(trimmedQuery, options)
-
-      // Extract results from various response formats
-      const results: RagResult[] =
-        response?.results || response?.documents || response?.docs || []
-
-      // Extract generated answer
-      const answer =
-        response?.generated_answer || response?.answer || response?.response || null
-
-      // Parse citations from answer
-      const citations = answer ? parseCitations(answer, results) : []
-
-      dispatch({
-        type: "SET_RESULTS",
-        payload: { results, answer, citations },
-      })
-
-      // Add to search history
-      const historyItem: SearchHistoryItem = {
-        id: crypto.randomUUID(),
-        query: trimmedQuery,
-        timestamp: new Date().toISOString(),
-        sourcesCount: results.length,
-        hasAnswer: !!answer,
-        preset: state.preset,
+      const characterId = await resolveDefaultCharacterId()
+      if (!characterId) {
+        throw new Error("Default character unavailable")
       }
-      dispatch({ type: "ADD_HISTORY_ITEM", payload: historyItem })
-    } catch (error) {
-      console.error("Search failed:", error)
-      dispatch({
-        type: "SET_ERROR",
-        payload: error instanceof Error ? error.message : "Search failed",
-      })
-    }
-  }, [state.query, state.settings, state.preset])
 
-  const clearResults = useCallback(() => {
-    dispatch({ type: "CLEAR_RESULTS" })
-  }, [])
+      const resolvedTitle = title?.trim()
+        ? title.trim()
+        : `Knowledge QA - ${new Date().toLocaleDateString()}`
 
-  const createNewThread = useCallback(async (): Promise<string> => {
-    try {
       // Create a new conversation via API
       const response = await tldwClient.createChat({
-        title: `Knowledge QA - ${new Date().toLocaleDateString()}`,
+        character_id: characterId,
+        title: resolvedTitle,
+        state: "in-progress",
         source: "knowledge_qa",
       })
 
-      const threadId = response?.id || crypto.randomUUID()
+      const threadId = response?.id
+      if (!threadId) {
+        throw new Error("Chat creation returned no ID")
+      }
+
+      const version =
+        typeof response?.version === "number" ? response.version : null
+      if (version != null) {
+        await tagConversationKeyword(String(threadId), version)
+      } else {
+        try {
+          const current = await tldwClient.getChat(String(threadId))
+          const currentVersion =
+            typeof current?.version === "number" ? current.version : null
+          if (currentVersion != null) {
+            await tagConversationKeyword(String(threadId), currentVersion)
+          }
+        } catch (error) {
+          console.warn("Failed to fetch conversation version for tagging:", error)
+        }
+      }
+      const normalizedState: "in-progress" | "resolved" =
+        response?.state === "resolved" ? "resolved" : "in-progress"
       const newThread: KnowledgeQAThread = {
         id: threadId,
-        title: response?.title || "New Knowledge QA Thread",
+        title: response?.title || resolvedTitle || "New Knowledge QA Thread",
         createdAt: new Date().toISOString(),
         lastModifiedAt: new Date().toISOString(),
-        state: "in-progress",
+        state: normalizedState,
         messageCount: 0,
         source: "knowledge_qa",
       }
@@ -252,15 +351,238 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Failed to create thread:", error)
       // Return a local ID as fallback
-      const localId = crypto.randomUUID()
+      const localId = `${LOCAL_THREAD_PREFIX}${crypto.randomUUID()}`
       dispatch({ type: "SET_THREAD_ID", payload: localId })
       dispatch({ type: "SET_MESSAGES", payload: [] })
       return localId
     }
+  }, [resolveDefaultCharacterId, tagConversationKeyword])
+
+  const persistChatMessage = useCallback(
+    async (
+      threadId: string,
+      role: "user" | "assistant" | "system",
+      content: string,
+      parentMessageId?: string | null
+    ): Promise<{ id: string; timestamp?: string } | null> => {
+      if (!threadId || isLocalThreadId(threadId)) return null
+      try {
+        const payload: Record<string, any> = { role, content }
+        if (parentMessageId) {
+          payload.parent_message_id = parentMessageId
+        }
+        const response = await tldwClient.addChatMessage(threadId, payload)
+        const id = response?.id != null ? String(response.id) : null
+        if (!id) return null
+        return {
+          id,
+          timestamp: response?.created_at ? String(response.created_at) : undefined,
+        }
+      } catch (error) {
+        console.warn("Failed to persist chat message:", error)
+        return null
+      }
+    },
+    []
+  )
+
+  const persistRagContext = useCallback(
+    async (messageId: string, context: RagContextData): Promise<boolean> => {
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/chat/messages/${messageId}/rag-context`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message_id: messageId,
+              rag_context: context,
+            }),
+          }
+        )
+        if (!response.ok) {
+          let errorDetails: string | unknown = ""
+          try {
+            errorDetails = await response.text()
+          } catch (textError) {
+            errorDetails = textError
+          }
+          console.error("Failed to persist RAG context:", {
+            status: response.status,
+            error: errorDetails,
+          })
+          return false
+        }
+        const result = await response.json()
+        return result?.success ?? false
+      } catch (error) {
+        console.error("Failed to persist RAG context:", error)
+        return false
+      }
+    },
+    []
+  )
+
+  const buildRagContext = useCallback(
+    (question: string, results: RagResult[], answer: string | null): RagContextData => ({
+      search_query: question,
+      search_mode: state.settings.search_mode,
+      settings_snapshot: {
+        top_k: state.settings.top_k,
+        enable_reranking: state.settings.enable_reranking,
+        enable_citations: state.settings.enable_citations,
+        enable_web_fallback: state.settings.enable_web_fallback,
+        web_fallback_threshold: state.settings.web_fallback_threshold,
+        web_search_engine: state.settings.web_search_engine,
+        web_fallback_result_count: state.settings.web_fallback_result_count,
+        web_fallback_merge_strategy: state.settings.web_fallback_merge_strategy,
+      },
+      retrieved_documents: results.map((r) => ({
+        id: r.id,
+        source_type: r.metadata?.source_type,
+        title: r.metadata?.title,
+        score: r.score,
+        chunk_id: r.metadata?.chunk_id,
+        excerpt: r.content || r.text || r.chunk,
+        url: r.metadata?.url,
+        page_number: r.metadata?.page_number,
+      })),
+      generated_answer: answer || undefined,
+      timestamp: new Date().toISOString(),
+    }),
+    [state.settings]
+  )
+
+  const runKnowledgeQuery = useCallback(
+    async (question: string, addToHistory: boolean) => {
+      const trimmedQuery = question.trim()
+      if (!trimmedQuery) return
+
+      dispatch({ type: "SET_SEARCHING", payload: true })
+
+      let threadId = state.currentThreadId
+      if (!threadId) {
+        threadId = await createNewThread(trimmedQuery)
+      }
+
+      const userTimestamp = new Date().toISOString()
+      const persistedUser = threadId
+        ? await persistChatMessage(threadId, "user", trimmedQuery, null)
+        : null
+      const userMessageId = persistedUser?.id || crypto.randomUUID()
+
+      if (threadId) {
+        const userMessage: KnowledgeQAMessage = {
+          id: userMessageId,
+          conversationId: threadId,
+          role: "user",
+          content: trimmedQuery,
+          timestamp: persistedUser?.timestamp || userTimestamp,
+        }
+        dispatch({ type: "ADD_MESSAGE", payload: userMessage })
+      }
+
+      try {
+        const { options } = buildRagSearchRequest({
+          ...state.settings,
+          query: trimmedQuery,
+          enable_web_fallback: state.settings.enable_web_fallback,
+        })
+
+        const response = await tldwClient.ragSearch(trimmedQuery, options)
+
+        // Extract results from various response formats
+        const results: RagResult[] =
+          response?.results || response?.documents || response?.docs || []
+
+        // Extract generated answer
+        const answer =
+          response?.generated_answer || response?.answer || response?.response || null
+
+        // Parse citations from answer
+        const citations = answer ? parseCitations(answer, results) : []
+
+        dispatch({
+          type: "SET_RESULTS",
+          payload: { results, answer, citations },
+        })
+
+        let assistantMessageId: string | null = null
+        const ragContext = buildRagContext(trimmedQuery, results, answer)
+
+        if (answer && threadId) {
+          const persistedAssistant = await persistChatMessage(
+            threadId,
+            "assistant",
+            answer,
+            persistedUser?.id
+          )
+          assistantMessageId = persistedAssistant?.id || crypto.randomUUID()
+          const assistantMessage: KnowledgeQAMessage = {
+            id: assistantMessageId,
+            conversationId: threadId,
+            role: "assistant",
+            content: answer,
+            timestamp: persistedAssistant?.timestamp || new Date().toISOString(),
+            ragContext,
+          }
+          dispatch({ type: "ADD_MESSAGE", payload: assistantMessage })
+
+          if (persistedAssistant?.id) {
+            await persistRagContext(persistedAssistant.id, ragContext)
+          }
+        }
+
+        if (addToHistory) {
+          const historyItem: SearchHistoryItem = {
+            id: crypto.randomUUID(),
+            query: trimmedQuery,
+            timestamp: new Date().toISOString(),
+            sourcesCount: results.length,
+            hasAnswer: !!answer,
+            preset: state.preset,
+            conversationId: threadId && !isLocalThreadId(threadId) ? threadId : undefined,
+            messageId: assistantMessageId || undefined,
+            keywords: [KNOWLEDGE_QA_KEYWORD],
+          }
+          dispatch({ type: "ADD_HISTORY_ITEM", payload: historyItem })
+        }
+      } catch (error) {
+        console.error("Search failed:", error)
+        dispatch({
+          type: "SET_ERROR",
+          payload: error instanceof Error ? error.message : "Search failed",
+        })
+      }
+    },
+    [
+      state.currentThreadId,
+      state.settings,
+      state.preset,
+      createNewThread,
+      persistChatMessage,
+      persistRagContext,
+      buildRagContext,
+    ]
+  )
+
+  const search = useCallback(async () => {
+    await runKnowledgeQuery(state.query, true)
+  }, [state.query, runKnowledgeQuery])
+
+  const clearResults = useCallback(() => {
+    dispatch({ type: "CLEAR_RESULTS" })
+    dispatch({ type: "SET_THREAD_ID", payload: null })
+    dispatch({ type: "SET_MESSAGES", payload: [] })
   }, [])
 
   const selectThread = useCallback(async (threadId: string) => {
     dispatch({ type: "SET_THREAD_ID", payload: threadId })
+
+    if (isLocalThreadId(threadId)) {
+      dispatch({ type: "SET_MESSAGES", payload: [] })
+      return
+    }
 
     try {
       // Load messages with RAG context
@@ -277,84 +599,9 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
 
   const askFollowUp = useCallback(
     async (question: string) => {
-      if (!question.trim()) return
-
-      // Ensure we have a thread
-      let threadId = state.currentThreadId
-      if (!threadId) {
-        threadId = await createNewThread()
-      }
-
-      // Add user message
-      const userMessage: KnowledgeQAMessage = {
-        id: crypto.randomUUID(),
-        conversationId: threadId,
-        role: "user",
-        content: question,
-        timestamp: new Date().toISOString(),
-      }
-      dispatch({ type: "ADD_MESSAGE", payload: userMessage })
-
-      dispatch({ type: "SET_SEARCHING", payload: true })
-
-      try {
-        // Search for context
-        const { options } = buildRagSearchRequest({
-          ...state.settings,
-          query: question,
-        })
-
-        const response = await tldwClient.ragSearch(question, options)
-        const results: RagResult[] =
-          response?.results || response?.documents || response?.docs || []
-        const answer =
-          response?.generated_answer || response?.answer || response?.response || null
-        const citations = answer ? parseCitations(answer, results) : []
-
-        dispatch({
-          type: "SET_RESULTS",
-          payload: { results, answer, citations },
-        })
-
-        // Add assistant message with RAG context
-        if (answer) {
-          const assistantMessage: KnowledgeQAMessage = {
-            id: crypto.randomUUID(),
-            conversationId: threadId,
-            role: "assistant",
-            content: answer,
-            timestamp: new Date().toISOString(),
-            ragContext: {
-              search_query: question,
-              search_mode: state.settings.search_mode,
-              settings_snapshot: {
-                top_k: state.settings.top_k,
-                enable_reranking: state.settings.enable_reranking,
-                enable_citations: state.settings.enable_citations,
-              },
-              retrieved_documents: results.map((r) => ({
-                id: r.id,
-                source_type: r.metadata?.source_type,
-                title: r.metadata?.title,
-                score: r.score,
-                excerpt: r.content || r.text || r.chunk,
-                url: r.metadata?.url,
-              })),
-              generated_answer: answer,
-              timestamp: new Date().toISOString(),
-            },
-          }
-          dispatch({ type: "ADD_MESSAGE", payload: assistantMessage })
-        }
-      } catch (error) {
-        console.error("Follow-up failed:", error)
-        dispatch({
-          type: "SET_ERROR",
-          payload: error instanceof Error ? error.message : "Follow-up failed",
-        })
-      }
+      await runKnowledgeQuery(question, false)
     },
-    [state.currentThreadId, state.settings, createNewThread]
+    [runKnowledgeQuery]
   )
 
   const setPreset = useCallback((preset: RagPresetName) => {
@@ -366,7 +613,7 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const resetSettings = useCallback(() => {
-    dispatch({ type: "SET_SETTINGS", payload: DEFAULT_RAG_SETTINGS })
+    dispatch({ type: "SET_SETTINGS", payload: { ...DEFAULT_RAG_SETTINGS, ...KNOWLEDGE_QA_SETTINGS_OVERRIDES } })
     dispatch({ type: "SET_PRESET", payload: "balanced" })
   }, [])
 
@@ -381,6 +628,92 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
       if (stored) {
         const history = JSON.parse(stored) as SearchHistoryItem[]
         dispatch({ type: "SET_SEARCH_HISTORY", payload: history })
+      }
+      // Best-effort: merge server conversation history for cross-session continuity
+      try {
+        const response = await tldwClient.fetchWithAuth(
+          `/api/v1/chat/conversations?order_by=recency&limit=50&keywords=${encodeURIComponent(
+            KNOWLEDGE_QA_KEYWORD
+          )}`
+        )
+        if (response.ok) {
+          const data = await response.json()
+          const items: any[] = Array.isArray(data)
+            ? data
+            : data?.items || data?.conversations || data?.chats || data?.results || []
+          const serverHistory: SearchHistoryItem[] = items
+            .map((conv) => {
+              const id =
+                conv?.id ||
+                conv?.conversation_id ||
+                conv?.chat_id ||
+                conv?.chatId
+              if (!id) return null
+              const keywords = Array.isArray(conv?.keywords) ? conv.keywords : []
+              const hasKeyword = keywords.some(
+                (kw: string) => String(kw).toLowerCase() === KNOWLEDGE_QA_KEYWORD.toLowerCase()
+              )
+              if (!hasKeyword) return null
+              const title = typeof conv?.title === "string" ? conv.title : "Knowledge QA"
+              const lastModified =
+                conv?.last_modified ||
+                conv?.lastModified ||
+                conv?.last_modified_at ||
+                conv?.lastModifiedAt ||
+                conv?.created_at ||
+                conv?.createdAt ||
+                new Date().toISOString()
+              const messageCount =
+                typeof conv?.message_count === "number"
+                  ? conv.message_count
+                  : typeof conv?.messageCount === "number"
+                    ? conv.messageCount
+                    : 0
+              return {
+                id: String(id),
+                query: title,
+                timestamp: new Date(lastModified).toISOString(),
+                sourcesCount: messageCount,
+                hasAnswer: messageCount >= 2,
+                conversationId: String(id),
+                keywords,
+              } as SearchHistoryItem
+            })
+            .filter(Boolean) as SearchHistoryItem[]
+
+          if (serverHistory.length > 0) {
+            const storedItems: SearchHistoryItem[] = stored
+              ? (JSON.parse(stored) as SearchHistoryItem[])
+              : []
+            const mergedMap = new Map<string, SearchHistoryItem>()
+            for (const item of storedItems) {
+              const itemKeywords = Array.isArray(item.keywords) ? item.keywords : []
+              const hasKeyword = itemKeywords.some(
+                (kw) => String(kw).toLowerCase() === KNOWLEDGE_QA_KEYWORD.toLowerCase()
+              )
+              if (!hasKeyword) continue
+              const key = item.conversationId
+                ? `conv:${item.conversationId}`
+                : `query:${item.query}`
+              mergedMap.set(key, item)
+            }
+            for (const item of serverHistory) {
+              const key = item.conversationId
+                ? `conv:${item.conversationId}`
+                : `query:${item.query}`
+              if (!mergedMap.has(key)) {
+                mergedMap.set(key, item)
+              }
+            }
+            const merged = Array.from(mergedMap.values()).sort(
+              (a, b) =>
+                new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            )
+            dispatch({ type: "SET_SEARCH_HISTORY", payload: merged })
+          }
+        }
+      } catch {
+        // ignore server history fetch failures
       }
     } catch (error) {
       console.error("Failed to load search history:", error)
@@ -400,20 +733,76 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
     [selectThread]
   )
 
-  const deleteHistoryItem = useCallback(async (id: string) => {
-    dispatch({ type: "REMOVE_HISTORY_ITEM", payload: id })
-    // Also remove from local storage
-    try {
-      const stored = localStorage.getItem("knowledge_qa_history")
-      if (stored) {
-        const history = JSON.parse(stored) as SearchHistoryItem[]
-        const updated = history.filter((h) => h.id !== id)
-        localStorage.setItem("knowledge_qa_history", JSON.stringify(updated))
+  const deleteHistoryItem = useCallback(
+    async (id: string) => {
+      const item = state.searchHistory.find((h) => h.id === id)
+      const conversationId = item?.conversationId
+
+      const toastKey = `knowledge-qa-delete-${id}`
+      const attemptServerDelete = async () => {
+        try {
+          await tldwClient.deleteChat(conversationId as string)
+          message.open({
+            key: toastKey,
+            type: "success",
+            content: "Deleted from server history.",
+            duration: 2.5,
+          })
+          return true
+        } catch (error) {
+          console.warn("Failed to delete Knowledge QA conversation:", error)
+          message.open({
+            key: toastKey,
+            type: "error",
+            duration: 4,
+            content: (
+              <span className="inline-flex items-center gap-2">
+                <span>Failed to delete server history.</span>
+                <button
+                  className="text-primary underline"
+                  onClick={() => {
+                    attemptServerDelete().catch(() => undefined)
+                  }}
+                >
+                  Retry
+                </button>
+              </span>
+            ),
+            className: "max-w-sm",
+          })
+          return false
+        }
       }
-    } catch (error) {
-      console.error("Failed to delete history item:", error)
-    }
-  }, [])
+
+      if (conversationId && !isLocalThreadId(conversationId)) {
+        const ok = await attemptServerDelete()
+        if (!ok) {
+          return
+        }
+      } else {
+        message.open({
+          key: toastKey,
+          type: "success",
+          content: "Removed from local history.",
+          duration: 2,
+        })
+      }
+
+      dispatch({ type: "REMOVE_HISTORY_ITEM", payload: id })
+      // Also remove from local storage
+      try {
+        const stored = localStorage.getItem("knowledge_qa_history")
+        if (stored) {
+          const history = JSON.parse(stored) as SearchHistoryItem[]
+          const updated = history.filter((h) => h.id !== id)
+          localStorage.setItem("knowledge_qa_history", JSON.stringify(updated))
+        }
+      } catch (error) {
+        console.error("Failed to delete history item:", error)
+      }
+    },
+    [message, state.searchHistory]
+  )
 
   const setSettingsPanelOpen = useCallback((open: boolean) => {
     dispatch({ type: "SET_SETTINGS_PANEL_OPEN", payload: open })
@@ -426,30 +815,6 @@ export function KnowledgeQAProvider({ children }: { children: ReactNode }) {
   const focusSource = useCallback((index: number | null) => {
     dispatch({ type: "SET_FOCUSED_SOURCE", payload: index })
   }, [])
-
-  const persistRagContext = useCallback(
-    async (messageId: string, context: RagContextData): Promise<boolean> => {
-      try {
-        const response = await tldwClient.fetchWithAuth(
-          `/api/v1/chat/messages/${messageId}/rag-context`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              message_id: messageId,
-              rag_context: context,
-            }),
-          }
-        )
-        const result = await response.json()
-        return result?.success ?? false
-      } catch (error) {
-        console.error("Failed to persist RAG context:", error)
-        return false
-      }
-    },
-    []
-  )
 
   const scrollToSource = useCallback((index: number) => {
     const element = document.getElementById(`source-card-${index}`)

@@ -1,42 +1,46 @@
+from typing import Any, Optional
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
-from typing import Any, Dict, List, Optional
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
-    require_roles,
     require_permissions,
+    require_roles,
 )
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.claims_schemas import (
+    ClaimNotificationResponse,
+    ClaimNotificationsAckRequest,
+    ClaimNotificationsDigestResponse,
     ClaimReviewBulkRequest,
     ClaimReviewRequest,
     ClaimReviewRuleCreate,
     ClaimReviewRuleUpdate,
-    ClaimNotificationResponse,
-    ClaimNotificationsAckRequest,
-    ClaimNotificationsDigestResponse,
     ClaimsAlertConfigCreate,
     ClaimsAlertConfigResponse,
     ClaimsAlertConfigUpdate,
     ClaimsAnalyticsDashboardResponse,
+    ClaimsAnalyticsExportListResponse,
     ClaimsAnalyticsExportRequest,
     ClaimsAnalyticsExportResponse,
-    ClaimsAnalyticsExportListResponse,
-    ClaimsExtractorCatalogResponse,
-    ClaimsReviewExtractorMetricsResponse,
     ClaimsClusterLinkCreate,
     ClaimsClusterLinkResponse,
-    ClaimsSearchResponse,
+    ClaimsExtractorCatalogResponse,
     ClaimsMonitoringSettingsResponse,
     ClaimsMonitoringSettingsUpdate,
+    ClaimsReviewExtractorMetricsResponse,
+    ClaimsSearchResponse,
     ClaimsSettingsResponse,
     ClaimsSettingsUpdate,
     ClaimUpdateRequest,
+    FVASettingsResponse,
+    FVAVerifyRequest,
+    FVAVerifyResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Claims_Extraction import claims_service
 from tldw_Server_API.app.core.Claims_Extraction.claims_rebuild_service import get_claims_rebuild_service
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
@@ -47,7 +51,7 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 @router.get("/status")
 def claims_rebuild_status(
     _principal: AuthPrincipal = Depends(require_roles("admin")),  # noqa: B008
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return statistics about the claims rebuild worker. Admin only."""
     return claims_service.claims_rebuild_status(
         rebuild_service=get_claims_rebuild_service(),
@@ -67,7 +71,7 @@ def list_all_claims(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List claims across accessible media for the current user."""
     return claims_service.list_all_claims(
         media_id=media_id,
@@ -84,7 +88,7 @@ def list_all_claims(
     )
 
 
-@router.get("/notifications", response_model=List[ClaimNotificationResponse])
+@router.get("/notifications", response_model=list[ClaimNotificationResponse])
 def list_claim_notifications(
     kind: Optional[str] = None,
     target_user_id: Optional[str] = None,
@@ -98,7 +102,7 @@ def list_claim_notifications(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List claim notifications visible to the caller."""
     return claims_service.list_claim_notifications(
         kind=kind,
@@ -132,7 +136,7 @@ def claim_notifications_digest(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return aggregated counts and optional items for claim notifications."""
     return claims_service.claim_notifications_digest(
         kind=kind,
@@ -159,7 +163,7 @@ def claim_notifications_ack(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Mark claim notifications as delivered."""
     return claims_service.mark_claim_notifications_delivered(
         ids=payload.ids,
@@ -176,7 +180,7 @@ def evaluate_watchlist_notifications(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Evaluate watchlist cluster subscriptions and emit notifications."""
     return claims_service.evaluate_watchlist_cluster_notifications(
         user_id=user_id,
@@ -237,13 +241,13 @@ def update_claims_monitoring_config(
     )
 
 
-@router.get("/alerts", response_model=List[ClaimsAlertConfigResponse])
+@router.get("/alerts", response_model=list[ClaimsAlertConfigResponse])
 def list_claims_alerts(
     user_id: Optional[int] = None,
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[ClaimsAlertConfigResponse]:
+) -> list[ClaimsAlertConfigResponse]:
     """List claims alert configs for the current user (admin can override user_id)."""
     return claims_service.list_claims_alerts(
         user_id=user_id,
@@ -295,7 +299,7 @@ def delete_claims_alert(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete a claims alert config."""
     return claims_service.delete_claims_alert(
         config_id=config_id,
@@ -313,7 +317,7 @@ def evaluate_claims_alerts(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Evaluate claims alert ratios and optionally dispatch notifications."""
     return claims_service.evaluate_claims_alerts(
         window_sec=window_sec,
@@ -328,7 +332,7 @@ def evaluate_claims_alerts(
 @router.get("/rebuild/health")
 def claims_rebuild_health(
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return health for the claims rebuild worker."""
     return claims_service.claims_rebuild_health(principal)
 
@@ -347,7 +351,7 @@ def get_review_queue(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return claims queued for review."""
     return claims_service.get_review_queue(
         status_filter=status_filter,
@@ -374,7 +378,7 @@ async def review_claim(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Update claim review status and notes."""
     return await claims_service.review_claim(
         claim_id=claim_id,
@@ -394,7 +398,7 @@ def get_claim_review_history(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return review history for a claim."""
     return claims_service.get_claim_review_history(
         claim_id=claim_id,
@@ -413,7 +417,7 @@ def bulk_review_claims(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Bulk review update (admin only)."""
     return claims_service.bulk_review_claims(
         payload=payload.model_dump(),
@@ -432,7 +436,7 @@ def list_review_rules(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List claim review rules."""
     return claims_service.list_review_rules(
         user_id=user_id,
@@ -450,7 +454,7 @@ def create_review_rule(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a claim review rule."""
     return claims_service.create_review_rule(
         payload=payload.model_dump(exclude_unset=True),
@@ -468,7 +472,7 @@ def update_review_rule(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Update a claim review rule."""
     return claims_service.update_review_rule(
         rule_id=rule_id,
@@ -485,7 +489,7 @@ def delete_review_rule(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete a claim review rule."""
     return claims_service.delete_review_rule(
         rule_id=rule_id,
@@ -499,7 +503,7 @@ def delete_review_rule(
 def review_analytics(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return summary review analytics."""
     return claims_service.review_analytics(principal, db)
 
@@ -507,7 +511,7 @@ def review_analytics(
 @router.get("/extractors", response_model=ClaimsExtractorCatalogResponse)
 def list_claims_extractors(
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return the available claims extractor catalog."""
     return claims_service.list_claims_extractors(principal)
 
@@ -524,7 +528,7 @@ def list_review_metrics(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return daily review metrics grouped by extractor."""
     return claims_service.list_claims_review_metrics(
         start_date=start_date,
@@ -547,7 +551,7 @@ def claims_dashboard_analytics(
     baseline_sec: int = Query(86400, ge=60, le=2592000),
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return dashboard-ready claims analytics."""
     return claims_service.claims_dashboard_analytics(
         window_days=window_days,
@@ -584,7 +588,7 @@ def list_claims_analytics_exports(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """List available claims analytics exports."""
     return claims_service.list_claims_analytics_exports(
         limit=limit,
@@ -629,7 +633,7 @@ def list_claim_clusters(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List cluster summaries, optionally filtered by timeframe or keyword."""
     return claims_service.list_claim_clusters(
         limit=limit,
@@ -654,7 +658,7 @@ def rebuild_claim_clusters(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rebuild claim clusters using stored embeddings."""
     return claims_service.rebuild_claim_clusters(
         min_size=min_size,
@@ -673,7 +677,7 @@ def get_claim_cluster(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a cluster summary."""
     return claims_service.get_claim_cluster(
         cluster_id=cluster_id,
@@ -683,14 +687,14 @@ def get_claim_cluster(
     )
 
 
-@router.get("/clusters/{cluster_id}/links", response_model=List[ClaimsClusterLinkResponse])
+@router.get("/clusters/{cluster_id}/links", response_model=list[ClaimsClusterLinkResponse])
 def list_claim_cluster_links(
     cluster_id: int,
     direction: str = Query("both", pattern="^(both|inbound|outbound|parent|child)$"),
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List cluster relationships."""
     return claims_service.list_claim_cluster_links(
         cluster_id=cluster_id,
@@ -708,7 +712,7 @@ def create_claim_cluster_link(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a cluster relationship."""
     return claims_service.create_claim_cluster_link(
         cluster_id=cluster_id,
@@ -726,7 +730,7 @@ def delete_claim_cluster_link(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Delete a cluster relationship."""
     return claims_service.delete_claim_cluster_link(
         cluster_id=cluster_id,
@@ -745,7 +749,7 @@ def list_claim_cluster_members(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return cluster members."""
     return claims_service.list_claim_cluster_members(
         cluster_id=cluster_id,
@@ -765,7 +769,7 @@ def claim_cluster_timeline(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return aggregated cluster timeline."""
     return claims_service.claim_cluster_timeline(
         cluster_id=cluster_id,
@@ -785,7 +789,7 @@ def claim_cluster_evidence(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return aggregated evidence for a cluster."""
     return claims_service.claim_cluster_evidence(
         cluster_id=cluster_id,
@@ -806,7 +810,7 @@ def search_claims(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Search claims using the FTS index."""
     return claims_service.search_claims(
         query=q,
@@ -852,7 +856,7 @@ def get_claim_item(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Fetch a single claim by id."""
     return claims_service.get_claim_item(
         claim_id=claim_id,
@@ -871,7 +875,7 @@ async def update_claim_item(
     principal: AuthPrincipal = Depends(get_auth_principal),
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Update a claim entry."""
     return await claims_service.update_claim_item(
         claim_id=claim_id,
@@ -889,7 +893,7 @@ def rebuild_claims(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Enqueue a claims rebuild for a media item."""
     return claims_service.rebuild_claims(
         media_id=media_id,
@@ -906,7 +910,7 @@ def rebuild_all_media(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Enqueue rebuild tasks for all media based on policy."""
     return claims_service.rebuild_all_media(
         policy=policy,
@@ -922,10 +926,70 @@ def rebuild_claims_fts(
     user_id: Optional[int] = None,
     current_user: User = Depends(get_request_user),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Rebuild the claims FTS table."""
     return claims_service.rebuild_claims_fts(
         user_id=user_id,
         current_user=current_user,
         db=db,
     )
+
+
+# =============================================================================
+# FVA (Falsification-Verification Alignment) Endpoints
+# =============================================================================
+
+
+@router.post("/verify/fva", response_model=FVAVerifyResponse)
+async def verify_claims_fva(
+    payload: FVAVerifyRequest,
+    user_id: Optional[int] = None,
+    principal: AuthPrincipal = Depends(get_auth_principal),
+    current_user: User = Depends(get_request_user),
+    db: MediaDatabase = Depends(get_media_db_for_user),
+) -> dict[str, Any]:
+    """
+    Verify claims using the FVA (Falsification-Verification Alignment) pipeline.
+
+    The FVA pipeline extends standard claim verification with active counter-evidence
+    retrieval. For each claim, it:
+
+    1. Performs standard verification against retrieved documents
+    2. Determines if falsification checking is needed based on confidence/claim type
+    3. If triggered, retrieves anti-context (counter-evidence) documents
+    4. Adjudicates between supporting and contradicting evidence
+    5. Returns final verification status which may include CONTESTED for conflicting evidence
+
+    This implements the approach from the FVA-RAG paper (arXiv:2512.07015).
+    """
+    # Convert claims to dict format
+    claims_data = [c.model_dump() for c in payload.claims]
+
+    # Get FVA config
+    fva_config = payload.fva_config.model_dump() if payload.fva_config else None
+
+    # Resolve user_id string
+    resolved_user_id: Optional[str] = None
+    if user_id is not None:
+        resolved_user_id = str(user_id)
+    elif current_user is not None:
+        resolved_user_id = str(getattr(current_user, "username", None) or getattr(current_user, "id", None))
+
+    return await claims_service.verify_claims_with_fva(
+        claims=claims_data,
+        query=payload.query,
+        sources=payload.sources,
+        top_k=payload.top_k,
+        fva_config=fva_config,
+        user_id=resolved_user_id,
+        current_user=current_user,
+        db=db,
+    )
+
+
+@router.get("/verify/fva/settings", response_model=FVASettingsResponse)
+def get_fva_settings(
+    principal: AuthPrincipal = Depends(get_auth_principal),
+) -> dict[str, Any]:
+    """Return current FVA pipeline settings."""
+    return claims_service.get_fva_settings()

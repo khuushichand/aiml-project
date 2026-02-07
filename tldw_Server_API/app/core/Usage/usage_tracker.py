@@ -10,32 +10,42 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Optional
 from datetime import date, datetime, timezone
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
-from .pricing_catalog import get_pricing_catalog
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Metrics import increment_counter
+
+from .pricing_catalog import get_pricing_catalog
 
 try:  # pragma: no cover - ledger optional during upgrades/tests
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (  # type: ignore
         LedgerEntry,
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except ImportError:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
 
-_tokens_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_USAGE_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+_tokens_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _tokens_daily_ledger_lock = asyncio.Lock()
 _tokens_legacy_backfill_done: set[str] = set()
 
 
-async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
+async def _get_tokens_daily_ledger() -> ResourceDailyLedger | None:
     global _tokens_daily_ledger
     if ResourceDailyLedger is None or LedgerEntry is None:
         return None
@@ -49,7 +59,7 @@ async def _get_tokens_daily_ledger() -> Optional["ResourceDailyLedger"]:
             await ledger.initialize()
             _tokens_daily_ledger = ledger
             return ledger
-        except Exception as exc:  # pragma: no cover - defensive
+        except _USAGE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"LLM usage: ResourceDailyLedger init failed; tokens/day caps disabled: {exc}")
             _tokens_daily_ledger = None
             return None
@@ -59,7 +69,7 @@ async def backfill_legacy_tokens_to_ledger(
     *,
     entity_scope: str,
     entity_value: str,
-    day_utc: Optional[str] = None,
+    day_utc: str | None = None,
 ) -> None:
     """
     Best-effort migration helper: mirror today's tokens usage from ``llm_usage_log``
@@ -82,7 +92,7 @@ async def backfill_legacy_tokens_to_ledger(
     if scope == "api_key":
         try:
             int(value)
-        except Exception:
+        except (TypeError, ValueError):
             return
 
     day = day_utc or datetime.now(timezone.utc).date().isoformat()
@@ -106,7 +116,7 @@ async def backfill_legacy_tokens_to_ledger(
 
         try:
             day_val = date.fromisoformat(day)
-        except Exception:
+        except (TypeError, ValueError):
             day_val = datetime.now(timezone.utc).date()
 
         pool: DatabasePool = await get_db_pool()
@@ -128,7 +138,7 @@ async def backfill_legacy_tokens_to_ledger(
                 occurred_at=datetime.now(timezone.utc),
             )
             await ledger.add(entry)
-    except Exception:
+    except _USAGE_NONCRITICAL_EXCEPTIONS:
         return
     finally:
         _tokens_legacy_backfill_done.add(key)
@@ -143,7 +153,7 @@ def _enabled() -> bool:
         if env_val is not None:
             return str(env_val).strip().lower() in {"true", "1", "yes", "y", "on"}
         return bool(val)
-    except Exception:
+    except _USAGE_NONCRITICAL_EXCEPTIONS:
         return True
 
 
@@ -162,8 +172,8 @@ def compute_costs(provider: str, model: str, prompt_tokens: int, completion_toke
 
 async def log_llm_usage(
     *,
-    user_id: Optional[int],
-    key_id: Optional[int],
+    user_id: int | None,
+    key_id: int | None,
     endpoint: str,
     operation: str,
     provider: str,
@@ -172,10 +182,10 @@ async def log_llm_usage(
     latency_ms: int,
     prompt_tokens: int,
     completion_tokens: int,
-    total_tokens: Optional[int] = None,
+    total_tokens: int | None = None,
     currency: str = "USD",
-    request_id: Optional[str] = None,
-    estimated: Optional[bool] = None,
+    request_id: str | None = None,
+    estimated: bool | None = None,
 ) -> None:
     """
     Insert a single llm_usage_log row. Computes costs if needed.
@@ -278,7 +288,7 @@ async def log_llm_usage(
                             "operation": str(operation or ""),
                         },
                     )
-        except Exception:
+        except _USAGE_NONCRITICAL_EXCEPTIONS:
             # Metrics must never impact request flow
             pass
 
@@ -319,7 +329,7 @@ async def log_llm_usage(
                         elif key_id is not None:
                             entity_scope = "api_key"
                             entity_value = str(int(key_id))
-                    except Exception:
+                    except (TypeError, ValueError):
                         entity_scope = None
                         entity_value = None
 
@@ -338,9 +348,9 @@ async def log_llm_usage(
                             occurred_at=datetime.now(timezone.utc),
                         )
                         await ledger.add(entry)
-        except Exception:
+        except _USAGE_NONCRITICAL_EXCEPTIONS:
             # Ledger writes must never affect request flow
             pass
-    except Exception as e:
+    except _USAGE_NONCRITICAL_EXCEPTIONS as e:
         # Never break request processing due to logging errors
         logger.debug(f"LLM usage logging skipped/failed: {e}")

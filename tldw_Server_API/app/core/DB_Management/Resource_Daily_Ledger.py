@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone, date
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime, timezone
+from typing import Any
 
 from loguru import logger
 
@@ -27,7 +27,7 @@ class ResourceDailyLedger:
     PostgreSQL and SQLite backends.
     """
 
-    def __init__(self, db_pool: Optional[DatabasePool] = None) -> None:
+    def __init__(self, db_pool: DatabasePool | None = None) -> None:
         self.db_pool = db_pool
         self._initialized = False
 
@@ -102,7 +102,7 @@ class ResourceDailyLedger:
             raise
 
     @staticmethod
-    def _to_day_utc(dt: Optional[datetime] = None) -> str:
+    def _to_day_utc(dt: datetime | None = None) -> str:
         d = (dt or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return d.strftime("%Y-%m-%d")
 
@@ -170,7 +170,7 @@ class ResourceDailyLedger:
             logger.error(f"ResourceDailyLedger.add failed: {e}")
             raise
 
-    async def total_for_day(self, entity_scope: str, entity_value: str, category: str, day_utc: Optional[str] = None) -> int:
+    async def total_for_day(self, entity_scope: str, entity_value: str, category: str, day_utc: str | None = None) -> int:
         if not self._initialized:
             await self.initialize()
         day = day_utc or self._to_day_utc()
@@ -195,7 +195,7 @@ class ResourceDailyLedger:
         entity_value: str,
         category: str,
         daily_cap: int,
-        day_utc: Optional[str] = None,
+        day_utc: str | None = None,
     ) -> int:
         """
         Convenience helper: returns max(0, daily_cap - total_for_day(...)).
@@ -211,7 +211,7 @@ class ResourceDailyLedger:
         category: str,
         start_day_utc: str,
         end_day_utc: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Return daily totals and grand total for an inclusive UTC day range.
 
@@ -237,7 +237,7 @@ class ResourceDailyLedger:
                 rows = await self.db_pool.fetchall(
                     q, entity_scope, entity_value, category, start_day_utc, end_day_utc
                 )
-            days: List[Dict[str, Any]] = []
+            days: list[dict[str, Any]] = []
             total = 0
             for r in rows:
                 # rows are dicts (PG) or aiosqlite.Row

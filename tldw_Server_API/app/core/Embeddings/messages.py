@@ -8,7 +8,8 @@ requeue operations while still catching obviously malformed payloads.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Dict, Optional
+from collections.abc import Mapping
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -24,17 +25,37 @@ SCHEMA_URL = "https://schemas.tldw.ai/embeddings/v1.json"
 class ChunkingConfigModel(BaseModel):
     chunk_size: int = Field(..., ge=100)
     overlap: int = Field(..., ge=0)
-    separator: Optional[str] = None
+    separator: str | None = None
 
 
-def normalize_message(stage: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+def _coerce_int_like(value: Any) -> int | None:
+    """Best-effort integer coercion for schema-compatible numeric fields."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+            try:
+                return int(stripped)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def normalize_message(stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Normalize an embeddings pipeline message payload.
 
     Adds envelope defaults (schema/version) and validates chunking_config.
     """
     validate_schema(stage, payload)
 
-    message: Dict[str, Any] = dict(payload)
+    message: dict[str, Any] = dict(payload)
     schema_value = message.get("msg_schema") or message.get("schema") or CURRENT_SCHEMA
     message.pop("schema", None)
     message["msg_schema"] = schema_value
@@ -80,8 +101,12 @@ def validate_schema(stage: str, payload: Mapping[str, Any]) -> None:
             "media_id": {"type": "integer"},
         },
     }
+    payload_for_validation = dict(payload)
+    media_id = _coerce_int_like(payload_for_validation.get("media_id"))
+    if media_id is not None:
+        payload_for_validation["media_id"] = media_id
 
     try:
-        jsonschema.validate(payload, schema)
+        jsonschema.validate(payload_for_validation, schema)
     except Exception as exc:
         raise ValueError(str(exc)) from exc

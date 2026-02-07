@@ -22,12 +22,15 @@ Notes:
   available, we can upgrade later to leverage it behind a feature flag.
 """
 
-from typing import List, Any, Dict, Optional, Tuple
+import contextlib
 import re
+from typing import Any, Optional
+
 from loguru import logger
+
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 class PropositionChunkingStrategy(BaseChunkingStrategy):
@@ -55,12 +58,12 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         "can", "could", "should", "would", "will", "shall", "may", "might", "must"
     }
 
-    def __init__(self, language: str = 'en', llm_call_func: Optional[Any] = None, llm_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, language: str = 'en', llm_call_func: Optional[Any] = None, llm_config: Optional[dict[str, Any]] = None):
         super().__init__(language)
         self.llm_call_func = llm_call_func
         self.llm_config = (llm_config or {}).copy()
 
-    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> List[str]:
+    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> list[str]:
         if not self.validate_parameters(text, max_size, overlap):
             return []
 
@@ -92,7 +95,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
 
         # Step 3: pack propositions into chunks with overlap (by proposition count)
         step = max(1, max_size - overlap)
-        chunks: List[str] = []
+        chunks: list[str] = []
         for i in range(0, len(propositions), step):
             window = propositions[i:i + max_size]
             if not window:
@@ -103,7 +106,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         logger.debug(f"Created {len(chunks)} chunks from {len(propositions)} propositions")
         return chunks
 
-    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> List[ChunkResult]:
+    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> list[ChunkResult]:
         """Chunk text and return metadata with reliable source offsets.
 
         For proposition chunking, offsets are derived from source spans using a
@@ -150,7 +153,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             )
             return [ChunkResult(text=text, metadata=md)]
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         step = max(1, max_size - overlap)
         total_props = len(spans)
 
@@ -162,10 +165,8 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             end_char = max(e for _s, e in window)
             if end_char < start_char:
                 end_char = start_char
-            try:
+            with contextlib.suppress(Exception):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
-                pass
             chunk_text = text[start_char:end_char]
             md = ChunkMetadata(
                 index=len(results),
@@ -187,14 +188,14 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         return results
 
     # --- helpers ---
-    def _propositions_via_heuristics(self, text: str, aggressiveness: int, min_prop_len: int) -> List[str]:
+    def _propositions_via_heuristics(self, text: str, aggressiveness: int, min_prop_len: int) -> list[str]:
         # Step 1: sentence segmentation (reuse sentence strategy heuristics)
         sentences = self._split_sentences_fast(text)
         if not sentences:
             return []
 
         # Step 2: split each sentence into propositions
-        propositions: List[str] = []
+        propositions: list[str] = []
         for sent in sentences:
             props = self._split_sentence_into_propositions(sent, aggressiveness)
             props = self._merge_short_propositions(props, min_prop_len)
@@ -204,7 +205,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                     propositions.append(p_clean)
         return propositions
 
-    def _propositions_via_spacy(self, text: str, aggressiveness: int, min_prop_len: int) -> List[str]:
+    def _propositions_via_spacy(self, text: str, aggressiveness: int, min_prop_len: int) -> list[str]:
         try:
             import spacy  # type: ignore
         except Exception:
@@ -225,7 +226,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             return []
 
         doc = nlp(text)
-        propositions: List[str] = []
+        propositions: list[str] = []
 
         for sent in getattr(doc, "sents", [doc]):
             # If no parser is available, fall back to heuristic splitting within the sentence
@@ -267,14 +268,14 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         propositions = [self._normalize_space(p) for p in propositions if p and self._normalize_space(p)]
         return propositions
 
-    def _propositions_via_llm(self, text: str, min_prop_len: int, prompt_profile: str = "generic") -> List[str]:
+    def _propositions_via_llm(self, text: str, min_prop_len: int, prompt_profile: str = "generic") -> list[str]:
         if not self.llm_call_func:
             logger.info("No LLM function provided; cannot use 'llm' engine")
             return []
 
         # Break text into manageable windows (approx. by characters)
         windows = self._windows_by_chars(text, target=self.llm_config.get('window_chars', 1200))
-        results: List[str] = []
+        results: list[str] = []
         for win in windows:
             prompt = self._build_llm_prompt(win, profile=prompt_profile)
             try:
@@ -292,13 +293,13 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         normed = [self._normalize_space(p) for p in results if p and self._normalize_space(p)]
         return self._merge_short_propositions(normed, min_prop_len)
 
-    def _windows_by_chars(self, text: str, target: int = 1200) -> List[str]:
+    def _windows_by_chars(self, text: str, target: int = 1200) -> list[str]:
         # Split into windows near target size, preferring sentence boundaries
         sentences = self._split_sentences_fast(text)
         if not sentences:
             return [text]
-        windows: List[str] = []
-        cur: List[str] = []
+        windows: list[str] = []
+        cur: list[str] = []
         size = 0
         for s in sentences:
             if size + len(s) + 1 > target and cur:
@@ -373,7 +374,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             logger.error(f"Error calling LLM for propositions: {e}")
         return None
 
-    def _parse_llm_props(self, output: Optional[str]) -> List[str]:
+    def _parse_llm_props(self, output: Optional[str]) -> list[str]:
         if not output:
             return []
         output = output.strip()
@@ -388,7 +389,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         # Fallback: parse lines starting with hyphen/number
         lines = [l.strip("- ") for l in output.splitlines() if l.strip()]
         return [l for l in lines if len(l) > 0]
-    def _split_sentences_fast(self, text: str) -> List[str]:
+    def _split_sentences_fast(self, text: str) -> list[str]:
         """Lightweight sentence splitter. Avoid heavy dependencies.
         Falls back to regex-based splitting similar to SentenceChunkingStrategy.
         """
@@ -403,7 +404,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         sentences = [p.strip() for p in parts if p and p.strip()]
         return sentences
 
-    def _split_sentence_into_propositions(self, sentence: str, aggressiveness: int) -> List[str]:
+    def _split_sentence_into_propositions(self, sentence: str, aggressiveness: int) -> list[str]:
         s = sentence.strip()
         if not s:
             return []
@@ -412,17 +413,14 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         # Retain punctuation where useful by splitting on the boundary and later normalizing spaces
         prelim = self._split_on_punct(s)
 
-        props: List[str] = []
+        props: list[str] = []
         for seg in prelim:
             seg = seg.strip()
             if not seg:
                 continue
 
             # 1) Subordinate clause markers (aggressiveness >= 1)
-            if aggressiveness >= 1:
-                seg_parts = self._split_on_subordinate_markers(seg)
-            else:
-                seg_parts = [seg]
+            seg_parts = self._split_on_subordinate_markers(seg) if aggressiveness >= 1 else [seg]
 
             for part in seg_parts:
                 part = part.strip()
@@ -436,7 +434,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
 
         return [p for p in (pp.strip() for pp in props) if p]
 
-    def _split_on_punct(self, s: str) -> List[str]:
+    def _split_on_punct(self, s: str) -> list[str]:
         """Split a sentence into chunks around strong punctuation and parentheticals.
 
         Handles semicolons, em/en dashes, and optional colon boundaries, while
@@ -481,7 +479,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 if tail:
                     final.append(tail)
         # Optionally split on colon if it looks like clause boundary
-        colon_split: List[str] = []
+        colon_split: list[str] = []
         for p in final:
             # Split on colon only when the right side looks clause-like (has a verb-like token)
             colon_parts = re.split(r"\s*:\s*", p)
@@ -491,16 +489,15 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 colon_split.append(p)
         return colon_split
 
-    def _split_on_subordinate_markers(self, s: str) -> List[str]:
+    def _split_on_subordinate_markers(self, s: str) -> list[str]:
         # Build a regex that splits on commas + marker or space + marker when mid-sentence
         # Keep the marker at the beginning of the following proposition for context
         parts = [s]
         for marker in sorted(self._SUBORDINATE_MARKERS, key=len, reverse=True):
-            new_parts: List[str] = []
+            new_parts: list[str] = []
             pattern = rf"[,\s]+({re.escape(marker)})\b"
             for seg in parts:
                 # Split but keep the marker in the next segment
-                idx = 0
                 last = 0
                 for m in re.finditer(pattern, seg, flags=re.IGNORECASE):
                     cut = seg[last:m.start()].strip()
@@ -514,7 +511,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             parts = new_parts if new_parts else parts
         return parts
 
-    def _split_on_coordination(self, s: str) -> List[str]:
+    def _split_on_coordination(self, s: str) -> list[str]:
         tokens = s.split()
         if len(tokens) < 5:
             return [s]
@@ -532,7 +529,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
             return [s]
 
         # Split at selected coordinates
-        parts: List[str] = []
+        parts: list[str] = []
         start = 0
         for idx in indices:
             left = " ".join(tokens[start:idx]).strip()
@@ -557,10 +554,10 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 return True
         return False
 
-    def _merge_short_propositions(self, props: List[str], min_len: int) -> List[str]:
+    def _merge_short_propositions(self, props: list[str], min_len: int) -> list[str]:
         if not props:
             return []
-        merged: List[str] = []
+        merged: list[str] = []
         for p in props:
             p = p.strip()
             if not merged:
@@ -575,18 +572,18 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
     def _normalize_space(self, s: str) -> str:
         return re.sub(r"\s+", " ", s).strip()
 
-    def _join_props(self, props: List[str]) -> str:
+    def _join_props(self, props: list[str]) -> str:
         # Join with a single space, ensuring basic punctuation spacing
         out = " ".join(p.strip() for p in props if p and p.strip())
         out = re.sub(r"\s+([,.;:!?])", r"\1", out)
         return out.strip()
 
     # ------------------ span helpers for metadata ------------------
-    def _split_sentences_with_spans(self, text: str) -> List[Tuple[str, int, int]]:
+    def _split_sentences_with_spans(self, text: str) -> list[tuple[str, int, int]]:
         """Split text into sentences with source spans using a lightweight regex."""
         if not text:
             return []
-        spans: List[Tuple[str, int, int]] = []
+        spans: list[tuple[str, int, int]] = []
         # Split on sentence terminators followed by whitespace
         pattern = re.compile(r"(?<=[.!?])\s+")
         start = 0
@@ -612,7 +609,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                     spans.append((text[s_start:s_end], s_start, s_end))
         return spans
 
-    def _normalize_for_mapping(self, text: str) -> Tuple[str, List[int]]:
+    def _normalize_for_mapping(self, text: str) -> tuple[str, list[int]]:
         """Normalize text to proposition-splitting form while tracking index mapping.
 
         - Collapses whitespace runs to a single space.
@@ -620,8 +617,8 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         Returns (normalized_text, mapping), where mapping maps normalized
         character indices back to original indices.
         """
-        norm_chars: List[str] = []
-        mapping: List[int] = []
+        norm_chars: list[str] = []
+        mapping: list[int] = []
         i = 0
         n = len(text)
         while i < n:
@@ -659,9 +656,9 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
         text: str,
         aggressiveness: int,
         min_prop_len: int,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """Return proposition spans as (start, end) offsets in the original text."""
-        spans: List[Tuple[int, int]] = []
+        spans: list[tuple[int, int]] = []
         sentences = self._split_sentences_with_spans(text)
         if not sentences:
             return spans
@@ -676,7 +673,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
 
             # Map proposition strings back to source indices using normalized mapping
             norm_cursor = 0
-            local_spans: List[Tuple[int, int, int]] = []  # (start, end, prop_len)
+            local_spans: list[tuple[int, int, int]] = []  # (start, end, prop_len)
             for prop in props:
                 prop_clean = prop.strip()
                 if not prop_clean:
@@ -701,7 +698,7 @@ class PropositionChunkingStrategy(BaseChunkingStrategy):
                 continue
 
             # Merge short propositions per sentence (same semantics as chunk())
-            merged: List[Tuple[int, int, int]] = []
+            merged: list[tuple[int, int, int]] = []
             for s, e, plen in local_spans:
                 if not merged:
                     merged.append((s, e, plen))

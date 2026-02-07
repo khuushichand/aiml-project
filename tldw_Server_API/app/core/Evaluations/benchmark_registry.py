@@ -6,21 +6,22 @@ to appropriate evaluation types.
 """
 
 import json
-import yaml
-from typing import Dict, Any, List, Optional, Type
-from pathlib import Path
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import (
     BaseEvaluation,
-    MultipleChoiceEvaluation,
     CodeGenerationEvaluation,
-    InstructionFollowingEvaluation,
     HonestyEvaluation,
+    InstructionFollowingEvaluation,
+    MultipleChoiceEvaluation,
     load_dataset_from_json,
     load_dataset_from_jsonl,
-    load_dataset_from_url
+    load_dataset_from_url,
 )
 
 logger = logger
@@ -34,11 +35,11 @@ class BenchmarkConfig:
     evaluation_type: str
     dataset_source: str  # URL, file path, or HuggingFace dataset ID
     dataset_format: str  # json, jsonl, csv, huggingface
-    field_mappings: Dict[str, str] = field(default_factory=dict)
-    evaluation_params: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    field_mappings: dict[str, str] = field(default_factory=dict)
+    evaluation_params: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "name": self.name,
@@ -52,14 +53,14 @@ class BenchmarkConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkConfig':
+    def from_dict(cls, data: dict[str, Any]) -> 'BenchmarkConfig':
         """Create from dictionary."""
         return cls(**data)
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'BenchmarkConfig':
         """Load from YAML file."""
-        with open(yaml_path, 'r') as f:
+        with open(yaml_path) as f:
             data = yaml.safe_load(f)
         return cls.from_dict(data)
 
@@ -79,7 +80,7 @@ class BenchmarkRegistry:
     }
 
     def __init__(self):
-        self.benchmarks: Dict[str, BenchmarkConfig] = {}
+        self.benchmarks: dict[str, BenchmarkConfig] = {}
         self._load_default_benchmarks()
 
     def _load_default_benchmarks(self):
@@ -304,11 +305,11 @@ class BenchmarkRegistry:
         """Get a benchmark configuration."""
         return self.benchmarks.get(name)
 
-    def list_benchmarks(self) -> List[str]:
+    def list_benchmarks(self) -> list[str]:
         """List all registered benchmark names."""
         return list(self.benchmarks.keys())
 
-    def get_benchmark_info(self, name: str) -> Dict[str, Any]:
+    def get_benchmark_info(self, name: str) -> dict[str, Any]:
         """Get detailed information about a benchmark."""
         config = self.get(name)
         if not config:
@@ -339,7 +340,7 @@ class BenchmarkRegistry:
                 )
                 return evaluator
             except Exception as e:
-                logger.error(f"Failed to create SimpleQA evaluator: {e}")
+                logger.exception(f"Failed to create SimpleQA evaluator: {e}")
                 return None
 
         eval_class = self.EVALUATION_TYPES.get(config.evaluation_type)
@@ -355,10 +356,10 @@ class BenchmarkRegistry:
             )
             return evaluator
         except Exception as e:
-            logger.error(f"Failed to create evaluator for {benchmark_name}: {e}")
+            logger.exception(f"Failed to create evaluator for {benchmark_name}: {e}")
             return None
 
-    def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def load_dataset(self, benchmark_name: str, limit: Optional[int] = None) -> list[dict[str, Any]]:
         """Load dataset for a benchmark."""
         config = self.get(benchmark_name)
         if not config:
@@ -411,7 +412,7 @@ class BenchmarkRegistry:
             return normalized_data
 
         except Exception as e:
-            logger.error(f"Failed to load dataset for {benchmark_name}: {e}")
+            logger.exception(f"Failed to load dataset for {benchmark_name}: {e}")
             return []
 
     def save_config(self, config: BenchmarkConfig, path: str) -> None:
@@ -439,14 +440,14 @@ class BenchmarkRegistry:
             if path.suffix == '.yaml' or path.suffix == '.yml':
                 config = BenchmarkConfig.from_yaml(str(path))
             else:
-                with open(path, 'r') as f:
+                with open(path) as f:
                     data = json.load(f)
                 config = BenchmarkConfig.from_dict(data)
 
             return config
 
         except Exception as e:
-            logger.error(f"Failed to load config from {path}: {e}")
+            logger.exception(f"Failed to load config from {path}: {e}")
             return None
 
 

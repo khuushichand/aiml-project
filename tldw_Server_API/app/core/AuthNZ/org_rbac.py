@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence
 
 from loguru import logger
 
@@ -12,11 +12,11 @@ from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 @dataclass
 class ScopedPermissionsResult:
     permissions: list[str]
-    active_org_id: Optional[int]
-    active_team_id: Optional[int]
+    active_org_id: int | None
+    active_team_id: int | None
 
 
-def _coerce_int_list(values: Optional[Sequence[int]]) -> list[int]:
+def _coerce_int_list(values: Sequence[int] | None) -> list[int]:
     if values is None:
         return []
     out: list[int] = []
@@ -28,7 +28,7 @@ def _coerce_int_list(values: Optional[Sequence[int]]) -> list[int]:
     return out
 
 
-def _row_value(row, key: str, idx: int = 0) -> Optional[str]:
+def _row_value(row, key: str, idx: int = 0) -> str | None:
     try:
         if isinstance(row, dict):
             return row.get(key)
@@ -40,7 +40,7 @@ def _row_value(row, key: str, idx: int = 0) -> Optional[str]:
             return None
 
 
-def _normalize_scope_mode(value: Optional[str]) -> str:
+def _normalize_scope_mode(value: str | None) -> str:
     if not value:
         return "require_active"
     mode = str(value).strip().lower()
@@ -49,7 +49,7 @@ def _normalize_scope_mode(value: Optional[str]) -> str:
     return "require_active"
 
 
-def _normalize_active_id(raw: Optional[int], allowed_ids: Sequence[int]) -> Optional[int]:
+def _normalize_active_id(raw: int | None, allowed_ids: Sequence[int]) -> int | None:
     if raw is None:
         return None
     try:
@@ -99,7 +99,7 @@ def _filter_permissions(permissions: Iterable[str], denylist: Iterable[str]) -> 
 async def _fetch_org_memberships(
     *,
     user_id: int,
-    org_ids: Optional[Sequence[int]],
+    org_ids: Sequence[int] | None,
 ) -> list[dict]:
     if org_ids is not None and not org_ids:
         return []
@@ -137,7 +137,7 @@ async def _fetch_org_memberships(
 async def _fetch_team_memberships(
     *,
     user_id: int,
-    team_ids: Optional[Sequence[int]],
+    team_ids: Sequence[int] | None,
 ) -> list[dict]:
     if team_ids is not None and not team_ids:
         return []
@@ -215,12 +215,12 @@ async def _fetch_role_permissions(
 
 async def resolve_scoped_permissions(
     *,
-    user_id: Optional[int],
-    org_ids: Optional[Sequence[int]] = None,
-    team_ids: Optional[Sequence[int]] = None,
-    active_org_id: Optional[int] = None,
-    active_team_id: Optional[int] = None,
-    scope_mode: Optional[str] = None,
+    user_id: int | None,
+    org_ids: Sequence[int] | None = None,
+    team_ids: Sequence[int] | None = None,
+    active_org_id: int | None = None,
+    active_team_id: int | None = None,
+    scope_mode: str | None = None,
 ) -> ScopedPermissionsResult:
     settings = get_settings()
     if not settings.ORG_RBAC_PROPAGATION_ENABLED or user_id is None:
@@ -318,13 +318,13 @@ async def resolve_scoped_permissions(
 
 async def apply_scoped_permissions(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     base_permissions: Sequence[str],
-    org_ids: Optional[Sequence[int]] = None,
-    team_ids: Optional[Sequence[int]] = None,
-    active_org_id: Optional[int] = None,
-    active_team_id: Optional[int] = None,
-    scope_mode: Optional[str] = None,
+    org_ids: Sequence[int] | None = None,
+    team_ids: Sequence[int] | None = None,
+    active_org_id: int | None = None,
+    active_team_id: int | None = None,
+    scope_mode: str | None = None,
 ) -> ScopedPermissionsResult:
     settings = get_settings()
     base_list = [str(p) for p in base_permissions or [] if p]

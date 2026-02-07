@@ -4,14 +4,16 @@ Base module interface for unified MCP with production features
 Includes health checking, metrics, circuit breaker support, and proper error handling.
 """
 
-from typing import Dict, Any, List, Optional, Set
+import asyncio
+import contextlib
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
-from dataclasses import dataclass, field
+from typing import Any, Optional
+
 from loguru import logger
-import asyncio
-import time
 
 
 class HealthStatus(str, Enum):
@@ -29,8 +31,8 @@ class ModuleHealth:
     message: str = ""
     # Set to None initially so the first health_check() performs real checks
     last_check: Optional[datetime] = None
-    checks: Dict[str, bool] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    checks: dict[str, bool] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_healthy(self) -> bool:
@@ -84,7 +86,7 @@ class ModuleConfig:
     # Circuit breaker backoff and caps for half-open failures
     circuit_breaker_backoff_factor: float = 2.0
     circuit_breaker_max_timeout: int = 300
-    settings: Dict[str, Any] = field(default_factory=dict)
+    settings: dict[str, Any] = field(default_factory=dict)
 
 
 class BaseModule(ABC):
@@ -298,7 +300,6 @@ class BaseModule(ABC):
         """Execute an operation with circuit breaker protection"""
         if self.is_circuit_breaker_open():
             raise Exception(f"Circuit breaker is open for module {self.name}")
-        was_half_open = self._circuit_breaker_half_open
         start_time = time.time()
         acquired = False
         try:
@@ -326,7 +327,7 @@ class BaseModule(ABC):
             self.record_circuit_breaker_failure()
 
             logger.error(f"Operation timeout in module {self.name}")
-            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s")
+            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
 
         except Exception as e:
             # Record failure
@@ -338,12 +339,10 @@ class BaseModule(ABC):
             raise
         finally:
             if acquired:
-                try:
+                with contextlib.suppress(Exception):
                     self._semaphore.release()
-                except Exception:
-                    pass
 
-    async def get_tool_def(self, tool_name: str) -> Optional[Dict[str, Any]]:
+    async def get_tool_def(self, tool_name: str) -> Optional[dict[str, Any]]:
         """Return a single tool definition, using cached tool list if available."""
         if self._tools_cache is None:
             self._tools_cache = await self.get_tools()
@@ -372,7 +371,7 @@ class BaseModule(ABC):
         pass
 
     @abstractmethod
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         """
         Module-specific health checks.
 
@@ -382,7 +381,7 @@ class BaseModule(ABC):
         pass
 
     @abstractmethod
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         """
         Get list of tools provided by this module.
 
@@ -392,7 +391,7 @@ class BaseModule(ABC):
         pass
 
     @abstractmethod
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Optional[Any] = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Optional[Any] = None) -> Any:
         """
         Execute a tool.
 
@@ -414,7 +413,7 @@ class BaseModule(ABC):
             self._tools_cache = await self.get_tools()
         return any(tool["name"] == tool_name for tool in self._tools_cache)
 
-    async def get_resources(self) -> List[Dict[str, Any]]:
+    async def get_resources(self) -> list[dict[str, Any]]:
         """Get list of resources (optional)"""
         return []
 
@@ -424,11 +423,11 @@ class BaseModule(ABC):
             self._resources_cache = await self.get_resources()
         return any(resource["uri"] == uri for resource in self._resources_cache)
 
-    async def read_resource(self, uri: str, context: Optional[Any] = None) -> Dict[str, Any]:
+    async def read_resource(self, uri: str, context: Optional[Any] = None) -> dict[str, Any]:
         """Read a resource"""
         raise NotImplementedError(f"Resource reading not implemented for {self.name}")
 
-    async def get_prompts(self) -> List[Dict[str, Any]]:
+    async def get_prompts(self) -> list[dict[str, Any]]:
         """Get list of prompts (optional)"""
         return []
 
@@ -438,13 +437,13 @@ class BaseModule(ABC):
             self._prompts_cache = await self.get_prompts()
         return any(prompt["name"] == name for prompt in self._prompts_cache)
 
-    async def get_prompt(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_prompt(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Get a prompt with arguments"""
         raise NotImplementedError(f"Prompt not implemented for {self.name}")
 
     # Validation helpers
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):  # noqa: B027
         """
         Validate tool arguments against schema.
 
@@ -497,7 +496,7 @@ class BaseModule(ABC):
         return input_data
 
     # Shared helpers for validators
-    def is_write_tool_def(self, tool_def: Dict[str, Any]) -> bool:
+    def is_write_tool_def(self, tool_def: dict[str, Any]) -> bool:
         """Heuristic and metadata-based check for write/management tools.
 
         Criteria:
@@ -521,9 +520,9 @@ class BaseModule(ABC):
 def create_tool_definition(
     name: str,
     description: str,
-    parameters: Dict[str, Any],
-    metadata: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    parameters: dict[str, Any],
+    metadata: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Create MCP-compliant tool definition"""
     tool_def = {
         "name": name,
@@ -546,8 +545,8 @@ def create_resource_definition(
     name: str,
     description: str,
     mime_type: str = "application/json",
-    metadata: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    metadata: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Create MCP-compliant resource definition"""
     resource_def = {
         "uri": uri,
@@ -565,9 +564,9 @@ def create_resource_definition(
 def create_prompt_definition(
     name: str,
     description: str,
-    arguments: Optional[List[Dict[str, Any]]] = None,
-    metadata: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    arguments: Optional[list[dict[str, Any]]] = None,
+    metadata: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
     """Create MCP-compliant prompt definition"""
     prompt_def = {
         "name": name,

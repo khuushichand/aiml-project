@@ -6,20 +6,44 @@ These adapters handle workflow state and caching operations.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_adapter
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_artifacts_dir
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_adapter, registry
 from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     BatchConfig,
     CacheResultConfig,
-    RetryConfig,
     CheckpointConfig,
+    RetryConfig,
 )
+
+_STATE_ADAPTER_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_STATE_JSON_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+
+
+def _get_workflow_cache_collection(collection_name: str):
+    """Resolve a Chroma collection for workflow cache storage."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
+
+    manager = get_default_chroma_manager()
+    if not manager:
+        return None
+    return manager.get_or_create_collection(collection_name=collection_name)
 
 
 @registry.register(
@@ -30,7 +54,7 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     tags=["control", "data"],
     config_model=BatchConfig,
 )
-async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_batch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Batch items into chunks for processing.
 
     Config:
@@ -68,7 +92,7 @@ async def run_batch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "cache"],
     config_model=CacheResultConfig,
 )
-async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Cache step result by key for reuse.
 
     Config:
@@ -95,24 +119,17 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
         data = prev
 
     try:
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client
-
-        client = chroma_client()
-        if not client:
-            # Fallback: just pass through
-            return {"cached": False, "data": data, "error": "cache_unavailable"}
-
         cache_collection_name = "workflow_cache"
         try:
-            collection = client.get_or_create_collection(name=cache_collection_name)
-        except Exception:
+            collection = _get_workflow_cache_collection(cache_collection_name)
+        except _STATE_ADAPTER_EXCEPTIONS:
             return {"cached": False, "data": data, "error": "cache_collection_error"}
+        if not collection:
+            return {"cached": False, "data": data, "error": "cache_unavailable"}
 
         if action == "invalidate":
-            try:
+            with contextlib.suppress(_STATE_ADAPTER_EXCEPTIONS):
                 collection.delete(ids=[cache_key])
-            except Exception:
-                pass
             return {"invalidated": True, "key": cache_key}
 
         if action in ("get", "get_or_set"):
@@ -124,12 +141,10 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
                     if time.time() - cached_at <= ttl_seconds:
                         cached_data = meta.get("data")
                         if isinstance(cached_data, str):
-                            try:
+                            with contextlib.suppress(_STATE_JSON_EXCEPTIONS):
                                 cached_data = json.loads(cached_data)
-                            except Exception:
-                                pass
                         return {"cached": True, "data": cached_data, "key": cache_key, "age_seconds": int(time.time() - cached_at)}
-            except Exception:
+            except _STATE_ADAPTER_EXCEPTIONS:
                 pass
 
         if action in ("set", "get_or_set"):
@@ -141,12 +156,12 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
                     metadatas=[{"data": data_str, "cached_at": time.time()}],
                 )
                 return {"cached": False, "stored": True, "data": data, "key": cache_key}
-            except Exception as e:
+            except _STATE_ADAPTER_EXCEPTIONS as e:
                 return {"cached": False, "data": data, "error": f"cache_store_error: {e}"}
 
         return {"cached": False, "data": data}
 
-    except Exception as e:
+    except _STATE_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Cache result error: {e}")
         return {"cached": False, "data": data, "error": str(e)}
 
@@ -159,7 +174,7 @@ async def run_cache_result_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["control", "error-handling"],
     config_model=RetryConfig,
 )
-async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_retry_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Wrap a step with retry logic.
 
     Config:
@@ -199,10 +214,7 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
             # Check if result indicates an error
             if isinstance(result, dict) and result.get("error"):
                 error_str = str(result["error"])
-                if retry_on_errors:
-                    should_retry = any(pat in error_str for pat in retry_on_errors)
-                else:
-                    should_retry = True
+                should_retry = any(pat in error_str for pat in retry_on_errors) if retry_on_errors else True
 
                 if should_retry and attempt < max_retries:
                     last_error = error_str
@@ -212,7 +224,7 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
 
             return {"result": result, "attempts": attempt + 1, "success": True}
 
-        except Exception as e:
+        except _STATE_ADAPTER_EXCEPTIONS as e:
             last_error = str(e)
             if attempt < max_retries:
                 delay = min(backoff_base ** attempt, backoff_max)
@@ -231,7 +243,7 @@ async def run_retry_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "state"],
     config_model=CheckpointConfig,
 )
-async def run_checkpoint_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_checkpoint_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Save workflow state for recovery.
 
     Config:
@@ -276,6 +288,6 @@ async def run_checkpoint_adapter(config: Dict[str, Any], context: Dict[str, Any]
 
         return {"checkpoint_id": checkpoint_id, "saved": True, "run_id": run_id}
 
-    except Exception as e:
+    except _STATE_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Checkpoint error: {e}")
         return {"error": str(e), "checkpoint_id": checkpoint_id, "saved": False}

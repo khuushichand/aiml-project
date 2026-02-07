@@ -4,19 +4,39 @@ eBook chapter-based chunking strategy.
 Splits text into chunks based on chapter markers.
 """
 
-from typing import List, Optional, Any, Dict, Tuple
-import re
-import sys
-import threading
-import time
-from contextlib import contextmanager
-from loguru import logger
 import multiprocessing as mp
-import os
+import re
+import threading
+from contextlib import contextmanager, suppress
 from queue import Queue
+from typing import Any, Optional
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from loguru import logger
+
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import InvalidInputError, ProcessingError
+
+_EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InvalidInputError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    ProcessingError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    ZeroDivisionError,
+    re.error,
+)
 
 
 class EbookChapterChunkingStrategy(BaseChunkingStrategy):
@@ -74,13 +94,13 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     v = _cp.get('Chunking', 'regex_simple_only', fallback=None)
                     if v is not None:
                         self._force_simple_only = str(v).strip().lower() in ("1", "true", "yes", "on")
-                except Exception:
+                except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     v = _cp.get('Chunking', 'regex_disable_multiprocessing', fallback=None)
                     if v is not None:
                         self._disable_mp = str(v).strip().lower() in ("1", "true", "yes", "on")
-                except Exception:
+                except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     v = _cp.get('Chunking', 'regex_timeout_seconds', fallback=None)
@@ -88,9 +108,9 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                         vt = float(str(v))
                         if vt > 0:
                             self.REGEX_TIMEOUT = vt
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
             # Default values above remain in effect if config unavailable
             pass
         logger.debug(f"EbookChapterChunkingStrategy initialized for language: {language}")
@@ -107,7 +127,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             try:
                 result['value'] = func(*args, **kwargs)
                 result['completed'] = True
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 result['error'] = e
                 result['completed'] = True
 
@@ -131,7 +151,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 def wrapper():
                     try:
                         result_container['value'] = func(*args, **kwargs)
-                    except Exception as e:
+                    except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                         result_container['error'] = e
 
                 thread = threading.Thread(target=wrapper, daemon=True)
@@ -218,7 +238,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         """
         try:
             compiled = re.compile(pattern, flags)
-            results: List[Tuple[int, int, str]] = []
+            results: list[tuple[int, int, str]] = []
             for m in compiled.finditer(text):
                 # Limit group length to avoid huge IPC payloads
                 g = m.group(0)
@@ -226,10 +246,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     g = g[:1024]
                 results.append((m.start(), m.end(), g))
             out_queue.put(("ok", results))
-        except Exception as e:
+        except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
             out_queue.put(("err", str(e)))
 
-    def _run_finditer_process(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+    def _run_finditer_process(self, pattern: str, text: str, flags: int, timeout_s: float) -> list[tuple[int, int, str]]:
         """Run regex finditer in a separate process and enforce a hard timeout."""
         ctx = mp.get_context("fork") if hasattr(mp, "get_context") else mp
         q: mp.Queue = ctx.Queue()
@@ -250,7 +270,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             raise ProcessingError(f"Regex execution failed: {pl}")
         raise ProcessingError("Regex execution failed without result (process)")
 
-    def _safe_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+    def _safe_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> list[tuple[int, int, str]]:
         """Run regex finditer in a separate process with a deadline.
 
         Returns list of (start, end, group0) tuples or raises ProcessingError on timeout/error.
@@ -258,7 +278,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         if not getattr(self, "_disable_mp", True):
             try:
                 return self._run_finditer_process(pattern, text, flags, timeout_s)
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Process-based regex execution failed; falling back to thread: {e}")
         # Fallback to thread-based execution when multiprocessing is disabled/unavailable
         done_q: Queue = Queue(maxsize=1)
@@ -266,14 +286,14 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         def _runner():
             try:
                 compiled = re.compile(pattern, flags)
-                results: List[Tuple[int, int, str]] = []
+                results: list[tuple[int, int, str]] = []
                 for m in compiled.finditer(text):
                     g = m.group(0)
                     if len(g) > 1024:
                         g = g[:1024]
                     results.append((m.start(), m.end(), g))
                 done_q.put(("ok", results))
-            except Exception as e:  # pragma: no cover - defensive
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - defensive
                 done_q.put(("err", str(e)))
 
         t = threading.Thread(target=_runner, daemon=True)
@@ -284,13 +304,13 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             raise ProcessingError("Regex operation timed out - possible ReDoS attack (thread)")
         try:
             status, payload = done_q.get_nowait()
-        except Exception:
-            raise ProcessingError("Regex execution failed without result (thread)")
+        except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
+            raise ProcessingError("Regex execution failed without result (thread)") from None
         if status == "ok":
             return payload  # type: ignore[return-value]
         raise ProcessingError(f"Regex execution failed: {payload}")
 
-    def _timed_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> List[Tuple[int, int, str]]:
+    def _timed_finditer(self, pattern: str, text: str, flags: int, timeout_s: float) -> list[tuple[int, int, str]]:
         """Run a simple finditer in a daemon thread with a timeout.
 
         Even for simple patterns, guard execution to avoid unexpected hangs.
@@ -299,21 +319,21 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         if not getattr(self, "_disable_mp", True):
             try:
                 return self._run_finditer_process(pattern, text, flags, timeout_s)
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Process-based regex execution failed; falling back to thread: {e}")
         done_q: Queue = Queue(maxsize=1)
 
         def _runner():
             try:
                 compiled = re.compile(pattern, flags)
-                results: List[Tuple[int, int, str]] = []
+                results: list[tuple[int, int, str]] = []
                 for m in compiled.finditer(text):
                     g = m.group(0)
                     if len(g) > 1024:
                         g = g[:1024]
                     results.append((m.start(), m.end(), g))
                 done_q.put(("ok", results))
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 done_q.put(("err", str(e)))
 
         t = threading.Thread(target=_runner, daemon=True)
@@ -361,7 +381,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         try:
             re.compile(pattern)
         except re.error as e:
-            raise InvalidInputError(f"Invalid regex pattern: {e}")
+            raise InvalidInputError(f"Invalid regex pattern: {e}") from e
 
         # Don't actually test the regex execution - the DANGEROUS_PATTERNS check above
         # should catch problematic patterns. Testing them would cause the very problem
@@ -373,7 +393,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int = 5000,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text by chapters.
 
@@ -414,7 +434,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     spans = self._safe_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
                     # Reconstruct minimal marker info from spans (we need only starts)
                     chapter_markers = spans
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split")
                 return self._split_by_size(text, max_size, overlap)
 
@@ -459,11 +479,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             logger.debug(f"Created {len(chunks)} chapter-based chunks")
             return chunks
 
-        except Exception as e:
+        except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during chapter chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}") from e
 
-    def _split_by_size(self, text: str, max_size: int, overlap: int) -> List[str]:
+    def _split_by_size(self, text: str, max_size: int, overlap: int) -> list[str]:
         """
         Split text by word count when no chapters or chapter is too large.
 
@@ -484,7 +504,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             overlap = max_size - 1
 
         words = text.split()
-        chunks: List[str] = []
+        chunks: list[str] = []
 
         # Ensure positive progress per iteration
         step = max(1, (max_size - overlap) if overlap > 0 else max_size)
@@ -500,7 +520,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                            text: str,
                            max_size: int = 5000,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text by chapters and return with metadata.
 
@@ -525,10 +545,10 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             overlap = max_size - 1
 
         try:
-            chunks: List[ChunkResult] = []
+            chunks: list[ChunkResult] = []
             chunk_index = 0
 
-            def _trim_bounds(start: int, end: int) -> Optional[Tuple[int, int]]:
+            def _trim_bounds(start: int, end: int) -> Optional[tuple[int, int]]:
                 segment = text[start:end]
                 ltrim = len(segment) - len(segment.lstrip())
                 rtrim = len(segment) - len(segment.rstrip())
@@ -538,20 +558,18 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                     return None
                 return new_start, new_end
 
-            def _word_spans(segment_text: str) -> List[Tuple[int, int]]:
+            def _word_spans(segment_text: str) -> list[tuple[int, int]]:
                 return [(m.start(), m.end()) for m in re.finditer(r'\S+', segment_text)]
 
-            def _append_chunk(seg_start: int, spans: List[Tuple[int, int]],
-                              start_idx: int, end_idx: int, meta_opts: Dict[str, Any]) -> None:
+            def _append_chunk(seg_start: int, spans: list[tuple[int, int]],
+                              start_idx: int, end_idx: int, meta_opts: dict[str, Any]) -> None:
                 nonlocal chunk_index
                 if end_idx <= start_idx:
                     return
                 chunk_start = seg_start + spans[start_idx][0]
                 chunk_end = seg_start + spans[end_idx - 1][1]
-                try:
+                with suppress(_EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS):
                     chunk_end = self._expand_end_to_grapheme_boundary(text, chunk_end)
-                except Exception:
-                    pass
                 if chunk_end < chunk_start:
                     chunk_end = chunk_start
                 chunk_text = text[chunk_start:chunk_end]
@@ -586,7 +604,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
                 else:
                     spans = self._safe_finditer(chapter_pattern, text, re.MULTILINE, self.REGEX_TIMEOUT)
                     chapter_markers = spans
-            except Exception as e:
+            except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Chapter marker detection timed out or failed ({e}); falling back to size-based split (metadata)")
                 bounds = _trim_bounds(0, len(text))
                 if not bounds:
@@ -672,11 +690,11 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             logger.debug(f"Created {len(chunks)} chapter-based chunks with metadata")
             return chunks
 
-        except Exception as e:
+        except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during chapter chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}") from e
 
-    def validate_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """
         Validate and normalize options for chapter chunking.
 
@@ -694,6 +712,6 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             try:
                 re.compile(pattern)
             except re.error as e:
-                raise InvalidInputError(f"Invalid chapter pattern: {e}")
+                raise InvalidInputError(f"Invalid chapter pattern: {e}") from e
 
         return validated

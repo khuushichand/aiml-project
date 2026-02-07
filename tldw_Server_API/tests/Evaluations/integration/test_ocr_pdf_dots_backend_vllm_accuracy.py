@@ -46,8 +46,8 @@ def test_ocr_pdf_with_dots_and_vllm_text_accuracy():
         pytest.skip("vLLM server not available on expected endpoint")
 
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_mod
-    from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
+     from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_mod
+     from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import UnifiedEvaluationService
 
     # Use a temporary DB to isolate test
     with tempfile.NamedTemporaryFile(suffix="_eval_test.db", delete=True) as dbf:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cached_property
-from typing import Optional, TypedDict
+from typing import TypedDict
 
 from loguru import logger
 
@@ -199,7 +199,7 @@ class AuthnzRbacRepo:
             )
             raise
 
-    def get_role_id_by_name(self, role_name: str) -> Optional[int]:
+    def get_role_id_by_name(self, role_name: str) -> int | None:
         """
         Look up a role id by its name.
 

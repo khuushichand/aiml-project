@@ -4,33 +4,53 @@ MCP Protocol implementation for unified module
 Implements JSON-RPC 2.0 with enhanced error handling and request routing.
 """
 
-import uuid
+import asyncio
 import json
-from typing import Dict, Any, Optional, List, Union, Callable, Literal, Tuple
+import secrets
+import uuid
 from datetime import datetime, timezone
 from enum import IntEnum
+from typing import Any, Callable, Literal, Optional, Union
+
 from pydantic import BaseModel, Field
+
 try:
     from pydantic import field_validator, model_validator  # v2
-except Exception:  # Fallback for v1
+except ImportError:  # Fallback for v1
     from pydantic import validator as field_validator  # type: ignore
     try:
         from pydantic import root_validator as model_validator  # type: ignore
-    except Exception:
+    except ImportError:
         model_validator = None  # type: ignore
-from loguru import logger
+import contextlib
+import inspect
+import re
+import time
 from collections import OrderedDict
 
-from .modules.registry import get_module_registry
-from .modules.base import BaseModule
-from .config import get_config
-import inspect
-from .auth.authnz_rbac import get_rbac_policy, Resource, Action
-from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
-import time
-from .monitoring.metrics import get_metrics_collector
+from loguru import logger
+
+from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
-import re
+
+from .auth.authnz_rbac import Action, Resource, get_rbac_policy
+from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
+from .config import get_config
+from .modules.base import BaseModule
+from .modules.registry import get_module_registry
+from .monitoring.metrics import get_metrics_collector
+
+try:  # pragma: no cover - optional dependency
+    from redis.exceptions import RedisError
+except ImportError:  # pragma: no cover - redis not installed
+    class RedisError(Exception):
+        """Fallback RedisError when redis-py is unavailable."""
+        pass
+
+
+# Redis exceptions can include connection URLs and credentials; keep logs sanitized.
+def _redact_redis_error(exc: Exception) -> str:
+    return f"{exc.__class__.__name__}: Redis connection error - details redacted"
 
 
 # JSON-RPC 2.0 Error Codes
@@ -55,11 +75,36 @@ class InvalidParamsException(Exception):
     pass
 
 
+_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    RedisError,
+    RateLimitExceeded,
+    InvalidParamsException,
+)
+
+
 class MCPRequest(BaseModel):
     """MCP request following JSON-RPC 2.0 specification"""
     jsonrpc: Literal["2.0"] = Field(default="2.0")
     method: str = Field(..., min_length=1, max_length=100)
-    params: Optional[Dict[str, Any]] = None
+    params: Optional[dict[str, Any]] = None
     id: Optional[Union[str, int]] = None
 
     @field_validator("method")
@@ -111,7 +156,7 @@ class RequestContext:
         user_id: Optional[str] = None,
         client_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         self.request_id = request_id
         self.user_id = user_id
@@ -120,7 +165,7 @@ class RequestContext:
         self.metadata = metadata or {}
         self.start_time = datetime.now(timezone.utc)
         # Derive per-user db paths (read-only) if possible
-        self.db_paths: Dict[str, str] = {}
+        self.db_paths: dict[str, str] = {}
         try:
             if self.user_id is not None:
                 # Attempt to parse an integer user id (expected by DatabasePaths)
@@ -129,7 +174,7 @@ class RequestContext:
                 paths = DatabasePaths.get_all_user_db_paths(uid_int)
                 # Convert Paths to strings for downstream use
                 self.db_paths = {k: str(v) for k, v in paths.items()}
-        except Exception as _e:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _e:
             # Non-fatal: leave db_paths empty when user id is not numeric or any failure occurs
             pass
         # Build a bound logger for this request
@@ -139,6 +184,295 @@ class RequestContext:
             client_id=client_id,
             session_id=session_id,
         )
+
+
+class IdempotencyManager:
+    """Idempotency manager with Redis backing and local lock fallback."""
+
+    def __init__(self) -> None:
+        self._local_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._local_bindings: OrderedDict[str, tuple[float, str]] = OrderedDict()
+        self._local_locks: dict[str, asyncio.Lock] = {}
+        self._local_guard = asyncio.Lock()
+        self._redis_client: Any | None = None
+        self._redis_ready = False
+        self._redis_attempted = False
+        self._redis_guard = asyncio.Lock()
+
+    def _prune_local_locks(self) -> None:
+        """Drop stale local locks once their cache/binding entries are gone."""
+        active_keys = set(self._local_cache.keys()) | set(self._local_bindings.keys())
+        stale_keys = [
+            key
+            for key, lock in self._local_locks.items()
+            if key not in active_keys and not lock.locked()
+        ]
+        for key in stale_keys:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_locks[key]
+
+    async def _ensure_redis(self) -> bool:
+        if self._redis_attempted:
+            return self._redis_ready
+        async with self._redis_guard:
+            if self._redis_attempted:
+                return self._redis_ready
+            self._redis_attempted = True
+            cfg = get_config()
+            params = cfg.get_redis_connection_params()
+            if not params:
+                self._redis_ready = False
+                return False
+            url = params.pop("url", None)
+            try:
+                self._redis_client = await create_async_redis_client(
+                    preferred_url=url,
+                    decode_responses=True,
+                    fallback_to_fake=False,
+                    context="mcp_idempotency",
+                    redis_kwargs=params,
+                )
+                self._redis_ready = True
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(
+                    "MCP idempotency Redis unavailable; falling back to local locks. Error: {}",
+                    _redact_redis_error(exc),
+                )
+                self._redis_client = None
+                self._redis_ready = False
+            return self._redis_ready
+
+    def _local_get(self, cache_key: str, ttl: int) -> Optional[dict[str, Any]]:
+        item = self._local_cache.get(cache_key)
+        if not item:
+            return None
+        ts, payload = item
+        if time.time() - ts > ttl:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_cache[cache_key]
+            self._prune_local_locks()
+            return None
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_cache.move_to_end(cache_key)
+        return payload
+
+    def _local_put(self, cache_key: str, payload: dict[str, Any], ttl: int, max_size: int) -> None:
+        now = time.time()
+        self._local_cache[cache_key] = (now, payload)
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_cache.move_to_end(cache_key)
+        # Evict expired entries opportunistically
+        expired = [k for k, (ts, _) in self._local_cache.items() if now - ts > ttl]
+        for k in expired:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_cache[k]
+        # Enforce max size (LRU)
+        while len(self._local_cache) > max_size:
+            try:
+                self._local_cache.popitem(last=False)
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                break
+        self._prune_local_locks()
+
+    def _local_get_binding(self, binding_key: str, ttl: int) -> Optional[str]:
+        item = self._local_bindings.get(binding_key)
+        if not item:
+            return None
+        ts, arguments_hash = item
+        if time.time() - ts > ttl:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_bindings[binding_key]
+            self._prune_local_locks()
+            return None
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_bindings.move_to_end(binding_key)
+        return arguments_hash
+
+    def _local_put_binding(self, binding_key: str, arguments_hash: str, ttl: int, max_size: int) -> None:
+        now = time.time()
+        self._local_bindings[binding_key] = (now, arguments_hash)
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_bindings.move_to_end(binding_key)
+        expired = [k for k, (ts, _) in self._local_bindings.items() if now - ts > ttl]
+        for k in expired:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_bindings[k]
+        while len(self._local_bindings) > max_size:
+            try:
+                self._local_bindings.popitem(last=False)
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                break
+        self._prune_local_locks()
+
+    async def _get_local_lock(self, cache_key: str) -> asyncio.Lock:
+        async with self._local_guard:
+            lock = self._local_locks.get(cache_key)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._local_locks[cache_key] = lock
+            return lock
+
+    async def _redis_get(self, client: Any, key: str) -> Optional[dict[str, Any]]:
+        raw = await client.get(key)
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    async def _redis_set(self, client: Any, key: str, payload: dict[str, Any], ttl: int) -> None:
+        data = json.dumps(payload, separators=(",", ":"), default=str)
+        await client.set(key, data, ex=ttl)
+
+    async def _redis_try_acquire(self, client: Any, key: str, token: str, ttl: int) -> bool:
+        resp = await client.set(key, token, nx=True, ex=ttl)
+        return bool(resp)
+
+    async def _redis_release(self, client: Any, key: str, token: str) -> None:
+        lua_script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] "
+            "then return redis.call('del', KEYS[1]) end"
+        )
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            await client.eval(lua_script, 1, key, token)
+
+    async def _redis_bind_arguments(self, client: Any, key: str, arguments_hash: str, ttl: int) -> bool:
+        binding_key = f"mcp:idemp:args:{key}"
+        created = await client.set(binding_key, arguments_hash, nx=True, ex=ttl)
+        if created:
+            return True
+        existing = await client.get(binding_key)
+        if existing is None:
+            # Key may have expired between checks; retry once.
+            created = await client.set(binding_key, arguments_hash, nx=True, ex=ttl)
+            if created:
+                return True
+            existing = await client.get(binding_key)
+        if existing is None:
+            return True
+        if existing == arguments_hash:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                await client.expire(binding_key, ttl)
+            return True
+        return False
+
+    async def _run_local(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        max_size: int,
+    ) -> tuple[dict[str, Any], bool]:
+        async with self._local_guard:
+            cached = self._local_get(cache_key, ttl)
+        if cached is not None:
+            return cached, True
+
+        lock = await self._get_local_lock(cache_key)
+        try:
+            async with lock:
+                async with self._local_guard:
+                    cached = self._local_get(cache_key, ttl)
+                if cached is not None:
+                    return cached, True
+                result = await execute_fn()
+                async with self._local_guard:
+                    self._local_put(cache_key, result, ttl, max_size)
+                return result, False
+        finally:
+            async with self._local_guard:
+                self._prune_local_locks()
+
+    async def _run_redis(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        lock_ttl: int,
+    ) -> tuple[dict[str, Any], bool]:
+        client = self._redis_client
+        if client is None:
+            raise RuntimeError("Redis client not initialized")
+        result_key = f"mcp:idemp:result:{cache_key}"
+        lock_key = f"mcp:idemp:lock:{cache_key}"
+        cached = await self._redis_get(client, result_key)
+        if cached is not None:
+            return cached, True
+
+        poll_interval = 0.2
+        while True:
+            token = secrets.token_urlsafe(16)
+            acquired = await self._redis_try_acquire(client, lock_key, token, lock_ttl)
+            if acquired:
+                try:
+                    result = await execute_fn()
+                    await self._redis_set(client, result_key, result, ttl)
+                finally:
+                    await self._redis_release(client, lock_key, token)
+                return result, False
+
+            cached = await self._redis_get(client, result_key)
+            if cached is not None:
+                return cached, True
+            await asyncio.sleep(poll_interval)
+
+    async def run(
+        self,
+        cache_key: str,
+        execute_fn: Callable[[], Any],
+        *,
+        ttl: int,
+        max_size: int,
+        lock_ttl: int,
+    ) -> tuple[dict[str, Any], bool]:
+        if await self._ensure_redis():
+            try:
+                return await self._run_redis(
+                    cache_key,
+                    execute_fn,
+                    ttl=ttl,
+                    lock_ttl=lock_ttl,
+                )
+            except RedisError as exc:
+                logger.warning(
+                    "MCP idempotency Redis path failed; falling back to local locks. Error: {}",
+                    _redact_redis_error(exc),
+                )
+                self._redis_ready = False
+        return await self._run_local(cache_key, execute_fn, ttl=ttl, max_size=max_size)
+
+    async def bind_arguments(
+        self,
+        cache_key: str,
+        arguments_hash: str,
+        *,
+        ttl: int,
+        max_size: int,
+    ) -> bool:
+        if await self._ensure_redis():
+            try:
+                client = self._redis_client
+                if client is not None:
+                    return await self._redis_bind_arguments(client, cache_key, arguments_hash, ttl)
+            except RedisError as exc:
+                logger.warning(
+                    "MCP idempotency binding Redis path failed; falling back to local cache. Error: {}",
+                    _redact_redis_error(exc),
+                )
+                self._redis_ready = False
+
+        async with self._local_guard:
+            existing = self._local_get_binding(cache_key, ttl)
+            if existing is None:
+                self._local_put_binding(cache_key, arguments_hash, ttl, max_size)
+                return True
+            if existing != arguments_hash:
+                return False
+            self._local_put_binding(cache_key, arguments_hash, ttl, max_size)
+            return True
 
 
 class MCPProtocol:
@@ -164,11 +498,11 @@ class MCPProtocol:
         self.telemetry = get_telemetry_manager()
         # Strict tool name validation regex
         self._tool_name_re = re.compile(r'^[A-Za-z0-9_.:-]{1,100}$')
-        # Small LRU with TTL for idempotency of write tools
-        self._idempotency_cache: "OrderedDict[str, Tuple[float, Dict[str, Any]] ]" = OrderedDict()
+        # Idempotency manager for write-capable tools
+        self._idempotency = IdempotencyManager()
 
         # Method handlers
-        self.handlers: Dict[str, Callable] = {
+        self.handlers: dict[str, Callable] = {
             "initialize": self._handle_initialize,
             "ping": self._handle_ping,
             "tools/list": self._handle_tools_list,
@@ -193,10 +527,10 @@ class MCPProtocol:
             if inspect.iscoroutinefunction(fn):
                 return await fn(user_id, resource, action, resource_id)
             return fn(user_id, resource, action, resource_id)
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def _scoped_permissions(self, context: RequestContext) -> List[str]:
+    def _scoped_permissions(self, context: RequestContext) -> list[str]:
         metadata = getattr(context, "metadata", {})
         if not isinstance(metadata, dict):
             return []
@@ -207,13 +541,13 @@ class MCPProtocol:
             return [str(item) for item in raw if isinstance(item, str)]
         return []
 
-    def _mcp_scopes(self, context: RequestContext) -> List[str]:
-        scopes: List[str] = []
+    def _mcp_scopes(self, context: RequestContext) -> list[str]:
+        scopes: list[str] = []
         for scope in self._scoped_permissions(context):
             try:
                 if scope.lower().startswith("mcp:"):
                     scopes.append(scope)
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 continue
         return scopes
 
@@ -227,13 +561,13 @@ class MCPProtocol:
             return None
         try:
             from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             normalize_scope = None  # type: ignore
 
         if normalize_scope is not None:
             try:
                 return set(normalize_scope(raw))
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if isinstance(raw, str):
@@ -298,15 +632,12 @@ class MCPProtocol:
             for scope in scopes:
                 try:
                     parts = scope.strip().lower().split(":")
-                except Exception:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                     continue
                 if len(parts) >= 2 and parts[0] == "mcp":
                     if parts[1] == "*" or parts[1] == resource_kind:
                         return True
-        for scope in scopes:
-            if self._scope_matches(scope, resource_kind, identifier_norm):
-                return True
-        return False
+        return any(self._scope_matches(scope, resource_kind, identifier_norm) for scope in scopes)
 
     async def _has_module_permission(self, context: RequestContext, module_id: Optional[str]) -> bool:
         module_id_norm = module_id or ""
@@ -336,12 +667,12 @@ class MCPProtocol:
         return False
 
     @staticmethod
-    def _hash_arguments(arguments: Dict[str, Any]) -> Optional[str]:
+    def _hash_arguments(arguments: dict[str, Any]) -> Optional[str]:
         try:
             payload = json.dumps(arguments or {}, sort_keys=True, default=str).encode("utf-8")
             import hashlib
             return hashlib.sha256(payload).hexdigest()
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _audit_tool_event(
@@ -368,17 +699,17 @@ class MCPProtocol:
                 status=status,
             )
             if error:
-                log.error(f"MCP tool execution failed", error_type=error.__class__.__name__, error_message=str(error)[:200])
+                log.error("MCP tool execution failed", error_type=error.__class__.__name__, error_message=str(error)[:200])
             else:
                 log.info("MCP tool executed")
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def process_request(
         self,
-        request: Union[Dict[str, Any], List[Dict[str, Any]], MCPRequest],
+        request: Union[dict[str, Any], list[dict[str, Any]], MCPRequest],
         context: Optional[RequestContext] = None
-    ) -> Union[MCPResponse, List[MCPResponse], None]:
+    ) -> Union[MCPResponse, list[MCPResponse], None]:
         """
         Process an MCP request and return response.
 
@@ -397,18 +728,18 @@ class MCPProtocol:
                     "Invalid request: empty batch",
                     None,
                 )
-            responses: List[MCPResponse] = []
+            responses: list[MCPResponse] = []
             for item in request:
                 try:
                     resp = await self.process_request(item, context)
                     # Notifications return None; do not include in batch response
                     if isinstance(resp, MCPResponse):
                         responses.append(resp)
-                except Exception as e:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
                     # If parsing fails at top-level, try to include an error response for that item
                     try:
                         req_id = item.get("id") if isinstance(item, dict) else None
-                    except Exception:
+                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                         req_id = None
                     responses.append(self._error_response(ErrorCode.INVALID_REQUEST, str(e), req_id))
             # Per JSON-RPC, if the batch is empty or only notifications, return no response
@@ -418,7 +749,7 @@ class MCPProtocol:
         if isinstance(request, dict):
             try:
                 request = MCPRequest(**request)
-            except Exception as e:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
                 req_id = request.get("id") if isinstance(request, dict) else None
                 return self._error_response(
                     ErrorCode.INVALID_REQUEST,
@@ -448,7 +779,7 @@ class MCPProtocol:
             try:
                 if context.metadata and context.metadata.get("rg_ingress_enforced"):
                     skip_rate_limit = True
-            except Exception as exc:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
                 log.debug(
                     "Failed to read rg_ingress_enforced from metadata; rate limit will be enforced",
                     error=str(exc),
@@ -493,7 +824,7 @@ class MCPProtocol:
                             "Invalid tool name",
                             request.id,
                         )
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 # Uniformly surface as INVALID_PARAMS for caller clarity
                 return self._error_response(ErrorCode.INVALID_PARAMS, "Invalid tool name", request.id)
 
@@ -520,7 +851,7 @@ class MCPProtocol:
                                     f"or tools.execute:* to your role (Admin → Access Control)."
                                 )
                             }
-                except Exception:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                     hint_data = None
 
                 return self._error_response(
@@ -545,7 +876,7 @@ class MCPProtocol:
                 try:
                     result = await handler(request.params or {}, context)
                     span.set_attribute("mcp.status", "success")
-                except Exception as _span_e:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _span_e:
                     span.set_attribute("mcp.status", "failure")
                     span.set_attribute("mcp.error_type", _span_e.__class__.__name__)
                     span.set_attribute("mcp.error_message", str(_span_e)[:200])
@@ -560,10 +891,8 @@ class MCPProtocol:
                 f"elapsed={elapsed:.3f}s",
                 extra={"audit": True}
             )
-            try:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                 self.metrics.record_request(method=request.method, duration=elapsed, status="success")
-            except Exception:
-                pass
 
             # Notification: do not return a response
             if request.id is None:
@@ -571,12 +900,12 @@ class MCPProtocol:
             # Return success response for standard requests
             return MCPResponse(result=result, id=request.id)
 
-        except RateLimitExceeded as rl:
+        except RateLimitExceeded:
             # Record rate limit hit and re-raise for caller-specific mapping
             try:
                 key_type = "user" if context.user_id else ("client" if context.client_id else "anonymous")
                 self.metrics.record_rate_limit_hit(key_type=key_type)
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 pass
             raise
         except InvalidParamsException as ive:
@@ -591,16 +920,16 @@ class MCPProtocol:
             # Redact any secrets in message (defensive)
             msg = self._mask_secrets(str(perr))
             return self._error_response(ErrorCode.AUTHORIZATION_ERROR, msg, request.id if isinstance(request, MCPRequest) else None)
-        except Exception as e:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
             # Log error
-            log.error(
+            log.exception(
                 f"MCP request failed: method={request.method}, error={self._mask_secrets(str(e))}",
                 extra={"audit": True}
             )
             try:
                 elapsed = max(0.0, time.time() - start_ts)
                 self.metrics.record_request(method=request.method, duration=elapsed, status="failure")
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Notification: do not return a response
@@ -610,7 +939,7 @@ class MCPProtocol:
             try:
                 cfg = get_config()
                 msg = self._mask_secrets(str(e)) if getattr(cfg, "debug_mode", False) else "Internal error"
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 msg = "Internal error"
             return self._error_response(
                 ErrorCode.INTERNAL_ERROR,
@@ -636,7 +965,7 @@ class MCPProtocol:
             for p in patterns:
                 text = _re.sub(p, lambda m: f"{m.group(1)}=****", text, flags=_re.IGNORECASE)
             return text
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             return text
 
     def _error_response(
@@ -676,7 +1005,7 @@ class MCPProtocol:
                 # Extract the parameter name from original message
                 try:
                     missing = message.split(":", 1)[1].strip().strip("'\"")
-                except Exception:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                     missing = None
                 if missing:
                     hint = f"Add '{missing}' to the tool arguments payload before retrying."
@@ -706,7 +1035,7 @@ class MCPProtocol:
             if isinstance(getattr(context, "metadata", None), dict):
                 if context.metadata.get("admin_override") is True and request.method in {"modules/health"}:
                     return True
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             pass
         # No user context means no auth
         if not context.user_id:
@@ -745,7 +1074,7 @@ class MCPProtocol:
                     name = params.get("name") if isinstance(params, dict) else None
                     if isinstance(name, str) and name:
                         resource_id = name
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 resource_id = None
             if inspect.iscoroutinefunction(fn):
                 allowed = await fn(context.user_id, resource, action, resource_id)
@@ -780,7 +1109,7 @@ class MCPProtocol:
                     is_write = module.is_write_tool_def(tool_def)
                 elif tool_name:
                     is_write = bool(re.search(r"(ingest|update|delete|create|import)", tool_name.lower()))
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 is_write = None
             return self._api_key_allows(context, is_write=is_write)
 
@@ -791,9 +1120,9 @@ class MCPProtocol:
 
     async def _handle_initialize(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle initialize request"""
         client_info = params.get("clientInfo", {})
 
@@ -819,18 +1148,27 @@ class MCPProtocol:
 
     async def _handle_ping(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle ping request"""
         return {"pong": True, "timestamp": datetime.now(timezone.utc).isoformat()}
 
     async def _resolve_catalog_tool_names(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
     ) -> Optional[set[str]]:
         """Resolve catalog parameter into a set of tool names for filtering."""
+        strict = False
+        if isinstance(params, dict):
+            raw_strict = params.get("catalog_strict")
+            if isinstance(raw_strict, bool):
+                strict = raw_strict
+            elif isinstance(raw_strict, (int, float)):
+                strict = bool(raw_strict)
+            elif isinstance(raw_strict, str):
+                strict = raw_strict.strip().lower() in {"1", "true", "yes", "on"}
         catalog_name = None
         catalog_id = None
         if isinstance(params, dict):
@@ -841,7 +1179,7 @@ class MCPProtocol:
         try:
             from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
             pool = await get_db_pool()
-        except Exception as exc:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
             context.logger.debug(f"Catalog lookup unavailable: {exc}")
             return None
 
@@ -849,7 +1187,7 @@ class MCPProtocol:
         if catalog_id is not None:
             try:
                 resolved_id = int(catalog_id)
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 resolved_id = None
 
         if resolved_id is None and isinstance(catalog_name, str) and catalog_name.strip():
@@ -879,18 +1217,18 @@ class MCPProtocol:
                     )
                 if row and row.get("id") is not None:
                     resolved_id = int(row.get("id"))
-            except Exception as exc:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
                 context.logger.debug(f"Catalog lookup failed: {exc}")
 
         if resolved_id is None:
-            return None
+            return set() if strict else None
 
         try:
             rows = await pool.fetchall(
                 "SELECT tool_name FROM tool_catalog_entries WHERE catalog_id = ?",
                 resolved_id,
             )
-        except Exception as exc:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as exc:
             context.logger.debug(f"Catalog entries lookup failed: {exc}")
             return None
 
@@ -898,17 +1236,19 @@ class MCPProtocol:
         for r in rows:
             try:
                 val = r["tool_name"] if isinstance(r, dict) else r[0]
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 val = None
             if isinstance(val, str):
                 names.add(val)
-        return names if names else None
+        if names:
+            return names
+        return set() if strict else None
 
     async def _handle_tools_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available tools"""
         tools = []
         catalog_filter = await self._resolve_catalog_tool_names(params, context)
@@ -946,39 +1286,128 @@ class MCPProtocol:
                             continue
                     # Catalog filter: include only when in selected catalog
                     if catalog_filter is not None and isinstance(name, str):
-                        if name not in catalog_filter:
+                        meta = tool_copy.get("metadata") if isinstance(tool_copy, dict) else None
+                        exempt = isinstance(meta, dict) and bool(meta.get("catalog_exempt"))
+                        if name not in catalog_filter and not exempt:
                             continue
                     is_write = None
                     try:
                         if isinstance(tool_copy, dict):
                             is_write = module.is_write_tool_def(tool_copy)
-                    except Exception:
+                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                         is_write = None
                     can_execute = await self._has_tool_permission(context, name, is_write=is_write) if name else False
                     tool_copy["canExecute"] = can_execute
                     tools.append(tool_copy)
-            except Exception as e:
-                context.logger.error(f"Error getting tools from module {module_id}: {e}")
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
+                context.logger.exception(f"Error getting tools from module {module_id}: {e}")
 
         return {"tools": tools}
 
+    def _extract_allowed_tools(self, context: RequestContext) -> list[str] | None:
+        """Extract allowed-tools list from request context metadata."""
+        try:
+            metadata = context.metadata or {}
+            allowed = metadata.get("allowed_tools")
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+            return None
+
+        if allowed is None:
+            return None
+        if isinstance(allowed, list):
+            cleaned = [str(item).strip() for item in allowed if str(item).strip()]
+            return cleaned or None
+        if isinstance(allowed, str):
+            try:
+                parsed = json.loads(allowed)
+                if isinstance(parsed, list):
+                    cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+                    return cleaned or None
+            except json.JSONDecodeError:
+                pass
+            cleaned = [part.strip() for part in allowed.split(",") if part.strip()]
+            return cleaned or None
+        return None
+
+    def _extract_tool_command(self, tool_args: Any) -> str | None:
+        """Extract command-like string from tool arguments for pattern matching."""
+        if not isinstance(tool_args, dict):
+            return None
+        for key in ("command", "cmd", "args", "arguments"):
+            if key not in tool_args:
+                continue
+            value = tool_args.get(key)
+            if isinstance(value, str):
+                return value
+            if isinstance(value, list):
+                return " ".join(str(part) for part in value)
+        return None
+
+    def _matches_allowed_tool_pattern(self, tool_name: str, tool_args: Any, pattern: str) -> bool:
+        """Check if tool invocation matches an allowed-tools pattern."""
+        pattern = str(pattern or "").strip()
+        if not pattern:
+            return False
+        if "(" not in pattern:
+            return tool_name == pattern
+        if not pattern.endswith(")"):
+            return False
+
+        base_name, cmd_pattern = pattern.split("(", 1)
+        cmd_pattern = cmd_pattern[:-1]
+        base_name = base_name.strip()
+        if tool_name != base_name:
+            return False
+
+        command = self._extract_tool_command(tool_args)
+        if command is None:
+            return False
+
+        regex_pattern = re.escape(cmd_pattern)
+        regex_pattern = regex_pattern.replace(r"\*", ".*")
+        try:
+            return bool(re.match(f"^{regex_pattern}$", command.strip()))
+        except re.error:
+            return False
+
+    def _is_tool_allowed_by_context(self, tool_name: str, tool_args: Any, context: RequestContext) -> bool:
+        """Return True when tool usage is allowed by context metadata."""
+        allowed_tools = self._extract_allowed_tools(context)
+        if not allowed_tools:
+            return True
+        return any(self._matches_allowed_tool_pattern(tool_name, tool_args, pattern) for pattern in allowed_tools)
+
     async def _handle_tools_call(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a tool"""
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
         # Accept both camelCase and snake_case for idempotency
-        idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
+        raw_idempotency_key = params.get("idempotencyKey")
+        if raw_idempotency_key is None:
+            raw_idempotency_key = params.get("idempotency_key")
+        idempotency_key: Optional[str] = None
 
         if not tool_name:
             raise InvalidParamsException("Tool name is required")
 
+        if raw_idempotency_key is not None:
+            if not isinstance(raw_idempotency_key, str):
+                raise InvalidParamsException("idempotencyKey must be a string")
+            idempotency_key = raw_idempotency_key.strip()
+            if not idempotency_key:
+                raise InvalidParamsException("idempotencyKey must not be empty")
+
         # Strictly validate tool name
         if not self._tool_name_re.match(tool_name):
             raise InvalidParamsException("Invalid tool name")
+
+        # Enforce allowed-tools constraints from context metadata (skill execution)
+        if not self._is_tool_allowed_by_context(tool_name, tool_args, context):
+            raise PermissionError(f"Tool '{tool_name}' not allowed by execution context")
 
         # Find module for tool
         module = await self.module_registry.find_module_for_tool(tool_name)
@@ -1000,7 +1429,7 @@ class MCPProtocol:
                     if isinstance(_t, dict) and _t.get("name") == tool_name:
                         tool_def = _t
                         break
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             tool_def = None
 
         # Determine write-capable status (best-effort)
@@ -1010,7 +1439,7 @@ class MCPProtocol:
                 is_write = module.is_write_tool_def(tool_def)
             else:
                 is_write = bool(re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             is_write = None
 
         module_allowed = await self._has_module_permission(context, module_id)
@@ -1029,15 +1458,15 @@ class MCPProtocol:
                 for k in list(tool_args.keys()):
                     if k in forbidden:
                         del tool_args[k]
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Central argument sanitization for all tools (deep)
         try:
             if isinstance(tool_args, dict):
                 tool_args = module.sanitize_input(tool_args)
-        except Exception as _san_e:
-            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}")
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _san_e:
+            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}") from _san_e
 
         # Protocol-level pre-execution validation for write-capable tools
         # Ensures that modules validate arguments even if they forgot to call
@@ -1054,7 +1483,7 @@ class MCPProtocol:
                         if isinstance(_t, dict) and _t.get("name") == tool_name:
                             tool_def = _t
                             break
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 tool_def = None
 
         try:
@@ -1065,10 +1494,8 @@ class MCPProtocol:
                 try:
                     self._validate_input_schema(schema, tool_args)
                 except InvalidParamsException:
-                    try:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
-                    except Exception:
-                        pass
                     raise
 
             # Determine write-capable status
@@ -1080,7 +1507,7 @@ class MCPProtocol:
                         # Fallback heuristic based on name
                         import re as _re
                         is_write = bool(_re.search(r"(ingest|update|delete|create|import)", str(tool_name).lower()))
-                except Exception:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                     is_write = False
 
             # Optional policy: disable write-capable tools entirely
@@ -1089,166 +1516,176 @@ class MCPProtocol:
                     raise PermissionError("Write tools are disabled by server policy")
                 # Check module overrides validator
                 if module.__class__.validate_tool_arguments is BaseModule.validate_tool_arguments:
-                    try:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_validator_missing(getattr(module, "name", "unknown"), str(tool_name))
-                    except Exception:
-                        pass
                     raise ValueError(
                         "Write-capable tool requires module.validate_tool_arguments override"
                     )
                 # Run validator
                 try:
                     module.validate_tool_arguments(tool_name, tool_args)
-                except Exception as ve:
-                    try:
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as ve:
+                    with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
-                    except Exception:
-                        pass
-                    raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
+                    raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}") from ve
 
-                # Idempotency dedupe for write-capable tools (optional)
-                if isinstance(idempotency_key, str) and idempotency_key:
-                    cache_key = self._make_idempotency_cache_key(
+                idempotency_cache_key = None
+                if idempotency_key:
+                    idempotency_cache_key = self._make_idempotency_cache_key(
                         context, module_id or getattr(module, "name", "unknown"), tool_name, idempotency_key
                     )
-                    cached = self._idemp_cache_get(cache_key)
-                    if cached is not None:
-                        try:
-                            self.metrics.record_idempotency_hit(module_id or getattr(module, "name", "unknown"), str(tool_name))
-                        except Exception:
-                            pass
-                        return cached
-                    else:
-                        try:
-                            self.metrics.record_idempotency_miss(module_id or getattr(module, "name", "unknown"), str(tool_name))
-                        except Exception:
-                            pass
         except ValueError as ve:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
             # by raising a sentinel exception handled by process_request
-            raise InvalidParamsException(str(ve))
+            raise InvalidParamsException(str(ve)) from ve
 
-        # Optional per-tool/category rate limits (ingestion vs read)
-        try:
-            # Categorization for per-category rate limiting
-            cfg = get_config()
-            category = None
-            # 1) Prefer tool metadata.category if available
-            try:
-                meta = (tool_def or {}).get("metadata") or {}
-                cat = str(meta.get("category") or "").lower()
-                if cat in {"ingestion", "management", "read"}:
-                    category = cat
-            except Exception:
-                category = None
-            # 2) Config-driven mapping
-            if not category:
-                try:
-                    if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
-                        category = str(cfg.tool_category_map.get(tool_name))
-                except Exception:
-                    category = None
-            # 3) Heuristic fallback
-            if not category:
-                ingestion_tools = {'ingest_media', 'update_media', 'delete_media'}
-                category = 'ingestion' if tool_name in ingestion_tools else 'read'
-            key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
-            rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
-            await self.rate_limiter.check_rate_limit(rl_key, category=category)
-        except RateLimitExceeded:
-            raise
-        except Exception:
-            # Best-effort; do not block on limiter errors
-            pass
-
-        # Execute tool with circuit breaker (pass context through)
-        t0 = time.time()
         args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
 
-        try:
-            # Trace the tool call with OTEL
-            with self.telemetry.trace_context(
-                "mcp.tool_call",
-                {
-                    "mcp.tool": tool_name,
-                    "mcp.module": getattr(module, "name", "unknown"),
-                    "mcp.user_id": str(context.user_id or ""),
-                    "mcp.client_id": str(context.client_id or ""),
-                },
-            ) as span:
+        async def _execute_tool_call() -> dict[str, Any]:
+            # Optional per-tool/category rate limits (ingestion vs read)
+            try:
+                # Categorization for per-category rate limiting
+                cfg = get_config()
+                category = None
+                # 1) Prefer tool metadata.category if available
                 try:
-                    result = await module.execute_with_circuit_breaker(
-                        module.execute_tool,
-                        tool_name,
-                        tool_args,
-                        context
-                    )
-                    span.set_attribute("mcp.status", "success")
-                except Exception as _tool_e:
-                    span.set_attribute("mcp.status", "failure")
-                    span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
-                    span.set_attribute("mcp.error_message", str(_tool_e)[:200])
-                    raise
-                finally:
-                    span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - t0) * 1000.0))
-
-            # Format result
-            if isinstance(result, str):
-                content = [{"type": "text", "text": result}]
-            elif isinstance(result, list):
-                content = result
-            elif isinstance(result, dict):
-                # Preserve structured tool results as JSON content instead of stringifying.
-                content = [{"type": "json", "json": result}]
-            else:
-                content = [{"type": "text", "text": str(result)}]
-
-            module_name = module_id or getattr(module, "name", None)
-            # Record module operation metrics
-            try:
-                duration = max(0.0, time.time() - t0)
-                self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
-            except Exception:
+                    meta = (tool_def or {}).get("metadata") or {}
+                    cat = str(meta.get("category") or "").lower()
+                    if cat in {"ingestion", "management", "read"}:
+                        category = cat
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                    category = None
+                # 2) Config-driven mapping
+                if not category:
+                    try:
+                        if isinstance(cfg.tool_category_map, dict) and tool_name in cfg.tool_category_map:
+                            category = str(cfg.tool_category_map.get(tool_name))
+                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                        category = None
+                # 3) Heuristic fallback
+                if not category:
+                    ingestion_tools = {'ingest_media', 'update_media', 'delete_media'}
+                    category = 'ingestion' if tool_name in ingestion_tools else 'read'
+                key_owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
+                rl_key = f"{key_owner}:tool:{tool_name}:cat:{category}"
+                await self.rate_limiter.check_rate_limit(rl_key, category=category)
+            except RateLimitExceeded:
+                raise
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                # Best-effort; do not block on limiter errors
                 pass
-            self._audit_tool_event(
-                context,
-                tool_name,
-                module_name,
-                status="success",
-                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
-                arguments_hash=args_hash,
+
+            # Execute tool with circuit breaker (pass context through)
+            t0 = time.time()
+
+            try:
+                # Trace the tool call with OTEL
+                with self.telemetry.trace_context(
+                    "mcp.tool_call",
+                    {
+                        "mcp.tool": tool_name,
+                        "mcp.module": getattr(module, "name", "unknown"),
+                        "mcp.user_id": str(context.user_id or ""),
+                        "mcp.client_id": str(context.client_id or ""),
+                    },
+                ) as span:
+                    try:
+                        result = await module.execute_with_circuit_breaker(
+                            module.execute_tool,
+                            tool_name,
+                            tool_args,
+                            context
+                        )
+                        span.set_attribute("mcp.status", "success")
+                    except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _tool_e:
+                        span.set_attribute("mcp.status", "failure")
+                        span.set_attribute("mcp.error_type", _tool_e.__class__.__name__)
+                        span.set_attribute("mcp.error_message", str(_tool_e)[:200])
+                        raise
+                    finally:
+                        span.set_attribute("mcp.duration_ms", max(0.0, (time.time() - t0) * 1000.0))
+
+                # Format result
+                if isinstance(result, str):
+                    content = [{"type": "text", "text": result}]
+                elif isinstance(result, list):
+                    content = result
+                elif isinstance(result, dict):
+                    # Preserve structured tool results as JSON content instead of stringifying.
+                    content = [{"type": "json", "json": result}]
+                else:
+                    content = [{"type": "text", "text": str(result)}]
+
+                module_name = module_id or getattr(module, "name", None)
+                # Record module operation metrics
+                try:
+                    duration = max(0.0, time.time() - t0)
+                    self.metrics.record_module_operation(module=module_name or "unknown", operation="tools_call", duration=duration, success=True)
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                    pass
+                self._audit_tool_event(
+                    context,
+                    tool_name,
+                    module_name,
+                    status="success",
+                    duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                    arguments_hash=args_hash,
+                )
+                response_payload = {"content": content, "module": module_name, "tool": tool_name}
+                return response_payload
+
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
+                sanitized_error = self._mask_secrets(str(e))
+                context.logger.exception(f"Tool execution failed: {tool_name} - {sanitized_error}")
+                try:
+                    duration = max(0.0, time.time() - t0)
+                    self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
+                except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                    pass
+                self._audit_tool_event(
+                    context,
+                    tool_name,
+                    module_id or getattr(module, "name", None),
+                    status="failure",
+                    duration_ms=max(0.0, (time.time() - t0) * 1000.0),
+                    arguments_hash=args_hash,
+                    error=e,
+                )
+                raise
+
+        if is_write and idempotency_cache_key:
+            cfg = get_config()
+            ttl = max(1, int(getattr(cfg, "idempotency_ttl_seconds", 300)))
+            max_size = max(1, int(getattr(cfg, "idempotency_cache_size", 512)))
+            if args_hash is None:
+                raise InvalidParamsException("Unable to fingerprint tool arguments for idempotency")
+            arguments_bound = await self._idempotency.bind_arguments(
+                idempotency_cache_key,
+                args_hash,
+                ttl=ttl,
+                max_size=max_size,
             )
-            response_payload = {"content": content, "module": module_name, "tool": tool_name}
-
-            # Store idempotent result for write-capable tools
-            try:
-                if isinstance(idempotency_key, str) and idempotency_key and 'is_write' in locals() and is_write:
-                    cache_key = self._make_idempotency_cache_key(
-                        context, module_name or getattr(module, "name", "unknown"), tool_name, idempotency_key
-                    )
-                    self._idemp_cache_put(cache_key, response_payload)
-            except Exception:
-                pass
-
-            return response_payload
-
-        except Exception as e:
-            context.logger.error(f"Tool execution failed: {tool_name} - {e}")
-            try:
-                duration = max(0.0, time.time() - t0)
-                self.metrics.record_module_operation(module=getattr(module, "name", "unknown"), operation="tools_call", duration=duration, success=False)
-            except Exception:
-                pass
-            self._audit_tool_event(
-                context,
-                tool_name,
-                module_id or getattr(module, "name", None),
-                status="failure",
-                duration_ms=max(0.0, (time.time() - t0) * 1000.0),
-                arguments_hash=args_hash,
-                error=e,
+            if not arguments_bound:
+                raise InvalidParamsException("Idempotency key was already used with different arguments")
+            module_timeout = int(getattr(getattr(module, "config", None), "timeout_seconds", cfg.module_timeout))
+            lock_ttl = max(ttl, module_timeout * 2)
+            payload, from_cache = await self._idempotency.run(
+                idempotency_cache_key,
+                _execute_tool_call,
+                ttl=ttl,
+                max_size=max_size,
+                lock_ttl=lock_ttl,
             )
-            raise
+            try:
+                if from_cache:
+                    self.metrics.record_idempotency_hit(module_id or getattr(module, "name", "unknown"), str(tool_name))
+                else:
+                    self.metrics.record_idempotency_miss(module_id or getattr(module, "name", "unknown"), str(tool_name))
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                pass
+            return payload
+
+        return await _execute_tool_call()
 
     # -------------------------
     # Idempotency cache helpers
@@ -1257,52 +1694,7 @@ class MCPProtocol:
         owner = f"user:{context.user_id}" if context.user_id else (f"client:{context.client_id}" if context.client_id else "anon")
         return f"{owner}|module:{module_name}|tool:{tool_name}|key:{idempotency_key}"
 
-    def _idemp_cache_get(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        try:
-            now = time.time()
-            cfg = get_config()
-            ttl = max(1, int(getattr(cfg, 'idempotency_ttl_seconds', 300)))
-            item = self._idempotency_cache.get(cache_key)
-            if not item:
-                return None
-            ts, payload = item
-            if now - ts > ttl:
-                # Expired; remove
-                try:
-                    del self._idempotency_cache[cache_key]
-                except Exception:
-                    pass
-                return None
-            # Touch LRU order
-            try:
-                self._idempotency_cache.move_to_end(cache_key)
-            except Exception:
-                pass
-            return payload
-        except Exception:
-            return None
-
-    def _idemp_cache_put(self, cache_key: str, payload: Dict[str, Any]) -> None:
-        try:
-            now = time.time()
-            cfg = get_config()
-            max_size = max(1, int(getattr(cfg, 'idempotency_cache_size', 512)))
-            self._idempotency_cache[cache_key] = (now, payload)
-            # Move to end to mark recent
-            try:
-                self._idempotency_cache.move_to_end(cache_key)
-            except Exception:
-                pass
-            # Evict if over size
-            while len(self._idempotency_cache) > max_size:
-                try:
-                    self._idempotency_cache.popitem(last=False)
-                except Exception:
-                    break
-        except Exception:
-            pass
-
-    def _validate_input_schema(self, schema: Dict[str, Any], args: Dict[str, Any]) -> None:
+    def _validate_input_schema(self, schema: dict[str, Any], args: dict[str, Any]) -> None:
         """Quick JSON Schema checks: required keys, primitive types, unknown fields.
         Only applies when schema.type == object.
         """
@@ -1324,7 +1716,7 @@ class MCPProtocol:
 
             # Unknown fields
             if addl is False:
-                unknown = [k for k in args.keys() if k not in props]
+                unknown = [k for k in args if k not in props]
                 if unknown:
                     raise InvalidParamsException(f"Unknown parameters: {', '.join(unknown)}")
 
@@ -1354,20 +1746,20 @@ class MCPProtocol:
                         raise InvalidParamsException(f"Invalid type for '{k}': expected {t}")
         except InvalidParamsException:
             raise
-        except Exception:
+        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
             # Be forgiving on schema format errors
             return
 
     async def _handle_resources_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available resources"""
         resources = []
         modules = await self.module_registry.get_all_modules()
         catalog_filter = await self._resolve_catalog_tool_names(params, context)
-        module_tool_names: Dict[str, set[str]] = {}
+        module_tool_names: dict[str, set[str]] = {}
 
         for module_id, module in modules.items():
             try:
@@ -1385,7 +1777,7 @@ class MCPProtocol:
                                 for tool in module_tools
                                 if isinstance(tool, dict) and isinstance(tool.get("name"), str)
                             }
-                        except Exception:
+                        except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                             cached_names = set()
                         module_tool_names[module_id] = cached_names
                     if not cached_names.intersection(catalog_filter):
@@ -1401,16 +1793,16 @@ class MCPProtocol:
                         resource_copy["module"] = module_id
                     resources.append(resource_copy)
 
-            except Exception as e:
-                context.logger.error(f"Error getting resources from module {module_id}: {e}")
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
+                context.logger.exception(f"Error getting resources from module {module_id}: {e}")
 
         return {"resources": resources}
 
     async def _handle_resources_read(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Read a resource"""
         uri = params.get("uri")
         if not uri:
@@ -1426,7 +1818,7 @@ class MCPProtocol:
             raise PermissionError(f"Permission denied for resource: {uri}")
 
         # Read resource (pass context when supported)
-        read_fn = getattr(module, "read_resource")
+        read_fn = module.read_resource
         try:
             params = inspect.signature(read_fn).parameters
         except (TypeError, ValueError):
@@ -1440,9 +1832,9 @@ class MCPProtocol:
 
     async def _handle_prompts_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List available prompts"""
         prompts = []
         modules = await self.module_registry.get_all_modules()
@@ -1462,16 +1854,16 @@ class MCPProtocol:
                         prompt_copy["module"] = module_id
                     prompts.append(prompt_copy)
 
-            except Exception as e:
-                context.logger.error(f"Error getting prompts from module {module_id}: {e}")
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as e:
+                context.logger.exception(f"Error getting prompts from module {module_id}: {e}")
 
         return {"prompts": prompts}
 
     async def _handle_prompts_get(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get a specific prompt"""
         name = params.get("name")
         if not name:
@@ -1495,26 +1887,26 @@ class MCPProtocol:
 
     async def _handle_modules_list(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List registered modules"""
         registrations = await self.module_registry.list_registrations()
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         for entry in registrations:
             module_id = entry.get("module_id") if isinstance(entry, dict) else None
             try:
                 if await self._has_module_permission(context, module_id):
                     filtered.append(entry)
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 continue
         return {"modules": filtered}
 
     async def _handle_modules_health(
         self,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         context: RequestContext
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get module health status"""
         health_results = await self.module_registry.check_all_health()
 
@@ -1525,7 +1917,7 @@ class MCPProtocol:
             try:
                 if getattr(health, "last_check", None):
                     last_check_iso = health.last_check.isoformat()
-            except Exception:
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 last_check_iso = None
             health_data[module_id] = {
                 "status": health.status.value if getattr(health, "status", None) else "unknown",
@@ -1539,7 +1931,7 @@ class MCPProtocol:
 
 # Convenience function
 async def process_mcp_request(
-    request: Union[Dict[str, Any], MCPRequest],
+    request: Union[dict[str, Any], MCPRequest],
     context: Optional[RequestContext] = None
 ) -> MCPResponse:
     """Process an MCP request"""

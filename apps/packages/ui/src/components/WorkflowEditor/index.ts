@@ -9,7 +9,7 @@ export { WorkflowEditor } from "./WorkflowEditor"
 
 // Canvas and nodes
 export { WorkflowCanvas } from "./WorkflowCanvas"
-export { WorkflowNode, workflowNodeTypes } from "./nodes/WorkflowNode"
+export { WorkflowNode, buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 
 // Sidebar panels
 export { NodePalette } from "./NodePalette"
@@ -18,12 +18,14 @@ export { ExecutionPanel } from "./ExecutionPanel"
 
 // Step registry
 export {
-  STEP_REGISTRY,
+  BASE_STEP_REGISTRY,
   STEP_CATEGORIES,
   PORT_COLORS,
   getStepMetadata,
   getStepsByCategory,
   getAllSteps,
   getAddableSteps,
-  getCategorizedSteps
+  getCategorizedSteps,
+  buildStepRegistry,
+  humanizeStepType
 } from "./step-registry"

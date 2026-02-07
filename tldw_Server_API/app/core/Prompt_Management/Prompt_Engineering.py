@@ -1,14 +1,15 @@
 # Prompt_Engineering.py
 # Description: Library for generating prompts
 
-from typing import Any, Dict, List, Optional
 import re
+from typing import Any, Optional
+
 from loguru import logger
 
 # Local Imports
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 
 
 class PromptGenerationError(Exception):
@@ -16,7 +17,7 @@ class PromptGenerationError(Exception):
     pass
 
 
-def _call_adapter(api_endpoint: str, request: Dict[str, Any]) -> Any:
+def _call_adapter(api_endpoint: str, request: dict[str, Any]) -> Any:
     provider = (api_endpoint or "").strip().lower()
     if not provider:
         raise PromptGenerationError("Provider name is required.")
@@ -30,12 +31,12 @@ def _call_adapter(api_endpoint: str, request: Dict[str, Any]) -> Any:
     if payload.get("model") is None:
         resolved = _resolve_model(provider, app_config)
         if not resolved:
-            raise PromptGenerationError("Model is required for provider '%s'." % provider)
+            raise PromptGenerationError(f"Model is required for provider '{provider}'.")
         payload["model"] = resolved
     return adapter.chat(payload)
 
 
-def _resolve_model(provider: str, app_config: Dict[str, Any]) -> Optional[str]:
+def _resolve_model(provider: str, app_config: dict[str, Any]) -> Optional[str]:
     key = f"{provider.replace('-', '_').replace('.', '_')}_api"
     model = (app_config.get(key) or {}).get("model")
     return model
@@ -53,7 +54,7 @@ def chat_api_call(**kwargs: Any) -> Any:
             or kwargs.get("endpoint")
         )
         if not api_endpoint:
-            raise PromptGenerationError("Provider name is required.")
+            raise PromptGenerationError("Provider name is required.") from None
         request = dict(kwargs)
         messages_payload = request.pop("messages_payload", None)
         if messages_payload is not None and "messages" not in request:
@@ -82,7 +83,7 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
         Provider-specific chat completion response (string or dict depending on backend)
     """
     # Convert variables into a list from comma-separated input
-    variables = [v.strip() for v in variables_str.split(',') if v.strip()]
+    [v.strip() for v in variables_str.split(',') if v.strip()]
 
     # Construct the metaprompt by embedding the task and variables into the defined structure
     metaprompt = f"""Today you will be writing instructions to an eager, helpful, but inexperienced and unworldly AI assistant who needs careful instruction and examples to understand how best to behave. I will explain a task to you. You will write instructions that will direct the assistant on how best to accomplish the task consistently, accurately, and correctly. Here are some examples of tasks and instructions.
@@ -570,7 +571,7 @@ def generate_prompt(api_endpoint: str, api_key: str, task: str, variables_str: s
         logger.error(f"Failed to generate prompt via chat API: {e}")
         raise PromptGenerationError(f"Failed to generate prompt: {e}") from e
 
-def extract_between_tags(tag: str, string: str, strip: bool = False) -> List[str]:
+def extract_between_tags(tag: str, string: str, strip: bool = False) -> list[str]:
     """Extract all substrings between specific XML-like tags.
 
     Args:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -26,15 +26,15 @@ class RouteMetadata:
     """Describes a FastAPI route relevant for privilege mapping."""
 
     path: str
-    methods: Tuple[str, ...]
+    methods: tuple[str, ...]
     name: str
-    tags: Tuple[str, ...]
+    tags: tuple[str, ...]
     endpoint: str
-    dependencies: Tuple[DependencyMetadata, ...] = field(default_factory=tuple)
-    dependency_sources: Tuple[str, ...] = field(default_factory=tuple)
-    rate_limit_resources: Tuple[str, ...] = field(default_factory=tuple)
-    summary: Optional[str] = None
-    description: Optional[str] = None
+    dependencies: tuple[DependencyMetadata, ...] = field(default_factory=tuple)
+    dependency_sources: tuple[str, ...] = field(default_factory=tuple)
+    rate_limit_resources: tuple[str, ...] = field(default_factory=tuple)
+    summary: str | None = None
+    description: str | None = None
 
     def __post_init__(self) -> None:
         if not self.dependency_sources and self.dependencies:
@@ -45,11 +45,11 @@ class RouteMetadata:
             )
 
     @property
-    def methods_or_any(self) -> Tuple[str, ...]:
+    def methods_or_any(self) -> tuple[str, ...]:
         return self.methods or ("ANY",)
 
 
-def _normalize_dependency_name(callable_obj: object) -> Tuple[str, str, str]:
+def _normalize_dependency_name(callable_obj: object) -> tuple[str, str, str]:
     module = getattr(callable_obj, "__module__", "") or ""
     qualname = getattr(callable_obj, "__qualname__", getattr(callable_obj, "__name__", repr(callable_obj))) or ""
     simple = qualname.split(".")[-1]
@@ -64,8 +64,8 @@ def _build_dependency_id(simple: str, module: str) -> str:
             return f"{suffix}.{simple}"
     return simple
 
-def _collect_candidate_scopes(callable_obj: object) -> Set[str]:
-    candidates: Set[str] = set()
+def _collect_candidate_scopes(callable_obj: object) -> set[str]:
+    candidates: set[str] = set()
     endpoint_id = getattr(callable_obj, "_tldw_endpoint_id", None)
     if isinstance(endpoint_id, str):
         candidates.add(endpoint_id)
@@ -75,14 +75,14 @@ def _collect_candidate_scopes(callable_obj: object) -> Set[str]:
     return candidates
 
 
-def _extract_scope_matches(callable_obj: object, known_scopes: Set[str]) -> Tuple[Set[str], Set[str]]:
+def _extract_scope_matches(callable_obj: object, known_scopes: set[str]) -> tuple[set[str], set[str]]:
     candidates = _collect_candidate_scopes(callable_obj)
     matches = {scope for scope in candidates if scope in known_scopes}
     unknown = {scope for scope in candidates if scope not in known_scopes}
     return matches, unknown
 
 
-def _extract_rate_limit_resources(callable_obj: object) -> Set[str]:
+def _extract_rate_limit_resources(callable_obj: object) -> set[str]:
     value = getattr(callable_obj, "_tldw_rate_limit_resource", None)
     return {value} if isinstance(value, str) and value else set()
 
@@ -92,13 +92,13 @@ def collect_privilege_route_registry(
     catalog: PrivilegeCatalog,
     *,
     strict: bool = False,
-) -> Dict[str, List[RouteMetadata]]:
+) -> dict[str, list[RouteMetadata]]:
     """
     Build a registry mapping privilege scope identifiers to relevant FastAPI route metadata.
     """
     scope_ids = {scope.id for scope in catalog.scopes}
-    registry: Dict[str, Dict[Tuple[str, Tuple[str, ...]], RouteMetadata]] = {}
-    unknown_scope_refs: Set[Tuple[str, str, str]] = set()
+    registry: dict[str, dict[tuple[str, tuple[str, ...]], RouteMetadata]] = {}
+    unknown_scope_refs: set[tuple[str, str, str]] = set()
 
     for route in app.routes:
         if not isinstance(route, APIRoute):
@@ -111,13 +111,13 @@ def collect_privilege_route_registry(
             # Even if no dependencies, there might still be catalog mappings via tags or other mechanisms.
             aggregated_deps = []
 
-        dependency_entries: List[DependencyMetadata] = []
-        dependency_sources: List[str] = []
-        seen_dependency_keys: Set[Tuple[str, str]] = set()
-        seen_dependency_sources: Set[str] = set()
-        rate_resources: List[str] = []
-        seen_rate_resources: Set[str] = set()
-        scope_matches: Set[str] = set()
+        dependency_entries: list[DependencyMetadata] = []
+        dependency_sources: list[str] = []
+        seen_dependency_keys: set[tuple[str, str]] = set()
+        seen_dependency_sources: set[str] = set()
+        rate_resources: list[str] = []
+        seen_rate_resources: set[str] = set()
+        scope_matches: set[str] = set()
 
         for dep in aggregated_deps:
             callable_obj = getattr(dep, "call", None)
@@ -186,10 +186,10 @@ def collect_privilege_route_registry(
     return {scope_id: list(bucket.values()) for scope_id, bucket in registry.items()}
 
 
-def serialize_route_registry(registry: Dict[str, List[RouteMetadata]]) -> Dict[str, List[Dict[str, Any]]]:
+def serialize_route_registry(registry: dict[str, list[RouteMetadata]]) -> dict[str, list[dict[str, Any]]]:
     """Convert the route registry into a JSON-serializable structure with deterministic ordering."""
 
-    serialized: Dict[str, List[Dict[str, Any]]] = {}
+    serialized: dict[str, list[dict[str, Any]]] = {}
     for scope_id in sorted(registry.keys()):
         entries = []
         for meta in sorted(registry[scope_id], key=lambda item: (item.path, tuple(item.methods_or_any))):

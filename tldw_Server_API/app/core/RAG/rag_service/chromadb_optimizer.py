@@ -12,20 +12,25 @@ Designed to handle 100k+ document collections efficiently.
 """
 
 import asyncio
-import time
 import hashlib
 import json
-from typing import List, Dict, Any, Optional, Tuple, Set, Union
-from dataclasses import dataclass, field
+import time
 from collections import OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional, cast
+
 import numpy as np
 from loguru import logger
+
+if TYPE_CHECKING:
+    from chromadb.api import ClientAPI as ChromaClient
+else:
+    ChromaClient = Any
 
 try:
     import chromadb
     from chromadb.config import Settings
-    from chromadb.api.types import QueryResult
     CHROMADB_AVAILABLE = True
 except ImportError:
     CHROMADB_AVAILABLE = False
@@ -69,12 +74,12 @@ class QueryResultCache:
     def __init__(self, max_size: int = 1000, ttl: int = 3600):
         self.max_size = max_size
         self.ttl = ttl
-        self._cache: OrderedDict[str, Tuple[Any, float]] = OrderedDict()
+        self._cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
         self._lock = asyncio.Lock()
         self.hits = 0
         self.misses = 0
 
-    def _make_key(self, query: str, collection: str, kwargs: Dict) -> str:
+    def _make_key(self, query: str, collection: str, kwargs: dict) -> str:
         """Create cache key from query parameters"""
         key_data = {
             "query": query,
@@ -140,12 +145,12 @@ class ChromaDBOptimizer:
         self.executor = ThreadPoolExecutor(max_workers=config.max_connections)
 
         # Client pool
-        self._clients: List[chromadb.Client] = []
+        self._clients: list[ChromaClient] = []
         self._client_lock = asyncio.Lock()
 
         logger.info("Initialized ChromaDB optimizer")
 
-    async def get_client(self, path: str) -> chromadb.Client:
+    async def get_client(self, path: str) -> ChromaClient:
         """Get client from pool"""
         async with self._client_lock:
             if not self._clients:
@@ -160,25 +165,26 @@ class ChromaDBOptimizer:
                 return client
             return self._clients.pop()
 
-    async def return_client(self, client: chromadb.Client):
+    async def return_client(self, client: ChromaClient):
         """Return client to pool"""
         async with self._client_lock:
             if len(self._clients) < self.config.max_connections:
                 self._clients.append(client)
 
-    async def search_with_cache(self, collection, query_text: str = None,
-                               query_embeddings: Optional[List[float]] = None,
+    async def search_with_cache(self, collection, query_text: Optional[str] = None,
+                               query_embeddings: Optional[list[float]] = None,
                                n_results: int = 10,
-                               where: Optional[Dict] = None,
-                               include: Optional[List[str]] = None,
-                               **kwargs) -> Dict[str, Any]:
+                               where: Optional[dict[str, Any]] = None,
+                               include: Optional[list[str]] = None,
+                               **kwargs) -> dict[str, Any]:
         """Search with result caching and query optimization."""
         if not CHROMADB_AVAILABLE:
             return {"ids": [[]], "distances": [[]], "documents": [[]], "metadatas": [[]]}
 
         # Build cache key
+        collection_name = collection.name if hasattr(collection, 'name') else str(collection)
         cache_key_data = {
-            "collection": collection.name if hasattr(collection, 'name') else str(collection),
+            "collection": collection_name,
             "query_text": query_text,
             "has_embeddings": query_embeddings is not None,
             "n_results": n_results,
@@ -189,14 +195,14 @@ class ChromaDBOptimizer:
         if self.result_cache and self.config.enable_result_cache:
             cached = await self.result_cache.get(
                 query_text or "embedding_query",
-                cache_key_data.get("collection"),
+                collection_name,
                 n_results=n_results,
                 where=where,
                 **kwargs
             )
             if cached is not None:
                 logger.debug(f"Cache hit for query in {cache_key_data['collection']}")
-                return cached
+                return cast(dict[str, Any], cached)
 
         # Optimize query for large collections
         if self.config.enable_query_optimization and n_results > 100:
@@ -206,7 +212,7 @@ class ChromaDBOptimizer:
         # Perform actual search
         try:
             # Run in executor to avoid blocking
-            result = await asyncio.get_event_loop().run_in_executor(
+            result = cast(dict[str, Any], await asyncio.get_event_loop().run_in_executor(
                 self.executor,
                 self._perform_search,
                 collection,
@@ -215,7 +221,7 @@ class ChromaDBOptimizer:
                 n_results,
                 where,
                 include
-            )
+            ))
         except Exception as e:
             logger.error(f"ChromaDB search failed: {e}")
             result = {"ids": [[]], "distances": [[]], "documents": [[]], "metadatas": [[]]}
@@ -224,7 +230,7 @@ class ChromaDBOptimizer:
         if self.result_cache and self.config.enable_result_cache:
             await self.result_cache.set(
                 query_text or "embedding_query",
-                cache_key_data.get("collection"),
+                collection_name,
                 result,
                 n_results=n_results,
                 where=where,
@@ -234,31 +240,31 @@ class ChromaDBOptimizer:
         return result
 
     def _perform_search(self, collection, query_text: Optional[str],
-                       query_embeddings: Optional[List[float]],
-                       n_results: int, where: Optional[Dict],
-                       include: Optional[List[str]]) -> Dict[str, Any]:
+                       query_embeddings: Optional[list[float]],
+                       n_results: int, where: Optional[dict],
+                       include: Optional[list[str]]) -> dict[str, Any]:
         """Perform the actual ChromaDB search."""
         if query_embeddings is not None:
-            return collection.query(
+            return cast(dict[str, Any], collection.query(
                 query_embeddings=[query_embeddings],
                 n_results=n_results,
                 where=where,
                 include=include or ["metadatas", "documents", "distances"]
-            )
+            ))
         elif query_text is not None:
-            return collection.query(
+            return cast(dict[str, Any], collection.query(
                 query_texts=[query_text],
                 n_results=n_results,
                 where=where,
                 include=include or ["metadatas", "documents", "distances"]
-            )
+            ))
         else:
             raise ValueError("Either query_text or query_embeddings must be provided")
 
-    def optimize_hybrid_search(self, vector_results: Dict[str, Any],
-                               fts_results: List[Dict[str, Any]],
+    def optimize_hybrid_search(self, vector_results: dict[str, Any],
+                               fts_results: list[dict[str, Any]],
                                alpha: Optional[float] = None,
-                               top_k: int = 10) -> List[Dict[str, Any]]:
+                               top_k: int = 10) -> list[dict[str, Any]]:
         """Optimize combination of vector and FTS results for large-scale search.
 
         This is the core hybrid search functionality for handling 100k+ documents.
@@ -326,7 +332,7 @@ class ChromaDBOptimizer:
             weighted_score = vector_scores.get(doc_id, 0) + fts_scores.get(doc_id, 0)
 
             # RRF score (if both sources have the document)
-            rrf_score = 0
+            rrf_score: float = 0.0
             if doc_id in vector_scores and doc_id in fts_scores:
                 # Get ranks in each result set
                 vector_rank = list(vector_scores.keys()).index(doc_id) + 1 if doc_id in vector_scores else len(vector_scores) + 1
@@ -377,20 +383,7 @@ class ChromaDBOptimizer:
 
         return combined_results[:top_k]
 
-
-# --- Compatibility helper for tests ---
-def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> dict:
-    """
-    Simplified optimization summary for large collections.
-
-    Provided to satisfy unit tests that patch this function.
-    """
-    return {
-        "optimization_applied": bool(collection_size and collection_size > 10000),
-        "hybrid_alpha": alpha
-    }
-
-    def _diversity_rerank(self, results: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+    def _diversity_rerank(self, results: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
         """Apply diversity reranking to reduce redundancy."""
         if not results:
             return []
@@ -401,7 +394,7 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
         while len(selected) < top_k and remaining:
             # Find document with best score that's also diverse
             best_idx = -1
-            best_score = -1
+            best_score = -1.0
 
             for i, candidate in enumerate(remaining):
                 # Calculate diversity from selected documents
@@ -415,7 +408,7 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
                     min_sim = min(min_sim, sim)
 
                 # Combine score with diversity
-                diversity_score = candidate["score"] * (0.7 + 0.3 * (1 - min_sim))
+                diversity_score = float(candidate.get("score", 0.0)) * (0.7 + 0.3 * (1 - min_sim))
 
                 if diversity_score > best_score:
                     best_score = diversity_score
@@ -443,10 +436,10 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
 
         return intersection / union if union > 0 else 0.0
 
-    async def batch_add_optimized(self, collection, documents: List[str],
-                                 embeddings: List[List[float]],
-                                 metadatas: List[Dict[str, Any]],
-                                 ids: List[str]) -> None:
+    async def batch_add_optimized(self, collection, documents: list[str],
+                                 embeddings: list[list[float]],
+                                 metadatas: list[dict[str, Any]],
+                                 ids: list[str]) -> None:
         """Optimized batch addition for 100k+ documents with parallel processing."""
         if not CHROMADB_AVAILABLE:
             logger.warning("ChromaDB not available, skipping batch add")
@@ -498,10 +491,10 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
 
         logger.info(f"Successfully added {total_docs} documents to collection")
 
-    async def _add_batch_async(self, collection, embeddings: List[List[float]],
-                              metadatas: List[Dict[str, Any]],
-                              documents: List[str],
-                              ids: List[str],
+    async def _add_batch_async(self, collection, embeddings: list[list[float]],
+                              metadatas: list[dict[str, Any]],
+                              documents: list[str],
+                              ids: list[str],
                               batch_num: int) -> None:
         """Add a single batch asynchronously."""
         try:
@@ -522,7 +515,7 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
             raise
 
     def get_collection_strategy(self, num_documents: int,
-                              metadata: Optional[Dict[str, Any]] = None) -> str:
+                              metadata: Optional[dict[str, Any]] = None) -> str:
         """Determine optimal collection partitioning strategy for 100k+ documents.
 
         For large collections, partitioning improves query performance.
@@ -566,10 +559,10 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
 
             if sample and sample.get("metadatas"):
                 # Identify common metadata fields
-                metadata_fields = defaultdict(int)
+                metadata_fields: dict[str, int] = defaultdict(int)
                 for metadata in sample["metadatas"]:
                     if metadata:
-                        for key in metadata.keys():
+                        for key in metadata:
                             metadata_fields[key] += 1
 
                 # Log most common fields for optimization hints
@@ -584,7 +577,7 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
         except Exception as e:
             logger.warning(f"Could not optimize metadata indexing: {e}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get optimization statistics"""
         stats = {
             "cache": {
@@ -600,6 +593,19 @@ def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> d
         }
 
         return stats
+
+
+# --- Compatibility helper for tests ---
+def optimize_for_large_collection(collection_size: int, alpha: float = 0.7) -> dict:
+    """
+    Simplified optimization summary for large collections.
+
+    Provided to satisfy unit tests that patch this function.
+    """
+    return {
+        "optimization_applied": bool(collection_size and collection_size > 10000),
+        "hybrid_alpha": alpha
+    }
 
 
 # Integration helper for existing RAG pipeline
@@ -652,10 +658,10 @@ class OptimizedChromaStore:
         # Initialize metadata indexing (deferred to avoid event loop issues)
         self._metadata_optimization_pending = True
 
-    async def search(self, query_text: str = None,
-                    query_embeddings: List[float] = None,
+    async def search(self, query_text: Optional[str] = None,
+                    query_embeddings: Optional[list[float]] = None,
                     n_results: int = 10,
-                    where: Dict[str, Any] = None) -> Dict[str, Any]:
+                    where: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """Search with optimizations"""
         return await self.optimizer.search_with_cache(
             self.collection,
@@ -666,11 +672,11 @@ class OptimizedChromaStore:
         )
 
     async def hybrid_search(self, query_text: str,
-                          query_embeddings: List[float],
-                          fts_results: List[Dict[str, Any]],
+                          query_embeddings: list[float],
+                          fts_results: list[dict[str, Any]],
                           n_results: int = 10,
-                          where: Optional[Dict[str, Any]] = None,
-                          alpha: Optional[float] = None) -> List[Dict[str, Any]]:
+                          where: Optional[dict[str, Any]] = None,
+                          alpha: Optional[float] = None) -> list[dict[str, Any]]:
         """Perform optimized hybrid search - core functionality for 100k+ docs.
 
         This is the primary search method for large document collections,
@@ -716,10 +722,10 @@ class OptimizedChromaStore:
 
         return combined
 
-    async def add_documents(self, documents: List[str],
-                          embeddings: List[List[float]],
-                          metadatas: List[Dict[str, Any]],
-                          ids: List[str]) -> bool:
+    async def add_documents(self, documents: list[str],
+                          embeddings: list[list[float]],
+                          metadatas: list[dict[str, Any]],
+                          ids: list[str]) -> bool:
         """Add documents with batch optimization for 100k+ documents.
 
         Handles large document collections efficiently with:
@@ -764,7 +770,7 @@ class OptimizedChromaStore:
             logger.error(f"Failed to add documents: {e}")
             return False
 
-    def get_performance_stats(self) -> Dict[str, Any]:
+    def get_performance_stats(self) -> dict[str, Any]:
         """Get performance statistics for monitoring."""
         stats = self.optimizer.get_stats()
 

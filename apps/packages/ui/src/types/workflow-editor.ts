@@ -9,20 +9,7 @@ import type { Node, Edge, XYPosition } from "@xyflow/react"
 // Step Types (Node Categories)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type WorkflowStepType =
-  | "prompt"
-  | "rag_search"
-  | "media_ingest"
-  | "branch"
-  | "map"
-  | "wait_for_human"
-  | "webhook"
-  | "tts"
-  | "stt_transcribe"
-  | "delay"
-  | "log"
-  | "start"
-  | "end"
+export type WorkflowStepType = string
 
 export type StepCategory =
   | "ai"
@@ -30,6 +17,32 @@ export type StepCategory =
   | "control"
   | "io"
   | "utility"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workflow Step Schema (Server-Driven)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type WorkflowStepSchema = {
+  type?: string | string[]
+  description?: string
+  properties?: Record<string, WorkflowStepSchema>
+  required?: string[]
+  enum?: Array<string | number | boolean | null>
+  items?: WorkflowStepSchema
+  default?: unknown
+  anyOf?: WorkflowStepSchema[]
+  oneOf?: WorkflowStepSchema[]
+  allOf?: WorkflowStepSchema[]
+  additionalProperties?: boolean | WorkflowStepSchema
+}
+
+export interface WorkflowStepTypeInfo {
+  name: string
+  description?: string
+  schema?: WorkflowStepSchema
+  example?: unknown
+  min_engine_version?: string
+}
 
 // StepTypeMetadata is defined in step-registry.ts to avoid circular deps
 
@@ -277,6 +290,7 @@ export type StepExecutionStatus =
   | "failed"
   | "skipped"
   | "waiting_human"
+  | "waiting_approval"
   | "cancelled"
 
 export interface StepExecutionState {
@@ -354,6 +368,7 @@ export type WorkflowRunStatus =
   | "running"
   | "paused"
   | "waiting_human"
+  | "waiting_approval"
   | "completed"
   | "failed"
   | "cancelled"

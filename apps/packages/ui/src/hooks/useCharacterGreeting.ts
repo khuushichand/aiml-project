@@ -3,9 +3,15 @@ import { generateID } from "@/db/dexie/helpers"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import type { ChatHistory, Message } from "@/store/option/types"
 import type { Character } from "@/types/character"
-import { collectGreetings, pickGreeting } from "@/utils/character-greetings"
+import {
+  buildGreetingOptionsFromEntries,
+  buildGreetingsChecksumFromOptions,
+  collectGreetingEntries,
+  type GreetingOption
+} from "@/utils/character-greetings"
 import { replaceUserDisplayNamePlaceholders } from "@/utils/chat-display-name"
 import { useStorage } from "@plasmohq/storage/hook"
+import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 import {
   SELECTED_CHARACTER_STORAGE_KEY,
   selectedCharacterStorage,
@@ -16,6 +22,7 @@ type UseCharacterGreetingOptions = {
   playgroundReady: boolean
   selectedCharacter: Character | null
   serverChatId: string | number | null
+  historyId: string | null
   messagesLength: number
   setMessages: (
     messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])
@@ -30,20 +37,31 @@ export const useCharacterGreeting = ({
   playgroundReady,
   selectedCharacter,
   serverChatId,
+  historyId,
   messagesLength,
   setMessages,
   setHistory,
   setSelectedCharacter
 }: UseCharacterGreetingOptions) => {
   const [userDisplayName] = useStorage("chatUserDisplayName", "")
+  const resolvedServerChatId =
+    serverChatId != null ? String(serverChatId) : null
+  const { settings, updateSettings } = useChatSettingsRecord({
+    historyId,
+    serverChatId: resolvedServerChatId
+  })
+  const greetingEnabled = settings?.greetingEnabled ?? true
   const greetingInjectedRef = React.useRef<string | null>(null)
   const greetingFetchRef = React.useRef<string | null>(null)
   const greetingTemplateRef = React.useRef<{
     characterId: string
     greeting: string
+    selectionId: string | null
+    checksum: string | null
   } | null>(null)
   const chatWasEmptyRef = React.useRef(false)
   const selectedCharacterIdRef = React.useRef<string | null>(null)
+  const lastCharacterIdRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     if (!playgroundReady) return
@@ -95,6 +113,19 @@ export const useCharacterGreeting = ({
 
     const characterId = String(selectedCharacter.id)
     selectedCharacterIdRef.current = characterId
+    if (
+      lastCharacterIdRef.current &&
+      lastCharacterIdRef.current !== characterId
+    ) {
+      void updateSettings({
+        greetingSelectionId: null,
+        greetingsChecksum: null,
+        useCharacterDefault: false
+      })
+      greetingTemplateRef.current = null
+      greetingInjectedRef.current = null
+    }
+    lastCharacterIdRef.current = characterId
     const characterName = selectedCharacter.name || "Assistant"
     const characterAvatarUrl = selectedCharacter.avatar_url ?? null
     const isCurrentSelection = () =>
@@ -102,7 +133,8 @@ export const useCharacterGreeting = ({
 
     const upsertGreeting = (
       greetingValue: string,
-      avatarUrl?: string | null
+      avatarUrl?: string | null,
+      meta?: { selectionId?: string | null; checksum?: string | null }
     ) => {
       if (!isCurrentSelection()) return
       const rendered = replaceUserDisplayNamePlaceholders(
@@ -111,7 +143,6 @@ export const useCharacterGreeting = ({
       )
       const trimmed = rendered.trim()
       if (!trimmed) return
-      if (serverChatId) return
 
       const createdAt = Date.now()
       const messageId = generateID()
@@ -157,54 +188,126 @@ export const useCharacterGreeting = ({
 
       if (!updated) return
       greetingInjectedRef.current = characterId
-      greetingTemplateRef.current = { characterId, greeting: greetingValue }
+      greetingTemplateRef.current = {
+        characterId,
+        greeting: greetingValue,
+        selectionId: meta?.selectionId ?? null,
+        checksum: meta?.checksum ?? null
+      }
 
-      setHistory((prev) => {
-        if (!isCurrentSelection()) return prev
-        const onlyGreetings =
-          prev.length > 0 &&
-          prev.every((entry) => entry.messageType === "character:greeting")
-        const singleAssistant =
-          prev.length === 1 && prev[0]?.role === "assistant"
-        const canReplace =
-          prev.length === 0 || onlyGreetings || singleAssistant
-        if (!canReplace) return prev
-        if (prev.length === 1 && prev[0]?.messageType === "character:greeting") {
+      if (greetingEnabled) {
+        setHistory((prev) => {
+          if (!isCurrentSelection()) return prev
+          const onlyGreetings =
+            prev.length > 0 &&
+            prev.every((entry) => entry.messageType === "character:greeting")
+          const singleAssistant =
+            prev.length === 1 && prev[0]?.role === "assistant"
+          const canReplace =
+            prev.length === 0 || onlyGreetings || singleAssistant
+          if (!canReplace) return prev
+          if (
+            prev.length === 1 &&
+            prev[0]?.messageType === "character:greeting"
+          ) {
+            return [
+              {
+                ...prev[0],
+                content: trimmed
+              }
+            ]
+          }
           return [
             {
-              ...prev[0],
-              content: trimmed
+              role: "assistant",
+              content: trimmed,
+              messageType: "character:greeting"
             }
           ]
+        })
+      }
+    }
+
+    const resolveAndPersistGreeting = (
+      options: GreetingOption[],
+      avatarUrl: string | null
+    ) => {
+      const checksum =
+        options.length > 0 ? buildGreetingsChecksumFromOptions(options) : null
+      const storedSelectionId =
+        typeof settings?.greetingSelectionId === "string"
+          ? settings.greetingSelectionId
+          : null
+      const storedChecksum =
+        typeof settings?.greetingsChecksum === "string"
+          ? settings.greetingsChecksum
+          : null
+      const useCharacterDefault = Boolean(settings?.useCharacterDefault)
+      const isStale =
+        Boolean(storedChecksum) && checksum ? storedChecksum !== checksum : false
+      let selectedOption =
+        !isStale && storedSelectionId
+          ? options.find((option) => option.id === storedSelectionId)
+          : undefined
+
+      if (!selectedOption) {
+        if (useCharacterDefault) {
+          selectedOption = options[0]
+        } else if (options.length > 0) {
+          selectedOption =
+            options[Math.floor(Math.random() * options.length)]
         }
-        return [
-          {
-            role: "assistant",
-            content: trimmed,
-            messageType: "character:greeting"
-          }
-        ]
+      }
+
+      if (!selectedOption) {
+        if (storedSelectionId || storedChecksum) {
+          void updateSettings({
+            greetingSelectionId: null,
+            greetingsChecksum: null
+          })
+        }
+        return
+      }
+
+      const cached = greetingTemplateRef.current
+      if (
+        cached?.characterId === characterId &&
+        cached.selectionId === selectedOption.id &&
+        cached.checksum === checksum
+      ) {
+        upsertGreeting(cached.greeting, avatarUrl, {
+          selectionId: cached.selectionId,
+          checksum: cached.checksum
+        })
+        return
+      }
+
+      if (
+        storedSelectionId !== selectedOption.id ||
+        storedChecksum !== checksum
+      ) {
+        void updateSettings({
+          greetingSelectionId: selectedOption.id,
+          greetingsChecksum: checksum
+        })
+      }
+
+      upsertGreeting(selectedOption.text, avatarUrl, {
+        selectionId: selectedOption.id,
+        checksum
       })
     }
 
-    const cachedGreeting =
-      greetingTemplateRef.current?.characterId === characterId
-        ? greetingTemplateRef.current?.greeting
-        : ""
-    if (cachedGreeting) {
-      upsertGreeting(cachedGreeting, characterAvatarUrl)
-      return
+    const greetingEntries = collectGreetingEntries(selectedCharacter)
+    const greetingOptions = buildGreetingOptionsFromEntries(greetingEntries)
+    if (greetingOptions.length > 0) {
+      resolveAndPersistGreeting(greetingOptions, characterAvatarUrl)
+      if (greetingOptions.length > 1) {
+        return
+      }
     }
 
-    const greetings = collectGreetings(selectedCharacter)
-    if (greetings.length > 1) {
-      const picked = pickGreeting(greetings)
-      greetingTemplateRef.current = { characterId, greeting: picked }
-      upsertGreeting(picked, characterAvatarUrl)
-      return
-    }
-
-    const fallbackGreeting = greetings[0]?.trim() || ""
+    const fallbackGreeting = greetingOptions[0]?.text?.trim() || ""
     if (greetingFetchRef.current !== characterId) {
       greetingFetchRef.current = characterId
       void (async () => {
@@ -223,32 +326,48 @@ export const useCharacterGreeting = ({
           ) {
             return
           }
-          const fetchedGreetings = collectGreetings(full)
-          const picked = pickGreeting(fetchedGreetings) || fallbackGreeting
-          if (!picked) return
-          greetingTemplateRef.current = { characterId, greeting: picked }
-          const nextAvatar =
-            full?.avatar_url ?? selectedCharacter.avatar_url ?? null
-          if (nextAvatar !== selectedCharacter.avatar_url) {
-            setSelectedCharacter({
-              ...selectedCharacter,
-              avatar_url: nextAvatar
+          const fetchedEntries = collectGreetingEntries(full)
+          const resolvedEntries =
+            fetchedEntries.length > 0 ? fetchedEntries : greetingEntries
+          const resolvedOptions = buildGreetingOptionsFromEntries(
+            resolvedEntries
+          )
+          if (resolvedOptions.length > 0) {
+            resolveAndPersistGreeting(resolvedOptions, characterAvatarUrl)
+          } else if (
+            settings?.greetingSelectionId ||
+            settings?.greetingsChecksum
+          ) {
+            void updateSettings({
+              greetingSelectionId: null,
+              greetingsChecksum: null
             })
           }
-          if (
-            !isCurrentSelection() ||
-            greetingFetchRef.current !== characterId
-          ) {
-            return
-          }
-          upsertGreeting(picked, nextAvatar)
+          const nextAvatar =
+            full?.avatar_url ?? selectedCharacter.avatar_url ?? null
+          const mergedCharacter = full
+            ? {
+                ...selectedCharacter,
+                ...full,
+                avatar_url: nextAvatar
+              }
+            : {
+                ...selectedCharacter,
+                avatar_url: nextAvatar
+              }
+          setSelectedCharacter(mergedCharacter)
         } catch {
           if (fallbackGreeting) {
-            greetingTemplateRef.current = {
-              characterId,
-              greeting: fallbackGreeting
-            }
-            upsertGreeting(fallbackGreeting, characterAvatarUrl)
+            resolveAndPersistGreeting(
+              buildGreetingOptionsFromEntries([
+                {
+                  text: fallbackGreeting,
+                  sourceKey: "greeting",
+                  sourceLabel: "Greeting"
+                }
+              ]),
+              characterAvatarUrl
+            )
           }
         } finally {
           if (greetingFetchRef.current === characterId) {
@@ -261,9 +380,15 @@ export const useCharacterGreeting = ({
     playgroundReady,
     selectedCharacter,
     serverChatId,
+    historyId,
     setHistory,
     setMessages,
     setSelectedCharacter,
-    userDisplayName
+    userDisplayName,
+    settings?.greetingSelectionId,
+    settings?.greetingsChecksum,
+    settings?.useCharacterDefault,
+    settings?.greetingEnabled,
+    updateSettings
   ])
 }

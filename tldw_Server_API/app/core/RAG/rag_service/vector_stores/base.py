@@ -6,9 +6,9 @@ enabling easy switching between different vector databases (ChromaDB, Pinecone, 
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Optional
 
 
 class VectorStoreType(Enum):
@@ -27,7 +27,7 @@ class VectorSearchResult:
     """Result from a vector search operation."""
     id: str
     content: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
     score: float  # Similarity score (higher is better)
     distance: float  # Raw distance from vector store
 
@@ -36,7 +36,7 @@ class VectorSearchResult:
 class VectorStoreConfig:
     """Configuration for vector store initialization."""
     store_type: VectorStoreType
-    connection_params: Dict[str, Any]
+    connection_params: dict[str, Any]
     embedding_dim: int
     distance_metric: str = "cosine"  # cosine, euclidean, dot_product
     collection_prefix: str = "user"  # Collections will be: user_{user_id}_{type}_embeddings
@@ -62,7 +62,7 @@ class VectorStoreAdapter(ABC):
         pass
 
     @abstractmethod
-    async def create_collection(self, collection_name: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def create_collection(self, collection_name: str, metadata: Optional[dict[str, Any]] = None) -> None:
         """
         Create a new collection/index in the vector store.
 
@@ -83,7 +83,7 @@ class VectorStoreAdapter(ABC):
         pass
 
     @abstractmethod
-    async def list_collections(self) -> List[str]:
+    async def list_collections(self) -> list[str]:
         """
         List all available collections in the vector store.
 
@@ -96,10 +96,10 @@ class VectorStoreAdapter(ABC):
     async def upsert_vectors(
         self,
         collection_name: str,
-        ids: List[str],
-        vectors: List[List[float]],
-        documents: List[str],
-        metadatas: List[Dict[str, Any]]
+        ids: list[str],
+        vectors: list[list[float]],
+        documents: list[str],
+        metadatas: list[dict[str, Any]]
     ) -> None:
         """
         Insert or update vectors in the specified collection.
@@ -114,7 +114,7 @@ class VectorStoreAdapter(ABC):
         pass
 
     @abstractmethod
-    async def delete_vectors(self, collection_name: str, ids: List[str]) -> None:
+    async def delete_vectors(self, collection_name: str, ids: list[str]) -> None:
         """
         Delete vectors from the specified collection.
 
@@ -125,7 +125,7 @@ class VectorStoreAdapter(ABC):
         pass
 
     @abstractmethod
-    async def delete_by_filter(self, collection_name: str, filter: Dict[str, Any]) -> int:
+    async def delete_by_filter(self, collection_name: str, filter: dict[str, Any]) -> int:
         """
         Delete vectors matching a metadata filter.
 
@@ -142,11 +142,11 @@ class VectorStoreAdapter(ABC):
     async def search(
         self,
         collection_name: str,
-        query_vector: List[float],
+        query_vector: list[float],
         k: int = 10,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[dict[str, Any]] = None,
         include_metadata: bool = True
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """
         Search for similar vectors in the specified collection.
 
@@ -165,11 +165,11 @@ class VectorStoreAdapter(ABC):
     @abstractmethod
     async def multi_search(
         self,
-        collection_patterns: List[str],
-        query_vector: List[float],
+        collection_patterns: list[str],
+        query_vector: list[float],
         k: int = 10,
-        filter: Optional[Dict[str, Any]] = None
-    ) -> List[VectorSearchResult]:
+        filter: Optional[dict[str, Any]] = None
+    ) -> list[VectorSearchResult]:
         """
         Search across multiple collections matching the patterns.
 
@@ -185,7 +185,7 @@ class VectorStoreAdapter(ABC):
         pass
 
     @abstractmethod
-    async def get_collection_stats(self, collection_name: str) -> Dict[str, Any]:
+    async def get_collection_stats(self, collection_name: str) -> dict[str, Any]:
         """
         Get statistics about a collection.
 
@@ -208,14 +208,14 @@ class VectorStoreAdapter(ABC):
         """
         pass
 
-    async def health(self) -> Dict[str, Any]:
+    async def health(self) -> dict[str, Any]:
         """Basic health check; adapters may override for richer info."""
         return {"ok": True}
     async def close(self) -> None:
         """Close connection to the vector store."""
         self._initialized = False
 
-    def _validate_vectors(self, vectors: List[List[float]]) -> None:
+    def _validate_vectors(self, vectors: list[list[float]]) -> None:
         """
         Validate that all vectors have the correct dimension.
 

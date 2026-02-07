@@ -5,16 +5,23 @@ import json
 import os
 import tempfile
 import threading
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_TOKENIZER = None
 _TF_IMAGE_PROCESSOR = None
 _TF_LOCK = threading.Lock()
+_POINTS_RUNTIME_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_mode() -> str:
@@ -57,7 +64,7 @@ class PointsReaderBackend(OCRBackend):
                 has_tf = importlib.util.find_spec("transformers") is not None
                 has_torch = importlib.util.find_spec("torch") is not None
                 return bool(has_tf and has_torch)
-            except Exception:
+            except (AttributeError, ImportError, ValueError):
                 return False
         return False
 
@@ -81,7 +88,7 @@ class PointsReaderBackend(OCRBackend):
             })
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning("PointsReaderBackend not available: install 'transformers'+'torch' or set up SGLang (requests)")
             return ""
@@ -97,7 +104,7 @@ class PointsReaderBackend(OCRBackend):
             try:
                 with open(img_path, "wb") as f:
                     f.write(image_bytes)
-            except Exception as e:
+            except OSError as e:
                 logging.error(f"PointsReaderBackend: failed to write temp image: {e}", exc_info=True)
                 return ""
 
@@ -106,13 +113,13 @@ class PointsReaderBackend(OCRBackend):
             if mode == "sglang" or (mode == "auto" and os.getenv("POINTS_SGLANG_URL")):
                 try:
                     return _ocr_via_sglang(img_path, prompt)
-                except Exception as e:
+                except _POINTS_RUNTIME_EXCEPTIONS as e:
                     logging.error(f"POINTS SGLang path failed: {e}", exc_info=True)
                     # fall through to transformers if available
 
             try:
                 return _ocr_via_transformers(img_path, prompt)
-            except Exception as e:
+            except _POINTS_RUNTIME_EXCEPTIONS as e:
                 logging.error(f"POINTS Transformers path failed: {e}", exc_info=True)
                 return ""
 
@@ -128,7 +135,7 @@ def _ocr_via_sglang(image_path: str, prompt: str) -> str:
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     content_image = None
@@ -178,20 +185,14 @@ def _load_transformers():
     with _TF_LOCK:
         if _TF_MODEL is not None and _TF_TOKENIZER is not None and _TF_IMAGE_PROCESSOR is not None:
             return _TF_MODEL, _TF_TOKENIZER, _TF_IMAGE_PROCESSOR
-        from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2VLImageProcessor
         import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer, Qwen2VLImageProcessor
 
         model_path = os.getenv("POINTS_MODEL_PATH", "tencent/POINTS-Reader")
         # device and dtype selection
         device_env = os.getenv("POINTS_DEVICE")
-        if device_env:
-            device_map = device_env
-        else:
-            device_map = "auto"
-        if torch.cuda.is_available():
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
+        device_map = device_env or "auto"
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
         _TF_MODEL = AutoModelForCausalLM.from_pretrained(
             model_path,
@@ -220,7 +221,7 @@ def _ocr_via_transformers(image_path: str, prompt: str) -> str:
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     generation_config = {
@@ -238,9 +239,9 @@ def _ocr_via_transformers(image_path: str, prompt: str) -> str:
         if not isinstance(response, str):
             try:
                 return json.dumps(response)
-            except Exception:
+            except (TypeError, ValueError):
                 return str(response)
         return response
-    except Exception as e:
+    except _POINTS_RUNTIME_EXCEPTIONS as e:
         logging.error(f"POINTS local inference failed: {e}", exc_info=True)
         return ""

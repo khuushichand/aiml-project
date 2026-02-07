@@ -156,9 +156,59 @@ export type ConversationState =
 export interface ServerChatMessage {
   id: string
   role: "system" | "user" | "assistant"
+  sender?: string
   content: string
   created_at: string
   version?: number
+  metadata_extra?: Record<string, unknown>
+  pinned?: boolean
+}
+
+export type ChatSettingsResponse = {
+  conversation_id: string
+  settings: Record<string, unknown>
+  last_modified: string
+}
+
+export type WorldBookProcessDiagnostic = {
+  entry_id: number | null
+  world_book_id: number | null
+  activation_reason: "keyword_match" | "regex_match" | "depth" | string
+  keyword?: string | null
+  token_cost: number
+  priority: number
+  regex_match: boolean
+  content_preview: string
+  depth_level?: number | null
+}
+
+export type WorldBookProcessResponse = {
+  injected_content: string
+  entries_matched: number
+  tokens_used: number
+  books_used: number
+  entry_ids: number[]
+  token_budget?: number | null
+  budget_exhausted?: boolean | null
+  skipped_entries_due_to_budget?: number | null
+  diagnostics: WorldBookProcessDiagnostic[]
+}
+
+export type LorebookDiagnosticTurn = {
+  message_id: string
+  timestamp?: string | null
+  turn_number: number
+  message_preview: string
+  diagnostics: Record<string, unknown>[]
+}
+
+export type LorebookDiagnosticExportResponse = {
+  chat_id: string
+  character_id?: string | null
+  total_turns_with_diagnostics: number
+  turns: LorebookDiagnosticTurn[]
+  page: number
+  size: number
 }
 
 type PromptPayload = {
@@ -1067,7 +1117,45 @@ export class TldwApiClient {
 
   async ragSearch(query: string, options?: any): Promise<any> {
     const { timeoutMs, ...rest } = options || {}
-    return await bgRequest<any>({ path: '/api/v1/rag/search', method: 'POST', headers: { 'Content-Type': 'application/json' }, body: { query, ...rest }, timeoutMs })
+    try {
+      return await bgRequest<any>({
+        path: '/api/v1/rag/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: { query, ...rest },
+        timeoutMs
+      })
+    } catch (error) {
+      const status = (error as { status?: number } | null)?.status
+      const message = error instanceof Error ? error.message : String(error ?? '')
+      const shouldRetryWithoutRerank =
+        status === 500 &&
+        rest?.enable_reranking !== false &&
+        rest?.reranking_strategy !== 'none'
+
+      if (!shouldRetryWithoutRerank) {
+        throw error
+      }
+
+      // Some local/dev servers fail hard when FlashRank assets are missing.
+      // Retry once with reranking disabled so retrieval still works.
+      console.warn(
+        '[tldw:rag] /api/v1/rag/search failed; retrying once without reranking',
+        { status, message }
+      )
+      return await bgRequest<any>({
+        path: '/api/v1/rag/search',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: {
+          query,
+          ...rest,
+          enable_reranking: false,
+          reranking_strategy: 'none'
+        },
+        timeoutMs
+      })
+    }
   }
 
   async ragSimple(query: string, options?: any): Promise<any> {
@@ -1116,7 +1204,23 @@ export class TldwApiClient {
       if (typeof v === 'boolean') normalized[k] = v ? 'true' : 'false'
       else normalized[k] = v
     }
-    return await bgUpload<any>({ path: '/api/v1/media/add', method: 'POST', fields: normalized, file: { name, type, data } })
+    let uploadTimeoutMs = 60000
+    const cfg = await this.getConfig().catch(() => null)
+    if (cfg && typeof (cfg as any).uploadRequestTimeoutMs === "number") {
+      const cfgTimeout = Number((cfg as any).uploadRequestTimeoutMs)
+      if (cfgTimeout > 0) {
+        uploadTimeoutMs = cfgTimeout
+      }
+    }
+    uploadTimeoutMs = Math.max(uploadTimeoutMs, 5000)
+    return await bgUpload<any>({
+      path: '/api/v1/media/add',
+      method: 'POST',
+      fields: normalized,
+      file: { name, type, data },
+      fileFieldName: 'files',
+      timeoutMs: uploadTimeoutMs
+    })
   }
 
   async listMedia(
@@ -1309,6 +1413,7 @@ export class TldwApiClient {
     mediaId: string | number,
     options?: {
       enrich?: boolean
+      referenceIndex?: number
       signal?: AbortSignal
     }
   ): Promise<{
@@ -1331,6 +1436,10 @@ export class TldwApiClient {
   }> {
     const id = encodeURIComponent(String(mediaId))
     const enrich = options?.enrich !== false
+    const referenceIndex =
+      typeof options?.referenceIndex === "number"
+        ? `&reference_index=${options.referenceIndex}`
+        : ""
     return await bgRequest<{
       media_id: number
       has_references: boolean
@@ -1349,9 +1458,10 @@ export class TldwApiClient {
       }>
       enrichment_source?: string
     }>({
-      path: `/api/v1/media/${id}/references?enrich=${enrich}`,
+      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}`,
       method: "GET",
-      abortSignal: options?.signal
+      abortSignal: options?.signal,
+      timeoutMs: 45000
     })
   }
 
@@ -2141,6 +2251,39 @@ export class TldwApiClient {
     return this.normalizeChatSummary(res)
   }
 
+  async getChatSettings(chat_id: string | number): Promise<ChatSettingsResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ChatSettingsResponse>({
+      path: `/api/v1/chats/${cid}/settings`,
+      method: "GET"
+    })
+  }
+
+  async updateChatSettings(
+    chat_id: string | number,
+    settings: Record<string, unknown>
+  ): Promise<ChatSettingsResponse> {
+    const cid = String(chat_id)
+    return await bgRequest<ChatSettingsResponse>({
+      path: `/api/v1/chats/${cid}/settings`,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: { settings }
+    })
+  }
+
+  async getChatLorebookDiagnostics(
+    chat_id: string | number,
+    params?: Record<string, any>
+  ): Promise<LorebookDiagnosticExportResponse> {
+    const cid = String(chat_id)
+    const query = this.buildQuery(params)
+    return await bgRequest<LorebookDiagnosticExportResponse>({
+      path: `/api/v1/chats/${cid}/diagnostics/lorebook${query}`,
+      method: "GET"
+    })
+  }
+
   async updateChat(
     chat_id: string | number,
     payload: Record<string, any>,
@@ -2222,33 +2365,78 @@ export class TldwApiClient {
       }
 
       const normalized = list.map((m) => {
+        const senderCandidate =
+          typeof m.sender === "string"
+            ? m.sender
+            : typeof m.author === "string"
+              ? m.author
+              : typeof (m as any)?.message?.sender === "string"
+                ? (m as any).message.sender
+                : typeof (m as any)?.message?.author === "string"
+                  ? (m as any).message.author
+                  : undefined
         const roleCandidate =
           typeof m.role === "string"
             ? m.role
-            : typeof m.sender === "string"
-              ? m.sender
-              : typeof m.author === "string"
-                ? m.author
+            : typeof senderCandidate === "string"
+              ? senderCandidate
                 : typeof (m as any)?.message?.role === "string"
                   ? (m as any).message.role
-                  : typeof (m as any)?.message?.sender === "string"
-                    ? (m as any).message.sender
-                    : typeof (m as any)?.message?.author === "string"
-                      ? (m as any).message.author
-                      : undefined
+                  : undefined
+        const senderLower =
+          typeof senderCandidate === "string"
+            ? senderCandidate.trim().toLowerCase()
+            : ""
+        const senderLooksLikeUser =
+          senderLower === "user" ||
+          senderLower === "human" ||
+          senderLower.startsWith("user")
+        const senderLooksLikeSystem =
+          senderLower === "system" || senderLower.startsWith("system")
+        const senderLooksLikeTool =
+          senderLower === "tool" ||
+          senderLower.startsWith("tool") ||
+          senderLower === "function"
+        const fallbackRole =
+          senderLower &&
+          !senderLooksLikeUser &&
+          !senderLooksLikeSystem &&
+          !senderLooksLikeTool
+            ? "assistant"
+            : "user"
         const role =
           typeof (m as any)?.is_bot === "boolean" ||
           typeof (m as any)?.isBot === "boolean"
             ? (m as any).is_bot || (m as any).isBot
               ? "assistant"
               : "user"
-            : normalizeChatRole(roleCandidate)
+            : normalizeChatRole(roleCandidate, fallbackRole)
         const created_at = String(
           m.created_at || m.createdAt || m.timestamp || ""
         )
+        const metadataExtraCandidate =
+          (m as any).metadata_extra ?? (m as any).metadataExtra
+        const metadataExtra =
+          metadataExtraCandidate &&
+          typeof metadataExtraCandidate === "object" &&
+          !Array.isArray(metadataExtraCandidate)
+            ? (metadataExtraCandidate as Record<string, unknown>)
+            : undefined
+        const rawPinned =
+          (metadataExtra?.pinned as unknown) ?? (m as any).pinned
+        const pinned =
+          typeof rawPinned === "boolean"
+            ? rawPinned
+            : typeof rawPinned === "string"
+              ? ["1", "true", "yes", "on"].includes(rawPinned.trim().toLowerCase())
+              : undefined
         return {
           id: String(m.id),
           role,
+          sender:
+            typeof senderCandidate === "string" && senderCandidate.trim().length > 0
+              ? senderCandidate
+              : undefined,
           content: String(m.content ?? ""),
           created_at,
           version:
@@ -2256,7 +2444,9 @@ export class TldwApiClient {
               ? m.version
               : typeof m.expected_version === "number"
                 ? m.expected_version
-                : undefined
+                : undefined,
+          metadata_extra: metadataExtra,
+          pinned
         } as ServerChatMessage
       })
       this.chatMessagesCache.set(cacheKey, {
@@ -2296,6 +2486,19 @@ export class TldwApiClient {
     const cid = String(chat_id)
     return await bgRequest<any>({
       path: `/api/v1/chats/${cid}/completions`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload || {}
+    })
+  }
+
+  async getCharacterPromptPreview(
+    chat_id: string | number,
+    payload?: Record<string, any>
+  ): Promise<any> {
+    const cid = String(chat_id)
+    return await bgRequest<any>({
+      path: `/api/v1/chats/${cid}/prompt-preview`,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload || {}
@@ -2370,15 +2573,20 @@ export class TldwApiClient {
     message_id: string | number,
     content: string,
     expectedVersion: number,
-    chatId?: string | number
+    chatId?: string | number,
+    options?: { pinned?: boolean }
   ): Promise<any> {
     const mid = String(message_id)
     const qp = `?expected_version=${encodeURIComponent(String(expectedVersion))}`
+    const body: Record<string, unknown> = { content }
+    if (typeof options?.pinned === "boolean") {
+      body.pinned = options.pinned
+    }
     const res = await bgRequest<any>({
       path: `/api/v1/messages/${mid}${qp}`,
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: { content }
+      body
     })
     if (chatId != null) {
       this.invalidateChatMessagesCache(chatId)
@@ -2486,6 +2694,22 @@ export class TldwApiClient {
   async listCharacterWorldBooks(character_id: number | string): Promise<any> {
     const cid = String(character_id)
     return await bgRequest<any>({ path: `/api/v1/characters/${cid}/world-books`, method: 'GET' })
+  }
+
+  async processWorldBookContext(payload: {
+    text: string
+    world_book_ids?: number[]
+    character_id?: number
+    scan_depth?: number
+    token_budget?: number
+    recursive_scanning?: boolean
+  }): Promise<WorldBookProcessResponse> {
+    return await bgRequest<WorldBookProcessResponse>({
+      path: "/api/v1/characters/world-books/process",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
   }
 
   async exportWorldBook(world_book_id: number | string): Promise<any> {
@@ -3121,6 +3345,66 @@ export class TldwApiClient {
       throw new Error("TTS returned an invalid audio buffer.")
     }
     return normalized
+  }
+
+  async createTtsJob(payload: {
+    input: string
+    model?: string
+    voice?: string
+    response_format?: string
+    speed?: number
+    lang_code?: string
+    normalization_options?: Record<string, any>
+    extra_params?: Record<string, any>
+  }): Promise<{ job_id: number; status: string }> {
+    return await bgRequest<{ job_id: number; status: string }>({
+      path: "/api/v1/audio/speech/jobs",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async getTtsJobArtifacts(jobId: number): Promise<{
+    job_id: number
+    artifacts: Array<{
+      output_id: number
+      format: string
+      type: string
+      title: string
+      download_url: string
+      metadata?: Record<string, any>
+    }>
+  }> {
+    const id = encodeURIComponent(String(jobId))
+    return await bgRequest({
+      path: `/api/v1/audio/speech/jobs/${id}/artifacts`,
+      method: "GET"
+    })
+  }
+
+  async *streamAudioJobProgress(
+    jobId: number,
+    options?: { signal?: AbortSignal; afterId?: number; streamIdleTimeoutMs?: number }
+  ): AsyncGenerator<any> {
+    const id = encodeURIComponent(String(jobId))
+    const query = options?.afterId
+      ? `?after_id=${encodeURIComponent(String(options.afterId))}`
+      : ""
+    const path = `/api/v1/audio/jobs/${id}/progress/stream${query}` as const
+    for await (const line of bgStream({
+      path,
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      abortSignal: options?.signal,
+      streamIdleTimeoutMs: options?.streamIdleTimeoutMs
+    })) {
+      try {
+        yield JSON.parse(line as string)
+      } catch {
+        yield { event: "raw", data: line }
+      }
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────

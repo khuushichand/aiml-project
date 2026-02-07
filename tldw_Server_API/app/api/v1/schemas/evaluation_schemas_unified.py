@@ -5,13 +5,13 @@ Unified evaluation schemas combining OpenAI-compatible and tldw-specific schemas
 This module provides all request/response models for the unified evaluation API.
 """
 
-from typing import Dict, List, Optional, Any, Literal, Union
-from pydantic import BaseModel, Field, field_validator, model_validator, HttpUrl
-from pydantic import ConfigDict
+import html
+import re
 from datetime import datetime
 from enum import Enum
-import re
-import html
+from typing import Any, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 try:
     import bleach
@@ -134,7 +134,7 @@ class EvaluationMetric(BaseModel):
     score: float = Field(..., ge=0.0, le=1.0, description="Normalized score (0-1)")
     raw_score: Optional[float] = Field(None, description="Raw score before normalization")
     explanation: Optional[str] = Field(None, description="Explanation of the score")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class EvaluationSpec(BaseModel):
@@ -144,11 +144,17 @@ class EvaluationSpec(BaseModel):
         default=None,
         description="Optional subtype for model_graded evaluations (e.g., rag_pipeline)"
     )
-    metrics: Optional[List[str]] = Field(
+    metrics: Optional[list[str]] = Field(
         default=None,
         description="Metrics to compute"
     )
-    thresholds: Optional[Dict[str, float]] = Field(
+    threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Pass/fail threshold (legacy single-value form)"
+    )
+    thresholds: Optional[dict[str, float]] = Field(
         default=None,
         description="Pass/fail thresholds"
     )
@@ -162,7 +168,7 @@ class EvaluationSpec(BaseModel):
         le=2.0,
         description="Temperature for model-based evaluation"
     )
-    custom_prompts: Optional[Dict[str, str]] = Field(
+    custom_prompts: Optional[dict[str, str]] = Field(
         default=None,
         description="Custom evaluation prompts"
     )
@@ -174,11 +180,11 @@ class EvaluationSpec(BaseModel):
     )
 
     # Optional fields for classification/label-choice and NLI fact-checking
-    allowed_labels: Optional[List[str]] = Field(
+    allowed_labels: Optional[list[str]] = Field(
         default=None,
         description="Allowed label set for label_choice/NLI evaluations"
     )
-    label_mapping: Optional[Dict[str, str]] = Field(
+    label_mapping: Optional[dict[str, str]] = Field(
         default=None,
         description="Mapping of synonyms/aliases to canonical labels"
     )
@@ -223,23 +229,23 @@ class DatasetSample(BaseModel):
     """Dataset sample"""
     input: Any = Field(..., description="Input data")
     expected: Optional[Any] = Field(None, description="Expected output")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class DatasetOverride(BaseModel):
     """Override dataset payload for a specific run."""
-    samples: List[DatasetSample] = Field(..., min_length=1, description="Evaluation samples")
+    samples: list[DatasetSample] = Field(..., min_length=1, description="Evaluation samples")
     name: Optional[str] = Field(None, description="Optional dataset name")
     description: Optional[str] = Field(None, description="Optional dataset description")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class EvaluationMetadata(BaseModel):
     """Evaluation metadata"""
     project: Optional[str] = Field(None, description="Project name")
     version: Optional[str] = Field(None, description="Version")
-    tags: Optional[List[str]] = Field(default_factory=list)
-    custom: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    tags: Optional[list[str]] = Field(default_factory=list)
+    custom: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 # ============= OpenAI-Compatible Schemas =============
@@ -251,7 +257,7 @@ class CreateEvaluationRequest(BaseModel):
     eval_type: EvaluationType = Field(..., description="Type of evaluation")
     eval_spec: EvaluationSpec = Field(..., description="Evaluation specification")
     dataset_id: Optional[str] = Field(None, description="Reference to existing dataset")
-    dataset: Optional[List[DatasetSample]] = Field(None, description="Inline dataset")
+    dataset: Optional[list[DatasetSample]] = Field(None, description="Inline dataset")
     metadata: Optional[EvaluationMetadata] = Field(None)
 
     @field_validator('name')
@@ -276,14 +282,14 @@ class EvaluationResponse(BaseModel):
     name: str
     description: Optional[str] = None
     eval_type: str
-    eval_spec: Dict[str, Any]
+    eval_spec: dict[str, Any]
     dataset_id: Optional[str] = None
     created: int = Field(..., description="Creation timestamp (OpenAI-compatible)")
     created_at: Optional[int] = Field(None, description="Creation timestamp (tldw-compatible)")
     created_by: str
     updated: Optional[int] = Field(None, description="Update timestamp (OpenAI-compatible)")
     updated_at: Optional[int] = Field(None, description="Update timestamp (tldw-compatible)")
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -318,8 +324,8 @@ class RunResponse(BaseModel):
     completed_at: Optional[int] = None
     progress: Optional[RunProgress] = None
     error_message: Optional[str] = None
-    results: Optional[Dict[str, Any]] = None
-    usage: Optional[Dict[str, int]] = None
+    results: Optional[dict[str, Any]] = None
+    usage: Optional[dict[str, int]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -331,8 +337,8 @@ class RunResultsResponse(BaseModel):
     status: str
     started_at: int
     completed_at: int
-    results: Dict[str, Any]
-    usage: Optional[Dict[str, int]] = None
+    results: dict[str, Any]
+    usage: Optional[dict[str, int]] = None
     duration_seconds: float
 
 
@@ -340,8 +346,8 @@ class CreateDatasetRequest(BaseModel):
     """Create dataset request"""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=1000)
-    samples: List[DatasetSample] = Field(..., min_length=1)
-    metadata: Optional[Dict[str, Any]] = None
+    samples: list[DatasetSample] = Field(..., min_length=1)
+    metadata: Optional[dict[str, Any]] = None
 
 
 class DatasetResponse(BaseModel):
@@ -351,11 +357,11 @@ class DatasetResponse(BaseModel):
     name: str
     description: Optional[str] = None
     sample_count: int
-    samples: Optional[List[DatasetSample]] = Field(None, description="Dataset samples")
+    samples: Optional[list[DatasetSample]] = Field(None, description="Dataset samples")
     created: int = Field(..., description="Creation timestamp (OpenAI-compatible)")
     created_at: Optional[int] = Field(None, description="Creation timestamp (tldw-compatible)")
     created_by: str
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -366,23 +372,23 @@ class OCREvaluationItem(BaseModel):
     id: str = Field(..., description="Document identifier")
     extracted_text: Optional[str] = Field(None, description="OCR-extracted text (if already computed)")
     ground_truth_text: str = Field(..., description="Ground-truth text for comparison")
-    ground_truth_pages: Optional[List[str]] = Field(default=None, description="Per-page ground-truth texts (aligned to PDF pages)")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    ground_truth_pages: Optional[list[str]] = Field(default=None, description="Per-page ground-truth texts (aligned to PDF pages)")
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict)
 
 
 class OCREvaluationRequest(BaseModel):
-    items: List[OCREvaluationItem]
-    metrics: Optional[List[Literal["cer", "wer", "coverage", "page_coverage"]]] = Field(
+    items: list[OCREvaluationItem]
+    metrics: Optional[list[Literal["cer", "wer", "coverage", "page_coverage"]]] = Field(
         default_factory=lambda: ["cer", "wer", "coverage", "page_coverage"],
         description="Metrics to compute"
     )
-    ocr_options: Optional[Dict[str, Any]] = Field(default=None, description="OCR configuration options")
-    thresholds: Optional[Dict[str, float]] = Field(default=None, description="Pass/fail thresholds: max_cer, max_wer, min_coverage, min_page_coverage")
+    ocr_options: Optional[dict[str, Any]] = Field(default=None, description="OCR configuration options")
+    thresholds: Optional[dict[str, float]] = Field(default=None, description="Pass/fail thresholds: max_cer, max_wer, min_coverage, min_page_coverage")
 
 
 class OCREvaluationResponse(BaseModel):
     evaluation_id: str
-    results: Dict[str, Any]
+    results: dict[str, Any]
     evaluation_time: float
 
 
@@ -399,17 +405,17 @@ class ListResponse(BaseModel):
 
 class EvaluationListResponse(ListResponse):
     """Evaluation list response"""
-    data: List[EvaluationResponse]
+    data: list[EvaluationResponse]
 
 
 class RunListResponse(ListResponse):
     """Run list response"""
-    data: List[RunResponse]
+    data: list[RunResponse]
 
 
 class DatasetListResponse(ListResponse):
     """Dataset list response"""
-    data: List[DatasetResponse]
+    data: list[DatasetResponse]
 
 
 # ============= tldw-Specific Evaluation Schemas =============
@@ -428,7 +434,7 @@ class GEvalRequest(BaseModel):
         min_length=10,
         max_length=50000
     )
-    metrics: Optional[List[Literal["fluency", "consistency", "relevance", "coherence"]]] = Field(
+    metrics: Optional[list[Literal["fluency", "consistency", "relevance", "coherence"]]] = Field(
         default=["fluency", "consistency", "relevance", "coherence"]
     )
     api_name: Optional[str] = Field("openai", description="LLM API to use")
@@ -446,20 +452,20 @@ class GEvalRequest(BaseModel):
 
 class GEvalResponse(BaseModel):
     """G-Eval response"""
-    metrics: Dict[str, EvaluationMetric]
+    metrics: dict[str, EvaluationMetric]
     average_score: float = Field(..., ge=0.0, le=1.0)
     summary_assessment: str
     evaluation_time: float
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class RAGEvaluationRequest(BaseModel):
     """RAG evaluation request"""
     query: str = Field(..., min_length=1, max_length=10000)
-    retrieved_contexts: List[str] = Field(..., min_length=1, max_length=20)
+    retrieved_contexts: list[str] = Field(..., min_length=1, max_length=20)
     generated_response: str = Field(..., min_length=1, max_length=50000)
     ground_truth: Optional[str] = Field(None, max_length=50000)
-    metrics: Optional[List[str]] = Field(
+    metrics: Optional[list[str]] = Field(
         default=["relevance", "faithfulness", "answer_similarity", "context_precision"]
     )
     api_name: Optional[str] = Field("openai")
@@ -476,14 +482,14 @@ class RAGEvaluationRequest(BaseModel):
 
 class PropositionEvaluationRequest(BaseModel):
     """Evaluate proposition extraction quality"""
-    extracted: List[str] = Field(..., min_length=1, description="Extracted propositions/claims")
-    reference: List[str] = Field(..., min_length=1, description="Reference propositions/claims")
+    extracted: list[str] = Field(..., min_length=1, description="Extracted propositions/claims")
+    reference: list[str] = Field(..., min_length=1, description="Reference propositions/claims")
     method: Optional[Literal['semantic', 'jaccard']] = Field('semantic', description="Matching method")
     threshold: Optional[float] = Field(0.7, ge=0.0, le=1.0, description="Match threshold")
 
     @field_validator('extracted', 'reference')
     @classmethod
-    def strip_items(cls, v: List[str]) -> List[str]:
+    def strip_items(cls, v: list[str]) -> list[str]:
         return [sanitize_html_text(x) or '' for x in v]
 
 
@@ -497,18 +503,18 @@ class PropositionEvaluationResponse(BaseModel):
     claim_density_per_100_tokens: float
     avg_prop_len_tokens: float
     dedup_rate: float
-    details: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    details: Optional[dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class RAGEvaluationResponse(BaseModel):
     """RAG evaluation response"""
-    metrics: Dict[str, EvaluationMetric]
+    metrics: dict[str, EvaluationMetric]
     overall_score: float = Field(..., ge=0.0, le=1.0)
     retrieval_quality: float = Field(..., ge=0.0, le=1.0)
     generation_quality: float = Field(..., ge=0.0, le=1.0)
-    suggestions: Optional[List[str]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    suggestions: Optional[list[str]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class ResponseQualityRequest(BaseModel):
@@ -516,7 +522,7 @@ class ResponseQualityRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=50000)
     response: str = Field(..., min_length=1, max_length=50000)
     expected_format: Optional[str] = Field(None, max_length=1000)
-    evaluation_criteria: Optional[Dict[str, str]] = None
+    evaluation_criteria: Optional[dict[str, str]] = None
     api_name: Optional[str] = Field("openai")
 
     @field_validator('prompt', 'response', 'expected_format')
@@ -529,11 +535,11 @@ class ResponseQualityRequest(BaseModel):
 
 class ResponseQualityResponse(BaseModel):
     """Response quality response"""
-    metrics: Dict[str, EvaluationMetric]
+    metrics: dict[str, EvaluationMetric]
     overall_quality: float = Field(..., ge=0.0, le=1.0)
-    format_compliance: Optional[Dict[str, bool]] = None
-    issues: Optional[List[str]] = None
-    improvements: Optional[List[str]] = None
+    format_compliance: Optional[dict[str, bool]] = None
+    issues: Optional[list[str]] = None
+    improvements: Optional[list[str]] = None
 
 # ============= RAG Pipeline Evaluation Schemas =============
 
@@ -547,20 +553,20 @@ def _ensure_list(v):
 
 class ChunkingSweepConfig(BaseModel):
     """Retrieval-time chunking parameters to sweep via unified_rag_pipeline flags."""
-    method: Optional[Union[str, List[str]]] = Field(
+    method: Optional[Union[str, list[str]]] = Field(
         default=None,
         description="Chunking method: structure_aware, sentences, markdown, code, xml"
     )
-    chunk_size: Optional[Union[int, List[int]]] = Field(
+    chunk_size: Optional[Union[int, list[int]]] = Field(
         default=None, description="Chunk size(s)"
     )
-    overlap: Optional[Union[int, List[int]]] = Field(
+    overlap: Optional[Union[int, list[int]]] = Field(
         default=None, description="Chunk overlap(s)"
     )
-    structure_aware: Optional[Union[bool, List[bool]]] = Field(default=None)
-    parent_expansion: Optional[Union[bool, List[bool]]] = Field(default=None)
-    include_siblings: Optional[Union[bool, List[bool]]] = Field(default=None)
-    chunk_type_filters: Optional[List[str]] = Field(
+    structure_aware: Optional[Union[bool, list[bool]]] = Field(default=None)
+    parent_expansion: Optional[Union[bool, list[bool]]] = Field(default=None)
+    include_siblings: Optional[Union[bool, list[bool]]] = Field(default=None)
+    chunk_type_filters: Optional[list[str]] = Field(
         default=None, description="Optional chunk type filters (e.g., ['code','text'])"
     )
 
@@ -572,12 +578,12 @@ class ChunkingSweepConfig(BaseModel):
 
 class RetrieverSweepConfig(BaseModel):
     """Retrieval parameters to sweep."""
-    search_mode: Optional[Union[Literal["fts", "vector", "hybrid"], List[Literal["fts", "vector", "hybrid"]]]] = Field(default=None)
+    search_mode: Optional[Union[Literal["fts", "vector", "hybrid"], list[Literal["fts", "vector", "hybrid"]]]] = Field(default=None)
     # Remove ge/le constraints on Union[list] fields; validate ranges in pipeline executor if needed
-    hybrid_alpha: Optional[Union[float, List[float]]] = Field(default=None)
-    top_k: Optional[Union[int, List[int]]] = Field(default=None)
-    min_score: Optional[Union[float, List[float]]] = Field(default=None)
-    keyword_filter: Optional[List[str]] = Field(default=None)
+    hybrid_alpha: Optional[Union[float, list[float]]] = Field(default=None)
+    top_k: Optional[Union[int, list[int]]] = Field(default=None)
+    min_score: Optional[Union[float, list[float]]] = Field(default=None)
+    keyword_filter: Optional[list[str]] = Field(default=None)
 
     @field_validator('search_mode', 'hybrid_alpha', 'top_k', 'min_score', mode='before')
     @classmethod
@@ -587,9 +593,9 @@ class RetrieverSweepConfig(BaseModel):
 
 class RerankerSweepConfig(BaseModel):
     """Reranker parameters to sweep."""
-    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"], List[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"]]]] = Field(default=None)
-    top_k: Optional[Union[int, List[int]]] = Field(default=None)
-    model: Optional[Union[str, List[str]]] = Field(default=None, description="Optional reranker model")
+    strategy: Optional[Union[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"], list[Literal["flashrank", "cross_encoder", "hybrid", "llama_cpp", "none"]]]] = Field(default=None)
+    top_k: Optional[Union[int, list[int]]] = Field(default=None)
+    model: Optional[Union[str, list[str]]] = Field(default=None, description="Optional reranker model")
 
     @field_validator('strategy', 'top_k', 'model', mode='before')
     @classmethod
@@ -599,10 +605,10 @@ class RerankerSweepConfig(BaseModel):
 
 class GenerationSweepConfig(BaseModel):
     """Generation parameters to sweep for RAG answers."""
-    model: Optional[Union[str, List[str]]] = Field(default=None)
-    prompt_template: Optional[Union[str, List[str]]] = Field(default=None)
-    temperature: Optional[Union[float, List[float]]] = Field(default=None)
-    max_tokens: Optional[Union[int, List[int]]] = Field(default=None)
+    model: Optional[Union[str, list[str]]] = Field(default=None)
+    prompt_template: Optional[Union[str, list[str]]] = Field(default=None)
+    temperature: Optional[Union[float, list[float]]] = Field(default=None)
+    max_tokens: Optional[Union[int, list[int]]] = Field(default=None)
 
     @field_validator('model', 'prompt_template', 'temperature', 'max_tokens', mode='before')
     @classmethod
@@ -612,9 +618,9 @@ class GenerationSweepConfig(BaseModel):
 
 class PipelineMetricsSelection(BaseModel):
     """Select which metrics to compute at each step."""
-    chunking_metrics: Optional[List[str]] = Field(default=None)
-    retrieval_metrics: Optional[List[str]] = Field(default=None)
-    generation_metrics: Optional[List[str]] = Field(default=None)
+    chunking_metrics: Optional[list[str]] = Field(default=None)
+    retrieval_metrics: Optional[list[str]] = Field(default=None)
+    generation_metrics: Optional[list[str]] = Field(default=None)
 
 
 class RAGPipelineCaching(BaseModel):
@@ -628,12 +634,12 @@ class RAGPipelineEvalSpec(BaseModel):
     """Spec for evaluating RAG configurations via the unified RAG pipeline."""
     # Data
     dataset_id: Optional[str] = Field(default=None, description="Existing dataset id")
-    dataset: Optional[List[DatasetSample]] = Field(default=None, description="Inline dataset samples")
+    dataset: Optional[list[DatasetSample]] = Field(default=None, description="Inline dataset samples")
 
     # Sweeps
     chunking: Optional[ChunkingSweepConfig] = None
-    retrievers: Optional[List[RetrieverSweepConfig]] = None
-    rerankers: Optional[List[RerankerSweepConfig]] = None
+    retrievers: Optional[list[RetrieverSweepConfig]] = None
+    rerankers: Optional[list[RerankerSweepConfig]] = None
     rag: Optional[GenerationSweepConfig] = None
 
     # Execution
@@ -648,7 +654,7 @@ class RAGPipelineEvalSpec(BaseModel):
     ephemeral_ttl_seconds: Optional[int] = Field(default=86400, ge=60, le=604800, description="TTL for ephemeral collections (seconds)")
 
     # Aggregation weights for leaderboard scoring
-    aggregation_weights: Optional[Dict[str, float]] = Field(
+    aggregation_weights: Optional[dict[str, float]] = Field(
         default=None,
         description="Weights for combining metrics into config score (e.g., {'rag_overall':1.0,'retrieval_diversity':0.1,'chunk_cohesion':0.1})"
     )
@@ -664,25 +670,25 @@ class RAGPipelineEvalSpec(BaseModel):
 
 class PipelinePresetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128, pattern=r'^[a-zA-Z0-9_\-]+$')
-    config: Dict[str, Any] = Field(..., description="RAG pipeline config blocks: {chunking,retriever,reranker,rag}")
+    config: dict[str, Any] = Field(..., description="RAG pipeline config blocks: {chunking,retriever,reranker,rag}")
 
 
 class PipelinePresetResponse(BaseModel):
     name: str
-    config: Dict[str, Any]
+    config: dict[str, Any]
     created_at: Optional[int] = None
     updated_at: Optional[int] = None
 
 
 class PipelinePresetListResponse(BaseModel):
-    items: List[PipelinePresetResponse]
+    items: list[PipelinePresetResponse]
     total: int
 
 
 class PipelineCleanupResponse(BaseModel):
     expired_count: int
     deleted_count: int
-    errors: Optional[List[str]] = None
+    errors: Optional[list[str]] = None
 
 # ============= QA3 (Tri-Label) Evaluation Schemas =============
 
@@ -702,9 +708,9 @@ class QA3Item(BaseModel):
 
 
 class QA3Request(BaseModel):
-    items: List[QA3Item] = Field(..., min_length=1)
-    allowed_labels: Optional[List[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"])
-    label_mapping: Optional[Dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
+    items: list[QA3Item] = Field(..., min_length=1)
+    allowed_labels: Optional[list[str]] = Field(default_factory=lambda: ["SUPPORTED","REFUTED","NEI"])
+    label_mapping: Optional[dict[str, str]] = Field(None, description="Normalize gold labels, e.g., {'true':'SUPPORTED','false':'REFUTED'}")
     generate_predictions: Optional[bool] = Field(False, description="If true, call LLM to predict; else expect item.prediction and score-only")
     api_name: Optional[str] = Field("openai")
     temperature: Optional[float] = Field(0.0, ge=0.0, le=1.0)
@@ -721,16 +727,16 @@ class QA3PerLabel(BaseModel):
 class QA3Response(BaseModel):
     accuracy: float
     macro_f1: float
-    per_label: Dict[str, QA3PerLabel]
-    confusion_matrix: Dict[str, Dict[str, int]]
-    results: List[Dict[str, Any]]
-    metadata: Optional[Dict[str, Any]] = None
+    per_label: dict[str, QA3PerLabel]
+    confusion_matrix: dict[str, dict[str, int]]
+    results: list[dict[str, Any]]
+    metadata: Optional[dict[str, Any]] = None
 
 
 class BatchEvaluationRequest(BaseModel):
     """Batch evaluation request"""
     evaluation_type: Literal["geval", "rag", "response_quality", "ocr", "propositions"]
-    items: List[Dict[str, Any]] = Field(..., min_length=1, max_length=1000)
+    items: list[dict[str, Any]] = Field(..., min_length=1, max_length=1000)
     parallel_workers: int = Field(4, ge=1, le=20)
     continue_on_error: bool = Field(True)
 
@@ -740,8 +746,8 @@ class BatchEvaluationResponse(BaseModel):
     total_items: int
     successful: int
     failed: int
-    results: List[Dict[str, Any]]
-    aggregate_metrics: Optional[Dict[str, float]] = None
+    results: list[dict[str, Any]]
+    aggregate_metrics: Optional[dict[str, float]] = None
     processing_time: float
 
 
@@ -750,8 +756,8 @@ class CustomMetricRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: str = Field(..., max_length=1000)
     evaluation_prompt: str = Field(..., max_length=10000)
-    input_data: Dict[str, Any]
-    scoring_criteria: Dict[str, Any]
+    input_data: dict[str, Any]
+    scoring_criteria: dict[str, Any]
     api_name: Optional[str] = Field("openai")
 
 
@@ -760,21 +766,21 @@ class CustomMetricResponse(BaseModel):
     metric_name: str
     score: float = Field(..., ge=0.0, le=1.0)
     explanation: str
-    details: Optional[Dict[str, Any]] = None
+    details: Optional[dict[str, Any]] = None
 
 
 class EvaluationComparisonRequest(BaseModel):
     """Evaluation comparison request"""
-    evaluation_ids: List[str] = Field(..., min_length=2, max_length=10)
-    metrics_to_compare: Optional[List[str]] = None
+    evaluation_ids: list[str] = Field(..., min_length=2, max_length=10)
+    metrics_to_compare: Optional[list[str]] = None
 
 
 class EvaluationComparisonResponse(BaseModel):
     """Evaluation comparison response"""
-    evaluations: List[Dict[str, Any]]
-    metric_comparisons: Dict[str, List[float]]
-    improvements: Optional[Dict[str, float]] = None
-    regressions: Optional[Dict[str, float]] = None
+    evaluations: list[dict[str, Any]]
+    metric_comparisons: dict[str, list[float]]
+    improvements: Optional[dict[str, float]] = None
+    regressions: Optional[dict[str, float]] = None
     summary: str
 
 
@@ -791,8 +797,8 @@ class EvaluationHistoryRequest(BaseModel):
 class EvaluationHistoryResponse(BaseModel):
     """Evaluation history response"""
     total_count: int
-    items: List[Dict[str, Any]]
-    aggregations: Optional[Dict[str, Any]] = None
+    items: list[dict[str, Any]]
+    aggregations: Optional[dict[str, Any]] = None
 
 
 # ============= Webhook Schemas =============
@@ -800,7 +806,7 @@ class EvaluationHistoryResponse(BaseModel):
 class WebhookRegistrationRequest(BaseModel):
     """Webhook registration request"""
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
-    events: List[WebhookEventType] = Field(..., min_length=1)
+    events: list[WebhookEventType] = Field(..., min_length=1)
     secret: Optional[str] = Field(None, min_length=32)
     retry_count: Optional[int] = Field(
         3,
@@ -820,7 +826,7 @@ class WebhookRegistrationResponse(BaseModel):
     """Webhook registration response"""
     webhook_id: int
     url: str
-    events: List[str]
+    events: list[str]
     secret: str
     created_at: datetime
     status: str = "active"
@@ -831,7 +837,7 @@ class WebhookRegistrationResponse(BaseModel):
 class WebhookUpdateRequest(BaseModel):
     """Webhook update request"""
     url: Optional[HttpUrl] = None
-    events: Optional[List[WebhookEventType]] = None
+    events: Optional[list[WebhookEventType]] = None
     status: Optional[Literal["active", "paused"]] = None
 
 
@@ -839,7 +845,7 @@ class WebhookStatusResponse(BaseModel):
     """Webhook status response"""
     webhook_id: int
     url: str
-    events: List[str]
+    events: list[str]
     status: str
     retry_count: Optional[int] = None
     timeout_seconds: Optional[int] = None
@@ -866,9 +872,9 @@ class WebhookTestResponse(BaseModel):
 class RateLimitStatusResponse(BaseModel):
     """Rate limit status response"""
     tier: str
-    limits: Dict[str, int]
-    usage: Dict[str, int]
-    remaining: Dict[str, int]
+    limits: dict[str, int]
+    usage: dict[str, int]
+    remaining: dict[str, int]
     reset_at: datetime
 
 
@@ -896,5 +902,5 @@ class HealthCheckResponse(BaseModel):
     uptime: float
     database: str
     circuit_breaker: Optional[str] = None
-    rate_limit: Optional[Dict[str, Any]] = None
-    checks: Optional[Dict[str, bool]] = None
+    rate_limit: Optional[dict[str, Any]] = None
+    checks: Optional[dict[str, bool]] = None

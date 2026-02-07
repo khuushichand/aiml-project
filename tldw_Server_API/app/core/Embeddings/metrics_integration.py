@@ -1,16 +1,17 @@
 # metrics_integration.py
 # Integration with the existing metrics module for comprehensive monitoring
 
-from typing import Dict, Any, Optional
+import asyncio
 import time
 from functools import wraps
-import asyncio
+from typing import Any, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_counter,
-    log_histogram,
     log_gauge,
+    log_histogram,
     log_resource_usage,
 )
 
@@ -185,7 +186,7 @@ class EmbeddingMetrics:
                             elapsed
                         )
                         return result
-                    except Exception as e:
+                    except Exception:
                         self.log_error("unknown", f"{operation}_error")
                         raise
                 return async_wrapper
@@ -201,7 +202,7 @@ class EmbeddingMetrics:
                             elapsed
                         )
                         return result
-                    except Exception as e:
+                    except Exception:
                         self.log_error("unknown", f"{operation}_error")
                         raise
                 return sync_wrapper
@@ -213,7 +214,7 @@ class EmbeddingMetrics:
         log_resource_usage()
 
     # Aggregated metrics
-    def get_summary_metrics(self) -> Dict[str, Any]:
+    def get_summary_metrics(self) -> dict[str, Any]:
         """Get summary of key metrics"""
         # This would integrate with the metrics backend to pull current values
         # For now, return a structure that would be populated

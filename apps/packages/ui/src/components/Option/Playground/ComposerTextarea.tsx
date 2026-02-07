@@ -1,0 +1,151 @@
+import React from "react"
+import { useTranslation } from "react-i18next"
+import {
+  SlashCommandMenu,
+  type SlashCommandItem
+} from "@/components/Sidepanel/Chat/SlashCommandMenu"
+import { MentionsDropdown } from "./MentionsDropdown"
+
+export type ComposerTextareaProps = {
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>
+  value: string
+  displayValue: string
+  onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+  onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
+  onFocus: () => void
+  onSelect: () => void
+  onCompositionStart: () => void
+  onCompositionEnd: () => void
+  onMouseDown: () => void
+  onMouseUp: () => void
+  placeholder: string
+  disabled?: boolean
+  isProMode: boolean
+  isMobile: boolean
+  isConnectionReady: boolean
+  isCollapsed: boolean
+  ariaExpanded: boolean
+  rows?: number
+  // Form bindings
+  formInputProps: Record<string, any>
+  // Slash commands
+  showSlashMenu: boolean
+  slashCommands: SlashCommandItem[]
+  slashActiveIndex: number
+  onSlashSelect: (cmd: SlashCommandItem) => void
+  onSlashActiveIndexChange: (idx: number) => void
+  slashEmptyLabel: string
+  // Mentions
+  showMentions: boolean
+  filteredTabs: any[]
+  mentionPosition: any
+  onMentionSelect: (tab: any) => void
+  onMentionsClose: () => void
+  onMentionRefetch: () => Promise<void>
+  onMentionsOpen: () => Promise<void>
+  // Draft
+  draftSaved: boolean
+}
+
+export const ComposerTextarea = React.memo(function ComposerTextarea({
+  textareaRef,
+  value,
+  displayValue,
+  onChange,
+  onKeyDown,
+  onPaste,
+  onFocus,
+  onSelect,
+  onCompositionStart,
+  onCompositionEnd,
+  onMouseDown,
+  onMouseUp,
+  placeholder,
+  isProMode,
+  isMobile,
+  isConnectionReady,
+  isCollapsed,
+  ariaExpanded,
+  rows = 1,
+  formInputProps,
+  showSlashMenu,
+  slashCommands,
+  slashActiveIndex,
+  onSlashSelect,
+  onSlashActiveIndexChange,
+  slashEmptyLabel,
+  showMentions,
+  filteredTabs,
+  mentionPosition,
+  onMentionSelect,
+  onMentionsClose,
+  onMentionRefetch,
+  onMentionsOpen,
+  draftSaved
+}: ComposerTextareaProps) {
+  const { t } = useTranslation(["sidepanel"])
+
+  return (
+    <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
+      <SlashCommandMenu
+        open={showSlashMenu}
+        commands={slashCommands}
+        activeIndex={slashActiveIndex}
+        onActiveIndexChange={onSlashActiveIndexChange}
+        onSelect={onSlashSelect}
+        emptyLabel={slashEmptyLabel}
+        className="absolute bottom-full left-3 right-3 mb-2"
+      />
+      <textarea
+        id="textarea-message"
+        data-testid="chat-input"
+        onCompositionStart={onCompositionStart}
+        onCompositionEnd={onCompositionEnd}
+        onMouseDown={onMouseDown}
+        onMouseUp={onMouseUp}
+        onKeyDown={onKeyDown}
+        onFocus={onFocus}
+        ref={textareaRef}
+        className={`w-full resize-none bg-transparent text-base leading-6 text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 border-0 ${
+          !isConnectionReady
+            ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
+            : ""
+        } ${isProMode ? "px-3 py-2.5" : "px-3 py-2"}`}
+        onPaste={onPaste}
+        aria-expanded={ariaExpanded}
+        rows={rows}
+        style={{
+          minHeight: isMobile ? "40px" : isProMode ? "60px" : "44px"
+        }}
+        tabIndex={0}
+        placeholder={placeholder}
+        {...formInputProps}
+        value={displayValue}
+        onChange={onChange}
+        onSelect={onSelect}
+      />
+
+      <MentionsDropdown
+        show={showMentions}
+        tabs={filteredTabs}
+        mentionPosition={mentionPosition}
+        onSelectTab={onMentionSelect}
+        onClose={onMentionsClose}
+        textareaRef={textareaRef}
+        refetchTabs={onMentionRefetch}
+        onMentionsOpen={onMentionsOpen}
+      />
+      {/* Draft saved indicator */}
+      {draftSaved && (
+        <span
+          className="absolute bottom-1 right-2 text-label text-text-subtle transition-opacity pointer-events-none"
+          role="status"
+          aria-live="polite"
+        >
+          {t("sidepanel:composer.draftSaved", "Draft saved")}
+        </span>
+      )}
+    </div>
+  )
+})

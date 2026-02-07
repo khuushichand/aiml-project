@@ -5,6 +5,7 @@ import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { useStoreMessageOption } from "@/store/option"
 import { tldwClient } from "@/services/tldw/TldwApiClient"
 import { getHistoriesWithMetadata, saveMessage } from "@/db/dexie/helpers"
+import { syncChatSettingsForServerChat } from "@/services/chat-settings"
 import { normalizeConversationState } from "@/utils/conversation-state"
 import { normalizeChatRole } from "@/utils/normalize-chat-role"
 import { updatePageTitle } from "@/utils/update-page-title"
@@ -206,7 +207,7 @@ export const useServerChatLoader = ({
 
           const list = await tldwClient.listChatMessages(
             serverChatId,
-            { include_deleted: "false" },
+            { include_deleted: "false", include_metadata: "true" },
             { signal: controller.signal }
           )
 
@@ -218,13 +219,17 @@ export const useServerChatLoader = ({
           const mappedMessages = list.map((m) => {
             const meta = m as unknown as Record<string, unknown>
             const createdAt = Date.parse(m.created_at)
+            const senderName =
+              typeof (m as any).sender === "string"
+                ? String((m as any).sender).trim()
+                : ""
             return {
               createdAt: Number.isNaN(createdAt) ? undefined : createdAt,
               isBot: m.role === "assistant",
               role: normalizeChatRole(m.role),
               name:
                 m.role === "assistant"
-                  ? assistantName
+                  ? senderName || assistantName
                   : m.role === "system"
                     ? "System"
                     : "You",
@@ -253,7 +258,12 @@ export const useServerChatLoader = ({
                 assistantName,
               modelImage:
                 (meta?.model_image as string | undefined) ??
-                (meta?.modelImage as string | undefined)
+                (meta?.modelImage as string | undefined),
+              pinned: Boolean(
+                (meta?.pinned as boolean | undefined) ??
+                  ((meta?.metadata_extra as Record<string, unknown> | undefined)
+                    ?.pinned as boolean | undefined)
+              )
             }
           })
 
@@ -279,6 +289,14 @@ export const useServerChatLoader = ({
                 chatTitle || undefined
               )
               if (localHistoryId) {
+                try {
+                  await syncChatSettingsForServerChat({
+                    historyId: localHistoryId,
+                    serverChatId
+                  })
+                } catch {
+                  // Best-effort settings sync.
+                }
                 const metadataMap = await getHistoriesWithMetadata([
                   localHistoryId
                 ])

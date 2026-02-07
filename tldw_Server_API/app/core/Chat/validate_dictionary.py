@@ -17,22 +17,41 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 try:
     import yaml  # type: ignore
-except Exception:  # pragma: no cover
+except (ImportError, ModuleNotFoundError):  # pragma: no cover
     yaml = None  # type: ignore
 
-import re
+import contextlib
+
+from jinja2 import StrictUndefined, TemplateError, nodes
 from jinja2.sandbox import SandboxedEnvironment
-from jinja2 import StrictUndefined, nodes
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 
 from tldw_Server_API.app.core.Chat.chat_dictionary import parse_user_dict_markdown_file
-from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as check_regex_pattern, warn_ambiguity
+from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as check_regex_pattern
+from tldw_Server_API.app.core.Chunking.regex_safety import warn_ambiguity
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 
+_VALIDATE_DICT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+_YAML_LOAD_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if yaml is not None:  # pragma: no cover
+    _yaml_error = getattr(yaml, "YAMLError", None)
+    if isinstance(_yaml_error, type) and issubclass(_yaml_error, BaseException):
+        _YAML_LOAD_EXCEPTIONS = (_yaml_error,)
+_CLI_LOAD_EXCEPTIONS = _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS + _YAML_LOAD_EXCEPTIONS
 
 # -----------------------------
 # Schema and limits
@@ -53,13 +72,13 @@ ALLOWED_ENTRY_FIELDS = {
 }
 
 
-def _as_list(obj: Any) -> List[Any]:
+def _as_list(obj: Any) -> list[Any]:
     if isinstance(obj, list):
         return obj
     return []
 
 
-def _as_dict(obj: Any) -> Dict[str, Any]:
+def _as_dict(obj: Any) -> dict[str, Any]:
     if isinstance(obj, dict):
         return obj
     return {}
@@ -78,7 +97,7 @@ def _int_env(name: str, default: int) -> int:
         return default
     try:
         return int(str(v))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -131,20 +150,20 @@ _ALLOWED_FUNCS = {
 }
 
 
-def _template_ast_checks(text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _template_ast_checks(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Return (errors, warnings) for a template string.
 
     Detect forbidden constructs and unknown functions. Unknown functions are
     reported as warnings; some special cases (e.g., 'weather') are flagged as
     external-calls-disabled.
     """
-    errs: List[Dict[str, Any]] = []
-    warns: List[Dict[str, Any]] = []
+    errs: list[dict[str, Any]] = []
+    warns: list[dict[str, Any]] = []
     if not isinstance(text, str) or ("{{" not in text and "{%" not in text):
         return errs, warns
     try:
         ast = _TPL_ENV.parse(text)
-    except Exception as e:
+    except (TemplateError, TypeError, ValueError) as e:
         errs.append({
             "code": "template_parse_error",
             "field": "replacement",
@@ -193,12 +212,12 @@ def _template_ast_checks(text: str) -> Tuple[List[Dict[str, Any]], List[Dict[str
 class ValidationResult:
     ok: bool
     schema_version: int
-    errors: List[Dict[str, Any]]
-    warnings: List[Dict[str, Any]]
-    entry_stats: Dict[str, int]
-    suggested_fixes: List[str]
+    errors: list[dict[str, Any]]
+    warnings: list[dict[str, Any]]
+    entry_stats: dict[str, int]
+    suggested_fixes: list[str]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
             "schema_version": self.schema_version,
@@ -209,10 +228,10 @@ class ValidationResult:
         }
 
 
-def _validate_entries(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, int], List[str]]:
-    errors: List[Dict[str, Any]] = []
-    warnings: List[Dict[str, Any]] = []
-    fixes: List[str] = []
+def _validate_entries(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int], list[str]]:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    fixes: list[str] = []
 
     total = len(entries)
     n_regex = 0
@@ -261,7 +280,7 @@ def _validate_entries(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any
         prob = e.get("probability", 1.0)
         try:
             pf = float(prob)
-        except Exception:
+        except (TypeError, ValueError):
             errors.append({"code": "schema_invalid", "field": f"{path}.probability", "message": "Must be a number"})
             pf = 1.0
         if pf < 0.0 or pf > 1.0:
@@ -271,14 +290,14 @@ def _validate_entries(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any
         mr = e.get("max_replacements", 0)
         try:
             mi = int(mr)
-        except Exception:
+        except (TypeError, ValueError):
             errors.append({"code": "schema_invalid", "field": f"{path}.max_replacements", "message": "Must be an integer"})
             mi = 0
         if mi < 0:
             errors.append({"code": "max_replacements_invalid", "field": f"{path}.max_replacements", "message": "Must be >= 0"})
 
         # Unknown fields
-        for k in e.keys():
+        for k in e:
             if k not in ALLOWED_ENTRY_FIELDS:
                 warnings.append({
                     "code": "unknown_field",
@@ -319,18 +338,16 @@ def _validate_entries(entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any
     return errors, warnings, stats, fixes
 
 
-def validate_dictionary(data: Dict[str, Any], schema_version: int = 1, strict: bool = False) -> ValidationResult:
-    errors: List[Dict[str, Any]] = []
-    warnings: List[Dict[str, Any]] = []
+def validate_dictionary(data: dict[str, Any], schema_version: int = 1, strict: bool = False) -> ValidationResult:
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
     _start_t = None
     try:
         _start_t = time.perf_counter()  # type: ignore[name-defined]
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
-    try:
+    with contextlib.suppress(_VALIDATE_DICT_NONCRITICAL_EXCEPTIONS):
         increment_counter("chat_dictionary_validate_requests_total", labels={"strict": str(bool(strict)).lower()})
-    except Exception:
-        pass
 
     if not isinstance(data, dict):
         errors.append({"code": "schema_invalid", "field": "root", "message": "Payload must be an object"})
@@ -353,7 +370,7 @@ def validate_dictionary(data: Dict[str, Any], schema_version: int = 1, strict: b
         for w in warnings:
             code = str(w.get("code", "unknown"))
             increment_counter("chat_dictionary_validate_warnings_total", labels={"code": code})
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
 
     ok = len(errors) == 0
@@ -364,7 +381,7 @@ def validate_dictionary(data: Dict[str, Any], schema_version: int = 1, strict: b
                 value=float(time.perf_counter() - _start_t),  # type: ignore[name-defined]
                 labels={"strict": str(bool(strict)).lower()},
             )
-    except Exception:
+    except _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     return ValidationResult(ok, schema_version, errors, warnings, stats, fixes)
 
@@ -374,13 +391,13 @@ def validate_dictionary(data: Dict[str, Any], schema_version: int = 1, strict: b
 # -----------------------------
 
 
-def _load_file(path: str) -> Dict[str, Any]:
+def _load_file(path: str) -> dict[str, Any]:
     p = str(path)
     if p.endswith(".json"):
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     if (p.endswith(".yaml") or p.endswith(".yml")) and yaml is not None:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(p, encoding="utf-8") as f:
             return yaml.safe_load(f)
     if p.endswith(".md"):
         kv = parse_user_dict_markdown_file(p)
@@ -394,11 +411,11 @@ def _load_file(path: str) -> Dict[str, Any]:
         } for k, v in kv.items()]
         return {"name": os.path.basename(p), "entries": entries}
     # Fallback: try JSON
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         return json.load(f)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Validate a chat dictionary JSON/YAML/MD file")
     parser.add_argument("--file", "-f", required=True, help="Path to dictionary file")
     parser.add_argument("--schema-version", type=int, default=1)
@@ -407,7 +424,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         payload = _load_file(args.file)
-    except Exception as e:
+    except _CLI_LOAD_EXCEPTIONS as e:
         logger.error(f"Failed to read {args.file}: {e}")
         print(json.dumps({
             "ok": False,

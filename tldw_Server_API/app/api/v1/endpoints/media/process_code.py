@@ -4,7 +4,7 @@ import asyncio
 import os
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from loguru import logger
@@ -12,6 +12,7 @@ from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_code_deps import get_process_code_form
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessCodeForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Ingestion_Media_Processing.code_utils import (
@@ -29,7 +30,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     CODE_FILE_EXTENSIONS,
 )
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -42,7 +42,7 @@ router = APIRouter()
 async def process_code_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),  # Parity with legacy signature
     form_data: ProcessCodeForm = Depends(get_process_code_form),
-    files: Optional[List[UploadFile]] = File(
+    files: list[UploadFile] | None = File(
         None,
         description="Code uploads (.py, .c, .cpp, .java, .ts, etc.)",
     ),
@@ -64,18 +64,18 @@ async def process_code_endpoint(
     # Do not preemptively hard-fail entire batch on URL policy here.
     # URL safety is handled during per-item download to allow partial 207
     # batches in tests.
-    batch: Dict[str, Any] = {"errors": [], "results": []}
+    batch: dict[str, Any] = {"errors": [], "results": []}
 
     with TempDirManager(cleanup=True, prefix="process_code_") as temp_dir_path:
         temp_dir = Path(temp_dir_path)
-        items: List[ProcessItem] = []
+        items: list[ProcessItem] = []
 
         # Handle uploads
         if files:
             # Preserve test-time monkeypatching of `_save_uploaded_files` and
             # `file_validator_instance` via the `media` shim.
-            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
-            validator = getattr(media_mod, "file_validator_instance")
+            save_uploaded_files = media_mod._save_uploaded_files
+            validator = media_mod.file_validator_instance
 
             saved, upload_errors = await save_uploaded_files(
                 files,
@@ -143,7 +143,7 @@ async def process_code_endpoint(
 
         # Handle URLs
         if urls:
-            download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = media_mod._download_url_async
             tasks = [
                 download_url_async(
                     client=None,
@@ -202,9 +202,9 @@ async def process_code_endpoint(
             )
 
         async def _code_batch_processor(
-            process_items: List[ProcessItem],
-        ) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+            process_items: list[ProcessItem],
+        ) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             for item in process_items:
                 local_path = item.local_path
                 input_ref = item.input_ref
@@ -249,7 +249,7 @@ async def process_code_endpoint(
 
                 chunks = []
                 op_status = "Success"
-                op_warnings: Optional[List[str]] = None
+                op_warnings: list[str] | None = None
 
                 if form_data.perform_chunking:
                     if str(form_data.chunk_method or "code").lower() == "lines":

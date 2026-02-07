@@ -10,13 +10,16 @@ import base64
 import random
 import re
 import time
-from datetime import datetime, timezone
 from collections import Counter
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
 
 from loguru import logger
 from PIL import Image
 
+from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTENT_LENGTH
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -24,15 +27,30 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 
+_CHAR_CHAT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 from .character_db import load_character_and_image
 from .character_utils import (
-    replace_placeholders,
-    USER_SENDER_ALIASES as _LEGACY_USER_SENDER_ALIASES,
     NON_CHARACTER_SENDER_ALIASES as _NON_CHARACTER_SENDER_ALIASES,
 )
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.Character_Chat.constants import MAX_PERSIST_CONTENT_LENGTH
-
+from .character_utils import (
+    USER_SENDER_ALIASES as _LEGACY_USER_SENDER_ALIASES,
+)
+from .character_utils import (
+    replace_placeholders,
+)
 
 # Aliases are sourced from character_utils for consistency across modules.
 _DEFAULT_FIRST_MESSAGE_TEMPLATE = "Hello, I am {{char}}. How can I help you, {{user}}?"
@@ -55,19 +73,16 @@ def _content_length_for_guardrails(text: str) -> int:
     return len(normalized)
 
 
-def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _extract_message_attachments(msg_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Build a normalized attachment list for UI consumption."""
 
-    attachments: Dict[int, Dict[str, Any]] = {}
+    attachments: dict[int, dict[str, Any]] = {}
 
     def _normalize_payload(position: int, data: Any, mime: Optional[str]) -> None:
         if data is None:
             return
         payload = data.tobytes() if isinstance(data, memoryview) else data
-        if isinstance(payload, str):
-            payload_bytes = payload.encode("utf-8")
-        else:
-            payload_bytes = bytes(payload)
+        payload_bytes = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
         attachments[position] = {
             "position": position,
             "data": base64.b64encode(payload_bytes).decode("ascii"),
@@ -100,10 +115,10 @@ def _extract_message_attachments(msg_data: Dict[str, Any]) -> List[Dict[str, Any
 
 
 def _infer_character_sender_aliases(
-    db_messages: List[Dict[str, Any]],
-    user_aliases: Set[str],
+    db_messages: list[dict[str, Any]],
+    user_aliases: set[str],
     primary_char_name: str,
-) -> List[str]:
+) -> list[str]:
     """Infer legacy character sender aliases stored on existing messages."""
 
     alias_counter: Counter[str] = Counter()
@@ -132,7 +147,7 @@ def _infer_character_sender_aliases(
         if first_candidate is None:
             first_candidate = normalized
 
-    inferred_aliases: List[str] = []
+    inferred_aliases: list[str] = []
     for alias, count in alias_counter.items():
         if alias.lower() == primary_lower:
             continue
@@ -142,11 +157,11 @@ def _infer_character_sender_aliases(
 
 
 def _compute_additional_char_aliases(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str,
-) -> Tuple[List[str], List[str]]:
+) -> tuple[list[str], list[str]]:
     user_aliases = {alias.lower() for alias in _LEGACY_USER_SENDER_ALIASES}
     if actual_user_sender_id_in_db:
         user_aliases.add(actual_user_sender_id_in_db.lower())
@@ -157,17 +172,17 @@ def _compute_additional_char_aliases(
     if not candidate_aliases:
         return [], []
 
-    inferred_user_aliases: List[str] = []
-    filtered_char_aliases: List[str] = []
+    inferred_user_aliases: list[str] = []
+    filtered_char_aliases: list[str] = []
     normalized_alias_map = {alias.lower(): alias for alias in candidate_aliases}
 
     # Pre-compute lowercase senders for efficient neighbour lookups
-    sender_sequence: List[Optional[str]] = []
+    sender_sequence: list[Optional[str]] = []
     for msg in db_messages:
         sender = msg.get("sender")
         sender_sequence.append(str(sender).strip().lower() if isinstance(sender, str) else None)
 
-    def _char_neighbor_set(current_alias: str) -> Set[str]:
+    def _char_neighbor_set(current_alias: str) -> set[str]:
         neighbors = {char_name_from_card.strip().lower()}
         for other_alias in candidate_aliases:
             normalized_other = other_alias.strip().lower()
@@ -207,7 +222,7 @@ def _compute_additional_char_aliases(
 
 
 def process_db_messages_to_ui_history(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str = "User",
@@ -216,7 +231,7 @@ def process_db_messages_to_ui_history(
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
     keep_trailing_user: bool = True,
-) -> List[Tuple[Optional[str], Optional[str]]]:
+) -> list[tuple[Optional[str], Optional[str]]]:
     """Convert database messages to UI-friendly paired chat history format."""
 
     rich_history = process_db_messages_to_rich_ui_history(
@@ -231,7 +246,7 @@ def process_db_messages_to_ui_history(
         keep_trailing_user=keep_trailing_user,
     )
 
-    processed_history: List[Tuple[Optional[str], Optional[str]]] = []
+    processed_history: list[tuple[Optional[str], Optional[str]]] = []
     for turn in rich_history:
         user_content = turn["user"]["content"] if turn["user"] else None
         character_content = None
@@ -244,7 +259,7 @@ def process_db_messages_to_ui_history(
 
 
 def process_db_messages_to_rich_ui_history(
-    db_messages: List[Dict[str, Any]],
+    db_messages: list[dict[str, Any]],
     char_name_from_card: str,
     user_name_for_placeholders: Optional[str],
     actual_user_sender_id_in_db: str = "User",
@@ -253,7 +268,7 @@ def process_db_messages_to_rich_ui_history(
     additional_user_sender_ids: Optional[Iterable[str]] = None,
     char_first_message: Optional[str] = None,
     keep_trailing_user: bool = False,
-) -> List[Dict[str, Optional[Dict[str, Any]]]]:
+) -> list[dict[str, Optional[dict[str, Any]]]]:
     """Convert database messages to UI-friendly structures including metadata."""
 
     char_sender_identifier = (
@@ -292,7 +307,7 @@ def process_db_messages_to_rich_ui_history(
         if placeholder_alias:
             user_identifiers.add(placeholder_alias)
 
-    user_msg_detail_buffer: Optional[Dict[str, Any]] = None
+    user_msg_detail_buffer: Optional[dict[str, Any]] = None
 
     explicit_char_sender_lower = None
     if actual_char_sender_id_in_db:
@@ -352,7 +367,7 @@ def process_db_messages_to_rich_ui_history(
     user_messages_seen = 0
     total_messages = len(db_messages)
 
-    rich_history: List[Dict[str, Optional[Dict[str, Any]]]] = []
+    rich_history: list[dict[str, Optional[dict[str, Any]]]] = []
 
     for idx, msg_data in enumerate(db_messages):
         sender = msg_data.get("sender")
@@ -538,12 +553,12 @@ def process_db_messages_to_rich_ui_history(
         # Redact both sender and content in logs to avoid leaking sensitive data
         try:
             _len = len(processed_content) if isinstance(processed_content, str) else 0
-        except Exception:
+        except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
             _len = 0
         # Hash sender name for traceability without exposing PII
         try:
             sender_hash = hash(sender) & 0xFFFFFFFF  # 32-bit positive hash for log reference
-        except Exception:
+        except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
             sender_hash = hash(str(sender)) & 0xFFFFFFFF
         logger.warning("Message from unknown sender (hash={:08x}, content_length={})", sender_hash, _len)
         formatted_content = f"[{sender}] {processed_content}"
@@ -596,9 +611,9 @@ def load_chat_and_character(
     conversation_id_str: str,
     user_name: Optional[str],
     messages_limit: int = 2000,
-) -> Tuple[
-    Optional[Dict[str, Any]],
-    List[Tuple[Optional[str], Optional[str]]],
+) -> tuple[
+    Optional[dict[str, Any]],
+    list[tuple[Optional[str], Optional[str]]],
     Optional[Image.Image],
 ]:
     """Load an existing chat conversation and associated character data."""
@@ -705,7 +720,7 @@ def load_chat_and_character(
             exc,
         )
         return None, [], None
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error in load_chat_and_character for conv ID %s: %s",
             conversation_id_str,
@@ -722,10 +737,10 @@ def start_new_chat_session(
     custom_title: Optional[str] = None,
     greeting_strategy: Optional[str] = None,
     alternate_index: Optional[int] = None,
-) -> Tuple[
+) -> tuple[
     Optional[str],
-    Optional[Dict[str, Any]],
-    Optional[List[Tuple[Optional[str], Optional[str]]]],
+    Optional[dict[str, Any]],
+    Optional[list[tuple[Optional[str], Optional[str]]]],
     Optional[Image.Image],
 ]:
     """Start a new chat session with the specified character."""
@@ -733,7 +748,7 @@ def start_new_chat_session(
     logger.debug("Starting new chat session for character_id: {}, user: {}", character_id, user_name)
 
     original_first_message_content: Optional[str] = None
-    original_alternate_greetings: Optional[List[str]] = None
+    original_alternate_greetings: Optional[list[str]] = None
 
     def _normalize_alt_greeting(value: Any) -> Optional[str]:
         """Normalize value (Any) to UTF-8 text or None (Optional[str]); bytes/memoryview are decoded with errors replaced."""
@@ -744,7 +759,7 @@ def start_new_chat_session(
         if isinstance(value, (bytes, bytearray)):
             try:
                 return bytes(value).decode("utf-8")
-            except Exception:
+            except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
                 return bytes(value).decode("utf-8", errors="replace")
         return None
 
@@ -755,7 +770,7 @@ def start_new_chat_session(
             ag = raw_char_data_for_first_message.get("alternate_greetings")
             if isinstance(ag, list):
                 # Normalize bytes-like greetings to text
-                normalized: List[str] = []
+                normalized: list[str] = []
                 for entry in ag:
                     greeting = _normalize_alt_greeting(entry)
                     if isinstance(greeting, str):
@@ -833,7 +848,7 @@ def start_new_chat_session(
                 elif greeting_strategy == "alternate_index":
                     if isinstance(alternate_index, int) and alternate_index >= 0 and alternate_index < len(original_alternate_greetings):
                         selected_alt = original_alternate_greetings[alternate_index]
-        except Exception as _sel_err:
+        except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as _sel_err:
             logger.debug("Alternate greeting selection failed: {}", _sel_err)
 
         if isinstance(selected_alt, str) and selected_alt.strip():
@@ -886,7 +901,7 @@ def start_new_chat_session(
                     initial_ui_history[0] = (None, processed)
                 else:
                     initial_ui_history = [(None, processed)]
-            except Exception as e:
+            except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to update initial_ui_history for conversation {conversation_id_val}: {e}")
         else:
             logger.warning(
@@ -907,7 +922,7 @@ def start_new_chat_session(
             exc,
         )
         return conversation_id_val, char_data, initial_ui_history, img
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Unexpected error in start_new_chat_session: {}", exc, exc_info=True)
         return conversation_id_val, char_data, initial_ui_history, img
 
@@ -918,7 +933,7 @@ def list_character_conversations(
     limit: int = 50,
     offset: int = 0,
     client_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List active conversations for a given character."""
 
     try:
@@ -935,7 +950,7 @@ def list_character_conversations(
             exc,
         )
         return []
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error listing conversations for char ID %s: %s",
             character_id,
@@ -945,7 +960,7 @@ def list_character_conversations(
         return []
 
 
-def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Optional[Dict[str, Any]]:
+def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Optional[dict[str, Any]]:
     """Retrieve metadata for a specific conversation."""
 
     try:
@@ -957,7 +972,7 @@ def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Opti
             exc,
         )
         return None
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error getting conversation metadata for ID %s: %s",
             conversation_id,
@@ -970,7 +985,7 @@ def get_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> Opti
 def update_conversation_metadata(
     db: CharactersRAGDB,
     conversation_id: str,
-    update_data: Dict[str, Any],
+    update_data: dict[str, Any],
     expected_version: int,
 ) -> bool:
     """Update conversation metadata with optimistic locking."""
@@ -1010,7 +1025,7 @@ def update_conversation_metadata(
             exc,
         )
         return False
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error updating conversation metadata for ID %s: %s",
             conversation_id,
@@ -1039,7 +1054,7 @@ def delete_conversation_by_id(
             exc,
         )
         return False
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Unexpected error removing conversation ID {}: {}", conversation_id, exc, exc_info=True)
         return False
 
@@ -1050,7 +1065,7 @@ def search_conversations_by_title_query(
     character_id: Optional[int] = None,
     limit: int = 10,
     client_id: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Search conversations by title."""
 
     try:
@@ -1067,7 +1082,7 @@ def search_conversations_by_title_query(
             exc,
         )
         return []
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error searching conversations: %s",
             exc,
@@ -1158,9 +1173,9 @@ def post_message_to_conversation(
             configured_max = settings.get("MAX_PERSIST_CONTENT_LENGTH", None)
             if configured_max is not None:
                 max_content_len = int(configured_max)
-        except Exception:
+        except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
             pass
-        if max_content_len and len(message_content) > max_content_len:
+        if max_content_len:
             effective_len = _content_length_for_guardrails(message_content)
             if effective_len > max_content_len:
                 raise InputError(
@@ -1171,7 +1186,7 @@ def post_message_to_conversation(
     if image_data is not None:
         try:
             max_bytes = int(settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
-        except Exception:
+        except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
             max_bytes = 5 * 1024 * 1024
         raw = image_data.tobytes() if isinstance(image_data, memoryview) else image_data
         if isinstance(raw, (bytes, bytearray)) and len(raw) > max_bytes:
@@ -1201,7 +1216,7 @@ def post_message_to_conversation(
                 from tldw_Server_API.app.core.Chat.conversation_enrichment import schedule_auto_tagging
 
                 schedule_auto_tagging(db, conversation_id)
-            except Exception as exc:
+            except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(
                     "Auto-tagging trigger skipped for conversation %s: %s",
                     conversation_id,
@@ -1222,7 +1237,7 @@ def post_message_to_conversation(
             exc,
         )
         raise
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error posting message to conv %s: %s",
             conversation_id,
@@ -1238,7 +1253,7 @@ def retrieve_message_details(
     message_id: str,
     character_name_for_placeholders: str,
     user_name_for_placeholders: Optional[str],
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """Retrieve a specific message by its ID and process placeholder content."""
 
     try:
@@ -1256,7 +1271,7 @@ def retrieve_message_details(
     except CharactersRAGDBError as exc:
         logger.error("Failed to retrieve message ID {}: {}", message_id, exc)
         return None
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error retrieving message ID %s: %s",
             message_id,
@@ -1276,7 +1291,8 @@ def retrieve_conversation_messages_for_ui(
     order: str = "ASC",
     rich_output: bool = False,
     char_first_message_hint: Optional[str] = None,
-) -> Union[List[Tuple[Optional[str], Optional[str]]], List[Dict[str, Optional[Dict[str, Any]]]]]:
+    character_id: Optional[int] = None,
+) -> Union[list[tuple[Optional[str], Optional[str]]], list[dict[str, Optional[dict[str, Any]]]]]:
     """Retrieve and process conversation messages for UI display.
 
     When ``rich_output`` is True the response contains message metadata and attachments.
@@ -1315,8 +1331,27 @@ def retrieve_conversation_messages_for_ui(
                 user_name,
             ).strip()
         else:
+            char_card = None
+            if isinstance(character_id, int) and character_id > 0:
+                try:
+                    char_card = db.get_character_card_by_id(character_id)
+                except CharactersRAGDBError:
+                    char_card = None
+                except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
+                    char_card = None
+            if char_card is None:
+                try:
+                    conversation = db.get_conversation_by_id(conversation_id)
+                    conv_char_id = conversation.get("character_id") if conversation else None
+                    if isinstance(conv_char_id, int) and conv_char_id > 0:
+                        char_card = db.get_character_card_by_id(conv_char_id)
+                except CharactersRAGDBError:
+                    char_card = None
+                except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
+                    char_card = None
             try:
-                char_card = db.get_character_card_by_name(character_name)
+                if char_card is None:
+                    char_card = db.get_character_card_by_name(character_name)
                 if char_card and isinstance(char_card.get("first_message"), str):
                     char_first_message_processed = replace_placeholders(
                         char_card["first_message"],
@@ -1325,7 +1360,7 @@ def retrieve_conversation_messages_for_ui(
                     ).strip()
             except CharactersRAGDBError:
                 char_first_message_processed = None
-            except Exception:
+            except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS:
                 char_first_message_processed = None
 
         rich_history = process_db_messages_to_rich_ui_history(
@@ -1364,7 +1399,7 @@ def retrieve_conversation_messages_for_ui(
             exc,
         )
         return []
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error retrieving UI messages for conversation %s: %s",
             conversation_id,
@@ -1396,7 +1431,7 @@ def edit_message_content(
     except (CharactersRAGDBError, InputError, ConflictError) as exc:
         logger.error("Failed to edit content for message ID {}: {}", message_id, exc)
         return False
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error editing message content for ID %s: %s",
             message_id,
@@ -1420,7 +1455,7 @@ def set_message_ranking(
     except (CharactersRAGDBError, InputError, ConflictError) as exc:
         logger.error("Failed to set ranking for message ID {}: {}", message_id, exc)
         return False
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error setting message ranking for ID %s: %s",
             message_id,
@@ -1442,7 +1477,7 @@ def remove_message_from_conversation(
     except (CharactersRAGDBError, ConflictError) as exc:
         logger.error("Failed to remove message ID {}: {}", message_id, exc)
         return False
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error removing message ID %s: %s",
             message_id,
@@ -1459,7 +1494,7 @@ def find_messages_in_conversation(
     character_name_for_placeholders: str,
     user_name_for_placeholders: Optional[str],
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Search for messages within a specific conversation by content."""
 
     try:
@@ -1487,7 +1522,7 @@ def find_messages_in_conversation(
             exc,
         )
         return []
-    except Exception as exc:
+    except _CHAR_CHAT_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(
             "Unexpected error searching messages in conversation %s: %s",
             conversation_id,

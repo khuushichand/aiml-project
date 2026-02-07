@@ -2,35 +2,41 @@
 # Description: This file contains functions for reading and writing plaintext files.
 #
 # Import necessary libraries
-import re
 import json
+import re
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Optional
+
+import html2text
+
 #
 # External Imports
 from bs4 import BeautifulSoup, Comment
 from docx2txt import docx2txt
-import html2text
 from pypandoc import convert_file
+
 try:
     from defusedxml import ElementTree as DET  # type: ignore
     from defusedxml.common import DefusedXmlException  # type: ignore
     _DEFUSED_AVAILABLE = True
-except Exception:  # pragma: no cover - defusedxml optional dependency
+except ImportError:  # pragma: no cover - defusedxml optional dependency
     DET = None  # type: ignore
     _DEFUSED_AVAILABLE = False
     DefusedXmlException = Exception  # type: ignore
 #
 # Local Imports
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+import contextlib
+
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 #
@@ -38,6 +44,18 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
 
 class PandocMissing(Exception): # Custom exception for Pandoc not found
     pass
+
+
+_PLAINTEXT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _ensure_secure_xml_support() -> None:
@@ -129,7 +147,7 @@ def _xml_to_text_simple(element):
 def convert_document_to_text(
     file_path: Path,
     base_dir: Optional[Path] = None,
-) -> Tuple[str, str, Dict[str, Any]]:
+) -> tuple[str, str, dict[str, Any]]:
     """
     Converts various document formats to plain text and extracts basic metadata.
 
@@ -187,7 +205,7 @@ def convert_document_to_text(
                 elif isinstance(e_rtf, ValueError):  # Catch the specific mock error by type check
                     logging.error(f"Pandoc conversion failed (ValueError) for RTF {file_path}: {e_rtf}", exc_info=False)
                     # Raise a NEW, clean ValueError containing the mock message
-                    raise ValueError(f"RTF conversion failed: {str(e_rtf)}")
+                    raise ValueError(f"RTF conversion failed: {str(e_rtf)}") from e_rtf
                 else:  # Catch other unexpected errors during RTF conversion
                     logging.error(f"Unexpected Pandoc conversion error for RTF {file_path}: {e_rtf}", exc_info=True)
                     raise ValueError(f"Unexpected RTF conversion error: {str(e_rtf)}") from e_rtf
@@ -224,18 +242,14 @@ def convert_document_to_text(
                     for t in soup.find_all(tag_name):
                         try:
                             t.decompose()
-                        except Exception:
-                            try:
+                        except (AttributeError, TypeError, ValueError):
+                            with contextlib.suppress(AttributeError, TypeError, ValueError):
                                 t.extract()
-                            except Exception:
-                                pass
                 for c in soup.find_all(string=lambda s: isinstance(s, Comment)):
-                    try:
+                    with contextlib.suppress(AttributeError, TypeError, ValueError):
                         c.extract()
-                    except Exception:
-                        pass
                 sanitized_html = str(soup)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fallback: use original content if BeautifulSoup fails
                 sanitized_html = html_content
             content = h.handle(sanitized_html) # Convert to Markdown
@@ -306,7 +320,7 @@ def convert_document_to_text(
         logging.error(f"Conversion error for {file_path}: {specific_error}", exc_info=False)
         log_counter(f"{source_format_used}_conversion_error", labels={"file_path": str(file_path), "error": type(specific_error).__name__})
         # Re-raise the specific error caught to be handled by process_document_content
-        raise specific_error
+        raise
 
     except Exception as unexpected_error:
         logging.exception(f"Unexpected error converting {file_path} to text: {unexpected_error}")
@@ -319,7 +333,7 @@ def convert_document_to_text(
 def process_document_content( # Renamed from _process_single_document for clarity
     doc_path: Path,
     perform_chunking: bool,
-    chunk_options: Optional[Dict[str, Any]],
+    chunk_options: Optional[dict[str, Any]],
     perform_analysis: bool,
     summarize_recursively: bool,
     api_name: Optional[str],
@@ -328,9 +342,9 @@ def process_document_content( # Renamed from _process_single_document for clarit
     system_prompt: Optional[str],
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Reads/converts various document formats, chunks (optional), analyses (optional).
     Handles .txt, .md, .html, .xml, .docx, .rtf (requires pandoc).
@@ -372,7 +386,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                 "db_message": None,
             }
         doc_path_obj = safe_path
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": str(doc_path_obj), # Will be overwritten by endpoint with original ref
         "processing_source": str(doc_path_obj), # Actual file processed
@@ -458,7 +472,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                      logging.info(f"Total chunks created: {len(processed_chunks)}")
                      log_histogram("document_chunks_created", len(processed_chunks), labels={"file_path": str(doc_path)})
 
-            except Exception as chunk_err:
+            except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as chunk_err:
                 logging.error(f"Chunking failed for {doc_path}: {chunk_err}", exc_info=True)
                 result["warnings"].append(f"Chunking failed: {chunk_err}")
                 processed_chunks = [{'text': text_content, 'metadata': {'chunk_index': 0, 'total_chunks': 1, 'error': f"Chunking failed: {chunk_err}"}}]
@@ -484,7 +498,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
             result["analysis_details"]["custom_prompt_used"] = custom_prompt
             result["analysis_details"]["system_prompt_used"] = system_prompt
 
-            chunk_summaries: List[str] = []
+            chunk_summaries: list[str] = []
             # Re-initialize or update result["chunks"] if chunk metadata needs to be updated
             analyzed_chunks_for_result = []
 
@@ -509,7 +523,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
                         else:
                             current_chunk_metadata['analysis'] = None
                             logging.debug(f"Analysis yielded empty result for chunk {i+1}/{len(processed_chunks)} of {doc_path}.")
-                    except Exception as summ_err:
+                    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as summ_err:
                         logging.warning(f"Analysis failed for chunk {i+1}/{len(processed_chunks)} of {doc_path}: {summ_err}", exc_info=False)
                         current_chunk_metadata['analysis'] = f"[Analysis Error: {str(summ_err)}]"
                         result["warnings"].append(f"Analysis failed for chunk {i+1}: {str(summ_err)}")
@@ -541,25 +555,31 @@ def process_document_content( # Renamed from _process_single_document for clarit
                          else:
                              log_counter("document_recursive_analysis_success", labels={"file_path": str(doc_path)})
 
-                    except Exception as rec_summ_err:
+                    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                          logging.error(f"Recursive analysis failed for {doc_path}: {rec_summ_err}", exc_info=True)
                          final_analysis_text = f"[Recursive Analysis Error: {str(rec_summ_err)}]\n\n" + "\n\n---\n\n".join(chunk_summaries)
                          result["warnings"].append(f"Recursive analysis failed: {str(rec_summ_err)}")
                          log_counter("document_recursive_analysis_error", labels={"file_path": str(doc_path), "error": str(rec_summ_err)})
                 else:
                     final_analysis_text = "\n\n---\n\n".join(chunk_summaries)
-                    if len(chunk_summaries) > 1: logging.info(f"Combined {len(chunk_summaries)} chunk analyses (non-recursive).")
-                    else: logging.info(f"Using single chunk analysis as final analysis.")
+                    if len(chunk_summaries) > 1:
+                        logging.info(f"Combined {len(chunk_summaries)} chunk analyses (non-recursive).")
+                    else:
+                        logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis_text
             log_counter("document_chunks_analyzed", value=len(chunk_summaries), labels={"file_path": str(doc_path)})
             logging.info(f"Analysis processing completed for document {doc_path}.")
 
         # Log skipped analysis reasons
-        elif not perform_analysis: logging.info(f"Analysis disabled for {doc_path}.")
-        elif not api_name: logging.warning(f"Analysis skipped for {doc_path}: API name missing.")
-        elif not processed_chunks: logging.warning(f"Analysis skipped for {doc_path}: No processable chunks available.")
-        else: logging.warning(f"Analysis skipped for {doc_path} due to unknown condition.")
+        elif not perform_analysis:
+            logging.info(f"Analysis disabled for {doc_path}.")
+        elif not api_name:
+            logging.warning(f"Analysis skipped for {doc_path}: API name missing.")
+        elif not processed_chunks:
+            logging.warning(f"Analysis skipped for {doc_path}: No processable chunks available.")
+        else:
+            logging.warning(f"Analysis skipped for {doc_path} due to unknown condition.")
 
 
         # Determine final status (Success or Warning)
@@ -581,7 +601,7 @@ def process_document_content( # Renamed from _process_single_document for clarit
         result["status"] = "Error"
         result["error"] = str(pm_err) # Include specific message
         log_counter("document_processing_error", labels={"file_path": str(doc_path), "error": "PandocMissing"})
-    except Exception as e:
+    except _PLAINTEXT_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Unexpected error processing document {doc_path}: {str(e)}")
         result["status"] = "Error"
         result["error"] = f"Unexpected processing error: {str(e)}"

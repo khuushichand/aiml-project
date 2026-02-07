@@ -5,7 +5,7 @@ Tests for production guardrails in single-user mode.
 import os
 import pytest
 
-from tldw_Server_API.app.core.AuthNZ.settings import Settings
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings, reset_settings
 from tldw_Server_API.app.core.AuthNZ.api_key_crypto import format_api_key
 
 
@@ -131,3 +131,20 @@ def test_single_user_production_allows_legacy_format_with_override(monkeypatch):
             sys.modules["pytest"] = pytest_mod
     monkeypatch.delenv("TLDW_ALLOW_LEGACY_SINGLE_USER_KEY", raising=False)
     monkeypatch.delenv("tldw_production", raising=False)
+
+
+def test_get_settings_does_not_use_pytest_module_presence_for_test_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_settings()
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("TLDW_TEST_MODE", raising=False)
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "legacy-key-1234567890123456")
+
+    settings = get_settings()
+
+    assert settings.RATE_LIMIT_ENABLED is True

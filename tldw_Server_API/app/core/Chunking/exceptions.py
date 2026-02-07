@@ -3,13 +3,13 @@
 Custom exceptions for the chunking module.
 """
 
-from typing import Optional, Any, Dict
+from typing import Any, Optional
 
 
 class ChunkingError(Exception):
     """Base exception for all chunking-related errors."""
 
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
         """
         Initialize chunking error.
 

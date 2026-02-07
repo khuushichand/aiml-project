@@ -3,8 +3,6 @@
 #
 from __future__ import annotations
 
-from typing import List, Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -16,11 +14,11 @@ class Figure(BaseModel):
     width: int = Field(..., ge=1, description="Width of the image in pixels")
     height: int = Field(..., ge=1, description="Height of the image in pixels")
     format: str = Field(..., description="Image format (png, jpeg, etc.)")
-    data_url: Optional[str] = Field(
+    data_url: str | None = Field(
         default=None,
         description="Base64-encoded data URL for the image"
     )
-    caption: Optional[str] = Field(
+    caption: str | None = Field(
         default=None,
         description="Figure caption if detected"
     )
@@ -31,7 +29,7 @@ class DocumentFiguresResponse(BaseModel):
 
     media_id: int = Field(..., description="ID of the media item")
     has_figures: bool = Field(..., description="Whether the document has extractable figures")
-    figures: List[Figure] = Field(
+    figures: list[Figure] = Field(
         default_factory=list,
         description="List of extracted figures"
     )

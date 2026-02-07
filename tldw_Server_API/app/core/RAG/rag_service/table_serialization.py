@@ -7,15 +7,16 @@ to convert tabular data into more semantically meaningful text representations.
 Ported from archived implementation and integrated with current RAG service.
 """
 
-import re
 import csv
-import json
 import io
-from typing import List, Dict, Any, Tuple, Optional, Union, Literal
+import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Literal, Optional
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
 
@@ -27,6 +28,34 @@ class TableFormat(Enum):
     HTML = "html"
     JSON = "json"
     PIPE_DELIMITED = "pipe"
+
+
+class TableSerializationError(ValueError):
+    """Base class for table serialization errors."""
+
+
+class InvalidMarkdownTableError(TableSerializationError):
+    """Raised when a Markdown table cannot be parsed."""
+
+
+class EmptyCsvDataError(TableSerializationError):
+    """Raised when CSV data is empty."""
+
+
+class InvalidJsonTableError(TableSerializationError):
+    """Raised when JSON table data is not an array of objects."""
+
+
+class TableFormatDetectionError(TableSerializationError):
+    """Raised when table format cannot be detected."""
+
+
+class UnsupportedTableFormatError(TableSerializationError):
+    """Raised when table format is unsupported."""
+
+
+class InvalidGroupByColumnError(TableSerializationError):
+    """Raised when grouping column is not in table headers."""
 
 
 @dataclass
@@ -48,10 +77,10 @@ class TableCell:
 @dataclass
 class Table:
     """Represents a parsed table."""
-    headers: List[str]
-    rows: List[List[str]]
+    headers: list[str]
+    rows: list[list[str]]
     format: TableFormat
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def num_columns(self) -> int:
@@ -63,13 +92,13 @@ class Table:
         """Get number of data rows (excluding header)."""
         return len(self.rows)
 
-    def to_dataframe_dict(self) -> Dict[str, List[Any]]:
+    def to_dataframe_dict(self) -> dict[str, list[Any]]:
         """Convert to dictionary format suitable for DataFrame creation."""
         if not self.headers:
             # Generate default headers
             self.headers = [f"Column_{i+1}" for i in range(self.num_columns)]
 
-        result = {header: [] for header in self.headers}
+        result: dict[str, list[Any]] = {header: [] for header in self.headers}
 
         for row in self.rows:
             for i, header in enumerate(self.headers):
@@ -113,14 +142,14 @@ class TableParser:
             data = json.loads(text)
             if isinstance(data, list) and all(isinstance(item, dict) for item in data):
                 return TableFormat.JSON
-        except Exception as e:
+        except (json.JSONDecodeError, TypeError, ValueError) as e:
             logger.debug(f"Table JSON detection failed: error={e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "rag", "event": "table_json_detect_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag table_json_detect_failed")
 
         # Check for CSV/TSV
@@ -139,7 +168,7 @@ class TableParser:
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
 
         if len(lines) < 2:
-            raise ValueError("Invalid Markdown table: too few lines")
+            raise InvalidMarkdownTableError
 
         # Parse header
         header_line = lines[0]
@@ -176,7 +205,7 @@ class TableParser:
         rows_data = list(reader)
 
         if not rows_data:
-            raise ValueError("Empty CSV data")
+            raise EmptyCsvDataError
 
         # First row is assumed to be headers
         headers = rows_data[0] if rows_data else []
@@ -200,18 +229,18 @@ class TableParser:
         data = json.loads(text)
 
         if not isinstance(data, list):
-            raise ValueError("JSON must be an array of objects")
+            raise InvalidJsonTableError
 
         if not data:
             return Table(headers=[], rows=[], format=TableFormat.JSON)
 
         # Extract headers from all objects (union of all keys)
-        all_keys = set()
+        all_keys: set[str] = set()
         for item in data:
             if isinstance(item, dict):
                 all_keys.update(item.keys())
 
-        headers = sorted(list(all_keys))
+        headers = sorted(all_keys)
 
         # Extract rows
         rows = []
@@ -237,7 +266,7 @@ class TableParser:
         if format is None:
             format = cls.detect_format(text)
             if format is None:
-                raise ValueError("Could not detect table format")
+                raise TableFormatDetectionError
 
         if format == TableFormat.MARKDOWN:
             return cls.parse_markdown_table(text)
@@ -248,7 +277,7 @@ class TableParser:
         elif format == TableFormat.JSON:
             return cls.parse_json_table(text)
         else:
-            raise ValueError(f"Unsupported format: {format}")
+            raise UnsupportedTableFormatError
 
 
 class TableSerializer:
@@ -258,7 +287,7 @@ class TableSerializer:
     def serialize_to_entities(table: Table,
                             include_row_numbers: bool = True,
                             value_separator: str = ": ",
-                            field_separator: str = "; ") -> List[Dict[str, str]]:
+                            field_separator: str = "; ") -> list[dict[str, Any]]:
         """
         Serialize table rows as entity descriptions.
 
@@ -273,7 +302,7 @@ class TableSerializer:
         Returns:
             List of serialized entity blocks
         """
-        serialized_blocks = []
+        serialized_blocks: list[dict[str, Any]] = []
 
         for i, row in enumerate(table.rows):
             entity_parts = []
@@ -301,7 +330,7 @@ class TableSerializer:
     @staticmethod
     def serialize_to_sentences(table: Table,
                              template: Optional[str] = None,
-                             include_summary: bool = True) -> List[str]:
+                             include_summary: bool = True) -> list[str]:
         """
         Serialize table rows as natural language sentences.
 
@@ -346,7 +375,7 @@ class TableSerializer:
 
     @staticmethod
     def serialize_to_key_value_pairs(table: Table,
-                                   group_by_column: Optional[str] = None) -> Dict[str, List[Dict[str, str]]]:
+                                   group_by_column: Optional[str] = None) -> dict[str, list[dict[str, str]]]:
         """
         Serialize table as key-value pairs, optionally grouped by a column.
 
@@ -358,9 +387,9 @@ class TableSerializer:
             Dictionary of key-value representations
         """
         if group_by_column and group_by_column not in table.headers:
-            raise ValueError(f"Group by column '{group_by_column}' not found in headers")
+            raise InvalidGroupByColumnError
 
-        result = {}
+        result: dict[str, list[dict[str, str]]] = {}
 
         if group_by_column:
             # Group by specified column
@@ -372,7 +401,7 @@ class TableSerializer:
                 if group_key not in result:
                     result[group_key] = []
 
-                row_data = {}
+                row_data: dict[str, str] = {}
                 for j, (header, value) in enumerate(zip(table.headers, row)):
                     if j != group_idx and value.strip():  # Skip group column and empty values
                         row_data[header] = value
@@ -381,14 +410,14 @@ class TableSerializer:
                     result[group_key].append(row_data)
         else:
             # No grouping, all rows in one list
-            all_rows = []
+            all_rows: list[dict[str, str]] = []
             for row in table.rows:
-                row_data = {}
+                row_entry: dict[str, str] = {}
                 for header, value in zip(table.headers, row):
                     if value.strip():
-                        row_data[header] = value
-                if row_data:
-                    all_rows.append(row_data)
+                        row_entry[header] = value
+                if row_entry:
+                    all_rows.append(row_entry)
             result["all_rows"] = all_rows
 
         return result
@@ -396,7 +425,7 @@ class TableSerializer:
     @staticmethod
     def serialize_for_rag(table: Table,
                          method: Literal["entities", "sentences", "hybrid"] = "hybrid",
-                         include_original: bool = True) -> Dict[str, Any]:
+                         include_original: bool = True) -> dict[str, Any]:
         """
         Serialize table for RAG indexing with multiple representations.
 
@@ -408,7 +437,7 @@ class TableSerializer:
         Returns:
             Dictionary with multiple representations
         """
-        result = {
+        result: dict[str, Any] = {
             "metadata": {
                 "num_rows": table.num_rows,
                 "num_columns": table.num_columns,
@@ -429,7 +458,7 @@ class TableSerializer:
             result["sentences"] = TableSerializer.serialize_to_sentences(table)
 
         # Add searchable text combining all representations
-        search_text_parts = []
+        search_text_parts: list[str] = []
 
         if "entity_blocks" in result:
             for block in result["entity_blocks"]:
@@ -478,7 +507,7 @@ class TableProcessor:
         logger.info(f"Initialized TableProcessor with method: {serialize_method}")
 
     def process_table(self, table_text: str,
-                     format: Optional[TableFormat] = None) -> Dict[str, Any]:
+                     format: Optional[TableFormat] = None) -> dict[str, Any]:
         """
         Process a single table.
 
@@ -492,14 +521,24 @@ class TableProcessor:
         try:
             table = self.parser.parse(table_text, format)
             return self.serializer.serialize_for_rag(table, self.serialize_method)
-        except Exception as e:
+        except (
+            InvalidMarkdownTableError,
+            EmptyCsvDataError,
+            InvalidJsonTableError,
+            TableFormatDetectionError,
+            UnsupportedTableFormatError,
+            InvalidGroupByColumnError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ) as e:
             logger.warning(f"Failed to process table: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "rag", "event": "table_process_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag table_process_failed")
             return {
                 "error": str(e),
@@ -509,7 +548,7 @@ class TableProcessor:
 
     def process_document_tables(self,
                               text: str,
-                              serialize_method: Optional[Literal["entities", "sentences", "hybrid"]] = None) -> Tuple[str, List[Dict[str, Any]]]:
+                              serialize_method: Optional[Literal["entities", "sentences", "hybrid"]] = None) -> tuple[str, list[dict[str, Any]]]:
         """
         Find and process all tables in a document.
 
@@ -582,14 +621,24 @@ class TableProcessor:
 
                 logger.debug(f"Processed table with {table.num_rows} rows and {table.num_columns} columns")
 
-            except Exception as e:
+            except (
+                InvalidMarkdownTableError,
+                EmptyCsvDataError,
+                InvalidJsonTableError,
+                TableFormatDetectionError,
+                UnsupportedTableFormatError,
+                InvalidGroupByColumnError,
+                json.JSONDecodeError,
+                TypeError,
+                ValueError,
+            ) as e:
                 logger.warning(f"Failed to process table: {e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "rag", "event": "table_process_failed"},
                     )
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     logger.debug("metrics increment failed for rag table_process_failed")
                 continue
 
@@ -602,7 +651,7 @@ class TableProcessor:
 # Convenience functions
 def serialize_table(table_text: str,
                    format: Optional[TableFormat] = None,
-                   method: Literal["entities", "sentences", "hybrid"] = "hybrid") -> Dict[str, Any]:
+                   method: Literal["entities", "sentences", "hybrid"] = "hybrid") -> dict[str, Any]:
     """
     Serialize a table for improved semantic understanding.
 
@@ -622,7 +671,7 @@ def serialize_table(table_text: str,
 
 
 def process_document_with_tables(document_text: str,
-                               serialize_method: Literal["entities", "sentences", "hybrid"] = "hybrid") -> Dict[str, Any]:
+                               serialize_method: Literal["entities", "sentences", "hybrid"] = "hybrid") -> dict[str, Any]:
     """
     Process a document and serialize any tables found.
 

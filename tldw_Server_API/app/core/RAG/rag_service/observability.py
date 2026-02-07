@@ -6,33 +6,31 @@ Provides comprehensive metrics, tracing, monitoring, and alerting capabilities
 for the RAG service using OpenTelemetry and custom metrics.
 """
 
-import json
+import asyncio
+import statistics
 import time
 import traceback
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
-import asyncio
 from contextlib import contextmanager
-import statistics
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Callable, Optional
 
-from loguru import logger
 import numpy as np
-
+from loguru import logger
 
 # Try to import OpenTelemetry components
 try:
-    from opentelemetry import trace, metrics
-    from opentelemetry.trace import Status, StatusCode
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.metrics import MeterProvider
-    from opentelemetry.sdk.resources import Resource
-    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry import metrics, trace
     from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.metrics import MeterProvider
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.trace import Status, StatusCode
     OTEL_AVAILABLE = True
 except ImportError:
     OTEL_AVAILABLE = False
@@ -61,7 +59,7 @@ class MetricPoint:
     name: str
     value: float
     timestamp: float = field(default_factory=time.time)
-    labels: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
     metric_type: MetricType = MetricType.GAUGE
 
 
@@ -76,8 +74,8 @@ class TraceSpan:
     end_time: Optional[float] = None
     duration_ms: Optional[float] = None
     status: str = "ok"
-    attributes: Dict[str, Any] = field(default_factory=dict)
-    events: List[Dict[str, Any]] = field(default_factory=list)
+    attributes: dict[str, Any] = field(default_factory=dict)
+    events: list[dict[str, Any]] = field(default_factory=list)
 
     def end(self):
         """End the span and calculate duration."""
@@ -96,7 +94,7 @@ class Alert:
     severity: AlertSeverity
     message: str
     timestamp: float = field(default_factory=time.time)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class MetricsCollector:
@@ -110,12 +108,12 @@ class MetricsCollector:
             max_history: Maximum metric points to keep in memory
         """
         self.max_history = max_history
-        self.metrics: Dict[str, deque] = defaultdict(lambda: deque(maxlen=max_history))
-        self.counters: Dict[str, float] = defaultdict(float)
-        self.gauges: Dict[str, float] = {}
-        self.histograms: Dict[str, List[float]] = defaultdict(list)
+        self.metrics: dict[str, deque] = defaultdict(lambda: deque(maxlen=max_history))
+        self.counters: dict[str, float] = defaultdict(float)
+        self.gauges: dict[str, float] = {}
+        self.histograms: dict[str, list[float]] = defaultdict(list)
 
-    def record_counter(self, name: str, value: float = 1, labels: Optional[Dict[str, str]] = None):
+    def record_counter(self, name: str, value: float = 1, labels: Optional[dict[str, str]] = None):
         """Record counter metric."""
         key = self._get_metric_key(name, labels)
         self.counters[key] += value
@@ -127,7 +125,7 @@ class MetricsCollector:
             metric_type=MetricType.COUNTER
         ))
 
-    def record_gauge(self, name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def record_gauge(self, name: str, value: float, labels: Optional[dict[str, str]] = None):
         """Record gauge metric."""
         key = self._get_metric_key(name, labels)
         self.gauges[key] = value
@@ -139,7 +137,7 @@ class MetricsCollector:
             metric_type=MetricType.GAUGE
         ))
 
-    def record_histogram(self, name: str, value: float, labels: Optional[Dict[str, str]] = None):
+    def record_histogram(self, name: str, value: float, labels: Optional[dict[str, str]] = None):
         """Record histogram metric."""
         key = self._get_metric_key(name, labels)
 
@@ -159,7 +157,7 @@ class MetricsCollector:
             metric_type=MetricType.HISTOGRAM
         ))
 
-    def _get_metric_key(self, name: str, labels: Optional[Dict[str, str]]) -> str:
+    def _get_metric_key(self, name: str, labels: Optional[dict[str, str]]) -> str:
         """Generate unique key for metric with labels."""
         if not labels:
             return name
@@ -167,7 +165,7 @@ class MetricsCollector:
         label_str = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
         return f"{name}{{{label_str}}}"
 
-    def get_metric_stats(self, name: str, window_seconds: int = 300) -> Dict[str, Any]:
+    def get_metric_stats(self, name: str, window_seconds: int = 300) -> dict[str, Any]:
         """
         Get statistics for a metric over time window.
 
@@ -209,10 +207,12 @@ class MetricsCollector:
     def get_histogram_percentiles(
         self,
         name: str,
-        labels: Optional[Dict[str, str]] = None,
-        percentiles: List[float] = [50, 75, 90, 95, 99]
-    ) -> Dict[float, float]:
+        labels: Optional[dict[str, str]] = None,
+        percentiles: list[float] | None = None
+    ) -> dict[float, float]:
         """Get percentiles for histogram metric."""
+        if percentiles is None:
+            percentiles = [50, 75, 90, 95, 99]
         key = self._get_metric_key(name, labels)
 
         if key not in self.histograms or not self.histograms[key]:
@@ -220,7 +220,7 @@ class MetricsCollector:
 
         values = self.histograms[key]
         return {
-            p: np.percentile(values, p)
+            p: float(np.percentile(values, p))
             for p in percentiles
         }
 
@@ -230,8 +230,8 @@ class Tracer:
 
     def __init__(self):
         """Initialize tracer."""
-        self.spans: Dict[str, TraceSpan] = {}
-        self.active_spans: List[TraceSpan] = []
+        self.spans: dict[str, TraceSpan] = {}
+        self.active_spans: list[TraceSpan] = []
         self.completed_spans: deque = deque(maxlen=1000)
 
         # OpenTelemetry tracer if available
@@ -240,11 +240,11 @@ class Tracer:
             try:
                 trace.set_tracer_provider(TracerProvider())
                 self.otel_tracer = trace.get_tracer(__name__)
-            except Exception as e:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to initialize OpenTelemetry tracer: {e}")
 
     @contextmanager
-    def span(self, operation: str, attributes: Optional[Dict[str, Any]] = None):
+    def span(self, operation: str, attributes: Optional[dict[str, Any]] = None):
         """
         Create a trace span context manager.
 
@@ -271,7 +271,7 @@ class Tracer:
     def start_span(
         self,
         operation: str,
-        attributes: Optional[Dict[str, Any]] = None,
+        attributes: Optional[dict[str, Any]] = None,
         parent: Optional[TraceSpan] = None
     ) -> TraceSpan:
         """Start a new trace span."""
@@ -308,7 +308,7 @@ class Tracer:
                     for key, value in attributes.items():
                         otel_span.set_attribute(key, str(value))
                 span.attributes["otel_span"] = otel_span
-            except Exception as e:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"Failed to create OpenTelemetry span: {e}")
 
         return span
@@ -331,10 +331,10 @@ class Tracer:
                 if span.status == "error":
                     otel_span.set_status(Status(StatusCode.ERROR))
                 otel_span.end()
-            except Exception as e:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"Failed to end OpenTelemetry span: {e}")
 
-    def add_event(self, span: TraceSpan, name: str, attributes: Optional[Dict[str, Any]] = None):
+    def add_event(self, span: TraceSpan, name: str, attributes: Optional[dict[str, Any]] = None):
         """Add event to span."""
         event = {
             "name": name,
@@ -343,7 +343,7 @@ class Tracer:
         }
         span.events.append(event)
 
-    def get_trace(self, trace_id: str) -> List[TraceSpan]:
+    def get_trace(self, trace_id: str) -> list[TraceSpan]:
         """Get all spans for a trace."""
         return [
             span for span in self.completed_spans
@@ -356,7 +356,7 @@ class PerformanceMonitor:
 
     def __init__(self):
         """Initialize performance monitor."""
-        self.operation_times: Dict[str, List[float]] = defaultdict(list)
+        self.operation_times: dict[str, list[float]] = defaultdict(list)
         self.slow_operations: deque = deque(maxlen=100)
         self.memory_usage: deque = deque(maxlen=1000)
 
@@ -394,7 +394,7 @@ class PerformanceMonitor:
                     f"(threshold: {threshold_ms}ms)"
                 )
 
-    def get_operation_stats(self, operation: str) -> Dict[str, float]:
+    def get_operation_stats(self, operation: str) -> dict[str, float]:
         """Get statistics for an operation."""
         if operation not in self.operation_times:
             return {}
@@ -407,11 +407,11 @@ class PerformanceMonitor:
             "max_ms": max(times),
             "mean_ms": statistics.mean(times),
             "median_ms": statistics.median(times),
-            "p95_ms": np.percentile(times, 95) if times else 0,
-            "p99_ms": np.percentile(times, 99) if times else 0
+            "p95_ms": float(np.percentile(times, 95)) if times else 0.0,
+            "p99_ms": float(np.percentile(times, 99)) if times else 0.0
         }
 
-    def get_memory_usage(self) -> Dict[str, float]:
+    def get_memory_usage(self) -> dict[str, Any]:
         """Get current memory usage."""
         try:
             import psutil
@@ -420,7 +420,7 @@ class PerformanceMonitor:
             memory_info = process.memory_info()
             memory_percent = process.memory_percent()
 
-            usage = {
+            usage: dict[str, Any] = {
                 "rss_mb": memory_info.rss / 1024 / 1024,
                 "vms_mb": memory_info.vms / 1024 / 1024,
                 "percent": memory_percent
@@ -435,7 +435,7 @@ class PerformanceMonitor:
 
         except ImportError:
             return {"error": "psutil not available"}
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError, psutil.Error) as e:
             return {"error": str(e)}
 
 
@@ -444,10 +444,10 @@ class AlertManager:
 
     def __init__(self):
         """Initialize alert manager."""
-        self.rules: List[Dict[str, Any]] = []
-        self.active_alerts: Dict[str, Alert] = {}
+        self.rules: list[dict[str, Any]] = []
+        self.active_alerts: dict[str, Alert] = {}
         self.alert_history: deque = deque(maxlen=1000)
-        self.alert_handlers: List[Callable] = []
+        self.alert_handlers: list[Callable] = []
 
     def add_rule(
         self,
@@ -483,7 +483,7 @@ class AlertManager:
         """Add alert handler function."""
         self.alert_handlers.append(handler)
 
-    def check_rules(self, metrics: Dict[str, float]):
+    def check_rules(self, metrics: dict[str, float]):
         """
         Check alert rules against current metrics.
 
@@ -540,7 +540,7 @@ class AlertManager:
                 for handler in self.alert_handlers:
                     try:
                         handler(alert)
-                    except Exception as e:
+                    except (AttributeError, ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as e:
                         logger.error(f"Alert handler failed: {e}")
 
                 logger.warning(f"Alert triggered: {alert.message}")
@@ -597,11 +597,11 @@ class ObservabilitySystem:
             span_exporter = OTLPSpanExporter(endpoint=endpoint)
             span_processor = BatchSpanProcessor(span_exporter)
 
-            provider = TracerProvider(
+            tracer_provider = TracerProvider(
                 resource=Resource.create({"service.name": "rag-service"})
             )
-            provider.add_span_processor(span_processor)
-            trace.set_tracer_provider(provider)
+            tracer_provider.add_span_processor(span_processor)
+            trace.set_tracer_provider(tracer_provider)
 
             # Setup metrics
             metric_exporter = OTLPMetricExporter(endpoint=endpoint)
@@ -610,19 +610,21 @@ class ObservabilitySystem:
                 export_interval_millis=60000
             )
 
-            provider = MeterProvider(
+            meter_provider = MeterProvider(
                 resource=Resource.create({"service.name": "rag-service"}),
                 metric_readers=[metric_reader]
             )
-            metrics.set_meter_provider(provider)
+            metrics.set_meter_provider(meter_provider)
 
             logger.info(f"OpenTelemetry configured with endpoint: {endpoint}")
 
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to setup OpenTelemetry: {e}")
 
     def _setup_default_alerts(self):
         """Setup default alert rules."""
+        if self.alerts is None:
+            return
         # High latency alert
         self.alerts.add_rule(
             metric_name="rag_pipeline_duration_ms",
@@ -673,7 +675,7 @@ class ObservabilitySystem:
                 # Wait before next iteration
                 await asyncio.sleep(60)  # Check every minute
 
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Monitoring loop error: {e}")
                 await asyncio.sleep(60)
 
@@ -692,7 +694,7 @@ class ObservabilitySystem:
         total = success + failure
         return failure / total if total > 0 else 0.0
 
-    def get_dashboard_metrics(self) -> Dict[str, Any]:
+    def get_dashboard_metrics(self) -> dict[str, Any]:
         """Get metrics for dashboard display."""
         dashboard = {
             "timestamp": datetime.now().isoformat(),

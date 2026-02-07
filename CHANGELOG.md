@@ -5,16 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Some kind of Versioning
 
+
 ## [Version] Date
 
 ### Added
+-
 
 ### Changed
+-
+
+### Removed
+- 
+
+### Fixed
+-
+
+
+## [0.1.20] 2026-02-07
+
+### Added
+- webui/extension fixes+improvements
+  - New Guardian settings page
+- **FVA Pipeline (Falsification-Verification Alignment)**: New claim verification enhancement that actively searches for contradicting evidence to provide more robust verification results. Implements the FVA-RAG paper (arXiv:2512.07015).
+  - New `CONTESTED` verification status for claims with significant evidence both supporting and contradicting
+  - Anti-context retrieval generates counter-queries (negation, contrary, alternative) to find contradicting evidence
+  - Adjudication weighs supporting vs contradicting evidence using NLI and LLM-based stance assessment
+  - API endpoints: `POST /api/v1/claims/verify/fva` and `GET /api/v1/claims/verify/fva/settings`
+  - Configurable via config.txt: FVA_ENABLED, FVA_CONFIDENCE_THRESHOLD, FVA_CONTESTED_THRESHOLD, etc.
+  - 9 new Prometheus metrics for observability (falsification triggers, status changes, adjudication scores, timeouts)
+  - Budget management to prevent runaway costs on large claim sets
+- Speech Playground history now shows metadata (duration, model/voice/provider, params summary) with a detail tooltip.
+- History entries now persist STT/TTS params (task, temp, response format, segmentation, speed, split, streaming, mode) so metadata reflects actual runs.
+- Global TS typecheck fixed across UI (EPUB viewer/search typings, document chat/store shapes, KnowledgeQA response normalization, MCP path typing, chunking options, safe config typing, xterm ambient types, SpeechPlayground ordering/import issues).
+- Implemented TTS history end-to-end:
+	- Write path (non-streaming, streaming, jobs) with status, metadata, artifacts, and error handling.
+	- Read path: list/detail/favorite/delete endpoints with filters, cursor pagination, total count.
+	- Retention: scheduled purge by days and max rows; artifact reference cleanup.
+	- Observability: read/write counters and latency histograms (no text logging).
+	- Added schema + migrations for tts_history and supporting indexes.
+- Added tests:
+	- Unit: schema and API list/favorite/delete, q/text_exact behavior.
+	- Integration: streaming failure writes history, artifact purge updates history, cursor pagination sanity.
+	- Fixed test infrastructure shims for audio/tokenizer/transcription helpers.
+- Server/API
+  - RAG upgrades: Doc-Researcher features (granularity router, evidence accumulator, evidence chains), batch + resume endpoints, web fallback with query rewrite, retrieval metrics, FlashRank model support.
+  - Character chat: per‑chat settings + prompt preview endpoint, greeting picker/inclusion toggle, generation presets, multi‑character turn‑taking, message steering controls, pinned messages pathing.
+  - Watchlists: dedup/seen inspect & reset tools; scheduler controls; performance/limits docs.
+  - Guardian/Self‑monitoring: new Guardian_DB and API surfaces.
+  - ACP sandbox: SSH-enabled runner and bridge; new Dockerfile + entrypoint.
+  - New “Skills” framework and Kanban endpoints/modules.
+
+### Changed
+- DBs modified
+	- Media DB v2: per-user SQLite DB at Media_DB_v2.db (and Postgres equivalent when configured).
+- MCP Unified hardening:
+  - `/api/v1/mcp/auth/refresh` now requires body-based `refresh_token` payloads (query-token transport rejected).
+  - Write-tool idempotency now binds each `idempotencyKey` to the initial argument fingerprint and returns `INVALID_PARAMS` on mismatched replays.
+  - Module registry lookups now use concurrency-safe snapshots to prevent `dictionary changed size during iteration` under concurrent module registration churn.
+  - Sandbox stream Redis fanout now requires explicit `SANDBOX_WS_REDIS_FANOUT` opt-in (no implicit enablement from global Redis settings).
+- Evaluations module hardening:
+  - Parallel batch mode now enforces strict fail-fast when `continue_on_error=false` by canceling remaining tasks and stopping new scheduling.
+  - Evaluation runner now safely normalizes `metrics` values, including `metrics=None`, across execution and aggregate/stat calculations.
+  - RAG pipeline eval runs now use per-run user context for ephemeral vector index creation/cleanup and pipeline calls.
+  - OCR-PDF usage accounting now records against the correct limiter namespace (`evals:ocr_pdf`).
+  - Access policy aligned: `/api/v1/evaluations/health` remains public, `/api/v1/evaluations/metrics` is authenticated (`EVALS_READ`), and dataset endpoints enforce `EVALS_READ`/`EVALS_MANAGE` consistently.
+- Server/API
+  - Admin endpoints modularized: tldw_Server_API/app/api/v1/endpoints/admin/* (replaces single admin.py).
+  - Audio split: new audio submodule endpoints (tts, tokenizer, streaming, history).
+- Web UI/Extension
+  - Document Workspace: PDF/EPUB viewers overhauled (virtualized PDF single-page mode, thumbnails, TOC keyboard nav), DocumentPicker modal, richer metadata, TTS panel improvements, retry logic.
+  - Knowledge QA: web-search fallback settings, local/server threads, richer history filtering; new “All options” settings section.
+  - Playground/Chat UX: composer extracted into components, Notes Dock, greeting picker, pin/steering controls, MCP tool catalog/filter UX.
+  - Workflow Editor: dynamic step registry + schema-driven fields, icons, dynamic options; new tests.
+  - TTS Playground: multi-voice roles, background job progress UI, presets.
+  - ACP Playground: Workspace terminal tab (xterm.js).
+  - Extension e2e hardening; pdf.worker exposed via web_accessible_resources.
+- Tooling/ops/docs
+  - Lint only-changed target and script; large doc set added/updated (PRDs, guides).
+  - FlashRank reranker model vendored under models/flashrank with unignore rules.
+  - New env vars for ACP sandbox, TTS history, and RAG FlashRank cache/model selection.
 
 ### Removed
 
 ### Fixed
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
+- Audit read paths no longer return empty results on DB failures; `/api/v1/audit/export` and `/api/v1/audit/count` now surface server errors when reads fail.
+- Audit fallback replay now quarantines malformed JSONL lines into `audit_fallback_queue.bad.jsonl` instead of silently dropping them.
+- Audit export now rejects non-positive `max_rows`, `audit_operation` ignores reserved kwarg collisions safely, and shared-audit migration stats counters now track read/inserted/skipped events correctly.
+- CodeQL Bugfixes
+- ruff and mypy fixes
 
 
 ## [0.1.19] 2026-01-31

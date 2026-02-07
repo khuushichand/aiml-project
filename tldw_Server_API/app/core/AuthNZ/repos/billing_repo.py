@@ -10,7 +10,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -24,7 +24,7 @@ class AuthnzBillingRepo:
 
     db_pool: DatabasePool
 
-    def _is_postgres(self, conn: Optional[Any] = None) -> bool:
+    def _is_postgres(self, conn: Any | None = None) -> bool:
         """Detect whether the current AuthNZ backend is PostgreSQL.
 
         Relies on the DatabasePool backend configuration rather than
@@ -33,14 +33,14 @@ class AuthnzBillingRepo:
         return getattr(self.db_pool, "pool", None) is not None
 
     @staticmethod
-    def _row_to_dict(cursor, row: tuple) -> Dict[str, Any]:
+    def _row_to_dict(cursor, row: tuple) -> dict[str, Any]:
         """Convert a SQLite row tuple to a dict using cursor.description."""
         if row is None:
             return {}
         return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
 
     @staticmethod
-    def _rows_to_dicts(cursor, rows: List[tuple]) -> List[Dict[str, Any]]:
+    def _rows_to_dicts(cursor, rows: list[tuple]) -> list[dict[str, Any]]:
         """Convert multiple SQLite row tuples to dicts using cursor.description."""
         if not rows:
             return []
@@ -48,7 +48,7 @@ class AuthnzBillingRepo:
         return [{columns[idx]: val for idx, val in enumerate(row)} for row in rows]
 
     @staticmethod
-    def _normalize_storage_limits(limits: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_storage_limits(limits: dict[str, Any]) -> dict[str, Any]:
         """Normalize storage limit keys to storage_mb."""
         if not limits:
             return limits
@@ -77,7 +77,7 @@ class AuthnzBillingRepo:
         *,
         active_only: bool = True,
         public_only: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List subscription plans.
 
@@ -134,7 +134,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.list_plans failed: {exc}")
             raise
 
-    async def get_plan_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_plan_by_name(self, name: str) -> dict[str, Any] | None:
         """Get a subscription plan by name."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -174,7 +174,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.get_plan_by_name failed: {exc}")
             raise
 
-    async def get_plan_by_stripe_price_id(self, price_id: str) -> Optional[Dict[str, Any]]:
+    async def get_plan_by_stripe_price_id(self, price_id: str) -> dict[str, Any] | None:
         """Get a subscription plan by its Stripe price ID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -214,7 +214,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.get_plan_by_stripe_price_id failed: {exc}")
             raise
 
-    async def get_plan_by_stripe_product_id(self, product_id: str) -> Optional[Dict[str, Any]]:
+    async def get_plan_by_stripe_product_id(self, product_id: str) -> dict[str, Any] | None:
         """Get a subscription plan by its Stripe product ID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -254,7 +254,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.get_plan_by_stripe_product_id failed: {exc}")
             raise
 
-    async def get_plan_by_id(self, plan_id: int) -> Optional[Dict[str, Any]]:
+    async def get_plan_by_id(self, plan_id: int) -> dict[str, Any] | None:
         """Get a subscription plan by ID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -292,7 +292,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.get_plan_by_id failed: {exc}")
             raise
 
-    def _plan_row_to_dict(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _plan_row_to_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         """Convert plan row to dict with parsed limits."""
         result = dict(row)
         if result.get("limits_json"):
@@ -312,7 +312,7 @@ class AuthnzBillingRepo:
     # Organization Subscriptions
     # =========================================================================
 
-    async def get_org_subscription(self, org_id: int) -> Optional[Dict[str, Any]]:
+    async def get_org_subscription(self, org_id: int) -> dict[str, Any] | None:
         """Get the subscription for an organization."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -360,12 +360,12 @@ class AuthnzBillingRepo:
         *,
         org_id: int,
         plan_id: int,
-        stripe_customer_id: Optional[str] = None,
-        stripe_subscription_id: Optional[str] = None,
+        stripe_customer_id: str | None = None,
+        stripe_subscription_id: str | None = None,
         billing_cycle: str = "monthly",
         status: str = "active",
-        trial_days: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        trial_days: int | None = None,
+    ) -> dict[str, Any]:
         """Create a subscription for an organization."""
         trial_end = None
         if trial_days:
@@ -429,7 +429,7 @@ class AuthnzBillingRepo:
         self,
         org_id: int,
         **updates: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Update an organization's subscription."""
         if not updates:
             return await self.get_org_subscription(org_id)
@@ -450,7 +450,7 @@ class AuthnzBillingRepo:
 
         # SECURITY: Verify column names are in the allowed whitelist before dynamic SQL
         # This assertion should never fail since we filtered above, but provides defense-in-depth
-        assert all(k in allowed_fields for k in updates.keys()), "Invalid column name in updates"
+        assert all(k in allowed_fields for k in updates), "Invalid column name in updates"
 
         try:
             async with self.db_pool.transaction() as conn:
@@ -462,7 +462,7 @@ class AuthnzBillingRepo:
                         *params,
                     )
                 else:
-                    set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
+                    set_clause = ", ".join(f"{k} = ?" for k in updates)
                     params = list(updates.values()) + [org_id]
                     await conn.execute(
                         f"UPDATE org_subscriptions SET {set_clause} WHERE org_id = ?",
@@ -474,7 +474,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.update_org_subscription failed: {exc}")
             raise
 
-    async def get_subscription_by_stripe_customer(self, stripe_customer_id: str) -> Optional[Dict[str, Any]]:
+    async def get_subscription_by_stripe_customer(self, stripe_customer_id: str) -> dict[str, Any] | None:
         """Get subscription by Stripe customer ID."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -499,7 +499,7 @@ class AuthnzBillingRepo:
             logger.error(f"AuthnzBillingRepo.get_subscription_by_stripe_customer failed: {exc}")
             raise
 
-    def _subscription_row_to_dict(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _subscription_row_to_dict(self, row: dict[str, Any]) -> dict[str, Any]:
         """Convert subscription row to dict with parsed limits."""
         result = dict(row)
         # Parse custom limits
@@ -540,13 +540,13 @@ class AuthnzBillingRepo:
         self,
         *,
         org_id: int,
-        stripe_invoice_id: Optional[str] = None,
+        stripe_invoice_id: str | None = None,
         amount_cents: int,
         currency: str = "usd",
         status: str = "succeeded",
-        description: Optional[str] = None,
-        invoice_pdf_url: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        invoice_pdf_url: str | None = None,
+    ) -> dict[str, Any]:
         """Record a payment in history."""
         try:
             async with self.db_pool.transaction() as conn:
@@ -591,7 +591,7 @@ class AuthnzBillingRepo:
         *,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """List payment history for an organization."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -645,10 +645,10 @@ class AuthnzBillingRepo:
         *,
         org_id: int,
         action: str,
-        user_id: Optional[int] = None,
-        details: Optional[Dict[str, Any]] = None,
-        ip_address: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        user_id: int | None = None,
+        details: dict[str, Any] | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         """Log a billing-related action for audit purposes."""
         details_json = json.dumps(details) if details else None
 
@@ -692,7 +692,7 @@ class AuthnzBillingRepo:
         self,
         stripe_event_id: str,
         event_type: str,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
     ) -> bool:
         """
         Record a Stripe webhook event for idempotency.
@@ -778,7 +778,7 @@ class AuthnzBillingRepo:
     async def get_webhook_event_status(
         self,
         stripe_event_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get the current status for a webhook event."""
         try:
             async with self.db_pool.acquire() as conn:
@@ -803,7 +803,7 @@ class AuthnzBillingRepo:
         self,
         stripe_event_id: str,
         *,
-        error_message: Optional[str] = None,
+        error_message: str | None = None,
     ) -> None:
         """Mark a webhook event as processed."""
         status = "failed" if error_message else "processed"
@@ -847,7 +847,7 @@ class AuthnzBillingRepo:
     # Effective Limits Helper
     # =========================================================================
 
-    async def get_org_limits(self, org_id: int) -> Dict[str, Any]:
+    async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """
         Get the effective limits for an organization.
 

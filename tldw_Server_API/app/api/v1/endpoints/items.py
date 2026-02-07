@@ -1,25 +1,49 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
-from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.items_schemas import (
     Item,
-    ItemsListResponse,
     ItemsBulkRequest,
     ItemsBulkResponse,
     ItemsBulkResult,
+    ItemsListResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import ContentItemRow
-
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, InputError
 
 router = APIRouter(prefix="/items", tags=["items"])
+
+_ITEMS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_ITEMS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    ImportError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _domain_from_url(url: str | None) -> str:
@@ -28,11 +52,11 @@ def _domain_from_url(url: str | None) -> str:
     try:
         from urllib.parse import urlparse
         return urlparse(url).hostname or ""
-    except Exception:
+    except _ITEMS_COERCE_EXCEPTIONS:
         return ""
 
 
-def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tuple[Optional[str], bool]:
+def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tuple[str | None, bool]:
     current = collections_db.get_content_item(item_id)
     status_lower = status.lower()
     if status_lower == "read" and not current.read_at:
@@ -44,17 +68,17 @@ def _resolve_read_at_for_status(collections_db, item_id: int, status: str) -> tu
 
 @router.get("", response_model=ItemsListResponse, summary="Unified items list across origins")
 async def list_items(
-    ids: Optional[List[int]] = Query(None, description="Filter by item IDs"),
-    q: Optional[str] = Query(None, description="Search query (title/content)"),
-    tags: Optional[List[str]] = Query(None, description="Require these tags (names)"),
-    domain: Optional[str] = Query(None, description="Filter by domain (hostname)"),
-    date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
-    date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
-    status_filter: Optional[List[str]] = Query(None, description="Filter by status (e.g., saved, read)"),
-    favorite: Optional[bool] = Query(None, description="Filter by favorite flag"),
-    origin: Optional[str] = Query(None, description="Filter by origin (watchlist, reading, etc.)"),
-    job_id: Optional[int] = Query(None, description="Filter by job_id"),
-    run_id: Optional[int] = Query(None, description="Filter by run_id"),
+    ids: list[int] | None = Query(None, description="Filter by item IDs"),
+    q: str | None = Query(None, description="Search query (title/content)"),
+    tags: list[str] | None = Query(None, description="Require these tags (names)"),
+    domain: str | None = Query(None, description="Filter by domain (hostname)"),
+    date_from: str | None = Query(None, description="ISO start date inclusive"),
+    date_to: str | None = Query(None, description="ISO end date inclusive"),
+    status_filter: list[str] | None = Query(None, description="Filter by status (e.g., saved, read)"),
+    favorite: bool | None = Query(None, description="Filter by favorite flag"),
+    origin: str | None = Query(None, description="Filter by origin (watchlist, reading, etc.)"),
+    job_id: int | None = Query(None, description="Filter by job_id"),
+    run_id: int | None = Query(None, description="Filter by run_id"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -75,8 +99,8 @@ async def list_items(
             date_from_iso = start_dt.isoformat()
         if end_dt:
             date_to_iso = end_dt.isoformat()
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid_date_range")
+    except _ITEMS_COERCE_EXCEPTIONS:
+        raise HTTPException(status_code=422, detail="invalid_date_range") from None
 
     # Query collections layer first
     try:
@@ -95,9 +119,9 @@ async def list_items(
             page=page,
             size=size,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections items query failed: {e}")
-        raise HTTPException(status_code=500, detail="items_query_failed")
+        raise HTTPException(status_code=500, detail="items_query_failed") from e
 
     if coll_total > 0:
         return ItemsListResponse(
@@ -126,12 +150,12 @@ async def list_items(
             include_trash=False,
             include_deleted=False,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"items list failed: {e}")
-        raise HTTPException(status_code=500, detail="items_query_failed")
+        raise HTTPException(status_code=500, detail="items_query_failed") from e
 
     # Build items and apply optional domain filter in-process
-    items: List[Item] = []
+    items: list[Item] = []
     for r in rows:
         item = _media_row_to_item(r, db=db, domain_filter=domain)
         if item is not None:
@@ -152,18 +176,18 @@ async def get_item(
         return _content_item_to_schema(row)
     except KeyError:
         pass
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     try:
         row = collections_db.get_content_item_by_media_id(item_id)
         return _content_item_to_schema(row)
     except KeyError:
         pass
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch by media_id failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     try:
         rows, _total = db.search_media_db(
@@ -180,9 +204,9 @@ async def get_item(
             include_trash=False,
             include_deleted=False,
         )
-    except Exception as e:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"media item fetch failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     if not rows:
         raise HTTPException(status_code=404, detail="item_not_found")
@@ -201,7 +225,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
             try:
                 import json as _json
                 metadata = _json.loads(row.metadata_json)
-            except Exception:
+            except _ITEMS_COERCE_EXCEPTIONS:
                 metadata = {}
         summary = metadata.get("summary")
     item_id = row.media_id if row.media_id is not None else row.id
@@ -219,7 +243,7 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
     )
 
 
-def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Item]:
+def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
     url = row.get("url")
     dom = _domain_from_url(url)
     if domain_filter and dom and dom != domain_filter:
@@ -228,7 +252,7 @@ def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Ite
     try:
         from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import fetch_keywords_for_media, get_document_version
         tag_list = fetch_keywords_for_media(media_id=int(row.get("id")), db_instance=db)
-    except Exception:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS:
         tag_list = []
 
     # Derive summary/published_at best-effort
@@ -243,11 +267,11 @@ def _media_row_to_item(row, *, db, domain_filter: Optional[str]) -> Optional[Ite
                 import json as _json
                 try:
                     sm = _json.loads(sm)
-                except Exception:
+                except _ITEMS_COERCE_EXCEPTIONS:
                     sm = None
             if isinstance(sm, dict):
                 published_at = sm.get("published_at") or sm.get("date")
-    except Exception:
+    except _ITEMS_NONCRITICAL_EXCEPTIONS:
         pass
     if not summary:
         content = row.get("content") or ""
@@ -287,14 +311,14 @@ async def bulk_update_items(
         raise HTTPException(status_code=422, detail="tags_required")
 
     seen: set[int] = set()
-    unique_ids: List[int] = []
+    unique_ids: list[int] = []
     for item_id in item_ids:
         if item_id in seen:
             continue
         seen.add(item_id)
         unique_ids.append(item_id)
 
-    results: List[ItemsBulkResult] = []
+    results: list[ItemsBulkResult] = []
     succeeded = 0
     failed = 0
 
@@ -343,7 +367,7 @@ async def bulk_update_items(
         except HTTPException as exc:
             results.append(ItemsBulkResult(item_id=item_id, success=False, error=str(exc.detail)))
             failed += 1
-        except Exception as exc:
+        except _ITEMS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"bulk_update_items failed for {item_id}: {exc}")
             results.append(ItemsBulkResult(item_id=item_id, success=False, error="update_failed"))
             failed += 1

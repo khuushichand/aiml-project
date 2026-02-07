@@ -13,67 +13,88 @@
 ####################
 #
 # Import necessary libraries
-from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
-from datetime import datetime
-import hashlib
-import json
-import os
-import random
-import sys
-import time
-import re
-import ipaddress
-import math
-import tempfile
-from threading import BoundedSemaphore, Lock
-from typing import Any, Dict, List, Union, Optional, Tuple, Callable
 #
 # 3rd-Party Imports
 import asyncio
-from urllib.parse import (
-    urljoin,
-    urlparse
-)
-from defusedxml import minidom
-from defusedxml import ElementTree as xET
-from defusedxml.common import DefusedXmlException
+import builtins
+import hashlib
+import ipaddress
+import json
+import math
+import os
+import random
+import re
+import sys
+import tempfile
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, suppress
+from datetime import datetime
+from pathlib import Path
+from threading import BoundedSemaphore, Lock
+from typing import Any, Callable, Optional, Union
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
+
+import pandas as pd
+import trafilatura
 
 # External Libraries
 from bs4 import BeautifulSoup
-import pandas as pd
+from defusedxml import ElementTree as xET
+from defusedxml import minidom
+from defusedxml.common import DefusedXmlException
 from loguru import logger
-from playwright.async_api import (
-    TimeoutError,
-    async_playwright
-)
+from playwright.async_api import TimeoutError, async_playwright
 from playwright.sync_api import sync_playwright
-import trafilatura
 from tqdm import tqdm
 
-from tldw_Server_API.app.core.DB_Management.DB_Manager import ingest_article_to_db, create_media_database
+from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database, ingest_article_to_db
+from tldw_Server_API.app.core.http_client import afetch
+from tldw_Server_API.app.core.http_client import fetch as http_fetch
+
 #
 # Import Local
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_histogram, log_counter
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import RateLimiter
-from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter, DEFAULT_HANDLER
+from tldw_Server_API.app.core.Web_Scraping.filters import (
+    ContentTypeFilter,
+    FilterChain,
+    URLPatternFilter,
+)
 from tldw_Server_API.app.core.Web_Scraping.handlers import resolve_handler
+from tldw_Server_API.app.core.Web_Scraping.scraper_router import ScraperRouter
 from tldw_Server_API.app.core.Web_Scraping.ua_profiles import (
     build_browser_headers,
     pick_ua_profile,
 )
-from tldw_Server_API.app.core.http_client import afetch, fetch as http_fetch
-from urllib.robotparser import RobotFileParser
-from pathlib import Path
-from tldw_Server_API.app.core.Web_Scraping.filters import (
-    FilterChain,
-    URLPatternFilter,
-    ContentTypeFilter,
+
+_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    builtins.TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    DefusedXmlException,
 )
 
 #
@@ -92,8 +113,8 @@ def _default_rules_path() -> str:
     return str(project_root / "tldw_Server_API" / "Config_Files" / "custom_scrapers.yaml")
 
 
-def _merge_cookie_list_to_map(custom_cookies: Optional[List[Dict[str, Any]]]) -> Dict[str, str]:
-    cookies: Dict[str, str] = {}
+def _merge_cookie_list_to_map(custom_cookies: Optional[list[dict[str, Any]]]) -> dict[str, str]:
+    cookies: dict[str, str] = {}
     if not custom_cookies:
         return cookies
     for c in custom_cookies:
@@ -124,7 +145,7 @@ _JS_REQUIRED_DOMAINS = {
 }
 
 
-def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) -> bool:
+def _js_required(html: str, headers: dict[str, Any], url: Optional[str] = None) -> bool:
     """Heuristics to detect pages that require JS rendering.
 
     Signals fallback to Playwright when:
@@ -139,7 +160,7 @@ def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) 
         if url:
             try:
                 domain = urlparse(url).netloc.lower()
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 domain = ""
         text = html.lower()
         if not text.strip():
@@ -203,7 +224,7 @@ def _js_required(html: str, headers: Dict[str, Any], url: Optional[str] = None) 
                 return True
             if script_count >= 15 and visible_len < 2500:
                 return True
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return False
     return False
 
@@ -220,7 +241,7 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
         # Mapping-like via __getitem__
         try:
             return resp[key]  # type: ignore[index]
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             pass
         # Direct attribute
         v = getattr(resp, key, None)
@@ -230,7 +251,7 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
         data = getattr(resp, "data", None)
         if isinstance(data, dict):
             return data.get(key, default)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return default
     return default
 
@@ -238,12 +259,12 @@ def _resp_get(resp: Any, key: str, default: Any = None) -> Any:
 def _fetch_with_curl(
     url: str,
     *,
-    headers: Dict[str, Any],
-    cookies: Optional[Dict[str, str]],
+    headers: dict[str, Any],
+    cookies: Optional[dict[str, str]],
     timeout: float,
     impersonate: Optional[str],
-    proxies: Optional[Dict[str, str]],
-) -> Dict[str, Any]:
+    proxies: Optional[dict[str, str]],
+) -> dict[str, Any]:
     """Fetch HTML using curl_cffi via the centralized http_client."""
     from tldw_Server_API.app.core.http_client import fetch as http_fetch
 
@@ -277,7 +298,7 @@ def is_allowed_by_robots(url: str, user_agent: str, *, timeout: float = 5.0) -> 
         rp = RobotFileParser()
         rp.parse(str(text).splitlines())
         return bool(rp.can_fetch(user_agent, url))
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         # On any error, allow by default to avoid false negatives
         return True
 
@@ -303,7 +324,7 @@ async def is_allowed_by_robots_async(url: str, user_agent: str, *, timeout: floa
         rp = RobotFileParser()
         rp.parse(str(text).splitlines())
         return bool(rp.can_fetch(user_agent, url))
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return True
 
 
@@ -335,10 +356,10 @@ def _strip_boilerplate_sections(text: str) -> str:
             return False
         return any(regex.search(stripped) for regex in _BOILERPLATE_REGEXES)
 
-    filtered_lines: List[str] = [line for line in lines if not _is_boilerplate(line)]
+    filtered_lines: list[str] = [line for line in lines if not _is_boilerplate(line)]
 
     # Collapse consecutive blank lines introduced by removals.
-    collapsed: List[str] = []
+    collapsed: list[str] = []
     previous_blank = False
     for line in filtered_lines:
         if line.strip():
@@ -367,7 +388,7 @@ def get_page_title(url: str) -> str:
         else: #debug code for problem in suceeded request but non 200 code
             logging.error(f"Failed to fetch {url}, status code: {resp.get('status')}")
             return "Untitled"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error fetching page title: {e}")
         log_counter("page_title_extracted", labels={"success": "false"})
         return "Untitled"
@@ -413,7 +434,7 @@ _JSONLD_SECONDARY_TYPES = {
     "creativework",
     "blog",
 }
-_REGEX_CATALOG: List[Tuple[str, re.Pattern[str]]] = [
+_REGEX_CATALOG: list[tuple[str, re.Pattern[str]]] = [
     ("email", re.compile(r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b")),
     ("phone", re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")),
     ("phone", re.compile(r"\b\+?\d[\d\s().-]{7,}\d\b")),
@@ -442,25 +463,25 @@ _CLUSTER_MIN_WORDS = 8
 _CLUSTER_MAX_BLOCKS = 60
 _CLUSTER_LINKAGE = "average"
 _CLUSTER_TAG_TOP_K = 3
-_DEFAULT_CLUSTER_TAG_KEYWORDS: Dict[str, List[str]] = {
+_DEFAULT_CLUSTER_TAG_KEYWORDS: dict[str, list[str]] = {
     "marketing": ["subscribe", "newsletter", "promotion", "marketing"],
     "commerce": ["price", "pricing", "cost", "$"],
     "product": ["feature", "release", "roadmap", "product"],
     "research": ["study", "research", "paper", "dataset"],
     "security": ["security", "encrypt", "token", "oauth"],
 }
-_CLUSTER_EMBED_CACHE: "OrderedDict[str, List[float]]" = OrderedDict()
+_CLUSTER_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
 _CLUSTER_CACHE_LOCK = Lock()
 _SCHEMA_RESULT_CACHE_MAX = 128
-_SCHEMA_RESULT_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_SCHEMA_RESULT_CACHE: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
 _SCHEMA_CACHE_LOCK = Lock()
-_LLM_PROVIDER_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_LLM_PROVIDER_LIMITS: dict[str, tuple[int, BoundedSemaphore]] = {}
 _LLM_PROVIDER_LIMITS_LOCK = Lock()
-_LLM_PROVIDER_LAST_CALL: Dict[str, float] = {}
+_LLM_PROVIDER_LAST_CALL: dict[str, float] = {}
 _LLM_PROVIDER_LAST_CALL_LOCK = Lock()
 
 
-def get_extraction_cache_stats() -> Dict[str, int]:
+def get_extraction_cache_stats() -> dict[str, int]:
     with _CLUSTER_CACHE_LOCK:
         cluster_size = len(_CLUSTER_EMBED_CACHE)
     with _SCHEMA_CACHE_LOCK:
@@ -482,7 +503,7 @@ def get_extraction_cache_stats() -> Dict[str, int]:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
 
         stats.update(_fetchers.get_selector_cache_stats())
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
     return stats
 
@@ -502,21 +523,21 @@ def clear_extraction_caches() -> None:
         from tldw_Server_API.app.core.Watchlists import fetchers as _fetchers
 
         _fetchers.clear_selector_caches()
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         pass
 
 
-def _schema_cache_key(html_text: str, url: str, schema_rules: Dict[str, Any]) -> str:
+def _schema_cache_key(html_text: str, url: str, schema_rules: dict[str, Any]) -> str:
     html_hash = hashlib.sha1(html_text.encode("utf-8", errors="ignore")).hexdigest()
     try:
         rules_repr = json.dumps(schema_rules, sort_keys=True, ensure_ascii=True)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rules_repr = str(schema_rules)
     raw = f"{url}|{rules_repr}|{html_hash}"
     return hashlib.sha1(raw.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def _schema_cache_get(key: str) -> Optional[Dict[str, Any]]:
+def _schema_cache_get(key: str) -> Optional[dict[str, Any]]:
     with _SCHEMA_CACHE_LOCK:
         value = _SCHEMA_RESULT_CACHE.get(key)
         if value is None:
@@ -525,7 +546,7 @@ def _schema_cache_get(key: str) -> Optional[Dict[str, Any]]:
         return dict(value)
 
 
-def _schema_cache_put(key: str, value: Dict[str, Any]) -> None:
+def _schema_cache_put(key: str, value: dict[str, Any]) -> None:
     with _SCHEMA_CACHE_LOCK:
         _SCHEMA_RESULT_CACHE[key] = dict(value)
         _SCHEMA_RESULT_CACHE.move_to_end(key)
@@ -533,30 +554,26 @@ def _schema_cache_put(key: str, value: Dict[str, Any]) -> None:
             _SCHEMA_RESULT_CACHE.popitem(last=False)
 
 
-def _cluster_cache_get(key: str) -> Optional[List[float]]:
+def _cluster_cache_get(key: str) -> Optional[list[float]]:
     with _CLUSTER_CACHE_LOCK:
         value = _CLUSTER_EMBED_CACHE.get(key)
         if value is None:
-            try:
+            with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                 increment_counter(
                     "extraction_cluster_cache_total",
                     labels={"cache": "embedding", "result": "miss"},
                 )
-            except Exception:
-                pass
             return None
         _CLUSTER_EMBED_CACHE.move_to_end(key)
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter(
             "extraction_cluster_cache_total",
             labels={"cache": "embedding", "result": "hit"},
         )
-    except Exception:
-        pass
     return value
 
 
-def _cluster_cache_put(key: str, value: List[float]) -> None:
+def _cluster_cache_put(key: str, value: list[float]) -> None:
     with _CLUSTER_CACHE_LOCK:
         _CLUSTER_EMBED_CACHE[key] = value
         _CLUSTER_EMBED_CACHE.move_to_end(key)
@@ -565,14 +582,14 @@ def _cluster_cache_put(key: str, value: List[float]) -> None:
 
 
 def _normalize_strategy_order(
-    strategy_order: Optional[List[str]],
-) -> Tuple[List[str], List[str]]:
+    strategy_order: Optional[list[str]],
+) -> tuple[list[str], list[str]]:
     if strategy_order:
         raw = strategy_order
     else:
         return list(DEFAULT_EXTRACTION_STRATEGY_ORDER), []
-    normalized: List[str] = []
-    unknown: List[str] = []
+    normalized: list[str] = []
+    unknown: list[str] = []
     for item in raw:
         if not isinstance(item, str):
             continue
@@ -590,11 +607,9 @@ def _normalize_strategy_order(
     return normalized, unknown
 
 
-def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> Dict[str, Any]:
-    try:
+def _trace_entry(strategy: str, status: str, reason: str, detail: Optional[str] = None) -> dict[str, Any]:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         log_counter("extraction_strategy_total", labels={"strategy": strategy, "status": status})
-    except Exception:
-        pass
     entry = {"strategy": strategy, "status": status, "reason": reason}
     if detail:
         entry["detail"] = detail
@@ -605,43 +620,39 @@ def _record_strategy_metrics(
     strategy: str,
     status: str,
     duration_s: float,
-    result: Optional[Dict[str, Any]] = None,
+    result: Optional[dict[str, Any]] = None,
 ) -> None:
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         observe_histogram(
             "extraction_strategy_duration_seconds",
             duration_s,
             labels={"strategy": strategy, "status": status},
         )
-    except Exception:
-        pass
     if status != "success" or not result:
         return
     content = result.get("content")
     if isinstance(content, str) and content:
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             observe_histogram(
                 "extraction_content_length_bytes",
                 len(content.encode("utf-8", errors="ignore")),
                 labels={"strategy": strategy},
             )
-        except Exception:
-            pass
 
 
 def _attach_trace(
-    result: Dict[str, Any],
-    trace: List[Dict[str, Any]],
+    result: dict[str, Any],
+    trace: list[dict[str, Any]],
     strategy: Optional[str],
-    strategy_order: List[str],
-) -> Dict[str, Any]:
+    strategy_order: list[str],
+) -> dict[str, Any]:
     result["extraction_trace"] = trace
     result["extraction_strategy"] = strategy
     result["extraction_strategy_order"] = strategy_order
     return result
 
 
-def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
+def _extract_with_trafilatura(html: str, url: str) -> dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     logging.info(f"Extracting article data from HTML for {url}")
     downloaded = trafilatura.extract(
@@ -653,7 +664,7 @@ def _extract_with_trafilatura(html: str, url: str) -> Dict[str, Any]:
     downloaded = _strip_boilerplate_sections(downloaded)
     metadata = trafilatura.extract_metadata(html)
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "title": "N/A",
         "author": "N/A",
         "content": "",
@@ -718,7 +729,7 @@ def _env_float(name: str) -> Optional[float]:
         return None
 
 
-def _regex_mask_override(settings: Optional[Dict[str, Any]]) -> Optional[bool]:
+def _regex_mask_override(settings: Optional[dict[str, Any]]) -> Optional[bool]:
     if not isinstance(settings, dict):
         return None
     for key in ("mask_pii", "pii_mask"):
@@ -750,7 +761,7 @@ def _should_clear_caches(stage: str) -> bool:
     return False
 
 
-_STRATEGY_LIMITS: Dict[str, Tuple[int, BoundedSemaphore]] = {}
+_STRATEGY_LIMITS: dict[str, tuple[int, BoundedSemaphore]] = {}
 _STRATEGY_LIMITS_LOCK = Lock()
 
 
@@ -783,10 +794,7 @@ def _mask_pii_value(label: str, value: str) -> str:
         if "@" not in value:
             return "***"
         local, domain = value.split("@", 1)
-        if len(local) <= 2:
-            masked_local = "*" * len(local)
-        else:
-            masked_local = f"{local[0]}***{local[-1]}"
+        masked_local = "*" * len(local) if len(local) <= 2 else f"{local[0]}***{local[-1]}"
         return f"{masked_local}@{domain}"
     if label == "phone":
         digits = re.sub(r"\D", "", value)
@@ -821,8 +829,8 @@ def extract_regex_entities(
     url: str,
     *,
     mask_pii: Optional[bool] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -849,11 +857,11 @@ def extract_regex_entities(
     if mask_pii is None:
         mask_pii = _regex_pii_mask_enabled()
 
-    matches: List[Dict[str, Any]] = []
+    matches: list[dict[str, Any]] = []
     seen_spans: set[tuple[str, int, int]] = set()
-    occupied: List[Tuple[int, int]] = []
+    occupied: list[tuple[int, int]] = []
     total_count = 0
-    per_label_counts: Dict[str, int] = {}
+    per_label_counts: dict[str, int] = {}
 
     for label, pattern in _REGEX_CATALOG:
         per_label_limit = _MAX_REGEX_MATCHES_PER_LABEL.get(label, _MAX_REGEX_TOTAL_MATCHES)
@@ -873,11 +881,10 @@ def extract_regex_entities(
             if label in {"ipv4", "ipv6"}:
                 try:
                     ipaddress.ip_address(value)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     continue
-            if label == "credit_card":
-                if not _luhn_check(value):
-                    continue
+            if label == "credit_card" and not _luhn_check(value):
+                continue
             if (label, start, end) in seen_spans:
                 continue
             seen_spans.add((label, start, end))
@@ -903,8 +910,8 @@ def extract_regex_entities(
     return result
 
 
-def _jsonld_type_tokens(value: Any) -> List[str]:
-    tokens: List[str] = []
+def _jsonld_type_tokens(value: Any) -> list[str]:
+    tokens: list[str] = []
     if isinstance(value, list):
         for item in value:
             tokens.extend(_jsonld_type_tokens(item))
@@ -924,11 +931,11 @@ def _jsonld_type_tokens(value: Any) -> List[str]:
     return tokens
 
 
-def _jsonld_type_set(node: Dict[str, Any]) -> set[str]:
+def _jsonld_type_set(node: dict[str, Any]) -> set[str]:
     return set(_jsonld_type_tokens(node.get("@type") or node.get("type")))
 
 
-def _jsonld_collect_text(value: Any) -> List[str]:
+def _jsonld_collect_text(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, (int, float)):
@@ -937,7 +944,7 @@ def _jsonld_collect_text(value: Any) -> List[str]:
         text = value.strip()
         return [text] if text else []
     if isinstance(value, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in value:
             parts.extend(_jsonld_collect_text(item))
         return parts
@@ -959,14 +966,14 @@ def _jsonld_join_text(value: Any, join_with: str) -> str:
     return join_with.join(parts)
 
 
-def _jsonld_extract_author(node: Dict[str, Any]) -> Optional[str]:
+def _jsonld_extract_author(node: dict[str, Any]) -> Optional[str]:
     for key in ("author", "creator", "publisher"):
         if key not in node:
             continue
         names = _jsonld_collect_text(node.get(key))
         if not names:
             continue
-        unique: List[str] = []
+        unique: list[str] = []
         seen: set[str] = set()
         for name in names:
             if name not in seen:
@@ -977,7 +984,7 @@ def _jsonld_extract_author(node: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _jsonld_score_candidate(node: Dict[str, Any]) -> Tuple[int, int]:
+def _jsonld_score_candidate(node: dict[str, Any]) -> tuple[int, int]:
     types = _jsonld_type_set(node)
     score = 0
     if types & _JSONLD_PRIMARY_TYPES:
@@ -1000,17 +1007,14 @@ def _jsonld_score_candidate(node: Dict[str, Any]) -> Tuple[int, int]:
     return score, content_len
 
 
-def _jsonld_has_content(result: Dict[str, Any]) -> bool:
+def _jsonld_has_content(result: dict[str, Any]) -> bool:
     content = result.get("content")
     summary = result.get("summary")
-    for value in (content, summary):
-        if isinstance(value, str) and value.strip():
-            return True
-    return False
+    return any(isinstance(value, str) and value.strip() for value in (content, summary))
 
 
-def _collect_jsonld_nodes(data: Any) -> List[Dict[str, Any]]:
-    nodes: List[Dict[str, Any]] = []
+def _collect_jsonld_nodes(data: Any) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
     if isinstance(data, list):
         for item in data:
             nodes.extend(_collect_jsonld_nodes(item))
@@ -1026,8 +1030,8 @@ def _collect_jsonld_nodes(data: Any) -> List[Dict[str, Any]]:
     return nodes
 
 
-def _resolve_jsonld_refs(value: Any, id_map: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
-    resolved: List[Dict[str, Any]] = []
+def _resolve_jsonld_refs(value: Any, id_map: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    resolved: list[dict[str, Any]] = []
     if isinstance(value, list):
         for item in value:
             resolved.extend(_resolve_jsonld_refs(item, id_map))
@@ -1066,12 +1070,12 @@ def _microdata_prop_value(tag: Any) -> Optional[str]:
     return text or None
 
 
-def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
+def _extract_microdata_items(soup: BeautifulSoup) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     if soup is None:
         return items
     for scope in soup.find_all(attrs={"itemscope": True}):
-        props: Dict[str, Any] = {}
+        props: dict[str, Any] = {}
         for prop in scope.find_all(attrs={"itemprop": True}):
             parent_scope = prop.find_parent(attrs={"itemscope": True})
             if parent_scope is not None and parent_scope is not scope:
@@ -1091,7 +1095,7 @@ def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
                 props[prop_name] = [existing, value]
         if not props:
             continue
-        item: Dict[str, Any] = dict(props)
+        item: dict[str, Any] = dict(props)
         item_type = scope.get("itemtype")
         item_id = scope.get("itemid")
         if item_type:
@@ -1102,8 +1106,8 @@ def _extract_microdata_items(soup: BeautifulSoup) -> List[Dict[str, Any]]:
     return items
 
 
-def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+def extract_jsonld_entities(html_text: str, url: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -1114,8 +1118,8 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
     if not html_text:
         return result
     soup = BeautifulSoup(html_text, "html.parser")
-    nodes: List[Dict[str, Any]] = []
-    errors: List[str] = []
+    nodes: list[dict[str, Any]] = []
+    errors: list[str] = []
 
     scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.IGNORECASE)})
     for script in scripts:
@@ -1129,7 +1133,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
             objects = _decode_all_json(payload)
             if not objects:
                 objects = [json.loads(payload)]
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             errors.append(f"jsonld_parse_failed: {exc}")
             continue
         for obj in objects:
@@ -1142,7 +1146,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
             result["jsonld_error"] = "; ".join(errors[:3])
         return result
 
-    id_map: Dict[str, Dict[str, Any]] = {}
+    id_map: dict[str, dict[str, Any]] = {}
     for node in nodes:
         node_id = node.get("@id")
         if isinstance(node_id, str):
@@ -1154,7 +1158,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
             expanded_nodes.extend(_resolve_jsonld_refs(node.get(ref_key), id_map))
 
     seen_ids: set[int] = set()
-    unique_nodes: List[Dict[str, Any]] = []
+    unique_nodes: list[dict[str, Any]] = []
     for node in expanded_nodes:
         node_id = id(node)
         if node_id in seen_ids:
@@ -1162,8 +1166,8 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
         seen_ids.add(node_id)
         unique_nodes.append(node)
 
-    best_node: Optional[Dict[str, Any]] = None
-    best_score: Tuple[int, int] = (-1, -1)
+    best_node: Optional[dict[str, Any]] = None
+    best_score: tuple[int, int] = (-1, -1)
     for node in unique_nodes:
         score = _jsonld_score_candidate(node)
         if score > best_score:
@@ -1213,7 +1217,7 @@ def extract_jsonld_entities(html_text: str, url: str) -> Dict[str, Any]:
     return result
 
 
-def _tokenize_cluster_text(text: str) -> List[str]:
+def _tokenize_cluster_text(text: str) -> list[str]:
     return re.findall(r"\b[\w'-]+\b", text.lower())
 
 
@@ -1221,7 +1225,7 @@ def _cluster_word_count(text: str) -> int:
     return len(_tokenize_cluster_text(text))
 
 
-def _normalize_vector(vec: List[float]) -> List[float]:
+def _normalize_vector(vec: list[float]) -> list[float]:
     if not vec:
         return vec
     norm = math.sqrt(sum(val * val for val in vec))
@@ -1230,7 +1234,7 @@ def _normalize_vector(vec: List[float]) -> List[float]:
     return [val / norm for val in vec]
 
 
-def _hash_embedding(text: str, dims: int) -> List[float]:
+def _hash_embedding(text: str, dims: int) -> list[float]:
     tokens = _tokenize_cluster_text(text)
     if not tokens:
         return [0.0] * dims
@@ -1242,7 +1246,7 @@ def _hash_embedding(text: str, dims: int) -> List[float]:
     return _normalize_vector(vec)
 
 
-def _cluster_embedding(text: str, dims: int) -> List[float]:
+def _cluster_embedding(text: str, dims: int) -> list[float]:
     key = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
     cached = _cluster_cache_get(key)
     if cached is not None:
@@ -1252,7 +1256,7 @@ def _cluster_embedding(text: str, dims: int) -> List[float]:
     return vec
 
 
-def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     if not vec_a or not vec_b:
         return 0.0
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
@@ -1265,7 +1269,7 @@ def _extract_cluster_blocks(
     min_block_chars: int,
     min_word_count: int,
     max_blocks: int,
-) -> List[str]:
+) -> list[str]:
     if not html_text:
         return []
     soup = BeautifulSoup(html_text, "html.parser")
@@ -1302,18 +1306,18 @@ def _extract_cluster_title(html_text: str) -> Optional[str]:
 
 
 def _cluster_assignments_hierarchical(
-    vectors: List[List[float]],
+    vectors: list[list[float]],
     *,
     similarity_threshold: float,
     linkage: str,
-) -> Optional[List[int]]:
+) -> Optional[list[int]]:
     if not vectors:
         return None
     if len(vectors) == 1:
         return [0]
     try:
         from sklearn.cluster import AgglomerativeClustering  # type: ignore
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return None
     distance_threshold = max(0.0, 1.0 - similarity_threshold)
     size = len(vectors)
@@ -1343,10 +1347,10 @@ def _cluster_assignments_hierarchical(
 
 
 def _build_clusters_from_assignments(
-    assignments: List[int],
-    items: List[Tuple[int, str, List[float], float]],
-) -> List[Dict[str, Any]]:
-    clusters: Dict[int, Dict[str, Any]] = {}
+    assignments: list[int],
+    items: list[tuple[int, str, list[float], float]],
+) -> list[dict[str, Any]]:
+    clusters: dict[int, dict[str, Any]] = {}
     for label, item in zip(assignments, items):
         idx, block, vec, sim_to_doc = item
         cluster = clusters.get(label)
@@ -1367,11 +1371,11 @@ def _build_clusters_from_assignments(
 
 
 def _cluster_blocks_greedy(
-    items: List[Tuple[int, str, List[float], float]],
+    items: list[tuple[int, str, list[float], float]],
     *,
     cluster_threshold: float,
-) -> List[Dict[str, Any]]:
-    clusters: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    clusters: list[dict[str, Any]] = []
     for idx, block, vec, sim_to_doc in items:
         best_idx = None
         best_sim = -1.0
@@ -1401,13 +1405,13 @@ def _cluster_blocks_greedy(
 def _tag_cluster_text(
     text: str,
     *,
-    tag_keywords: Dict[str, List[str]],
+    tag_keywords: dict[str, list[str]],
     top_k: int,
-) -> Tuple[List[str], Dict[str, int]]:
+) -> tuple[list[str], dict[str, int]]:
     if top_k <= 0 or not text:
         return [], {}
     text_lower = text.lower()
-    scores: Dict[str, int] = {}
+    scores: dict[str, int] = {}
     for tag, keywords in tag_keywords.items():
         if not keywords:
             continue
@@ -1429,9 +1433,9 @@ def extract_cluster_entities(
     html_text: str,
     url: str,
     *,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -1475,10 +1479,8 @@ def extract_cluster_entities(
     if not isinstance(tag_keywords, dict):
         tag_keywords = _DEFAULT_CLUSTER_TAG_KEYWORDS
 
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter("extraction_cluster_total", labels={"status": "started"})
-    except Exception:
-        pass
 
     blocks = _extract_cluster_blocks(
         html_text,
@@ -1488,14 +1490,12 @@ def extract_cluster_entities(
     )
     if not blocks:
         result["cluster_error"] = "cluster_no_blocks"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "no_blocks"})
-        except Exception:
-            pass
         return result
 
     doc_vec = _cluster_embedding(" ".join(blocks), embed_dims)
-    scored_blocks: List[Tuple[int, str, List[float], float]] = []
+    scored_blocks: list[tuple[int, str, list[float], float]] = []
     for idx, block in enumerate(blocks):
         vec = _cluster_embedding(block, embed_dims)
         sim = _cosine_similarity(vec, doc_vec)
@@ -1505,7 +1505,7 @@ def extract_cluster_entities(
     if not kept:
         kept = sorted(scored_blocks, key=lambda item: item[3], reverse=True)[: min(2, len(scored_blocks))]
 
-    clusters: List[Dict[str, Any]] = []
+    clusters: list[dict[str, Any]] = []
     cluster_method = method
     if method == "hierarchical":
         assignments = _cluster_assignments_hierarchical(
@@ -1524,13 +1524,11 @@ def extract_cluster_entities(
 
     if not clusters:
         result["cluster_error"] = "cluster_no_clusters"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "no_clusters"})
-        except Exception:
-            pass
         return result
 
-    def _cluster_score(cluster: Dict[str, Any]) -> Tuple[int, int]:
+    def _cluster_score(cluster: dict[str, Any]) -> tuple[int, int]:
         return (int(cluster.get("total_chars", 0)), len(cluster.get("members", [])))
 
     best_cluster = max(clusters, key=_cluster_score)
@@ -1540,10 +1538,8 @@ def extract_cluster_entities(
 
     if not content:
         result["cluster_error"] = "cluster_empty_content"
-        try:
+        with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
             increment_counter("extraction_cluster_total", labels={"status": "empty"})
-        except Exception:
-            pass
         return result
 
     title = _extract_cluster_title(html_text)
@@ -1569,10 +1565,8 @@ def extract_cluster_entities(
         result["cluster_tags"] = tags
         result["cluster_tag_scores"] = tag_scores
     result["extraction_successful"] = True
-    try:
+    with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
         increment_counter("extraction_cluster_total", labels={"status": "success"})
-    except Exception:
-        pass
     return result
 
 
@@ -1581,7 +1575,7 @@ def _coerce_positive_int(value: Any) -> Optional[int]:
         return None
     try:
         parsed = int(value)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return None
     return parsed if parsed > 0 else None
 
@@ -1591,12 +1585,12 @@ def _coerce_non_negative_float(value: Any, default: float = 0.0) -> float:
         return default
     try:
         parsed = float(value)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         return default
     return parsed if parsed >= 0.0 else default
 
 
-def _resolve_llm_throttle_settings(settings: Dict[str, Any]) -> Tuple[Optional[int], float, float]:
+def _resolve_llm_throttle_settings(settings: dict[str, Any]) -> tuple[Optional[int], float, float]:
     max_concurrency = _coerce_positive_int(
         settings.get("max_concurrency") if "max_concurrency" in settings else os.getenv("LLM_MAX_CONCURRENCY")
     )
@@ -1615,7 +1609,7 @@ def _resolve_llm_throttle_settings(settings: Dict[str, Any]) -> Tuple[Optional[i
     return max_concurrency, delay_ms, jitter_ms
 
 
-def _extractor_retry_settings() -> Tuple[int, float, float]:
+def _extractor_retry_settings() -> tuple[int, float, float]:
     max_retries = _coerce_positive_int(os.getenv("EXTRACTOR_MAX_RETRIES")) or 0
     base_delay_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_BASE_MS"), default=0.0)
     jitter_ms = _coerce_non_negative_float(os.getenv("EXTRACTOR_RETRY_JITTER_MS"), default=0.0)
@@ -1623,29 +1617,27 @@ def _extractor_retry_settings() -> Tuple[int, float, float]:
 
 
 def _run_with_retries(
-    func: Callable[[], Dict[str, Any]],
+    func: Callable[[], dict[str, Any]],
     *,
     strategy: str,
-) -> Tuple[Optional[Dict[str, Any]], Optional[Exception], int]:
+) -> tuple[Optional[dict[str, Any]], Optional[Exception], int]:
     max_retries, base_delay_ms, jitter_ms = _extractor_retry_settings()
     attempts = 0
     while True:
         try:
             return func(), None, attempts
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             if attempts >= max_retries:
                 return None, exc, attempts
             delay_s = (base_delay_ms / 1000.0) * (2 ** attempts)
             if jitter_ms:
                 delay_s += random.uniform(0.0, jitter_ms / 1000.0)
             attempts += 1
-            try:
+            with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                 increment_counter(
                     "extraction_retry_total",
                     labels={"strategy": strategy, "attempt": str(attempts)},
                 )
-            except Exception:
-                pass
             if delay_s > 0.0:
                 time.sleep(delay_s)
 
@@ -1677,7 +1669,7 @@ def _apply_llm_delay(provider: str, delay_ms: float, jitter_ms: float) -> None:
 
 
 @contextmanager
-def _llm_throttle(provider: str, settings: Dict[str, Any]):
+def _llm_throttle(provider: str, settings: dict[str, Any]):
     max_concurrency, delay_ms, jitter_ms = _resolve_llm_throttle_settings(settings)
     semaphore = _get_llm_semaphore(provider, max_concurrency) if max_concurrency else None
     if semaphore is not None:
@@ -1705,7 +1697,7 @@ def _split_llm_chunks(
     chunk_token_threshold: int,
     overlap_rate: float,
     word_token_rate: float,
-) -> List[str]:
+) -> list[str]:
     if not text:
         return []
     words = text.split()
@@ -1718,7 +1710,7 @@ def _split_llm_chunks(
     chunk_words = max(50, int(chunk_token_threshold / rate))
     overlap = max(0, min(int(chunk_words * max(0.0, min(overlap_rate, 0.9))), chunk_words - 1))
     step = max(1, chunk_words - overlap)
-    chunks: List[str] = []
+    chunks: list[str] = []
     for start in range(0, len(words), step):
         chunk = words[start : start + chunk_words]
         if not chunk:
@@ -1750,13 +1742,13 @@ def _extract_llm_response_text(resp: Any) -> str:
     return ""
 
 
-def _extract_usage_from_response(resp: Any) -> Dict[str, int]:
+def _extract_usage_from_response(resp: Any) -> dict[str, int]:
     if not isinstance(resp, dict):
         return {}
     usage = resp.get("usage")
     if not isinstance(usage, dict):
         return {}
-    out: Dict[str, int] = {}
+    out: dict[str, int] = {}
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         val = usage.get(key)
         if isinstance(val, (int, float)):
@@ -1764,7 +1756,7 @@ def _extract_usage_from_response(resp: Any) -> Dict[str, int]:
     return out
 
 
-def _record_llm_usage_metrics(usage: Dict[str, int], *, provider: str, model: str) -> None:
+def _record_llm_usage_metrics(usage: dict[str, int], *, provider: str, model: str) -> None:
     pt = usage.get("prompt_tokens")
     ct = usage.get("completion_tokens")
     if pt:
@@ -1800,8 +1792,8 @@ def _strip_code_fences(text: str) -> str:
     return stripped
 
 
-def _extract_json_candidates(text: str) -> List[str]:
-    candidates: List[str] = []
+def _extract_json_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
     if not text:
         return candidates
     for match in re.finditer(r"```(?:json)?\\s*(.*?)```", text, re.IGNORECASE | re.DOTALL):
@@ -1816,23 +1808,20 @@ def _extract_json_candidates(text: str) -> List[str]:
     return candidates
 
 
-def _decode_all_json(payload: str) -> List[Any]:
+def _decode_all_json(payload: str) -> list[Any]:
     decoder = json.JSONDecoder()
     idx = 0
     length = len(payload)
-    objects: List[Any] = []
+    objects: list[Any] = []
     while idx < length:
         brace = payload.find("{", idx)
         bracket = payload.find("[", idx)
         if brace == -1 and bracket == -1:
             break
-        if brace == -1 or (bracket != -1 and bracket < brace):
-            start = bracket
-        else:
-            start = brace
+        start = bracket if brace == -1 or bracket != -1 and bracket < brace else brace
         try:
             obj, end = decoder.raw_decode(payload, start)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             idx = start + 1
             continue
         objects.append(obj)
@@ -1840,8 +1829,8 @@ def _decode_all_json(payload: str) -> List[Any]:
     return objects
 
 
-def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str, Any]]:
-    meta: Dict[str, Any] = {"objects": []}
+def _parse_llm_json(text: str, *, strict: bool) -> tuple[Optional[Any], dict[str, Any]]:
+    meta: dict[str, Any] = {"objects": []}
     if not text:
         return None, meta
     payload = text.strip()
@@ -1850,7 +1839,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str
             obj = json.loads(payload)
             meta["objects"] = [obj]
             return obj, meta
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             meta["error"] = f"strict_json_failed: {exc}"
             return None, meta
     candidates = _extract_json_candidates(payload)
@@ -1859,7 +1848,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str
         if not objs:
             try:
                 obj = json.loads(candidate)
-            except Exception:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                 continue
             objs = [obj]
         if objs:
@@ -1868,7 +1857,7 @@ def _parse_llm_json(text: str, *, strict: bool) -> Tuple[Optional[Any], Dict[str
     return None, meta
 
 
-def _resolve_llm_provider(settings: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+def _resolve_llm_provider(settings: dict[str, Any]) -> tuple[str, Optional[dict[str, Any]]]:
     provider = str(settings.get("provider") or "").strip().lower()
     app_config = None
     if not provider:
@@ -1877,14 +1866,14 @@ def _resolve_llm_provider(settings: Dict[str, Any]) -> Tuple[str, Optional[Dict[
 
             app_config = ensure_app_config(None)
             provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             provider = ""
     if app_config is None:
         try:
             from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
             app_config = ensure_app_config(None)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             app_config = None
     return provider, app_config
 
@@ -1934,7 +1923,7 @@ def _llm_prompt_for_regex_generation(
     url: str,
     label: Optional[str],
     query: Optional[str],
-    examples: Optional[List[str]],
+    examples: Optional[list[str]],
 ) -> str:
     snippet = html_text.strip()
     if len(snippet) > 8000:
@@ -1958,11 +1947,11 @@ def generate_schema_rules_from_llm(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
     query: Optional[str] = None,
     example_json: Optional[str] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"success": False}
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
     if not html_text:
         result["error"] = "schema_llm_empty_html"
         return result
@@ -2006,7 +1995,7 @@ def generate_schema_rules_from_llm(
                 response_format=response_format,
                 app_config=app_config,
             )
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"schema_llm_call_failed: {exc}"
         return result
 
@@ -2023,7 +2012,7 @@ def generate_schema_rules_from_llm(
         result["error"] = meta.get("error") or "schema_llm_parse_failed"
         return result
 
-    schema_obj: Optional[Dict[str, Any]] = None
+    schema_obj: Optional[dict[str, Any]] = None
     if isinstance(obj, dict):
         if isinstance(obj.get("schema"), dict):
             schema_obj = obj.get("schema")
@@ -2037,7 +2026,7 @@ def generate_schema_rules_from_llm(
         from tldw_Server_API.app.core.Watchlists.fetchers import validate_selector_rules
 
         validation = validate_selector_rules(schema_obj, html_text=html_text)
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         validation = {"errors": [{"key": "validation", "error": str(exc)}], "warnings": []}
 
     result["schema_rules"] = schema_obj
@@ -2050,12 +2039,12 @@ def generate_regex_pattern_from_llm(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
     label: Optional[str] = None,
     query: Optional[str] = None,
-    examples: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {"success": False}
+    examples: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
     if not html_text:
         result["error"] = "regex_llm_empty_html"
         return result
@@ -2100,7 +2089,7 @@ def generate_regex_pattern_from_llm(
                 response_format=response_format,
                 app_config=app_config,
             )
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"regex_llm_call_failed: {exc}"
         return result
 
@@ -2130,7 +2119,7 @@ def generate_regex_pattern_from_llm(
 
     try:
         compiled = re.compile(pattern, flags)
-    except Exception as exc:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
         result["error"] = f"regex_llm_invalid_pattern: {exc}"
         return result
 
@@ -2138,7 +2127,7 @@ def generate_regex_pattern_from_llm(
     if match:
         try:
             matched_value = match.group(group_idx) if group_idx is not None else match.group(0)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             matched_value = match.group(0)
         result["sample_match"] = matched_value
         result["sample_span"] = [match.start(), match.end()]
@@ -2152,21 +2141,18 @@ def generate_regex_pattern_from_llm(
     return result
 
 
-def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _schema_rules_to_field_specs(schema_rules: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(schema_rules, dict):
         return []
-    fields: List[Dict[str, Any]] = []
+    fields: list[dict[str, Any]] = []
     if isinstance(schema_rules.get("fields"), list) or isinstance(schema_rules.get("baseFields"), (list, dict)):
-        def _normalize_field_definitions(raw: Any) -> List[Dict[str, Any]]:
+        def _normalize_field_definitions(raw: Any) -> list[dict[str, Any]]:
             if isinstance(raw, list):
                 return [f for f in raw if isinstance(f, dict)]
             if isinstance(raw, dict):
-                normalized: List[Dict[str, Any]] = []
+                normalized: list[dict[str, Any]] = []
                 for name, spec in raw.items():
-                    if isinstance(spec, dict):
-                        entry = dict(spec)
-                    else:
-                        entry = {"selector": spec}
+                    entry = dict(spec) if isinstance(spec, dict) else {"selector": spec}
                     entry.setdefault("name", str(name))
                     normalized.append(entry)
                 return normalized
@@ -2196,10 +2182,10 @@ def _schema_rules_to_field_specs(schema_rules: Optional[Dict[str, Any]]) -> List
     return fields
 
 
-def _schema_rule_keys(schema_rules: Optional[Dict[str, Any]]) -> List[str]:
+def _schema_rule_keys(schema_rules: Optional[dict[str, Any]]) -> list[str]:
     if not isinstance(schema_rules, dict):
         return []
-    keys: List[str] = []
+    keys: list[str] = []
     if any(schema_rules.get(key) for key in ("baseSelector", "base_selector", "baseXpath", "base_xpath")):
         keys.append("baseSelector")
     fields = _schema_rules_to_field_specs(schema_rules)
@@ -2232,7 +2218,7 @@ def _llm_prompt_for_mode(
     mode: str,
     chunk: str,
     url: str,
-    fields: List[Dict[str, Any]],
+    fields: list[dict[str, Any]],
     chunk_index: int,
     chunk_count: int,
     extra_instructions: Optional[str],
@@ -2266,7 +2252,7 @@ def _llm_prompt_for_mode(
     return f"{prompt}\n\nContent:\n{chunk}"
 
 
-def _merge_llm_data(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_llm_data(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     for key, value in incoming.items():
         if key not in base or base[key] in (None, "", [], {}):
             base[key] = value
@@ -2276,9 +2262,9 @@ def _merge_llm_data(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str,
     return base
 
 
-def _merge_llm_results(objs: List[Dict[str, Any]], mode: str) -> Tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    merged: Dict[str, Any] = {}
-    schema: Optional[Dict[str, Any]] = None
+def _merge_llm_results(objs: list[dict[str, Any]], mode: str) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
+    merged: dict[str, Any] = {}
+    schema: Optional[dict[str, Any]] = None
     for obj in objs:
         if not isinstance(obj, dict):
             continue
@@ -2292,8 +2278,8 @@ def _merge_llm_results(objs: List[Dict[str, Any]], mode: str) -> Tuple[Dict[str,
     return merged, schema
 
 
-def _llm_has_content(data: Dict[str, Any]) -> bool:
-    for key, value in data.items():
+def _llm_has_content(data: dict[str, Any]) -> bool:
+    for _key, value in data.items():
         if value is None:
             continue
         if isinstance(value, str) and value.strip():
@@ -2309,10 +2295,10 @@ def extract_llm_entities(
     html_text: str,
     url: str,
     *,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    result: Dict[str, Any] = {
+    llm_settings: Optional[dict[str, Any]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
         "url": url,
         "title": "N/A",
         "author": "N/A",
@@ -2333,7 +2319,7 @@ def extract_llm_entities(
 
             app_config = ensure_app_config(None)
             provider = str(app_config.get("RAG_DEFAULT_LLM_PROVIDER") or "").strip().lower()
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             provider = ""
     if not provider:
         result["llm_error"] = "llm_provider_missing"
@@ -2344,7 +2330,7 @@ def extract_llm_entities(
             from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
             app_config = ensure_app_config(None)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             app_config = None
 
     text = _extract_text_for_llm(html_text)
@@ -2383,9 +2369,9 @@ def extract_llm_entities(
     if strict_json and response_format is None:
         response_format = {"type": "json_object"}
 
-    parsed_objects: List[Dict[str, Any]] = []
+    parsed_objects: list[dict[str, Any]] = []
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    llm_errors: List[str] = []
+    llm_errors: list[str] = []
     for idx, chunk in enumerate(chunks):
         prompt = _llm_prompt_for_mode(
             mode=mode,
@@ -2412,7 +2398,7 @@ def extract_llm_entities(
                     response_format=response_format,
                     app_config=app_config,
                 )
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             llm_errors.append(f"llm_call_failed: {exc}")
             continue
 
@@ -2467,24 +2453,24 @@ def extract_article_with_pipeline(
     html: str,
     url: str,
     *,
-    strategy_order: Optional[List[str]] = None,
-    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    fallback_extractor: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    regex_settings: Optional[Dict[str, Any]] = None,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    trace: List[Dict[str, Any]] = []
+    strategy_order: Optional[list[str]] = None,
+    handler: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    fallback_extractor: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
+    regex_settings: Optional[dict[str, Any]] = None,
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    trace: list[dict[str, Any]] = []
     order, unknown = _normalize_strategy_order(strategy_order)
     if _should_clear_caches("start"):
         clear_extraction_caches()
 
     def _finalize_result(
-        result: Dict[str, Any],
+        result: dict[str, Any],
         *,
         strategy: Optional[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         final = _attach_trace(result, trace, strategy, order)
         if _should_clear_caches("end"):
             clear_extraction_caches()
@@ -2492,7 +2478,7 @@ def extract_article_with_pipeline(
     for strategy in unknown:
         trace.append(_trace_entry(strategy, "skipped", "unknown_strategy"))
 
-    last_result: Optional[Dict[str, Any]] = None
+    last_result: Optional[dict[str, Any]] = None
     for strategy in order:
         start = time.perf_counter()
         if strategy == "jsonld":
@@ -2514,7 +2500,7 @@ def extract_article_with_pipeline(
                         extract_schema_fields,
                         validate_selector_rules,
                     )
-                except Exception as exc:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
                     trace.append(_trace_entry(strategy, "failed", "schema_import_error", str(exc)))
                     _record_strategy_metrics(strategy, "failed", time.perf_counter() - start)
                     continue
@@ -2555,7 +2541,7 @@ def extract_article_with_pipeline(
                 if warning_detail:
                     result["schema_selector_warnings"] = warnings
                 if isinstance(selector_counts, dict):
-                    normalized_counts: Dict[str, int] = {}
+                    normalized_counts: dict[str, int] = {}
                     for key, count in selector_counts.items():
                         if not isinstance(key, str):
                             continue
@@ -2636,7 +2622,7 @@ def extract_article_with_pipeline(
             extractor = fallback_extractor or _extract_with_trafilatura
             with _strategy_throttle(strategy):
                 result, exc, _attempts = _run_with_retries(
-                    lambda: extractor(html, url),
+                    lambda _extractor=extractor: _extractor(html, url),
                     strategy=strategy,
                 )
             if exc or result is None:
@@ -2666,13 +2652,13 @@ def extract_article_with_pipeline(
 def extract_article_data_from_html(
     html: str,
     url: str,
-    strategy_order: Optional[List[str]] = None,
-    handler: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-    schema_rules: Optional[Dict[str, Any]] = None,
-    llm_settings: Optional[Dict[str, Any]] = None,
-    regex_settings: Optional[Dict[str, Any]] = None,
-    cluster_settings: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    strategy_order: Optional[list[str]] = None,
+    handler: Optional[Callable[[str, str], dict[str, Any]]] = None,
+    schema_rules: Optional[dict[str, Any]] = None,
+    llm_settings: Optional[dict[str, Any]] = None,
+    regex_settings: Optional[dict[str, Any]] = None,
+    cluster_settings: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """Extract article metadata and body from raw HTML."""
     return extract_article_with_pipeline(
         html,
@@ -2707,7 +2693,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+async def scrape_article(url: str, custom_cookies: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     logging.info(f"Scraping article from URL: {url}")
     # Enforce centralized egress/SSRF policy before any network access
     try:
@@ -2724,7 +2710,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 "extraction_successful": False,
                 "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"
             }
-    except Exception as _e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
         logging.error(f"Egress policy evaluation failed: {_e}")
         return {
             "url": url,
@@ -2736,7 +2722,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             "error": "Egress policy evaluation failed. Please contact system administrator."
         }
     # Resolve scraper plan via router (configurable via YAML)
-    ws_cfg: Dict[str, Any] = {}
+    ws_cfg: dict[str, Any] = {}
     try:
         cfg = load_and_log_configs() or {}
         ws_cfg = cfg.get('web_scraper', {}) or {}
@@ -2748,7 +2734,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
         router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         # Safe default plan
         class _P:  # minimal stand-in
             backend = "auto"
@@ -2786,7 +2772,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 backend_choice = "auto"
 
     preflight_analysis = None
-    preflight_notes: List[str] = []
+    preflight_notes: list[str] = []
     preflight_method = "auto"
     if _as_bool(ws_cfg.get("web_scraper_preflight_analyzers", False), False):
         find_all = _as_bool(ws_cfg.get("web_scraper_preflight_find_all_waf", False), False)
@@ -2797,7 +2783,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
 
         try:
             timeout_s = float(ws_cfg.get("web_scraper_preflight_timeout_s", 0) or 0)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             timeout_s = 0.0
 
         try:
@@ -2816,7 +2802,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 preflight_analysis = await task
         except asyncio.TimeoutError:
             logging.debug(f"Preflight analysis timed out for {url}")
-        except Exception as exc:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
             logging.debug(f"Preflight analysis failed for {url}: {exc}")
 
     if preflight_analysis and isinstance(preflight_analysis, dict):
@@ -2849,30 +2835,29 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
             },
         }
 
-    def _attach_preflight(result: Dict[str, Any]) -> Dict[str, Any]:
+    def _attach_preflight(result: dict[str, Any]) -> dict[str, Any]:
         if preflight_payload and isinstance(result, dict):
             result.setdefault("preflight_analysis", preflight_payload)
         return result
 
     # robots.txt enforcement (fail open if error)
     effective_ua = ua_headers.get("User-Agent", web_scraping_user_agent)
-    if getattr(plan, "respect_robots", True):
-        if not await is_allowed_by_robots_async(url, effective_ua):
-            logging.warning("Robots policy disallows fetching this URL; skipping fetch")
-            try:
-                parsed = urlparse(url)
-                increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
-            except Exception:
-                increment_counter("scrape_blocked_by_robots_total", labels={})
-            return _attach_preflight({
-                "url": url,
-                "title": "N/A",
-                "author": "N/A",
-                "date": "N/A",
-                "content": "",
-                "extraction_successful": False,
-                "error": "Blocked by robots policy",
-            })
+    if getattr(plan, "respect_robots", True) and not await is_allowed_by_robots_async(url, effective_ua):
+        logging.warning("Robots policy disallows fetching this URL; skipping fetch")
+        try:
+            parsed = urlparse(url)
+            increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
+            increment_counter("scrape_blocked_by_robots_total", labels={})
+        return _attach_preflight({
+            "url": url,
+            "title": "N/A",
+            "author": "N/A",
+            "date": "N/A",
+            "content": "",
+            "extraction_successful": False,
+            "error": "Blocked by robots policy",
+        })
 
     if backend_choice != "playwright" and preflight_method != "playwright":
         # First try lightweight HTTP path (curl/httpx) before Playwright
@@ -2895,7 +2880,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                         proxies=getattr(plan, "proxies", None) or None,
                     )
                     backend_used = "curl"
-                except Exception as exc:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as exc:
                     logging.debug(f"curl backend failed; falling back to httpx: {exc}")
                     resp = await asyncio.to_thread(
                         http_fetch,
@@ -2957,7 +2942,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                     return _attach_preflight(article_data)
             # No extractable content
             increment_counter("scrape_fetch_total", labels={"backend": backend_used, "outcome": "no_extract"})
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             logging.debug(f"Lightweight fetch path failed or yielded no extractable content: {_e}")
             increment_counter("scrape_fetch_total", labels={"backend": backend_choice, "outcome": "error"})
             increment_counter("scrape_playwright_fallback_total", labels={"reason": "error"})
@@ -3022,7 +3007,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                         try:
                             from tldw_Server_API.app.core.config import config
                             stealth_wait_ms = config.get("STEALTH_WAIT_MS", 5000)
-                        except Exception as e:
+                        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Falling back to default STEALTH_WAIT_MS; error={e}")
                             stealth_wait_ms = 5000
                         await page.wait_for_timeout(stealth_wait_ms)  # configurable delay
@@ -3043,7 +3028,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
                 # Return the scraped HTML
                 return content
 
-            except Exception as e:
+            except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Error fetching HTML from {url} on attempt {attempt + 1}: {e}")
                 increment_counter("scrape_fetch_total", labels={"backend": "playwright", "outcome": "error"})
 
@@ -3074,9 +3059,8 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
         regex_settings=regex_settings,
         cluster_settings=cluster_settings,
     )
-    if article_data.get("extraction_successful") and not use_handler:
-        if article_data.get("content"):
-            article_data["content"] = convert_html_to_markdown(article_data["content"])
+    if article_data.get("extraction_successful") and not use_handler and article_data.get("content"):
+        article_data["content"] = convert_html_to_markdown(article_data["content"])
     if article_data.get("extraction_successful"):
         content = article_data.get("content", "") or ""
         logging.info(f"Article content length: {len(content)}")
@@ -3088,7 +3072,7 @@ async def scrape_article(url: str, custom_cookies: Optional[List[Dict[str, Any]]
     return _attach_preflight(article_data)
 
 
-def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def scrape_article_blocking(url: str, custom_cookies: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
     """Blocking scraper for synchronous code paths.
 
     Fetches HTML with http_client using a desktop-like user agent and optional cookies,
@@ -3101,7 +3085,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
             pol = evaluate_url_policy(url)
             if not getattr(pol, 'allowed', False):
                 return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress denied: {getattr(pol, 'reason', 'blocked')}"}
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False, "error": f"Egress policy evaluation failed: {_e}"}
 
         headers = {"User-Agent": web_scraping_user_agent}
@@ -3121,7 +3105,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
                 content = _resp_get(resp, "content", b"")
                 try:
                     text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     text = ""
         finally:
             close = getattr(resp, "close", None)
@@ -3136,7 +3120,7 @@ def scrape_article_blocking(url: str, custom_cookies: Optional[List[Dict[str, An
         if article_data.get("extraction_successful"):
             article_data["content"] = convert_html_to_markdown(article_data["content"])
         return article_data
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Blocking scrape failed for {url}: {e}")
         return {"url": url, "title": "N/A", "author": "N/A", "date": "N/A", "content": "", "extraction_successful": False}
 
@@ -3151,9 +3135,9 @@ async def scrape_and_summarize_multiple(
     custom_article_titles: Optional[str],
     system_message: Optional[str] = None,
     summarize_checkbox: bool = False,
-    custom_cookies: Optional[List[Dict[str, Any]]] = None,
+    custom_cookies: Optional[list[dict[str, Any]]] = None,
     temperature: float = 0.7
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     urls_list = [url.strip() for url in urls.split('\n') if url.strip()]
     custom_titles = custom_article_titles.split('\n') if custom_article_titles else []
 
@@ -3165,7 +3149,7 @@ async def scrape_and_summarize_multiple(
     # block scraping when the limiter cannot be constructed.
     try:
         rate_limiter = RateLimiter()
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rate_limiter = None
 
     # Create a tqdm progress bar
@@ -3176,10 +3160,8 @@ async def scrape_and_summarize_multiple(
         custom_title = custom_titles[i] if i < len(custom_titles) else None
         try:
             if rate_limiter is not None:
-                try:
+                with suppress(_ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS):
                     await rate_limiter.acquire()
-                except Exception:
-                    pass
             # Scrape the article
             article = await scrape_article(url, custom_cookies=custom_cookies)
             if article and article['extraction_successful']:
@@ -3221,7 +3203,7 @@ async def scrape_and_summarize_multiple(
                 errors.append(error_message)
                 logging.error(error_message)
                 log_counter("article_scraped", labels={"success": "false", "url": url})
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             log_counter("article_processing_error", labels={"url": url})
             error_message = f"Error processing URL {i + 1} ({url}): {str(e)}"
             errors.append(error_message)
@@ -3278,7 +3260,7 @@ async def async_scrape_and_no_summarize_then_ingest(url, keywords, custom_articl
         # When displaying content, we might want to strip metadata
         display_content = ContentMetadataHandler.strip_metadata(content)
         return f"Title: {title}\nAuthor: {author}\nIngestion Result: {ingestion_result}\n\nArticle Contents: {display_content}"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         log_counter("article_processing_error", labels={"url": url})
         logging.error(f"Error processing URL {url}: {str(e)}")
         return f"Failed to process URL {url}: {str(e)}"
@@ -3371,7 +3353,7 @@ def scrape_and_convert_with_filter(source: str, output_file: str, filter_functio
     logging.info(f"Scraped and filtered content saved to {output_file}")
 
 
-async def scrape_entire_site(base_url: str) -> List[Dict]:
+async def scrape_entire_site(base_url: str) -> list[dict]:
     """
     Scrape the entire site by generating a temporary sitemap and extracting content from each page.
 
@@ -3381,7 +3363,7 @@ async def scrape_entire_site(base_url: str) -> List[Dict]:
     # Step 1: Collect internal links from the site (async, with rate limiting)
     try:
         rate = RateLimiter(max_requests_per_second=1.5, max_requests_per_minute=60, max_requests_per_hour=1000)
-    except Exception:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
         rate = None
     links = await async_collect_internal_links(base_url, rate_limiter=rate)
     log_histogram("internal_links_collected", len(links), labels={"base_url": base_url})
@@ -3455,7 +3437,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
                 else:
                     logging.error(f"Egress denied for sitemap: {getattr(pol, 'reason', 'blocked')}")
                     return []
-        except Exception as _e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
             if _allow_in_tests:
                 logging.warning(f"Egress policy evaluation failed in test mode; proceeding: {_e}")
             else:
@@ -3464,7 +3446,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
 
         try:
             resp = http_fetch(method="GET", url=sitemap_url, timeout=10)
-        except Exception as fetch_err:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as fetch_err:
             logging.error(f"Sitemap fetch failed via http_fetch: {fetch_err}")
             return []
         try:
@@ -3477,7 +3459,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
                 content = _resp_get(resp, "content", b"")
                 try:
                     text = content.decode("utf-8") if isinstance(content, (bytes, bytearray)) else str(content)
-                except Exception:
+                except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
                     text = ""
         finally:
             close = getattr(resp, "close", None)
@@ -3498,7 +3480,7 @@ def scrape_from_sitemap(sitemap_url: str) -> list:
             if article:
                 results.append(article)
         return results
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error fetching sitemap: {e}")
         return []
 
@@ -3520,7 +3502,7 @@ def collect_internal_links(base_url: str) -> set:
         if not getattr(pol, 'allowed', False):
             logging.error(f"Egress denied for base URL: {getattr(pol, 'reason', 'blocked')}")
             return visited
-    except Exception as _e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as _e:
         logging.error(f"Egress policy evaluation failed: {_e}")
         return visited
 
@@ -3539,12 +3521,11 @@ def collect_internal_links(base_url: str) -> set:
             for link in soup.find_all('a', href=True):
                 full_url = urljoin(base_url, link['href'])
                 # Only process links within the same domain
-                if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                    if full_url not in visited:
-                        to_visit.add(full_url)
+                if urlparse(full_url).netloc == urlparse(base_url).netloc and full_url not in visited:
+                    to_visit.add(full_url)
 
             visited.add(current_url)
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error visiting {current_url}: {e}")
             continue
 
@@ -3593,7 +3574,7 @@ async def async_collect_internal_links(base_url: str,
                 text = resp.text
             finally:
                 await _close_resp(resp)
-        except Exception:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             continue
 
         visited.add(current_url)
@@ -3601,10 +3582,9 @@ async def async_collect_internal_links(base_url: str,
             soup = BeautifulSoup(text, 'html.parser')
             for link in soup.find_all('a', href=True):
                 full_url = urljoin(base_url, link['href'])
-                if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                    if full_url not in visited:
-                        to_visit.add(full_url)
-        except Exception:
+                if urlparse(full_url).netloc == urlparse(base_url).netloc and full_url not in visited:
+                    to_visit.add(full_url)
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS:
             continue
 
     return visited
@@ -3647,7 +3627,7 @@ def generate_temp_sitemap_from_links(links: set) -> str:
     return temp_file_path
 
 
-def generate_sitemap_for_url(url: str) -> List[Dict[str, str]]:
+def generate_sitemap_for_url(url: str) -> list[dict[str, str]]:
     """
     Generate a sitemap for the given URL using the create_filtered_sitemap function.
 
@@ -3714,18 +3694,18 @@ def convert_to_markdown(articles: list) -> str:
 def compute_content_hash(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
-def load_hashes(filename: str) -> Dict[str, str]:
+def load_hashes(filename: str) -> dict[str, str]:
     if os.path.exists(filename):
-        with open(filename, 'r') as f:
+        with open(filename) as f:
             return json.load(f)
     else:
         return {}
 
-def save_hashes(hashes: Dict[str, str], filename: str):
+def save_hashes(hashes: dict[str, str], filename: str):
     with open(filename, 'w') as f:
         json.dump(hashes, f)
 
-def has_page_changed(url: str, new_hash: str, stored_hashes: Dict[str, str]) -> bool:
+def has_page_changed(url: str, new_hash: str, stored_hashes: dict[str, str]) -> bool:
     old_hash = stored_hashes.get(url)
     return old_hash != new_hash
 
@@ -3736,7 +3716,7 @@ def has_page_changed(url: str, new_hash: str, stored_hashes: Dict[str, str]) -> 
 #
 # Bookmark Parsing Functions
 
-def parse_chromium_bookmarks(json_data: dict) -> Dict[str, Union[str, List[str]]]:
+def parse_chromium_bookmarks(json_data: dict) -> dict[str, Union[str, list[str]]]:
     """
     Parse Chromium-based browser bookmarks from JSON data.
 
@@ -3772,7 +3752,7 @@ def parse_chromium_bookmarks(json_data: dict) -> Dict[str, Union[str, List[str]]
     return bookmarks
 
 
-def parse_firefox_bookmarks(html_content: str) -> Dict[str, Union[str, List[str]]]:
+def parse_firefox_bookmarks(html_content: str) -> dict[str, Union[str, list[str]]]:
     """
     Parse Firefox bookmarks from HTML content.
 
@@ -3798,7 +3778,7 @@ def parse_firefox_bookmarks(html_content: str) -> Dict[str, Union[str, List[str]
     return bookmarks
 
 
-def load_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Load bookmarks from a file (JSON for Chrome/Edge or HTML for Firefox).
 
@@ -3816,27 +3796,27 @@ def load_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
     if ext == '.json' or ext == '':
         # Attempt to parse as JSON (Chrome/Edge)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 json_data = json.load(f)
             return parse_chromium_bookmarks(json_data)
         except json.JSONDecodeError:
             logging.error("Failed to parse JSON. Ensure the file is a valid Chromium bookmarks JSON file.")
-            raise ValueError("Invalid JSON format for Chromium bookmarks.")
+            raise ValueError("Invalid JSON format for Chromium bookmarks.") from None
     elif ext in ['.html', '.htm']:
         # Parse as HTML (Firefox)
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 html_content = f.read()
             return parse_firefox_bookmarks(html_content)
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Failed to parse HTML bookmarks: {e}")
-            raise ValueError(f"Failed to parse HTML bookmarks: {e}")
+            raise ValueError(f"Failed to parse HTML bookmarks: {e}") from e
     else:
         logging.error("Unsupported file format. Please provide a JSON (Chrome/Edge) or HTML (Firefox) bookmarks file.")
         raise ValueError("Unsupported file format for bookmarks.")
 
 
-def collect_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def collect_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Collect bookmarks from the provided bookmarks file and return a dictionary.
 
@@ -3852,7 +3832,7 @@ def collect_bookmarks(file_path: str) -> Dict[str, Union[str, List[str]]]:
         return {}
 
 
-def parse_csv_urls(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def parse_csv_urls(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Parse URLs from a CSV file. The CSV should have at minimum a 'url' column,
     and optionally a 'title' or 'name' column.
@@ -3878,10 +3858,7 @@ def parse_csv_urls(file_path: str) -> Dict[str, Union[str, List[str]]]:
             url = df.iloc[idx]['url'].strip()
 
             # Use title/name if available, otherwise use URL as key
-            if key_column:
-                key = df.iloc[idx][key_column].strip()
-            else:
-                key = f"Article {idx + 1}"
+            key = df.iloc[idx][key_column].strip() if key_column else f"Article {idx + 1}"
 
             # Handle duplicate keys
             if key in urls_dict:
@@ -3897,12 +3874,12 @@ def parse_csv_urls(file_path: str) -> Dict[str, Union[str, List[str]]]:
     except pd.errors.EmptyDataError:
         logging.error("The CSV file is empty")
         return {}
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error parsing CSV file: {str(e)}")
         return {}
 
 
-def collect_urls_from_file(file_path: str) -> Dict[str, Union[str, List[str]]]:
+def collect_urls_from_file(file_path: str) -> dict[str, Union[str, list[str]]]:
     """
     Unified function to collect URLs from either bookmarks or CSV files.
 
@@ -3959,7 +3936,7 @@ class ContentMetadataHandler:
             url: str,
             content: str,
             pipeline: str = "Trafilatura",
-            additional_metadata: Optional[Dict[str, Any]] = None
+            additional_metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Format content with metadata header.
@@ -3993,7 +3970,7 @@ class ContentMetadataHandler:
         return formatted_content
 
     @staticmethod
-    def extract_metadata(content: str) -> Tuple[Dict[str, Any], str]:
+    def extract_metadata(content: str) -> tuple[dict[str, Any], str]:
         """
         Extract metadata and content separately.
 
@@ -4011,7 +3988,7 @@ class ContentMetadataHandler:
             metadata = json.loads(metadata_json)
             clean_content = content[metadata_end + len(ContentMetadataHandler.METADATA_END):].strip()
             return metadata, clean_content
-        except (ValueError, json.JSONDecodeError) as e:
+        except (ValueError, json.JSONDecodeError):
             return {}, content
 
     @staticmethod
@@ -4102,9 +4079,9 @@ async def recursive_scrape(
         delay: float = 1.0,
         resume_file: str = 'scrape_progress.json',
         user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
-        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        custom_cookies: Optional[list[dict[str, Any]]] = None,
         progress_callback: Optional[callable] = None
-) -> List[Dict]:
+) -> list[dict]:
     async def save_progress():
         temp_file = resume_file + ".tmp"
         with open(temp_file, 'w') as f:
@@ -4121,7 +4098,7 @@ async def recursive_scrape(
 
     # Load progress if resume file exists
     if os.path.exists(resume_file):
-        with open(resume_file, 'r') as f:
+        with open(resume_file) as f:
             progress_data = json.load(f)
             visited = set(progress_data['visited'])
             to_visit = progress_data['to_visit']
@@ -4180,7 +4157,7 @@ async def recursive_scrape(
 
                             await page.close()
 
-                    except Exception as e:
+                    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
                         logging.error(f"Error scraping {current_url}: {str(e)}")
 
                     # Save progress periodically (e.g., every 10 pages)
@@ -4202,9 +4179,9 @@ async def recursive_scrape(
         if progress_callback:
             progress_callback(f"Scraping completed. Total pages scraped: {pages_scraped}")
 
-        return scraped_articles
+    return scraped_articles
 
-async def scrape_article_async(context, url: str) -> Dict[str, Any]:
+async def scrape_article_async(context, url: str) -> dict[str, Any]:
     page = await context.new_page()
     try:
         await page.goto(url)
@@ -4219,7 +4196,7 @@ async def scrape_article_async(context, url: str) -> Dict[str, Any]:
             'content': content,
             'extraction_successful': True
         }
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error scraping article {url}: {str(e)}")
         return {
             'url': url,
@@ -4229,7 +4206,7 @@ async def scrape_article_async(context, url: str) -> Dict[str, Any]:
     finally:
         await page.close()
 
-def scrape_article_sync(url: str) -> Dict[str, Any]:
+def scrape_article_sync(url: str) -> dict[str, Any]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -4246,7 +4223,7 @@ def scrape_article_sync(url: str) -> Dict[str, Any]:
                 'content': content,
                 'extraction_successful': True
             }
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error scraping article {url}: {str(e)}")
             return {
                 'url': url,
@@ -4286,7 +4263,7 @@ async def scrape_with_retry(url: str, max_retries: int = 3, retry_delay: float =
             else:
                 logging.error(f"Failed to scrape {url} after {max_retries} attempts.")
                 return None
-        except Exception as e:
+        except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Error scraping {url}: {str(e)}")
             return None
 
@@ -4340,7 +4317,7 @@ def convert_json_to_markdown(json_str: str) -> str:
         return "# Error\n\nInvalid JSON string provided."
     except KeyError as e:
         return f"# Error\n\nMissing key in JSON data: {str(e)}"
-    except Exception as e:
+    except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
         return f"# Error\n\nAn unexpected error occurred: {str(e)}"
 
 #

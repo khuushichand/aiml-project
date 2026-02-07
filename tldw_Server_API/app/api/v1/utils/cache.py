@@ -12,9 +12,11 @@ Design goals:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Tuple
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
+from typing import Any
 
 from fastapi import Request
 from loguru import logger
@@ -22,17 +24,50 @@ from loguru import logger
 from tldw_Server_API.app.core.config import config
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
-
 CacheClient = Any  # Redis-like interface (setex/get/delete/sadd/smembers/expire/scan).
+
+_CACHE_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
+_CACHE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
+
+try:
+    from redis.exceptions import RedisError as _REDIS_ERROR
+except ImportError:
+    _REDIS_ERROR = None
+
+_CACHE_RUNTIME_EXCEPTIONS = (
+    *_CACHE_NONCRITICAL_EXCEPTIONS,
+    *((_REDIS_ERROR,) if _REDIS_ERROR else ()),
+)
 
 
 # TTL and enable flag come from central configuration.
 CACHE_TTL: int = int(config.get("CACHE_TTL", 300))
 _REDIS_ENABLED: bool = bool(config.get("REDIS_ENABLED", False))
-_CACHE_CLIENT: Optional[CacheClient] = None
+_CACHE_CLIENT: CacheClient | None = None
 
 
-def get_cache_client() -> Optional[CacheClient]:
+def get_cache_client() -> CacheClient | None:
     """
     Return a Redis client when enabled and reachable, otherwise None.
 
@@ -60,7 +95,7 @@ def get_cache_client() -> Optional[CacheClient]:
             decode_responses=False,
         )
         logger.info("Redis cache enabled")
-    except Exception as exc:  # pragma: no cover - defensive; logged once
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive; logged once
         logger.warning(f"Failed to connect to Redis cache: {exc}. Running without cache.")
         _CACHE_CLIENT = None
     return _CACHE_CLIENT
@@ -69,7 +104,7 @@ def get_cache_client() -> Optional[CacheClient]:
 def build_cache_key_from_request(
     request: Request,
     *,
-    exclude_keys: Optional[Iterable[str]] = None,
+    exclude_keys: Iterable[str] | None = None,
 ) -> str:
     """
     Build a stable cache key from the request URL and query params.
@@ -91,7 +126,7 @@ def build_cache_key(
     path: str,
     query_params: Mapping[str, Any],
     *,
-    exclude_keys: Optional[Iterable[str]] = None,
+    exclude_keys: Iterable[str] | None = None,
 ) -> str:
     """
     Build a stable cache key from path and query parameters.
@@ -101,7 +136,7 @@ def build_cache_key(
     """
     exclude = set(exclude_keys or ())
     exclude.update({"token"})
-    params: Dict[str, Any] = {k: v for k, v in query_params.items() if k not in exclude}
+    params: dict[str, Any] = {k: v for k, v in query_params.items() if k not in exclude}
     frozen = frozenset(params.items())
     return f"cache:{path}:{hash(frozen)}"
 
@@ -116,7 +151,7 @@ def _serialize_for_etag(payload: Any) -> str:
     def _default(obj: Any) -> Any:
         try:
             return str(obj)
-        except Exception:
+        except _CACHE_COERCE_EXCEPTIONS:
             return repr(obj)
 
     return json.dumps(
@@ -137,7 +172,7 @@ def generate_etag(payload: Any) -> str:
     return hashlib.md5(serialized.encode("utf-8")).hexdigest()
 
 
-def parse_if_none_match(header_value: Optional[str]) -> Sequence[str]:
+def parse_if_none_match(header_value: str | None) -> Sequence[str]:
     """
     Parse an If-None-Match header into a list of candidate ETags.
 
@@ -160,7 +195,7 @@ def parse_if_none_match(header_value: Optional[str]) -> Sequence[str]:
     return etags
 
 
-def is_not_modified(current_etag: str, if_none_match: Optional[str]) -> bool:
+def is_not_modified(current_etag: str, if_none_match: str | None) -> bool:
     """
     Return True when the provided If-None-Match header matches current_etag.
     """
@@ -171,8 +206,8 @@ def cache_response(
     key: str,
     payload: Any,
     *,
-    client: Optional[CacheClient] = None,
-    media_id: Optional[int] = None,
+    client: CacheClient | None = None,
+    media_id: int | None = None,
 ) -> str:
     """
     Cache a response payload under the given key and return its ETag.
@@ -193,9 +228,9 @@ def cache_response(
                 idx_key = f"cacheidx:/api/v1/media/{int(media_id)}"
                 cache.sadd(idx_key, key)
                 cache.expire(idx_key, max(CACHE_TTL, 300))
-            except Exception:  # pragma: no cover - defensive
+            except _CACHE_RUNTIME_EXCEPTIONS:  # pragma: no cover - defensive
                 pass
-    except Exception as exc:  # pragma: no cover - defensive; avoid breaking handlers
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive; avoid breaking handlers
         logger.warning(f"Failed to cache response for key '{key}': {exc}")
     return etag
 
@@ -203,8 +238,8 @@ def cache_response(
 def get_cached_response(
     key: str,
     *,
-    client: Optional[CacheClient] = None,
-) -> Optional[Tuple[str, Any]]:
+    client: CacheClient | None = None,
+) -> tuple[str, Any] | None:
     """
     Retrieve a cached payload and its ETag for the given key.
 
@@ -217,10 +252,7 @@ def get_cached_response(
         cached_value = cache.get(key)
         if not cached_value:
             return None
-        if isinstance(cached_value, bytes):
-            decoded = cached_value.decode("utf-8")
-        else:
-            decoded = str(cached_value)
+        decoded = cached_value.decode("utf-8") if isinstance(cached_value, bytes) else str(cached_value)
         parts = decoded.split("|", 1)
         if len(parts) != 2:
             logger.warning(f"Cached value for key '{key}' has unexpected format")
@@ -232,7 +264,7 @@ def get_cached_response(
             logger.error(f"Failed to decode cached JSON for key '{key}'")
             return None
         return etag, payload
-    except Exception as exc:  # pragma: no cover - defensive
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.warning(f"Failed to retrieve cached response for key '{key}': {exc}")
         return None
 
@@ -240,7 +272,7 @@ def get_cached_response(
 def invalidate_media_cache(
     media_id: int,
     *,
-    client: Optional[CacheClient] = None,
+    client: CacheClient | None = None,
 ) -> None:
     """
     Invalidate cache entries related to a specific media item.
@@ -259,24 +291,22 @@ def invalidate_media_cache(
             members = cache.smembers(idx_key)
             if members:
                 keys = list(members)
-        except Exception:
+        except _CACHE_RUNTIME_EXCEPTIONS:
             keys = []
 
         total_deleted = 0
         if keys:
             try:
                 total_deleted += cache.delete(*keys)
-            except Exception:
+            except _CACHE_RUNTIME_EXCEPTIONS:
                 for key in keys:
                     try:
                         cache.delete(key)
                         total_deleted += 1
-                    except Exception:
+                    except _CACHE_RUNTIME_EXCEPTIONS:
                         pass
-            try:
+            with contextlib.suppress(_CACHE_RUNTIME_EXCEPTIONS):
                 cache.delete(idx_key)
-            except Exception:
-                pass
 
         # Fallback: scan for keys matching the media path.
         pattern = f"cache:/api/v1/media/{int(media_id)}:*"
@@ -284,17 +314,17 @@ def invalidate_media_cache(
         while True:
             try:
                 cursor, scan_keys = cache.scan(cursor=cursor, match=pattern, count=500)
-            except Exception:
+            except _CACHE_RUNTIME_EXCEPTIONS:
                 break
             if scan_keys:
                 try:
                     total_deleted += cache.delete(*scan_keys)
-                except Exception:
+                except _CACHE_RUNTIME_EXCEPTIONS:
                     for key in scan_keys:
                         try:
                             cache.delete(key)
                             total_deleted += 1
-                        except Exception:
+                        except _CACHE_RUNTIME_EXCEPTIONS:
                             pass
             if cursor == 0:
                 break
@@ -302,7 +332,7 @@ def invalidate_media_cache(
             logger.info(f"Invalidated {total_deleted} cache entries for media ID {media_id}")
         else:
             logger.debug(f"No cached entries found to invalidate for media ID {media_id}")
-    except Exception as exc:  # pragma: no cover - defensive
+    except _CACHE_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.error(f"Unexpected error invalidating cache for media ID {media_id}: {exc}")
 
 

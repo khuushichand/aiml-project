@@ -7,36 +7,105 @@ including media database, notes, prompts, and character cards.
 """
 
 import asyncio
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Sequence, Literal
-from dataclasses import dataclass, field
-from enum import Enum
-import sqlite3
+import contextlib
 import json
 import os
+import sqlite3
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from loguru import logger
-import numpy as np
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
 from tldw_Server_API.app.core.DB_Management.backends.fts_translator import FTSQueryTranslator
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 
-from .types import Document, DataSource
-from .utils import get_float_env as _get_float_env, normalize_scores as _normalize_scores
+from .types import DataSource, Document
+from .utils import get_float_env as _get_float_env
+from .utils import normalize_scores as _normalize_scores
 from .vector_stores import (
-    VectorStoreFactory,
-    VectorStoreConfig,
-    VectorStoreType,
+    VectorStoreAdapter,
     create_from_settings_for_user,
 )
 
 if TYPE_CHECKING:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+
+class DatabasePathError(ValueError):
+    """Raised when a database path is invalid."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid database path")
+
+
+class PathNormalizationError(DatabasePathError):
+    """Raised when a database path cannot be normalized."""
+
+    def __init__(self) -> None:
+        super().__init__("Database path normalization failed")
+
+
+class InvalidFileUriError(DatabasePathError):
+    """Raised when a file:// URI is malformed."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid file URI for database path")
+
+
+class UnsupportedDatabaseSchemeError(DatabasePathError):
+    """Raised when a database path uses an unsupported URI scheme."""
+
+    def __init__(self) -> None:
+        super().__init__("Unsupported URI scheme in database path")
+
+
+class PathTraversalError(DatabasePathError):
+    """Raised when path traversal patterns are detected."""
+
+    def __init__(self) -> None:
+        super().__init__("Path traversal patterns (..) are not allowed")
+
+
+class PathResolutionError(DatabasePathError):
+    """Raised when a database path cannot be resolved."""
+
+    def __init__(self) -> None:
+        super().__init__("Database path resolution failed")
+
+
+class SuspiciousDatabasePathError(DatabasePathError):
+    """Raised when suspicious path patterns are detected."""
+
+    def __init__(self) -> None:
+        super().__init__("Suspicious path pattern detected in database path")
+
+
+class RestrictedDatabasePathError(DatabasePathError):
+    """Raised when a restricted directory is referenced."""
+
+    def __init__(self) -> None:
+        super().__init__("Access to restricted directory is not allowed")
+
+
+class MissingDatabasePathError(DatabasePathError):
+    """Raised when no database path is provided."""
+
+    def __init__(self) -> None:
+        super().__init__("db_path is required")
+
+
+class RawSqlFallbackDisabledError(RuntimeError):
+    """Raised when raw SQL fallback is disabled in production mode."""
+
+    def __init__(self, retriever_name: str) -> None:
+        super().__init__(
+            f"Raw SQL fallback is disabled in production for {retriever_name}. Provide a database adapter."
+        )
 
 
 def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
@@ -44,7 +113,7 @@ def _sanitize_media_fts_query(query: Optional[str]) -> Optional[str]:
         return None
     try:
         text = str(query).strip()
-    except Exception:
+    except (TypeError, ValueError):
         return query
     if not text:
         return text
@@ -67,12 +136,12 @@ def _coerce_int(value: Any) -> Optional[int]:
         if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
             try:
                 return int(stripped)
-            except Exception:
+            except (TypeError, ValueError):
                 return None
     return None
 
 
-def _get_metadata_value(metadata: Dict[str, Any], *keys: str) -> Any:
+def _get_metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in metadata and metadata.get(key) is not None:
             return metadata.get(key)
@@ -142,9 +211,9 @@ class RetrievalConfig:
     use_fts: bool = True
     use_vector: bool = True
     include_metadata: bool = True
-    date_filter: Optional[Tuple[datetime, datetime]] = None
-    tags_filter: Optional[List[str]] = None
-    source_filter: Optional[List[str]] = None
+    date_filter: Optional[tuple[datetime, datetime]] = None
+    tags_filter: Optional[list[str]] = None
+    source_filter: Optional[list[str]] = None
     # FTS search level: media-level (default) or chunk-level (UnvectorizedMediaChunks)
     fts_level: Literal['media', 'chunk'] = 'media'
 
@@ -167,7 +236,7 @@ class BaseRetriever(ABC):
         try:
             prod_val = str(os.getenv("tldw_production", "false")).strip().lower()
             self._production_mode = prod_val in {"true", "1", "yes", "on", "y"}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             self._production_mode = False
         # In production, prefer adapters over any raw SQL fallbacks
         if self._production_mode and self._db_adapter is None:
@@ -176,7 +245,7 @@ class BaseRetriever(ABC):
                 "Raw SQL fallback is disabled and calls will fail without an adapter."
             )
         if self._db_adapter is None and self.db_path is None:
-            raise ValueError("db_path is required when no database adapter is provided.")
+            raise MissingDatabasePathError()
 
     def _validate_path(self, path: Optional[str]) -> Optional[str]:
         """Validate and normalise database paths while guarding against traversal.
@@ -189,77 +258,102 @@ class BaseRetriever(ABC):
         try:
             if not isinstance(path, str):
                 path = str(path)
-        except Exception as exc:  # noqa: BLE001
+        except (TypeError, ValueError) as exc:
             logger.error(f"Path normalization error for '{path}': {exc}")
-            raise ValueError(f"Invalid database path: {exc}")
+            raise PathNormalizationError() from exc
 
+        # Handle URI schemes - only allow file:// and validate the path component
         if '://' in path:
-            return path
+            if path.startswith('file://'):
+                from urllib.parse import unquote, urlparse
+                parsed = urlparse(path)
+                # Extract and decode the path component
+                extracted_path = unquote(parsed.path)
+                # Recursively validate the extracted path (this will catch traversal, etc.)
+                validated = self._validate_path(extracted_path)
+                if validated is None:
+                    raise InvalidFileUriError()
+                # Return only the validated absolute path - drop query params and URI scheme
+                # This prevents SQLite URI mode options that could be dangerous
+                return validated
+            else:
+                # Reject non-file URI schemes (http://, ftp://, etc.)
+                scheme = path.split('://')[0]
+                logger.warning(f"Rejected unsupported URI scheme: {scheme}")
+                raise UnsupportedDatabaseSchemeError()
+
+        # Check for path traversal sequences BEFORE resolving
+        # This catches attempts like "../../../etc/passwd" before they get normalized
+        if '..' in path:
+            logger.warning(f"Path traversal attempt detected in: {path}")
+            raise PathTraversalError()
+
         try:
             path_obj = Path(path)
             abs_path = path_obj.resolve()
             path_str = str(abs_path)
-            suspicious_patterns = [
-                '../',
-                '..\\',
-                '/etc/',
-                '/proc/',
-                '/sys/',
-                '\\System32\\',
-                '\\Windows\\',
-            ]
-            for pattern in suspicious_patterns:
-                if pattern in path_str:
-                    logger.warning(f"Suspicious path pattern detected: {pattern} in {path_str}")
-                    raise ValueError(f"Invalid path: contains suspicious pattern '{pattern}'")
-            if abs_path.parts and abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
-                restricted_dirs = ['etc', 'proc', 'sys', 'dev', 'boot', 'root']
-                if abs_path.parts[1] in restricted_dirs:
-                    raise ValueError(f"Access to /{abs_path.parts[1]}/ directory is not allowed")
-            parent_dir = abs_path.parent
-            if not parent_dir.exists():
-                logger.warning(f"Parent directory does not exist: {parent_dir}")
-            return str(abs_path)
-        except Exception as exc:  # noqa: BLE001
+        except (OSError, RuntimeError, ValueError) as exc:
             logger.error(f"Path validation error for '{path}': {exc}")
-            raise ValueError(f"Invalid database path: {exc}")
+            raise PathResolutionError() from exc
+
+        # Check for suspicious system paths in the resolved path
+        suspicious_patterns = [
+            '/etc/',
+            '/proc/',
+            '/sys/',
+            '\\System32\\',
+            '\\Windows\\',
+        ]
+        for pattern in suspicious_patterns:
+            if pattern in path_str:
+                logger.warning(f"Suspicious path pattern detected: {pattern} in {path_str}")
+                raise SuspiciousDatabasePathError()
+        if abs_path.parts and abs_path.parts[0] == '/' and len(abs_path.parts) > 1:
+            restricted_dirs = ['etc', 'proc', 'sys', 'dev', 'boot', 'root']
+            if abs_path.parts[1] in restricted_dirs:
+                raise RestrictedDatabasePathError()
+        parent_dir = abs_path.parent
+        if not parent_dir.exists():
+            logger.warning(f"Parent directory does not exist: {parent_dir}")
+        return str(abs_path)
 
     @abstractmethod
     async def retrieve(
         self,
         query: str,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Retrieve documents from database."""
         raise NotImplementedError
 
     @abstractmethod
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get metadata for a document."""
         raise NotImplementedError
 
     def _execute_query(
         self,
         query: str,
-        params: Tuple = ()
-    ) -> List[Dict[str, Any]]:
+        params: tuple = ()
+    ) -> list[dict[str, Any]]:
         """Execute SQL query and return results as dictionaries."""
         if self._db_adapter is not None:
             try:
-                cursor = self._db_adapter.execute_query(query, params)  # type: ignore[attr-defined]
+                execute_query = getattr(self._db_adapter, "execute_query", None)
+                if not callable(execute_query):
+                    logger.error("DB adapter missing execute_query()")
+                    return []
+                cursor = execute_query(query, params)
                 if cursor is None:
                     return []
                 fetched = cursor.fetchall() or []
                 return [dict(row) if not isinstance(row, dict) else row for row in fetched]
-            except Exception as exc:  # noqa: BLE001
+            except (AttributeError, OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as exc:
                 logger.error(f"Backend query error: {exc}")
                 return []
         # Disallow raw SQL fallback in production to honor project DB abstraction policy
         if getattr(self, "_production_mode", False):
-            raise RuntimeError(
-                f"Raw SQL fallback is disabled in production for {self.__class__.__name__}. "
-                "Provide a database adapter (e.g., MediaDatabase or CharactersRAGDB)."
-            )
+            raise RawSqlFallbackDisabledError(self.__class__.__name__)
         if not self.db_path:
             logger.error("No database path available for direct query execution.")
             return []
@@ -276,7 +370,7 @@ class BaseRetriever(ABC):
                 results = cursor.fetchall()
                 logger.debug(f"Query returned {len(results)} results")
                 return [dict(row) for row in results]
-        except Exception as exc:  # noqa: BLE001
+        except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Database query error: {exc}")
             if not getattr(self, "_production_mode", False):
                 logger.error(f"Query was: {query}")
@@ -301,12 +395,12 @@ class MediaDBRetriever(BaseRetriever):
         attached = None
         own = False
         if media_db is None:
-            attached = self._maybe_attach_media_db(db_path)
+            attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
         self._own_media_db = own
         self.user_id = user_id
-        self.vector_store = None
+        self.vector_store: Optional[VectorStoreAdapter] = None
         self._initialize_vector_store()
 
     def _maybe_attach_media_db(self, db_path: Optional[str]):
@@ -317,9 +411,13 @@ class MediaDBRetriever(BaseRetriever):
         if not db_path:
             return None
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
-            return MediaDatabase(db_path=db_path, client_id="rag_service")
-        except Exception:
+            # Defensive re-validation in case callers bypass BaseRetriever.
+            validated_path = self._validate_path(db_path)
+            if not validated_path:
+                return None
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+            return MediaDatabase(db_path=validated_path, client_id="rag_service")
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None
 
     def close(self):
@@ -328,7 +426,7 @@ class MediaDBRetriever(BaseRetriever):
                 close_fn = getattr(self.media_db, 'close_connection', None)
                 if callable(close_fn):
                     close_fn()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
     def _initialize_vector_store(self):
@@ -336,13 +434,14 @@ class MediaDBRetriever(BaseRetriever):
         try:
             # Try to get vector store from settings
             from tldw_Server_API.app.core.config import settings
-            if settings.get("RAG", {}).get("vector_store_type"):
+            settings_dict: dict[str, Any] = dict(settings)
+            if settings_dict.get("RAG", {}).get("vector_store_type"):
                 self.vector_store = create_from_settings_for_user(
-                    settings,
+                    settings_dict,
                     self.user_id
                 )
                 logger.info(f"Vector store adapter initialized for MediaDBRetriever with user_id={self.user_id}")
-        except Exception as e:
+        except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"Could not initialize vector store: {e}")
             self.vector_store = None
 
@@ -351,14 +450,14 @@ class MediaDBRetriever(BaseRetriever):
         query: str,
         media_type: Optional[str] = None,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Retrieve documents from the media database."""
         if self.media_db is not None:
             # Branch on FTS level when FTS search is enabled
             try:
                 if self.config.use_fts and getattr(self.config, 'fts_level', 'media') == 'chunk':
                     return self._retrieve_chunk_fts(query, media_type, **kwargs)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 # Fall back gracefully to media-level
                 pass
             return self._retrieve_via_backend(query, media_type, **kwargs)
@@ -372,11 +471,11 @@ class MediaDBRetriever(BaseRetriever):
         title_w = 2.0
         content_w = 1.0
         try:
-            from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
+            from tldw_Server_API.app.core.config import settings as _settings
             # Allow nested RAG.FTS config or flat vars
             title_w = float((_settings.get("RAG", {}) or {}).get("fts_title_weight", _settings.get("FTS_TITLE_WEIGHT", 2.0)))
             content_w = float((_settings.get("RAG", {}) or {}).get("fts_content_weight", _settings.get("FTS_CONTENT_WEIGHT", 1.0)))
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
         # Build SQL with filters
@@ -450,7 +549,7 @@ class MediaDBRetriever(BaseRetriever):
 
         return documents
 
-    def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
+    def _retrieve_chunk_fts(self, query: str, media_type: Optional[str], **kwargs) -> list[Document]:
         """Retrieve chunk-level matches using FTS5 over UnvectorizedMediaChunks.
 
         For SQLite: uses virtual table `unvectorized_chunks_fts`.
@@ -470,10 +569,10 @@ class MediaDBRetriever(BaseRetriever):
                 check = getattr(self.media_db, 'maybe_rebuild_chunk_fts_if_empty', None)
                 if callable(check):
                     self.media_db.maybe_rebuild_chunk_fts_if_empty()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 logger.debug(f"Chunk FTS ensure/rebuild skipped: {exc}")
 
-        params: List[Any] = []
+        params: list[Any] = []
         if backend_type == BackendType.SQLITE:
             # Build SQLite FTS query and SQL
             fts_query = self._build_fts_query(query)
@@ -539,18 +638,23 @@ class MediaDBRetriever(BaseRetriever):
         params.append(self.config.max_results)
 
         try:
-            rows = self.media_db.execute_query(sql, tuple(params)).fetchall()  # type: ignore[attr-defined]
-        except Exception as exc:  # noqa: BLE001
+            execute_query = getattr(self.media_db, "execute_query", None)
+            if not callable(execute_query):
+                logger.error("Media DB adapter missing execute_query() for chunk FTS")
+                return []
+            cursor = execute_query(sql, tuple(params))
+            rows = cursor.fetchall() if cursor is not None else []
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"Chunk FTS query failed: {exc}")
             return []
 
-        docs: List[Document] = []
+        docs: list[Document] = []
 
         # Normalize scores to [0,1] (higher is better)
-        norm_scores: List[float] = []
+        norm_scores: list[float] = []
         if rows:
             row_maps = [r if isinstance(r, dict) else dict(r) for r in rows]
-            raw_vals: List[float] = []
+            raw_vals: list[float] = []
             for rm in row_maps:
                 rv = rm.get('rank')
                 try:
@@ -570,7 +674,7 @@ class MediaDBRetriever(BaseRetriever):
             if float(score_val) < min_score:
                 continue
 
-            md: Dict[str, Any] = {}
+            md: dict[str, Any] = {}
             if self.config.include_metadata:
                 md = {
                     'title': row.get('title'),
@@ -588,7 +692,7 @@ class MediaDBRetriever(BaseRetriever):
                 try:
                     from tldw_Server_API.app.core.config import rag_enable_structure_index  # lazy import
                     _enable_si = rag_enable_structure_index()
-                except Exception:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError):
                     _enable_si = True
                 if _enable_si:
                     try:
@@ -597,7 +701,8 @@ class MediaDBRetriever(BaseRetriever):
                         if self.media_db and mid_raw is not None and st is not None:
                             mid = int(str(mid_raw))
                             st_i = int(st)
-                            sec = self.media_db.lookup_section_for_offset(mid, st_i)  # type: ignore[attr-defined]
+                            lookup_section = getattr(self.media_db, "lookup_section_for_offset", None)
+                            sec = lookup_section(mid, st_i) if callable(lookup_section) else None
                             if isinstance(sec, dict):
                                 md['section_title'] = sec.get('title')
                                 md['section_start'] = sec.get('start_char')
@@ -605,12 +710,12 @@ class MediaDBRetriever(BaseRetriever):
                                 # Paragraph bounds default to chunk bounds
                                 md.setdefault('paragraph_start', md.get('start_char'))
                                 md.setdefault('paragraph_end', md.get('end_char'))
-                    except Exception:
+                    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
                         pass
 
                 raw_meta = row.get("chunk_metadata")
                 if raw_meta is not None:
-                    extra_meta: Optional[Dict[str, Any]] = None
+                    extra_meta: Optional[dict[str, Any]] = None
                     try:
                         if isinstance(raw_meta, dict):
                             extra_meta = raw_meta
@@ -618,7 +723,7 @@ class MediaDBRetriever(BaseRetriever):
                             extra_meta = json.loads(raw_meta.decode("utf-8", "ignore"))
                         elif isinstance(raw_meta, str):
                             extra_meta = json.loads(raw_meta)
-                    except Exception:
+                    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
                         extra_meta = None
                     if isinstance(extra_meta, dict):
                         for key, value in extra_meta.items():
@@ -643,7 +748,7 @@ class MediaDBRetriever(BaseRetriever):
 
         return docs
 
-    def _retrieve_via_backend(self, query: str, media_type: Optional[str], **kwargs) -> List[Document]:
+    def _retrieve_via_backend(self, query: str, media_type: Optional[str], **kwargs) -> list[Document]:
         if self.media_db is None:
             return []
         date_range = None
@@ -655,7 +760,7 @@ class MediaDBRetriever(BaseRetriever):
         backend_type = getattr(self.media_db, 'backend_type', None)
         search_query = query
         if backend_type == BackendType.SQLITE:
-            search_query = _sanitize_media_fts_query(query)
+            search_query = _sanitize_media_fts_query(query) or query
         try:
             allowed_media_ids = kwargs.get("allowed_media_ids")
             results, _total = self.media_db.search_media_db(
@@ -670,13 +775,13 @@ class MediaDBRetriever(BaseRetriever):
                 include_trash=False,
                 include_deleted=False,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"MediaDatabase search failed: {exc}")
             return []
-        documents: List[Document] = []
+        documents: list[Document] = []
 
         # Normalize scores across results to [0,1] (higher is better)
-        raw_vals: List[float] = []
+        raw_vals: list[float] = []
         for row in results:
             rv = row.get('relevance_score')
             if rv is None:
@@ -732,8 +837,8 @@ class MediaDBRetriever(BaseRetriever):
     async def retrieve_with_keywords(
         self,
         query: str,
-        keywords: List[str]
-    ) -> List[Document]:
+        keywords: list[str]
+    ) -> list[Document]:
         """Retrieve with additional keyword filtering."""
         # Get base results
         documents = await self.retrieve(query)
@@ -754,7 +859,7 @@ class MediaDBRetriever(BaseRetriever):
         query: str,
         media_type: Optional[str] = None,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Internal method for FTS retrieval (same as retrieve)."""
         return await self.retrieve(query, media_type, **kwargs)
 
@@ -763,7 +868,7 @@ class MediaDBRetriever(BaseRetriever):
         query: str,
         media_type: Optional[str] = None,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieve documents using vector search.
 
@@ -774,11 +879,12 @@ class MediaDBRetriever(BaseRetriever):
         Returns:
             List of documents from vector search
         """
-        if not self.vector_store:
+        vector_store = self.vector_store
+        if vector_store is None:
             logger.warning("Vector store not initialized, falling back to FTS")
             return await self._retrieve_fts(query, media_type, **kwargs)
 
-        def _finalize_docs(documents: List[Document]) -> List[Document]:
+        def _finalize_docs(documents: list[Document]) -> list[Document]:
             for doc in documents:
                 _apply_location_metadata(doc)
             return documents
@@ -787,8 +893,8 @@ class MediaDBRetriever(BaseRetriever):
             # Allow callers to provide a precomputed query vector (e.g., HyDE)
             provided_vector = kwargs.get("query_vector")
             # Initialize vector store if needed
-            if not self.vector_store._initialized:
-                await self.vector_store.initialize()
+            if not vector_store._initialized:
+                await vector_store.initialize()
 
             # Get embedding for query (or use provided)
             if provided_vector is not None:
@@ -817,12 +923,12 @@ class MediaDBRetriever(BaseRetriever):
                     query_vector = embeddings[0]
                     if hasattr(query_vector, 'tolist'):
                         query_vector = query_vector.tolist()
-                except Exception as e:
+                except (ImportError, AttributeError, RuntimeError, TypeError, ValueError) as e:
                     logger.error(f"Failed to generate query embedding: {e}")
                     return []
 
             # Build filter for vector search
-            base_filter: Dict[str, Any] = {}
+            base_filter: dict[str, Any] = {}
             if media_type:
                 base_filter["media_type"] = media_type
 
@@ -837,16 +943,15 @@ class MediaDBRetriever(BaseRetriever):
 
             # Search collection selection; support multi-search via wildcard/list namespace
             index_namespace = kwargs.get("index_namespace")
-            multi_namespace: Optional[List[str]] = None
+            multi_namespace: Optional[list[str]] = None
+            collection_name: Optional[str] = None
             if index_namespace:
                 # If a list/tuple of patterns provided, use multi_search
                 if isinstance(index_namespace, (list, tuple)):
                     multi_namespace = [str(x) for x in index_namespace]
-                    collection_name = None  # type: ignore[assignment]
                 # If a single string contains a wildcard, treat as pattern
                 elif isinstance(index_namespace, str) and ("*" in index_namespace or "?" in index_namespace):
                     multi_namespace = [index_namespace]
-                    collection_name = None  # type: ignore[assignment]
                 else:
                     # Use provided namespace directly (already includes user prefix if desired)
                     collection_name = str(index_namespace)
@@ -862,7 +967,7 @@ class MediaDBRetriever(BaseRetriever):
                 hyde_score_floor = float(_settings.get("HYDE_SCORE_FLOOR", 0.30) or 0.30)
                 hyde_k_frac = float(_settings.get("HYDE_K_FRACTION", 0.5) or 0.5)
                 hyde_weight = float(_settings.get("HYDE_WEIGHT_QUESTION_MATCH", 0.05) or 0.05)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 hyde_enabled = False
                 hyde_only_if_needed = True
                 hyde_score_floor = 0.30
@@ -873,33 +978,32 @@ class MediaDBRetriever(BaseRetriever):
 
             async def _search_with_filter(kind_filter: Optional[str], k_: int):
                 # Merge kind filter with base_filter
-                f: Optional[Dict[str, Any]]
+                f: Optional[dict[str, Any]]
                 if kind_filter:
-                    if base_filter:
-                        f = {"$and": [base_filter, {"kind": kind_filter}]}
-                    else:
-                        f = {"kind": kind_filter}
+                    f = {"$and": [base_filter, {"kind": kind_filter}]} if base_filter else {"kind": kind_filter}
                 else:
                     f = base_filter if base_filter else None
 
                 try:
                     # Multi-namespace search when patterns provided
                     if multi_namespace:
-                        return await self.vector_store.multi_search(
+                        return await vector_store.multi_search(
                             collection_patterns=multi_namespace,
                             query_vector=query_vector,
                             k=k_,
                             filter=f,
                         )
                     # Single collection search
-                    return await self.vector_store.search(
-                        collection_name=collection_name,  # type: ignore[arg-type]
+                    if collection_name is None:
+                        return []
+                    return await vector_store.search(
+                        collection_name=collection_name,
                         query_vector=query_vector,
                         k=k_,
                         filter=f,
                         include_metadata=True,
                     )
-                except Exception as exc:
+                except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
                     logger.debug(f"Vector search with filter {f} failed, reason={exc}")
                     return []
 
@@ -912,14 +1016,14 @@ class MediaDBRetriever(BaseRetriever):
             max_base = max((r.score for r in base_results), default=0.0)
             if not hyde_enabled or (hyde_only_if_needed and len(base_results) >= k and max_base >= hyde_score_floor):
                 # Convert and return baseline
-                documents: List[Document] = []
+                documents: list[Document] = []
                 allowed_media_ids = kwargs.get("allowed_media_ids")
-                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
                 for result in base_results:
                     doc_media_id = result.metadata.get("media_id", result.id)
                     try:
                         doc_media_id_int = int(str(doc_media_id))
-                    except Exception:
+                    except (TypeError, ValueError):
                         doc_media_id_int = None
                     if allowed_set is not None and (doc_media_id_int is None or doc_media_id_int not in allowed_set):
                         continue
@@ -942,13 +1046,13 @@ class MediaDBRetriever(BaseRetriever):
             # 3) Merge - two modes: media-level (default) and optional chunk-level (by parent_chunk_id)
             try:
                 dedupe_by_parent = bool(_settings.get("HYDE_DEDUPE_BY_PARENT", False))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 dedupe_by_parent = False
 
             if not dedupe_by_parent:
                 # Media-level merge (default)
-                best_score: Dict[str, float] = {}
-                doc_map: Dict[str, Document] = {}
+                best_score: dict[str, float] = {}
+                doc_map: dict[str, Document] = {}
 
                 def _maybe_add_media(result_obj):
                     # Convert VectorSearchResult to Document (id=media_id preferred)
@@ -990,14 +1094,14 @@ class MediaDBRetriever(BaseRetriever):
                             )
 
                 allowed_media_ids = kwargs.get("allowed_media_ids")
-                allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+                allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
                 merged = list(doc_map.values())
                 if allowed_set is not None:
                     tmp = []
                     for d in merged:
                         try:
                             mid = int(str(d.metadata.get("media_id", d.id)))
-                        except Exception:
+                        except (TypeError, ValueError):
                             mid = None
                         if mid is not None and mid in allowed_set:
                             tmp.append(d)
@@ -1009,14 +1113,14 @@ class MediaDBRetriever(BaseRetriever):
 
             # Chunk-level merge (by parent_chunk_id)
             # Build best-per-parent maps for base and HYDE
-            base_by_parent: Dict[str, Tuple[float, Any]] = {}
+            base_by_parent: dict[str, tuple[float, Any]] = {}
             for r in base_results:
                 parent = str(r.metadata.get("parent_chunk_id") or r.id)
                 sc = float(r.score)
                 if parent not in base_by_parent or sc > base_by_parent[parent][0]:
                     base_by_parent[parent] = (sc, r)
 
-            hyde_by_parent: Dict[str, Tuple[float, Any]] = {}
+            hyde_by_parent: dict[str, tuple[float, Any]] = {}
             for r in hyde_results:
                 parent = str(r.metadata.get("parent_chunk_id") or r.id)
                 sc = min(1.0, float(r.score) + hyde_weight)
@@ -1025,7 +1129,7 @@ class MediaDBRetriever(BaseRetriever):
 
             # Combine per parent key
             chunk_keys = set(base_by_parent.keys()) | set(hyde_by_parent.keys())
-            chunk_docs: List[Document] = []
+            chunk_docs: list[Document] = []
             for ck in chunk_keys:
                 base_tuple = base_by_parent.get(ck)
                 hyde_tuple = hyde_by_parent.get(ck)
@@ -1048,13 +1152,13 @@ class MediaDBRetriever(BaseRetriever):
 
             # Apply allowed_media_ids filter
             allowed_media_ids = kwargs.get("allowed_media_ids")
-            allowed_set = set(int(x) for x in allowed_media_ids) if allowed_media_ids else None
+            allowed_set = {int(x) for x in allowed_media_ids} if allowed_media_ids else None
             if allowed_set is not None:
-                filtered: List[Document] = []
+                filtered: list[Document] = []
                 for d in chunk_docs:
                     try:
                         mid = int(str(d.metadata.get("media_id", d.id)))
-                    except Exception:
+                    except (TypeError, ValueError):
                         mid = None
                     if mid is not None and mid in allowed_set:
                         filtered.append(d)
@@ -1065,7 +1169,7 @@ class MediaDBRetriever(BaseRetriever):
             logger.debug(f"Retrieved {len(documents)} documents from vector search (HYDE merged, chunk-level)")
             return _finalize_docs(documents)
 
-        except Exception as e:
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Vector search failed: {e}")
             # Fallback to FTS
             return await self._retrieve_fts(query, media_type, **kwargs)
@@ -1076,7 +1180,7 @@ class MediaDBRetriever(BaseRetriever):
         media_type: Optional[str] = None,
         alpha: float = 0.7,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieve documents using hybrid search (FTS + Vector).
 
@@ -1099,11 +1203,11 @@ class MediaDBRetriever(BaseRetriever):
 
     def _reciprocal_rank_fusion(
         self,
-        fts_docs: List[Document],
-        vector_docs: List[Document],
+        fts_docs: list[Document],
+        vector_docs: list[Document],
         alpha: float = 0.7,
         k: int = 60
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Merge FTS and vector results using reciprocal rank fusion.
 
@@ -1157,7 +1261,7 @@ class MediaDBRetriever(BaseRetriever):
         logger.debug(f"Hybrid search merged {len(merged_docs)} documents")
         return merged_docs
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get full metadata for a media item."""
         aggregator = "GROUP_CONCAT(t.name)"
         media_adapter = getattr(self, 'media_db', None)
@@ -1229,14 +1333,14 @@ class NotesDBRetriever(BaseRetriever):
         query: str,
         notebook_id: Optional[int] = None,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Retrieve from notes database."""
         if self.chacha_db is not None and not self.config.tags_filter:
             docs = self._retrieve_via_chacha(query, notebook_id)
             # Optional restriction to specific note IDs
             allowed_note_ids = kwargs.get("allowed_note_ids")
             if allowed_note_ids and isinstance(allowed_note_ids, (list, tuple)):
-                allowed_set = set(str(x) for x in allowed_note_ids)
+                allowed_set = {str(x) for x in allowed_note_ids}
                 docs = [d for d in docs if str(d.id).replace("note_", "") in allowed_set]
             return docs
 
@@ -1253,7 +1357,7 @@ class NotesDBRetriever(BaseRetriever):
             FROM notes n
             WHERE n.deleted = 0 AND (n.title LIKE ? OR n.content LIKE ?)
         """
-        params = [f"%{query}%", f"%{query}%"]
+        params: list[Any] = [f"%{query}%", f"%{query}%"]
 
         # Optional restriction to specific note IDs (e.g., from access control)
         allowed_note_ids = kwargs.get("allowed_note_ids")
@@ -1299,15 +1403,15 @@ class NotesDBRetriever(BaseRetriever):
 
         return documents
 
-    def _retrieve_via_chacha(self, query: str, notebook_id: Optional[int]) -> List[Document]:
+    def _retrieve_via_chacha(self, query: str, notebook_id: Optional[int]) -> list[Document]:
         if self.chacha_db is None:
             return []
         try:
             results = self.chacha_db.search_notes(query, limit=int(self.config.max_results))
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"ChaCha notes search failed: {exc}")
             return []
-        documents: List[Document] = []
+        documents: list[Document] = []
         # Normalize backend-provided ranks (if present) to [0,1]
         ranks = []
         for r in results:
@@ -1316,7 +1420,7 @@ class NotesDBRetriever(BaseRetriever):
                 rv = r.get('bm25_score')
             try:
                 ranks.append(float(rv) if rv is not None else None)
-            except Exception:
+            except (TypeError, ValueError):
                 ranks.append(None)
         norm_map = {}
         if any(v is not None for v in ranks):
@@ -1358,7 +1462,7 @@ class NotesDBRetriever(BaseRetriever):
         documents.sort(key=lambda x: getattr(x, 'score', 0.0), reverse=True)
         return documents
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get metadata for a note."""
         # Extract numeric ID
         note_id = doc_id.replace("note_", "")
@@ -1426,7 +1530,7 @@ class KanbanDBRetriever(BaseRetriever):
     def _get_db(self) -> KanbanDB:
         if self.kanban_db is None:
             if self.db_path is None:
-                raise ValueError("Kanban db_path is required for retrieval")
+                raise MissingDatabasePathError()
             self.kanban_db = KanbanDB(db_path=str(self.db_path), user_id=self.user_id)
             self._owns_db = True
         return self.kanban_db
@@ -1436,10 +1540,11 @@ class KanbanDBRetriever(BaseRetriever):
         query: str,
         *,
         board_id: Optional[int] = None,
-        label_ids: Optional[List[int]] = None,
+        label_ids: Optional[list[int]] = None,
         priority: Optional[str] = None,
         include_archived: bool = False,
-    ) -> List[Document]:
+        **kwargs: Any,
+    ) -> list[Document]:
         if not query or not str(query).strip():
             return []
         db = self._get_db()
@@ -1484,11 +1589,11 @@ class KanbanDBRetriever(BaseRetriever):
         *,
         query: str,
         board_id: Optional[int],
-        label_ids: Optional[List[int]],
+        label_ids: Optional[list[int]],
         priority: Optional[str],
         include_archived: bool,
         limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         cards, _ = db.search_cards(
             query=query,
             board_id=board_id,
@@ -1509,11 +1614,11 @@ class KanbanDBRetriever(BaseRetriever):
         *,
         query: str,
         board_id: Optional[int],
-        label_ids: Optional[List[int]],
+        label_ids: Optional[list[int]],
         priority: Optional[str],
         include_archived: bool,
         limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         vector_search = db.get_vector_search()
         if vector_search is None or not getattr(vector_search, "available", False):
             return self._fts_search(
@@ -1552,11 +1657,11 @@ class KanbanDBRetriever(BaseRetriever):
         *,
         query: str,
         board_id: Optional[int],
-        label_ids: Optional[List[int]],
+        label_ids: Optional[list[int]],
         priority: Optional[str],
         include_archived: bool,
         limit: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         fts_cards = self._fts_search(
             db,
             query=query,
@@ -1582,7 +1687,7 @@ class KanbanDBRetriever(BaseRetriever):
             for r in vector_results
             if r.get("card_id")
         }
-        combined: List[Dict[str, Any]] = []
+        combined: list[dict[str, Any]] = []
         seen: set[int] = set()
         for _idx, card in enumerate(fts_cards):
             card_id = card["id"]
@@ -1593,7 +1698,7 @@ class KanbanDBRetriever(BaseRetriever):
             vector_score = vector_scores.get(card_id, 0.0)
             card["relevance_score"] = (self._FTS_WEIGHT * fts_score) + (self._VECTOR_WEIGHT * vector_score)
             combined.append(card)
-        extra_ids = [cid for cid in vector_scores.keys() if cid not in seen]
+        extra_ids = [cid for cid in vector_scores if cid not in seen]
         if extra_ids:
             extra_cards = db.get_cards_by_ids(
                 card_ids=extra_ids,
@@ -1608,7 +1713,7 @@ class KanbanDBRetriever(BaseRetriever):
         return combined[:limit]
 
     @staticmethod
-    def _filter_by_labels(cards: List[Dict[str, Any]], label_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
+    def _filter_by_labels(cards: list[dict[str, Any]], label_ids: Optional[list[int]]) -> list[dict[str, Any]]:
         if not label_ids:
             return list(cards)
         required = set(label_ids)
@@ -1619,8 +1724,8 @@ class KanbanDBRetriever(BaseRetriever):
                 filtered.append(card)
         return filtered
 
-    def _cards_to_documents(self, cards: List[Dict[str, Any]], *, min_score: float) -> List[Document]:
-        documents: List[Document] = []
+    def _cards_to_documents(self, cards: list[dict[str, Any]], *, min_score: float) -> list[Document]:
+        documents: list[Document] = []
         for card in cards:
             score = float(card.get("relevance_score") or 0.0)
             if score < min_score:
@@ -1658,7 +1763,7 @@ class KanbanDBRetriever(BaseRetriever):
         documents.sort(key=lambda d: getattr(d, "score", 0.0), reverse=True)
         return documents
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get metadata for a Kanban card document."""
         if not doc_id:
             return {}
@@ -1682,16 +1787,17 @@ class KanbanDBRetriever(BaseRetriever):
                 return {}
             metadata = dict(card)
             metadata.setdefault("source", "kanban")
-            return metadata
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"KanbanDBRetriever metadata lookup failed for {doc_id}: {exc}")
-            return {}
+        else:
+            return metadata
+        return {}
 
     def close(self) -> None:
         if self._owns_db and self.kanban_db is not None:
             try:
                 self.kanban_db.close()
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 logger.debug(f"KanbanDBRetriever close error: {exc}")
             finally:
                 self.kanban_db = None
@@ -1716,7 +1822,7 @@ class PromptsDBRetriever(BaseRetriever):
         query: str,
         category: Optional[str] = None,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieve from prompts database.
 
@@ -1743,7 +1849,7 @@ class PromptsDBRetriever(BaseRetriever):
             WHERE (p.name LIKE ? OR p.prompt LIKE ?)
         """
 
-        params = [f"%{query}%", f"%{query}%"]
+        params: list[Any] = [f"%{query}%", f"%{query}%"]
 
         # Add category filter
         if category:
@@ -1793,7 +1899,7 @@ class PromptsDBRetriever(BaseRetriever):
 
         return documents
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get metadata for a prompt."""
         prompt_id = doc_id.replace("prompt_", "")
 
@@ -1825,7 +1931,7 @@ class CharacterCardsRetriever(BaseRetriever):
         query: str,
         include_chats: bool = True,
         **kwargs
-    ) -> List[Document]:
+    ) -> list[Document]:
         """
         Retrieve from character cards and chats.
 
@@ -1836,7 +1942,7 @@ class CharacterCardsRetriever(BaseRetriever):
         Returns:
             List of retrieved documents
         """
-        documents: List[Document] = []
+        documents: list[Document] = []
 
         # Prefer backend-aware path via ChaCha DB (leverages Postgres FTS when available)
         if self.chacha_db is not None:
@@ -1849,7 +1955,7 @@ class CharacterCardsRetriever(BaseRetriever):
                     rv = r.get("rank")
                     try:
                         raw_ranks.append(float(rv) if rv is not None else None)
-                    except Exception:
+                    except (TypeError, ValueError):
                         raw_ranks.append(None)
                 norm_map = {}
                 if any(v is not None for v in raw_ranks):
@@ -1905,10 +2011,13 @@ class CharacterCardsRetriever(BaseRetriever):
                         if conv_id:
                             conv = self.chacha_db.get_conversation_by_id(conv_id)
                             if conv and conv.get("character_id") is not None:
-                                character_id = conv.get("character_id")
-                                card = self.chacha_db.get_character_card_by_id(int(character_id))
-                                if card:
-                                    character_name = card.get("name")
+                                character_id_val = conv.get("character_id")
+                                character_id_int = _coerce_int(character_id_val)
+                                if character_id_int is not None:
+                                    character_id = character_id_int
+                                    card = self.chacha_db.get_character_card_by_id(character_id_int)
+                                    if card:
+                                        character_name = card.get("name")
 
                         content = f"{row.get('sender')}: {row.get('content', '')}"
                         metadata = {
@@ -1928,10 +2037,7 @@ class CharacterCardsRetriever(BaseRetriever):
                         )
                         documents.append(doc)
 
-                documents.sort(key=lambda x: x.score, reverse=True)
-                logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
-                return documents
-            except Exception as e:
+            except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as e:
                 if getattr(self.chacha_db, "backend_type", None) == BackendType.POSTGRESQL:
                     logger.warning(
                         "ChaCha backend search failed under PostgreSQL backend; skipping legacy fallback: %s",
@@ -1939,6 +2045,10 @@ class CharacterCardsRetriever(BaseRetriever):
                     )
                     raise
                 logger.debug(f"ChaCha backend search failed; falling back to legacy SQL: {e}")
+            else:
+                documents.sort(key=lambda x: x.score, reverse=True)
+                logger.debug(f"Retrieved {len(documents)} Character/Chat documents via ChaCha backend")
+                return documents
 
         # Legacy SQLite-style path
         # Search character cards
@@ -1964,7 +2074,7 @@ class CharacterCardsRetriever(BaseRetriever):
             LIMIT ?
         """
         params = [f"%{query}%"] * 5 + [self.config.max_results // 2]
-        card_results = self._execute_query(card_sql, params)
+        card_results = self._execute_query(card_sql, tuple(params))
         for row in card_results:
             content = f"""# {row['name']}\n\n**Description:** {row['description']}\n\n**Personality:** {row['personality']}\n\n**Scenario:** {row['scenario']}\n\n**First Message:** {row['first_message']}"""
             matches = sum([
@@ -2004,7 +2114,7 @@ class CharacterCardsRetriever(BaseRetriever):
                 LIMIT ?
             """
             chat_params = [f"%{query}%", self.config.max_results // 2]
-            chat_results = self._execute_query(chat_sql, chat_params)
+            chat_results = self._execute_query(chat_sql, tuple(chat_params))
             for row in chat_results:
                 content = f"[{row['sender']}]: {row['content']}"
                 doc = Document(
@@ -2026,7 +2136,7 @@ class CharacterCardsRetriever(BaseRetriever):
         logger.debug(f"Retrieved {len(documents)} documents from Character Cards")
         return documents
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get metadata for a character card or chat."""
         if doc_id.startswith("character_"):
             card_id = doc_id.replace("character_", "")
@@ -2056,7 +2166,7 @@ class MultiDatabaseRetriever:
 
     def __init__(
         self,
-        db_paths: Dict[str, str],
+        db_paths: dict[str, str],
         user_id: str = "0",
         *,
         media_db: Optional[Any] = None,
@@ -2069,7 +2179,7 @@ class MultiDatabaseRetriever:
             db_paths: Mapping of database names to paths
             user_id: User ID for vector store access
         """
-        self.retrievers: Dict[DataSource, BaseRetriever] = {}
+        self.retrievers: dict[DataSource, BaseRetriever] = {}
 
         # Initialize retrievers for available databases
         if "media_db" in db_paths:
@@ -2103,7 +2213,7 @@ class MultiDatabaseRetriever:
         if "claims_db" in db_paths:
             try:
                 self.retrievers[DataSource.CLAIMS] = ClaimsRetriever(db_paths["claims_db"])
-            except Exception as e:
+            except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"ClaimsRetriever init skipped: {e}")
 
     # Resource management
@@ -2112,10 +2222,8 @@ class MultiDatabaseRetriever:
             for retr in list(self.retrievers.values()):
                 close_fn = getattr(retr, "close", None)
                 if callable(close_fn):
-                    try:
+                    with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                         close_fn()
-                    except Exception:
-                        pass
         finally:
             self.retrievers.clear()
 
@@ -2123,30 +2231,26 @@ class MultiDatabaseRetriever:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             self.close()
-        except Exception:
-            pass
         # Do not suppress exceptions
         return False
 
     def __del__(self):
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             self.close()
-        except Exception:
-            pass
 
     async def retrieve(
         self,
         query: str,
         *,
-        sources: Optional[List[DataSource]] = None,
+        sources: Optional[list[DataSource]] = None,
         config: Optional[RetrievalConfig] = None,
         index_namespace: Optional[str] = None,
         # Optional per-source restrictions
-        allowed_media_ids: Optional[List[int]] = None,
-        allowed_note_ids: Optional[List[str]] = None,
-    ) -> List[Document]:
+        allowed_media_ids: Optional[list[int]] = None,
+        allowed_note_ids: Optional[list[str]] = None,
+    ) -> list[Document]:
         """
         Retrieve documents from one or more configured data sources.
 
@@ -2160,7 +2264,7 @@ class MultiDatabaseRetriever:
             A list of `Document` objects sorted by score (desc), capped by config.max_results if provided.
         """
         # Normalize the sources list
-        ds_list: List[DataSource]
+        ds_list: list[DataSource]
         if sources is None:
             ds_list = list(self.retrievers.keys())
         else:
@@ -2172,11 +2276,11 @@ class MultiDatabaseRetriever:
                 else:
                     try:
                         ds_list.append(DataSource(str(s)))
-                    except Exception:
+                    except (ValueError, TypeError):
                         continue
 
-        documents: List[Document] = []
-        tasks: List[Any] = []
+        documents: list[Document] = []
+        tasks: list[Any] = []
 
         # Prepare async tasks for each source
         for src in ds_list:
@@ -2231,7 +2335,7 @@ class MultiDatabaseRetriever:
         if tasks:
             try:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-            except Exception as e:
+            except (RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Multi-database retrieval failed: {e}")
                 results = []
         else:
@@ -2256,12 +2360,12 @@ class MultiDatabaseRetriever:
         self,
         query: str,
         *,
-        sources: Optional[List[DataSource]] = None,
+        sources: Optional[list[DataSource]] = None,
         fusion_method: str = "rrf",
-    ) -> List[Document]:
+    ) -> list[Document]:
         """Retrieve from multiple sources and fuse results."""
         # Collect per-source results
-        source_results: Dict[DataSource, List[Document]] = {}
+        source_results: dict[DataSource, list[Document]] = {}
         ds_list = list(self.retrievers.keys()) if sources is None else sources
         for src in ds_list:
             retr = self.retrievers.get(src)
@@ -2269,7 +2373,7 @@ class MultiDatabaseRetriever:
                 continue
             try:
                 docs = await retr.retrieve(query)
-            except Exception:
+            except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError):
                 docs = []
             source_results[src] = docs
 
@@ -2282,24 +2386,24 @@ class MultiDatabaseRetriever:
             return self._max_fusion(source_results)
 
         # Default: simple concatenation
-        all_docs: List[Document] = []
+        all_docs: list[Document] = []
         for docs in source_results.values():
             all_docs.extend(docs)
         return sorted(all_docs, key=lambda x: getattr(x, "score", 0.0), reverse=True)
 
     def _reciprocal_rank_fusion(
         self,
-        source_results: Dict[DataSource, List[Document]],
+        source_results: dict[DataSource, list[Document]],
         k: int = 60,
-    ) -> List[Document]:
-        doc_scores: Dict[str, Dict[str, Any]] = {}
+    ) -> list[Document]:
+        doc_scores: dict[str, dict[str, Any]] = {}
         for _source, docs in source_results.items():
             for rank, doc in enumerate(docs, 1):
                 if doc.id not in doc_scores:
                     doc_scores[doc.id] = {"doc": doc, "score": 0.0}
                 doc_scores[doc.id]["score"] += 1.0 / (k + rank)
 
-        fused_docs: List[Document] = [
+        fused_docs: list[Document] = [
             Document(
                 id=item["doc"].id,
                 content=item["doc"].content,
@@ -2313,9 +2417,9 @@ class MultiDatabaseRetriever:
 
     def _weighted_fusion(
         self,
-        source_results: Dict[DataSource, List[Document]],
-        weights: Optional[Dict[DataSource, float]] = None,
-    ) -> List[Document]:
+        source_results: dict[DataSource, list[Document]],
+        weights: Optional[dict[DataSource, float]] = None,
+    ) -> list[Document]:
         weights = weights or {
             DataSource.MEDIA_DB: 1.0,
             DataSource.NOTES: 0.8,
@@ -2323,14 +2427,14 @@ class MultiDatabaseRetriever:
             DataSource.CHARACTER_CARDS: 0.5,
             DataSource.KANBAN: 0.85,
         }
-        doc_scores: Dict[str, Dict[str, Any]] = {}
+        doc_scores: dict[str, dict[str, Any]] = {}
         for source, docs in source_results.items():
             w = weights.get(source, 1.0)
             for doc in docs:
                 if doc.id not in doc_scores:
                     doc_scores[doc.id] = {"doc": doc, "score": 0.0}
                 doc_scores[doc.id]["score"] += float(getattr(doc, "score", 0.0)) * w
-        fused_docs: List[Document] = [
+        fused_docs: list[Document] = [
             Document(
                 id=item["doc"].id,
                 content=item["doc"].content,
@@ -2344,9 +2448,9 @@ class MultiDatabaseRetriever:
 
     def _max_fusion(
         self,
-        source_results: Dict[DataSource, List[Document]],
-    ) -> List[Document]:
-        doc_map: Dict[str, Document] = {}
+        source_results: dict[DataSource, list[Document]],
+    ) -> list[Document]:
+        doc_map: dict[str, Document] = {}
         for _source, docs in source_results.items():
             for doc in docs:
                 existing = doc_map.get(doc.id)
@@ -2354,7 +2458,7 @@ class MultiDatabaseRetriever:
                     getattr(existing, "score", 0.0)
                 ):
                     doc_map[doc.id] = doc
-        return sorted(list(doc_map.values()), key=lambda d: getattr(d, "score", 0.0), reverse=True)
+        return sorted(doc_map.values(), key=lambda d: getattr(d, "score", 0.0), reverse=True)
 
 class ClaimsRetriever(BaseRetriever):
     """Retriever for Claims table (ingestion-time factual statements)."""
@@ -2370,7 +2474,7 @@ class ClaimsRetriever(BaseRetriever):
         attached = None
         own = False
         if media_db is None:
-            attached = self._maybe_attach_media_db(db_path)
+            attached = self._maybe_attach_media_db(self.db_path)
             own = attached is not None
         self.media_db = media_db or attached
         self._own_media_db = own
@@ -2379,9 +2483,13 @@ class ClaimsRetriever(BaseRetriever):
         if not db_path:
             return None
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # type: ignore
-            return MediaDatabase(db_path=db_path, client_id="rag_service")
-        except Exception:
+            # Defensive re-validation in case callers bypass BaseRetriever.
+            validated_path = self._validate_path(db_path)
+            if not validated_path:
+                return None
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+            return MediaDatabase(db_path=validated_path, client_id="rag_service")
+        except (ImportError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
             return None
 
     def close(self):
@@ -2390,14 +2498,14 @@ class ClaimsRetriever(BaseRetriever):
                 close_fn = getattr(self.media_db, 'close_connection', None)
                 if callable(close_fn):
                     close_fn()
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
-    async def retrieve(self, query: str, **kwargs) -> List[Document]:
+    async def retrieve(self, query: str, **kwargs) -> list[Document]:
         if self.media_db is not None:
             return self._retrieve_via_media_backend(query)
 
-        documents: List[Document] = []
+        documents: list[Document] = []
         try:
             # Try FTS on claims_fts first
             sql = (
@@ -2447,7 +2555,7 @@ class ClaimsRetriever(BaseRetriever):
                             score=0.4,
                         )
                     )
-        except Exception as e:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"Claims FTS failed, fallback to LIKE: {e}")
             sql = (
                 "SELECT id, media_id, chunk_index, claim_text FROM Claims "
@@ -2473,15 +2581,15 @@ class ClaimsRetriever(BaseRetriever):
                 )
         return documents
 
-    def _retrieve_via_media_backend(self, query: str) -> List[Document]:
+    def _retrieve_via_media_backend(self, query: str) -> list[Document]:
         if self.media_db is None:
             return []
         try:
             results = self.media_db.search_claims(query, limit=int(self.config.max_results))
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(f"MediaDatabase claims search failed: {exc}")
             return []
-        documents: List[Document] = []
+        documents: list[Document] = []
         min_score = float(self.config.min_score or 0.0)
         backend_type = getattr(self.media_db, 'backend_type', None)
         for row in results:
@@ -2511,13 +2619,13 @@ class ClaimsRetriever(BaseRetriever):
             )
         return documents
 
-    async def get_metadata(self, doc_id: str) -> Dict[str, Any]:
+    async def get_metadata(self, doc_id: str) -> dict[str, Any]:
         try:
             cid = doc_id.replace("claim_", "")
             sql = "SELECT * FROM Claims WHERE id = ?"
             rows = self._execute_query(sql, (cid,))
             return dict(rows[0]) if rows else {}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             return {}
 
     # (no second retrieve method inside ClaimsRetriever)
@@ -2526,144 +2634,9 @@ class ClaimsRetriever(BaseRetriever):
 # Backward compatibility aliases for test suites expecting older names
 try:
     # Some tests import MediaDatabaseRetriever; map to MediaDBRetriever for compatibility
-    MediaDatabaseRetriever = MediaDBRetriever  # type: ignore[name-defined]
-except Exception:
+    MediaDatabaseRetriever = MediaDBRetriever
+except (NameError, AttributeError):
     pass
-
-    async def retrieve_with_fusion(
-        self,
-        query: str,
-        sources: Optional[List[DataSource]] = None,
-        fusion_method: str = "rrf"
-    ) -> List[Document]:
-        """
-        Retrieve with result fusion across databases.
-
-        Args:
-            query: Search query
-            sources: List of sources to search
-            fusion_method: Fusion method (rrf, weighted, max)
-
-        Returns:
-            Fused list of documents
-        """
-        # Get results from each source
-        source_results = {}
-        sources = sources or list(self.retrievers.keys())
-
-        for source in sources:
-            if source in self.retrievers:
-                docs = await self.retrievers[source].retrieve(query)
-                source_results[source] = docs
-
-        # Apply fusion
-        if fusion_method == "rrf":
-            return self._reciprocal_rank_fusion(source_results)
-        elif fusion_method == "weighted":
-            return self._weighted_fusion(source_results)
-        elif fusion_method == "max":
-            return self._max_fusion(source_results)
-        else:
-            # Simple concatenation
-            all_docs = []
-            for docs in source_results.values():
-                all_docs.extend(docs)
-            return sorted(all_docs, key=lambda x: x.score, reverse=True)
-
-    def _reciprocal_rank_fusion(
-        self,
-        source_results: Dict[DataSource, List[Document]],
-        k: int = 60
-    ) -> List[Document]:
-        """Apply Reciprocal Rank Fusion."""
-        doc_scores = {}
-
-        for source, docs in source_results.items():
-            for rank, doc in enumerate(docs, 1):
-                if doc.id not in doc_scores:
-                    doc_scores[doc.id] = {"doc": doc, "score": 0}
-
-                # RRF formula
-                doc_scores[doc.id]["score"] += 1.0 / (k + rank)
-
-        # Sort by fused score
-        fused_docs = [
-            Document(
-                id=item["doc"].id,
-                content=item["doc"].content,
-                source=item["doc"].source,  # Preserve original source
-                metadata=item["doc"].metadata,
-                score=item["score"]
-            )
-            for item in sorted(
-                doc_scores.values(),
-                key=lambda x: x["score"],
-                reverse=True
-            )
-        ]
-
-        return fused_docs
-
-    def _weighted_fusion(
-        self,
-        source_results: Dict[DataSource, List[Document]],
-        weights: Optional[Dict[DataSource, float]] = None
-    ) -> List[Document]:
-        """Apply weighted fusion based on source importance."""
-        # Default weights
-        if not weights:
-            weights = {
-                DataSource.MEDIA_DB: 1.0,
-                DataSource.NOTES: 0.8,
-                DataSource.PROMPTS: 0.6,
-                DataSource.CHARACTER_CARDS: 0.5,
-                DataSource.KANBAN: 0.85,
-            }
-
-        doc_scores = {}
-
-        for source, docs in source_results.items():
-            weight = weights.get(source, 1.0)
-
-            for doc in docs:
-                if doc.id not in doc_scores:
-                    doc_scores[doc.id] = {"doc": doc, "score": 0}
-
-                doc_scores[doc.id]["score"] += doc.score * weight
-
-        # Create fused documents
-        fused_docs = [
-            Document(
-                id=item["doc"].id,
-                content=item["doc"].content,
-                source=item["doc"].source,  # Preserve original source
-                metadata=item["doc"].metadata,
-                score=item["score"]
-            )
-            for item in sorted(
-                doc_scores.values(),
-                key=lambda x: x["score"],
-                reverse=True
-            )
-        ]
-
-        return fused_docs
-
-    def _max_fusion(
-        self,
-        source_results: Dict[DataSource, List[Document]]
-    ) -> List[Document]:
-        """Take maximum score for each document across sources."""
-        doc_scores = {}
-
-        for source, docs in source_results.items():
-            for doc in docs:
-                if doc.id not in doc_scores:
-                    doc_scores[doc.id] = doc
-                elif doc.score > doc_scores[doc.id].score:
-                    doc_scores[doc.id] = doc
-
-        return sorted(doc_scores.values(), key=lambda x: x.score, reverse=True)
 
 
 # Pipeline integration function

@@ -4,10 +4,12 @@ Role-Based Access Control (RBAC) for unified MCP module
 Implements fine-grained permission management with role inheritance.
 """
 
-from typing import Set, List, Optional, Dict, Any
-from enum import Enum
+import contextlib
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import lru_cache
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -54,7 +56,7 @@ class Permission:
     resource: Resource
     action: Action
     resource_id: Optional[str] = None  # None means all resources of this type
-    conditions: Dict[str, Any] = field(default_factory=dict)
+    conditions: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         resource_part = f"{self.resource.value}:{self.resource_id or '*'}"
@@ -91,8 +93,8 @@ class Role:
     """A role is a collection of permissions with inheritance support"""
     name: str
     description: str
-    permissions: Set[Permission] = field(default_factory=set)
-    inherits_from: Set[str] = field(default_factory=set)
+    permissions: set[Permission] = field(default_factory=set)
+    inherits_from: set[str] = field(default_factory=set)
 
     def add_permission(self, permission: Permission):
         """Add a permission to this role"""
@@ -104,10 +106,7 @@ class Role:
 
     def has_permission(self, resource: Resource, action: Action, resource_id: Optional[str] = None) -> bool:
         """Check if role has a specific permission"""
-        for perm in self.permissions:
-            if perm.matches(resource, action, resource_id):
-                return True
-        return False
+        return any(perm.matches(resource, action, resource_id) for perm in self.permissions)
 
 
 class RBACPolicy:
@@ -118,9 +117,9 @@ class RBACPolicy:
     """
 
     def __init__(self):
-        self.roles: Dict[str, Role] = {}
-        self.user_roles: Dict[str, Set[str]] = {}
-        self.user_permissions: Dict[str, Set[Permission]] = {}
+        self.roles: dict[str, Role] = {}
+        self.user_roles: dict[str, set[str]] = {}
+        self.user_permissions: dict[str, set[Permission]] = {}
 
         # Initialize default roles
         self._init_default_roles()
@@ -312,8 +311,8 @@ class RBACPolicy:
                 extra={"audit": True}
             )
 
-    @lru_cache(maxsize=1000)
-    def _get_user_permissions(self, user_id: str) -> Set[Permission]:
+    @lru_cache(maxsize=1000)  # noqa: B019
+    def _get_user_permissions(self, user_id: str) -> set[Permission]:
         """
         Get all permissions for a user (cached).
 
@@ -381,11 +380,11 @@ class RBACPolicy:
         )
         return False
 
-    def get_user_roles(self, user_id: str) -> Set[str]:
+    def get_user_roles(self, user_id: str) -> set[str]:
         """Get all roles for a user"""
         return self.user_roles.get(user_id, set())
 
-    def get_user_permissions_list(self, user_id: str) -> List[str]:
+    def get_user_permissions_list(self, user_id: str) -> list[str]:
         """Get a list of all permissions for a user (for display)"""
         permissions = self._get_user_permissions(user_id)
         return [str(p) for p in permissions]
@@ -393,10 +392,8 @@ class RBACPolicy:
     def _clear_user_cache(self, user_id: str):
         """Clear cached permissions for a user"""
         # lru_cache has no per-key invalidation; clear entire cache.
-        try:
+        with contextlib.suppress(Exception):
             self._get_user_permissions.cache_clear()
-        except Exception:
-            pass
 
     def can_access_module(self, user_id: str, module_id: str) -> bool:
         """Check if user can access a module"""

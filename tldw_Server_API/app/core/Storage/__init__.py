@@ -4,8 +4,8 @@
 # This module supports storing original uploaded files (PDFs, etc.) with
 # a pluggable backend architecture for future S3/object storage support.
 
-from tldw_Server_API.app.core.Storage.storage_interface import StorageBackend
 from tldw_Server_API.app.core.Storage.filesystem_storage import FileSystemStorage
+from tldw_Server_API.app.core.Storage.storage_interface import StorageBackend
 
 __all__ = ["StorageBackend", "FileSystemStorage", "get_storage_backend"]
 
@@ -23,8 +23,9 @@ def get_storage_backend() -> StorageBackend:
     global _storage_backend_instance
 
     if _storage_backend_instance is None:
-        from tldw_Server_API.app.core.config import settings
         from pathlib import Path
+
+        from tldw_Server_API.app.core.config import settings
 
         # Get storage configuration
         storage_type = getattr(settings, 'storage_backend', 'filesystem')

@@ -10,14 +10,12 @@ from __future__ import annotations
 import os
 from configparser import ConfigParser
 from dataclasses import dataclass
-from typing import Optional
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     DatabaseConfig,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
-
 
 _DEFAULT_SQLITE_PATH = ""
 _DEFAULT_BACKUP_PATH = "./tldw_DB_Backups/"
@@ -28,10 +26,10 @@ class ContentDatabaseSettings:
     """Resolved configuration for the content database backend."""
 
     raw_backend_type: str
-    backend_type: Optional[BackendType]
-    database_config: Optional[DatabaseConfig]
-    sqlite_path: Optional[str]
-    backup_path: Optional[str]
+    backend_type: BackendType | None
+    database_config: DatabaseConfig | None
+    sqlite_path: str | None
+    backup_path: str | None
 
 
 def _normalise_backend_name(raw_backend: str) -> str:
@@ -41,7 +39,7 @@ def _normalise_backend_name(raw_backend: str) -> str:
     return raw_backend.strip().lower()
 
 
-def _backend_type_from_raw(raw_backend: str) -> Optional[BackendType]:
+def _backend_type_from_raw(raw_backend: str) -> BackendType | None:
     """Map textual backend identifiers to BackendType enum where supported."""
     if raw_backend in {"sqlite", "sqlite3"}:
         return BackendType.SQLITE
@@ -67,7 +65,7 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
         "Database", "backup_path", fallback=_DEFAULT_BACKUP_PATH
     )
 
-    database_config: Optional[DatabaseConfig]
+    database_config: DatabaseConfig | None
     if backend_type == BackendType.SQLITE:
         database_config = DatabaseConfig(
             backend_type=BackendType.SQLITE,
@@ -88,7 +86,7 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
         # extra configuration. Explicit TLDW_* overrides always win.
         pg_dsn = os.getenv("TLDW_CONTENT_PG_DSN") or os.getenv("POSTGRES_TEST_DSN")
 
-        def _env_chain(*names: str, fallback: Optional[str] = None) -> Optional[str]:
+        def _env_chain(*names: str, fallback: str | None = None) -> str | None:
             for name in names:
                 value = os.getenv(name)
                 if value:
@@ -153,7 +151,7 @@ def load_content_db_settings(config: ConfigParser) -> ContentDatabaseSettings:
 
 
 _cached_backend = None
-_cached_backend_signature: Optional[tuple] = None
+_cached_backend_signature: tuple | None = None
 try:
     from threading import RLock
     _cache_lock = RLock()

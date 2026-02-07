@@ -11,19 +11,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlsplit
+
 from loguru import logger
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 from tldw_Server_API.app.core.AuthNZ.migrations import (
     apply_authnz_migrations,
-    rollback_authnz_migrations,
     check_migration_status,
-    ensure_authnz_tables
+    rollback_authnz_migrations,
 )
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
 
 def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
@@ -148,7 +148,7 @@ def main():
 
             # Check final status
             final_status = check_migration_status(db_path)
-            print(f"\n✅ Migrations completed successfully")
+            print("\n✅ Migrations completed successfully")
             print(f"Database is now at version {final_status['current_version']}")
 
         except Exception as e:

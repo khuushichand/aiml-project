@@ -1,8 +1,7 @@
 import React from "react"
 import type { TFunction } from "i18next"
 import { Tooltip, Input } from "antd"
-import { CogIcon, Menu, Search, Signpost, SquarePen, Keyboard, GitBranch, Volume2 } from "lucide-react"
-import { ConnectionStatus } from "./ConnectionStatus"
+import { CogIcon, Menu, Search, Signpost, SquarePen } from "lucide-react"
 import { HeaderShortcuts } from "./HeaderShortcuts"
 import logoImage from "~/assets/icon.png"
 
@@ -20,10 +19,7 @@ type ChatHeaderProps = {
   onOpenCommandPalette: () => void
   onOpenShortcutsModal: () => void
   onOpenSettings: () => void
-  onOpenTtsClips?: () => void
   onClearChat: () => void
-  showTimelineButton?: boolean
-  onOpenTimeline?: () => void
   shortcutsExpanded: boolean
   onToggleShortcuts: (next?: boolean) => void
   commandKeyLabel: string
@@ -43,10 +39,7 @@ export function ChatHeader({
   onOpenCommandPalette,
   onOpenShortcutsModal,
   onOpenSettings,
-  onOpenTtsClips,
   onClearChat,
-  showTimelineButton = false,
-  onOpenTimeline,
   shortcutsExpanded,
   onToggleShortcuts,
   commandKeyLabel
@@ -63,7 +56,6 @@ export function ChatHeader({
     ? t("option:header.hideShortcuts", "Hide shortcuts")
     : t("option:header.showShortcuts", "Show shortcuts")
   const canEditTitle = !temporaryChat && historyId && historyId !== "temp"
-  const timelineLabel = t("option:header.timeline", "Timeline")
 
   return (
     <header
@@ -86,7 +78,6 @@ export function ChatHeader({
               </button>
             </Tooltip>
           )}
-          <ConnectionStatus showLabel={false} className="px-2 py-1" />
           <div className="flex items-center gap-2 text-text">
             <img
               src={logoSrc}
@@ -96,20 +87,22 @@ export function ChatHeader({
             <span className="text-sm font-medium">
               {t("common:pageAssist", "tldw Assistant")}
             </span>
-            <Tooltip title={shortcutsToggleLabel} placement="bottom">
+            <Tooltip title={shortcutsToggleLabel}>
               <button
                 type="button"
                 onClick={() => onToggleShortcuts(!shortcutsExpanded)}
                 aria-label={shortcutsToggleLabel as string}
+                aria-expanded={shortcutsExpanded}
                 className="inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text"
-                title={shortcutsToggleLabel}
+                title={shortcutsToggleLabel as string}
+                data-testid="chat-toggle-shortcuts"
               >
                 <Signpost className="size-4" aria-hidden="true" />
               </button>
             </Tooltip>
           </div>
           {canEditTitle && (
-            <div className="hidden min-w-[140px] max-w-[220px] sm:block">
+            <div className="min-w-[140px] max-w-[220px] truncate">
               {isEditingTitle ? (
                 <Input
                   size="small"
@@ -137,74 +130,24 @@ export function ChatHeader({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {onOpenTtsClips && (
-            <Tooltip title={t("playground:ttsClips.title", "TTS clips")}>
-              <button
-                type="button"
-                onClick={onOpenTtsClips}
-                aria-label={t("playground:ttsClips.title", "TTS clips") as string}
-                className="inline-flex items-center justify-center rounded-md border border-border p-2 text-text-muted hover:bg-surface2 hover:text-text"
-                title={t("playground:ttsClips.title", "TTS clips")}
-              >
-                <Volume2 className="size-4" aria-hidden="true" />
-              </button>
-            </Tooltip>
-          )}
           <button
             type="button"
             onClick={onOpenCommandPalette}
-            className="hidden items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text sm:inline-flex"
+            className="hidden items-center gap-2 rounded-md px-3 py-1.5 text-xs text-text-muted transition hover:bg-surface2 hover:text-text sm:inline-flex"
             title={t("common:search", "Search")}
           >
             <Search className="size-4" aria-hidden="true" />
             <span>{t("common:search", "Search")}</span>
-            <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-subtle">
+            <span className="rounded border border-border px-1.5 py-0.5 text-xs text-text-subtle">
               {commandKeyLabel}K
             </span>
           </button>
-          <Tooltip
-            title={t(
-              "common:shortcuts.showKeyboardShortcuts",
-              "Show keyboard shortcuts"
-            )}
-          >
-            <button
-              type="button"
-              onClick={onOpenShortcutsModal}
-              aria-label={
-                t(
-                  "common:shortcuts.showKeyboardShortcuts",
-                  "Show keyboard shortcuts"
-                ) as string
-              }
-              className="inline-flex items-center justify-center rounded-md border border-border p-2 text-text-muted hover:bg-surface2 hover:text-text"
-              title={t(
-                "common:shortcuts.showKeyboardShortcuts",
-                "Show keyboard shortcuts"
-              )}
-            >
-              <Keyboard className="size-4" aria-hidden="true" />
-            </button>
-          </Tooltip>
-          {showTimelineButton && onOpenTimeline && (
-            <Tooltip title={timelineLabel}>
-              <button
-                type="button"
-                onClick={onOpenTimeline}
-                aria-label={timelineLabel as string}
-                className="inline-flex items-center justify-center rounded-md border border-border p-2 text-text-muted hover:bg-surface2 hover:text-text"
-                title={timelineLabel}
-              >
-                <GitBranch className="size-4" aria-hidden="true" />
-              </button>
-            </Tooltip>
-          )}
           <Tooltip title={t("common:newChat", "New chat")}>
             <button
               type="button"
               onClick={onClearChat}
               aria-label={t("common:newChat", "New chat") as string}
-              className="inline-flex items-center justify-center rounded-md border border-border p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              className="inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
               title={t("common:newChat", "New chat")}
             >
               <SquarePen className="size-4" aria-hidden="true" />
@@ -215,10 +158,21 @@ export function ChatHeader({
               type="button"
               onClick={onOpenSettings}
               aria-label={t("sidepanel:header.openSettingsAria", "Open settings") as string}
-              className="inline-flex items-center justify-center rounded-md border border-border p-2 text-text-muted hover:bg-surface2 hover:text-text"
+              className="inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
               title={t("sidepanel:header.settingsShortLabel", "Settings")}
             >
               <CogIcon className="size-4" aria-hidden="true" />
+            </button>
+          </Tooltip>
+          <Tooltip title={t("option:header.keyboardShortcuts", "Keyboard shortcuts (?)")}>
+            <button
+              type="button"
+              onClick={onOpenShortcutsModal}
+              aria-label={t("option:header.keyboardShortcutsAria", "Show keyboard shortcuts") as string}
+              className="inline-flex items-center justify-center rounded-md p-1.5 text-text-subtle hover:bg-surface2 hover:text-text"
+              title={t("option:header.keyboardShortcuts", "Keyboard shortcuts")}
+            >
+              <kbd className="rounded border border-border px-1.5 py-0.5 text-xs font-medium text-text-subtle">?</kbd>
             </button>
           </Tooltip>
         </div>

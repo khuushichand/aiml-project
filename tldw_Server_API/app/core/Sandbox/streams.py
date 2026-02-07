@@ -2,16 +2,34 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import threading
-from typing import Any, Dict, Optional
+import contextlib
 import json
 import os
-import uuid
+import threading
 import time
+import uuid
 
 from loguru import logger
-from tldw_Server_API.app.core.config import settings as app_settings
+
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
+
+try:
+    import redis as _redis_lib
+    _REDIS_EXCEPTIONS: tuple[type[Exception], ...] = (_redis_lib.RedisError,)
+except ImportError:
+    _REDIS_EXCEPTIONS = ()
+
+_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+) + _REDIS_EXCEPTIONS
 
 
 class RunStreamHub:
@@ -24,7 +42,7 @@ class RunStreamHub:
         self._log_bytes: dict[str, int] = {}
         self._truncated: set[str] = set()
         self._ended: set[str] = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.RLock()
         self._max_queue = 1000
         self._max_log_bytes_default = 10 * 1024 * 1024
@@ -41,7 +59,7 @@ class RunStreamHub:
         # Optional Redis fan-out (cross-worker broadcast)
         self._redis_enabled: bool = False
         self._redis_client = None
-        self._redis_thread: Optional[threading.Thread] = None
+        self._redis_thread: threading.Thread | None = None
         self._redis_channel: str = str(os.getenv("SANDBOX_WS_REDIS_CHANNEL") or "tldw:sandbox:streams:v1")
         self._instance_id: str = uuid.uuid4().hex
         self._maybe_enable_redis_fanout()
@@ -58,7 +76,7 @@ class RunStreamHub:
         for run_id in pending:
             try:
                 self._schedule_dispatch(run_id)
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 continue
 
     def _get_queue(self, run_id: str) -> asyncio.Queue:
@@ -104,7 +122,7 @@ class RunStreamHub:
                     frame["seq"] = self._next_seq(run_id)
                 try:
                     q.put_nowait(_copy.deepcopy(frame))
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     break
             # Finally register this subscriber for future live frames
             self._queues.setdefault(run_id, []).append((loop, q))
@@ -133,7 +151,7 @@ class RunStreamHub:
                 try:
                     if isinstance(frame, dict) and int(frame.get("seq", 0)) >= int(from_seq):
                         q.put_nowait(_copy.deepcopy(frame))
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     break
             self._queues.setdefault(run_id, []).append((loop, q))
             return q
@@ -154,7 +172,7 @@ class RunStreamHub:
                 data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 # fire-and-forget; swallow errors
                 self._redis_client.publish(self._redis_channel, data)
-        except Exception as e:
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"redis publish failed: {e}")
 
     def _publish_local(self, run_id: str, frame: dict) -> None:
@@ -178,7 +196,7 @@ class RunStreamHub:
             try:
                 if loop is not None and loop.is_closed():
                     loop = None
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 pass
             if not loop:
                 subs = self._queues.get(run_id) or []
@@ -189,12 +207,12 @@ class RunStreamHub:
                 t = threading.Timer(0.005, lambda: self._schedule_dispatch(run_id))
                 t.daemon = True
                 t.start()
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 pass
             return
         try:
             loop.call_soon_threadsafe(self._do_dispatch, run_id)
-        except Exception as e:
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"dispatch schedule failed: {e}")
 
     def _do_dispatch(self, run_id: str) -> None:
@@ -215,7 +233,7 @@ class RunStreamHub:
                 try:
                     import copy as _copy
                     lp.call_soon_threadsafe(self._queue_put_nowait, q, _copy.deepcopy(frame))
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     # Swallow delivery errors to individual subscribers
                     pass
 
@@ -225,10 +243,8 @@ class RunStreamHub:
             q.put_nowait(item)
         except asyncio.QueueFull:
             # Drop oldest by draining one, then put
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 _ = q.get_nowait()
-            except Exception:
-                pass
             # Metrics: queue overflow/drop
             try:
                 from tldw_Server_API.app.core.Metrics import increment_counter
@@ -236,14 +252,12 @@ class RunStreamHub:
                     "sandbox_ws_queue_drops_total",
                     labels={"component": "sandbox", "reason": "drop_oldest"},
                 )
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 q.put_nowait(item)
-            except Exception:
-                pass
 
-    def publish_event(self, run_id: str, event: str, data: Optional[dict] = None) -> None:
+    def publish_event(self, run_id: str, event: str, data: dict | None = None) -> None:
         # Deduplicate final end event to avoid double-emission from runner and service
         if event == "end":
             with self._lock:
@@ -262,13 +276,13 @@ class RunStreamHub:
         """Publish a truncated frame with a reason code."""
         self._publish(run_id, {"type": "truncated", "reason": str(reason)})
 
-    def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
+    def publish_stdout(self, run_id: str, chunk: bytes, max_log_bytes: int | None = None) -> None:
         self._publish_stream(run_id, "stdout", chunk, max_log_bytes=max_log_bytes)
 
-    def publish_stderr(self, run_id: str, chunk: bytes, max_log_bytes: Optional[int] = None) -> None:
+    def publish_stderr(self, run_id: str, chunk: bytes, max_log_bytes: int | None = None) -> None:
         self._publish_stream(run_id, "stderr", chunk, max_log_bytes=max_log_bytes)
 
-    def _publish_stream(self, run_id: str, kind: str, chunk: bytes, *, max_log_bytes: Optional[int]) -> None:
+    def _publish_stream(self, run_id: str, kind: str, chunk: bytes, *, max_log_bytes: int | None) -> None:
         cap = max_log_bytes or self._max_log_bytes_default
         with self._lock:
             used = self._log_bytes.get(run_id, 0)
@@ -283,7 +297,7 @@ class RunStreamHub:
                             "sandbox_log_truncations_total",
                             labels={"component": "sandbox", "reason": "log_cap"},
                         )
-                    except Exception:
+                    except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                         pass
                 return
             remaining = cap - used
@@ -310,7 +324,7 @@ class RunStreamHub:
                         frame["seq"] = self._next_seq(run_id)
                     import copy as _copy
                     q.put_nowait(_copy.deepcopy(frame))
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     break
 
     def get_buffer_snapshot(self, run_id: str) -> list[dict]:
@@ -329,10 +343,10 @@ class RunStreamHub:
     # Interactive stdin
     # -----------------
     def configure_stdin(self, run_id: str, *, interactive: bool,
-                         stdin_max_bytes: Optional[int] = None,
-                         stdin_max_frame_bytes: Optional[int] = None,
-                         stdin_bps: Optional[int] = None,
-                         stdin_idle_timeout_sec: Optional[int] = None) -> None:
+                         stdin_max_bytes: int | None = None,
+                         stdin_max_frame_bytes: int | None = None,
+                         stdin_bps: int | None = None,
+                         stdin_idle_timeout_sec: int | None = None) -> None:
         """Configure stdin caps for a run. If interactive is False, clears any config."""
         with self._lock:
             if not interactive:
@@ -359,7 +373,7 @@ class RunStreamHub:
             st.setdefault("last_input", float(_time.time()))
             self._stdin_state[run_id] = st
 
-    def get_stdin_config(self, run_id: str) -> Optional[dict]:
+    def get_stdin_config(self, run_id: str) -> dict | None:
         with self._lock:
             cfg = self._stdin_cfg.get(run_id)
             return dict(cfg) if cfg else None
@@ -380,10 +394,10 @@ class RunStreamHub:
             tokens = min(cap, tokens + add)
             st["tokens"] = tokens
             st["last_refill"] = now
-        except Exception:
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
             return
 
-    def consume_stdin(self, run_id: str, data_len: int) -> tuple[int, Optional[str]]:
+    def consume_stdin(self, run_id: str, data_len: int) -> tuple[int, str | None]:
         """Consume stdin bytes for a run according to configured caps.
 
         Returns a tuple of (allowed_bytes, reason_if_truncated). If allowed_bytes is 0
@@ -397,7 +411,7 @@ class RunStreamHub:
             # refill tokens for rate limiting
             self._refill_tokens(st)
             allowed = int(data_len)
-            reason: Optional[str] = None
+            reason: str | None = None
             # Per-frame cap
             if cfg.get("stdin_max_frame_bytes") is not None:
                 mfb = int(cfg["stdin_max_frame_bytes"])
@@ -433,13 +447,13 @@ class RunStreamHub:
                 st["last_input"] = float(_time.time())
             return (int(allowed), reason)
 
-    def get_stdin_idle_timeout(self, run_id: str) -> Optional[int]:
+    def get_stdin_idle_timeout(self, run_id: str) -> int | None:
         with self._lock:
             cfg = self._stdin_cfg.get(run_id) or {}
             val = cfg.get("stdin_idle_timeout_sec")
             return int(val) if val is not None else None
 
-    def get_last_stdin_input_time(self, run_id: str) -> Optional[float]:
+    def get_last_stdin_input_time(self, run_id: str) -> float | None:
         with self._lock:
             st = self._stdin_state.get(run_id) or {}
             return float(st.get("last_input")) if st.get("last_input") is not None else None
@@ -463,11 +477,11 @@ class RunStreamHub:
                 if q is None:
                     q = _queue.Queue()
                     self._stdin_queues[run_id] = q
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 return
             try:
                 q.put_nowait(bytes(data))
-            except Exception:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                 # Best-effort; drop on overflow
                 pass
 
@@ -511,40 +525,28 @@ class RunStreamHub:
             # Clear sequence counter
             self._seq.pop(run_id, None)
             # Drop stdin queues and state
-            try:
+            with contextlib.suppress(_SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS):
                 self._stdin_queues.pop(run_id, None)
-            except Exception:
-                pass
 
     # -----------------
     # Redis fan-out (optional)
     # -----------------
     def _maybe_enable_redis_fanout(self) -> None:
         try:
-            # Explicit toggle (env) or reuse global REDIS_ENABLED
-            toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower() in {"1","true","yes","on","y"}
-            global_enabled = False
-            try:
-                global_enabled = bool(getattr(app_settings, "REDIS_ENABLED", False))
-            except Exception:
-                global_enabled = False
-            if not (toggle_env or global_enabled):
+            # Redis fan-out must be explicitly enabled for sandbox streams.
+            toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower()
+            if toggle_env not in {"1", "true", "yes", "on", "y"}:
                 return
             # Resolve URL
             url = os.getenv("SANDBOX_REDIS_URL") or os.getenv("REDIS_URL")
             if not url:
-                try:
-                    url = getattr(app_settings, "REDIS_URL", None)
-                except Exception:
-                    url = None
-            if not url:
                 # Try host/port/db
                 try:
-                    host = getattr(app_settings, "REDIS_HOST", "127.0.0.1")
-                    port = int(getattr(app_settings, "REDIS_PORT", 6379))
-                    db = int(getattr(app_settings, "REDIS_DB", 0))
+                    host = str(os.getenv("REDIS_HOST", "127.0.0.1"))
+                    port = int(os.getenv("REDIS_PORT", "6379"))
+                    db = int(os.getenv("REDIS_DB", "0"))
                     url = f"redis://{host}:{port}/{db}"
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     url = None
             if not url:
                 return
@@ -562,11 +564,11 @@ class RunStreamHub:
                 th.start()
                 self._redis_thread = th
                 logger.debug("Sandbox WS Redis fan-out enabled")
-            except Exception as e:
+            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS as e:
                 self._redis_enabled = False
                 self._redis_client = None
                 logger.debug(f"Sandbox WS Redis fan-out unavailable: {e}")
-        except Exception:
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
             # Never break hub init on redis issues
             self._redis_enabled = False
             self._redis_client = None
@@ -593,10 +595,10 @@ class RunStreamHub:
                     frame = payload.get("frame")
                     if isinstance(run_id, str) and isinstance(frame, dict):
                         self._publish_local(run_id, frame)
-                except Exception:
+                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     # Keep listening on individual message errors
                     continue
-        except Exception as e:
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"redis listen loop ended: {e}")
 
     def get_redis_status(self) -> dict:
@@ -619,7 +621,7 @@ class RunStreamHub:
             self._redis_client.ping()
             dt = (time.perf_counter() - t0) * 1000.0
             return {"ok": True, "ms": float(dt), "error": None}
-        except Exception as e:  # pragma: no cover (network flake)
+        except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover (network flake)
             return {"ok": False, "ms": None, "error": str(e)}
 
 

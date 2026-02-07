@@ -13,9 +13,7 @@ If you prefer a single registry, adapt this module to upsert into
 """
 
 import sqlite3
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+
 from loguru import logger
 
 

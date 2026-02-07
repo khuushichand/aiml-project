@@ -5,38 +5,67 @@ Provides webhook registration, delivery, and retry logic for
 asynchronous evaluation notifications.
 """
 
-import json
-import hmac
-import hashlib
 import asyncio
+import hashlib
+import hmac
+import json
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List, Tuple
-from dataclasses import dataclass, asdict
-from enum import Enum
-from pathlib import Path
-from loguru import logger
 import secrets
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
+
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
     log_webhook_registration,
     log_webhook_unregistration,
 )
+from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+
 #
 # Local Imports
 from tldw_Server_API.app.core.Evaluations.db_adapter import (
-    DatabaseAdapter, DatabaseConfig, DatabaseType,
-    DatabaseAdapterFactory, get_database_adapter
+    DatabaseAdapter,
+    DatabaseAdapterFactory,
+    DatabaseConfig,
+    DatabaseType,
+    get_database_adapter,
 )
-# Import security enhancements
-from tldw_Server_API.app.core.Evaluations.webhook_security import (
-    webhook_validator,
-    WebhookPermissionManager,
-)
-from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+
 # Remove legacy audit event types; use unified audit adapter
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+
+# Import security enhancements
+from tldw_Server_API.app.core.Evaluations.webhook_security import (
+    WebhookPermissionManager,
+    webhook_validator,
+)
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+
+_WEBHOOK_MANAGER_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
 #
 #
 #######################################################################################################################
@@ -73,7 +102,7 @@ class WebhookPayload:
     event: str
     evaluation_id: str
     timestamp: str
-    data: Dict[str, Any]
+    data: dict[str, Any]
 
     def to_json(self) -> str:
         """Convert to JSON string."""
@@ -181,7 +210,7 @@ class WebhookManager:
         if current_adapter is not None:
             try:
                 current_adapter.close()
-            except Exception as exc:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to close existing webhook adapter: {exc}")
 
         self.db_adapter = adapter
@@ -194,12 +223,12 @@ class WebhookManager:
         self,
         user_id: str,
         url: str,
-        events: List[WebhookEvent],
+        events: list[WebhookEvent],
         secret: Optional[str] = None,
         skip_validation: bool = False,
         retry_count: Optional[int] = None,
         timeout_seconds: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Register a webhook for a user with enhanced security validation.
 
@@ -262,13 +291,10 @@ class WebhookManager:
                 if existing:
                     webhook_id = existing['id']
                     existing_secret = existing['secret']
-                    existing_events = existing['events']
+                    existing['events']
 
                     # Preserve secret unless explicitly rotated
-                    if secret:
-                        secret_to_store = secret
-                    else:
-                        secret_to_store = existing_secret
+                    secret_to_store = secret or existing_secret
 
                     # Update existing webhook
                     self.db_adapter.update("""
@@ -338,7 +364,7 @@ class WebhookManager:
         except ValueError:
             # Re-raise validation errors
             raise
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             # Log unexpected errors
             processing_time = asyncio.get_event_loop().time() - start_time
             self.metrics.record_webhook_delivery(
@@ -350,7 +376,7 @@ class WebhookManager:
             log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=str(e))
 
             logger.error(f"Failed to register webhook: {e}")
-            raise ValueError(f"Webhook registration failed: {str(e)}")
+            raise ValueError(f"Webhook registration failed: {str(e)}") from e
 
     async def unregister_webhook(self, user_id: str, url: str) -> bool:
         """
@@ -406,7 +432,7 @@ class WebhookManager:
 
                 return False
 
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             log_webhook_unregistration(user_id=user_id, webhook_id=None, url=url, events=[], success=False, error=str(e))
 
             logger.error(f"Failed to unregister webhook: {e}")
@@ -417,7 +443,7 @@ class WebhookManager:
         user_id: str,
         event: WebhookEvent,
         evaluation_id: str,
-        data: Dict[str, Any]
+        data: dict[str, Any]
     ):
         """
         Send webhook notification to all registered endpoints.
@@ -457,7 +483,7 @@ class WebhookManager:
         self,
         user_id: str,
         event: WebhookEvent
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get active webhooks for user and event."""
         # In TEST_MODE, ignore event filtering to maximize delivery determinism
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
@@ -487,7 +513,7 @@ class WebhookManager:
                 AND events LIKE ?
             """, (user_id, f'%"{event.value}"%'))
 
-            webhooks: List[Dict[str, Any]] = []
+            webhooks: list[dict[str, Any]] = []
             for row in rows:
                 webhooks.append({
                     "id": row['id'],
@@ -535,7 +561,7 @@ class WebhookManager:
 
     async def _deliver_webhook(
         self,
-        webhook: Dict[str, Any],
+        webhook: dict[str, Any],
         payload: WebhookPayload
     ):
         """Deliver webhook with retry logic."""
@@ -544,9 +570,10 @@ class WebhookManager:
         secret = webhook["secret"]
 
         # Validate URL before delivery to prevent SSRF
-        from urllib.parse import urlparse
         import ipaddress
         import socket
+        from urllib.parse import urlparse
+
         # In tests, skip DNS validation to keep runs deterministic.
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
         testing_env = (_is_test_mode() or "PYTEST_CURRENT_TEST" in os.environ)
@@ -603,7 +630,7 @@ class WebhookManager:
                             logger.error(f"Failed to resolve webhook hostname: {url}")
                             self._update_webhook_stats(webhook_id, success=False, error="DNS resolution failed")
                             return
-            except Exception as e:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"URL validation failed: {e}")
                 self._update_webhook_stats(webhook_id, success=False, error=f"URL validation failed: {str(e)}")
                 return
@@ -640,7 +667,7 @@ class WebhookManager:
 
                 try:
                     timeout = min(5, int(webhook.get("timeout_seconds", 30)))
-                except Exception:
+                except _WEBHOOK_MANAGER_COERCE_EXCEPTIONS:
                     timeout = 5
                 resp = await afetch(
                     method="POST",
@@ -672,7 +699,7 @@ class WebhookManager:
                     logger.info(f"Webhook delivered successfully: {delivery_id}")
                     break
                 error = f"status={status_code}"
-            except Exception as e:
+            except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 error = str(e)
                 logger.error(f"Webhook delivery error: {delivery_id} - {error}")
             finally:
@@ -788,7 +815,7 @@ class WebhookManager:
         self,
         user_id: str,
         url: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get webhook status for user.
 
@@ -862,7 +889,7 @@ class WebhookManager:
         self,
         user_id: str,
         url: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Send a test webhook.
 
@@ -889,7 +916,7 @@ class WebhookManager:
                 "error": "Webhook not found"
             }
 
-        webhook_id = row.get("id") if isinstance(row, dict) else row[0]
+        row.get("id") if isinstance(row, dict) else row[0]
         secret = row.get("secret") if isinstance(row, dict) else row[1]
 
         # Create test payload
@@ -920,9 +947,9 @@ class WebhookManager:
         # Send test webhook with DNS rebinding prevention
         try:
             # Parse URL to get hostname and port
-            from urllib.parse import urlparse, urlunparse
-            import socket
             import ipaddress
+            import socket
+            from urllib.parse import urlparse, urlunparse
 
             parsed_url = urlparse(url)
             hostname = parsed_url.hostname
@@ -1008,13 +1035,14 @@ class WebhookManager:
                 "success": False,
                 "error": "Request timeout"
             }
-        except Exception as e:
+        except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             return {
                 "success": False,
                 "error": str(e)
             }
 
 
+import contextlib
 from functools import lru_cache
 
 
@@ -1055,17 +1083,15 @@ def shutdown_webhook_manager_if_initialized() -> None:
                     try:
                         # Best effort cancellation for asyncio Task
                         task.cancel()
-                    except Exception:
+                    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Close any underlying DB adapter to avoid leaking closed connections across tests
                 try:
                     adapter = getattr(mgr, "db_adapter", None)
                     if adapter is not None:
-                        try:
+                        with contextlib.suppress(_WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS):
                             adapter.close()
-                        except Exception:
-                            pass
-                except Exception:
+                except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             finally:
                 try:
@@ -1074,11 +1100,11 @@ def shutdown_webhook_manager_if_initialized() -> None:
                     try:
                         from tldw_Server_API.app.core.Evaluations.db_adapter import close_database_adapter as _close_db
                         _close_db()
-                    except Exception:
+                    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                         pass
                     get_webhook_manager.cache_clear()  # type: ignore[attr-defined]
-                except Exception:
+                except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
-    except Exception:
+    except _WEBHOOK_MANAGER_NONCRITICAL_EXCEPTIONS:
         # Never raise during teardown
         pass

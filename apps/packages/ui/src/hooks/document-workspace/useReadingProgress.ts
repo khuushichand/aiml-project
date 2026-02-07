@@ -34,7 +34,7 @@ function syncReadingProgressWithBeacon(
   }
 
   try {
-    const url = `${serverUrl}/api/v1/media/${mediaId}/reading-progress`
+    const url = `${serverUrl}/api/v1/media/${mediaId}/progress`
     const payload = JSON.stringify(progress)
 
     // sendBeacon returns true if the browser successfully queued the request
@@ -90,6 +90,7 @@ export function useReadingProgress(mediaId: number | null) {
   const setCurrentCfi = useDocumentWorkspaceStore((s) => s.setCurrentCfi)
   const setCurrentPercentage = useDocumentWorkspaceStore((s) => s.setCurrentPercentage)
   const openDocuments = useDocumentWorkspaceStore((s) => s.openDocuments)
+  const setProgressHealth = useDocumentWorkspaceStore((s) => s.setProgressHealth)
 
   // Track which documents have had server progress applied (only apply once per session)
   const appliedProgressRef = useRef<Set<number>>(new Set())
@@ -99,7 +100,19 @@ export function useReadingProgress(mediaId: number | null) {
     queryFn: async (): Promise<ReadingProgressResponse | null> => {
       if (mediaId === null) return null
 
-      const response = await tldwClient.getReadingProgress(mediaId)
+      let response
+      try {
+        response = await tldwClient.getReadingProgress(mediaId)
+      } catch (error) {
+        const status = (error as { status?: number })?.status
+        if (status === 500) {
+          setProgressHealth("error")
+        } else {
+          setProgressHealth("unknown")
+        }
+        throw error
+      }
+      setProgressHealth("ok")
 
       // Only apply server progress if:
       // 1. We haven't already applied progress for this document this session
@@ -299,12 +312,16 @@ export function useReadingProgressAutoSave(
 
 /**
  * Hook that saves reading progress when the document is closed or changed.
+ * Pass the forceSave callback returned by useReadingProgressAutoSave to avoid
+ * duplicating autosave effects.
  *
  * Uses navigator.sendBeacon for page unload events to guarantee delivery,
  * since regular async requests may not complete before the page closes.
  */
-export function useReadingProgressSaveOnClose(mediaId: number | null) {
-  const { forceSave } = useReadingProgressAutoSave(mediaId, 0)
+export function useReadingProgressSaveOnClose(
+  mediaId: number | null,
+  forceSave: () => void
+) {
   const totalPages = useDocumentWorkspaceStore((s) => s.totalPages)
   const currentPage = useDocumentWorkspaceStore((s) => s.currentPage)
   const zoomLevel = useDocumentWorkspaceStore((s) => s.zoomLevel)
@@ -313,20 +330,50 @@ export function useReadingProgressSaveOnClose(mediaId: number | null) {
   const currentPercentage = useDocumentWorkspaceStore((s) => s.currentPercentage)
   const serverUrl = useConnectionStore((s) => s.state.serverUrl)
   const previousMediaIdRef = useRef<number | null>(mediaId)
+  const forceSaveRef = useRef(forceSave)
+  const totalPagesRef = useRef(totalPages)
+  const currentPageRef = useRef(currentPage)
+  const zoomLevelRef = useRef(zoomLevel)
+  const viewModeRef = useRef(viewMode)
+  const currentCfiRef = useRef(currentCfi)
+  const currentPercentageRef = useRef(currentPercentage)
+  const serverUrlRef = useRef(serverUrl)
+  const mediaIdRef = useRef(mediaId)
+
+  useEffect(() => {
+    forceSaveRef.current = forceSave
+  }, [forceSave])
+
+  useEffect(() => {
+    totalPagesRef.current = totalPages
+    currentPageRef.current = currentPage
+    zoomLevelRef.current = zoomLevel
+    viewModeRef.current = viewMode
+    currentCfiRef.current = currentCfi
+    currentPercentageRef.current = currentPercentage
+  }, [totalPages, currentPage, zoomLevel, viewMode, currentCfi, currentPercentage])
+
+  useEffect(() => {
+    serverUrlRef.current = serverUrl
+  }, [serverUrl])
+
+  useEffect(() => {
+    mediaIdRef.current = mediaId
+  }, [mediaId])
 
   // Save when document changes (normal async sync is fine here)
   useEffect(() => {
     if (previousMediaIdRef.current !== mediaId && previousMediaIdRef.current !== null) {
-      forceSave()
+      forceSaveRef.current()
     }
     previousMediaIdRef.current = mediaId
-  }, [mediaId, forceSave])
+  }, [mediaId])
 
   // Save on unmount / page close
   // Use sendBeacon for beforeunload to guarantee delivery
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (mediaId !== null && totalPages > 0) {
+      if (mediaIdRef.current !== null && totalPagesRef.current > 0) {
         // Build progress object
         const progress: {
           current_page: number
@@ -336,28 +383,28 @@ export function useReadingProgressSaveOnClose(mediaId: number | null) {
           cfi?: string
           percentage?: number
         } = {
-          current_page: currentPage,
-          total_pages: totalPages,
-          zoom_level: zoomLevel,
-          view_mode: viewMode
+          current_page: currentPageRef.current,
+          total_pages: totalPagesRef.current,
+          zoom_level: zoomLevelRef.current,
+          view_mode: viewModeRef.current
         }
 
         // Include CFI and percentage for EPUB documents
-        if (currentCfi) {
-          progress.cfi = currentCfi
-          progress.percentage = currentPercentage
+        if (currentCfiRef.current) {
+          progress.cfi = currentCfiRef.current
+          progress.percentage = currentPercentageRef.current
         }
 
         // Try sendBeacon first (guaranteed delivery on page close)
         const beaconSent = syncReadingProgressWithBeacon(
-          serverUrl,
-          mediaId,
+          serverUrlRef.current,
+          mediaIdRef.current,
           progress
         )
 
         // Fall back to regular sync if beacon fails (might not complete)
         if (!beaconSent) {
-          forceSave()
+          forceSaveRef.current()
         }
       }
     }
@@ -366,19 +413,9 @@ export function useReadingProgressSaveOnClose(mediaId: number | null) {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
       // On unmount (not page close), regular async sync is fine
-      if (totalPages > 0) {
-        forceSave()
+      if (totalPagesRef.current > 0) {
+        forceSaveRef.current()
       }
     }
-  }, [
-    forceSave,
-    totalPages,
-    mediaId,
-    currentPage,
-    zoomLevel,
-    viewMode,
-    currentCfi,
-    currentPercentage,
-    serverUrl
-  ])
+  }, [])
 }

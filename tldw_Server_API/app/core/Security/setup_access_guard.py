@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 import ipaddress
-from typing import Callable, Optional
+import os
+from typing import Callable
 
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response, PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
-import os
+
+_SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _env_true(name: str) -> bool:
@@ -20,14 +29,14 @@ def _env_true(name: str) -> bool:
 
 
 
-def _get_peer_ip(request: Request) -> Optional[str]:
+def _get_peer_ip(request: Request) -> str | None:
     try:
         return request.client.host if request.client else None
-    except Exception:
+    except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
         return None
 
 
-def _is_loopback(ip_str: Optional[str]) -> bool:
+def _is_loopback(ip_str: str | None) -> bool:
     if not ip_str:
         return False
     if ip_str in {"testclient", "localhost"}:
@@ -35,7 +44,7 @@ def _is_loopback(ip_str: Optional[str]) -> bool:
     try:
         ip_obj = ipaddress.ip_address(ip_str)
         return ip_obj.is_loopback
-    except Exception:
+    except ValueError:
         # Non-IP or parse failure; treat as remote
         return False
 
@@ -47,7 +56,7 @@ def setup_remote_access_enabled() -> bool:
         cp = load_comprehensive_config()
         if cp and cp.has_section("Setup"):
             return cp.getboolean("Setup", "allow_remote_setup_access", fallback=False)
-    except Exception:
+    except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
         pass
     return False
 
@@ -60,7 +69,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
       - [Setup] allow_remote_setup_access=true in Config_Files/config.txt
     """
 
-    def _parse_allowlist(self, raw: Optional[str]) -> list[ipaddress._BaseNetwork]:
+    def _parse_allowlist(self, raw: str | None) -> list[ipaddress._BaseNetwork]:
         nets: list[ipaddress._BaseNetwork] = []
         if not raw:
             return nets
@@ -72,7 +81,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 else:
                     ip = ipaddress.ip_address(token)
                     nets.append(ipaddress.ip_network(ip.exploded + ("/32" if ip.version == 4 else "/128"), strict=False))
-            except Exception:
+            except ValueError:
                 logger.warning(f"Invalid allowlist entry ignored: {token}")
         return nets
 
@@ -87,11 +96,11 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 raw_cfg = cp.get(section, field, fallback="").strip()
                 if raw_cfg:
                     return self._parse_allowlist(raw_cfg)
-        except Exception:
+        except _SETUP_ACCESS_GUARD_NONCRITICAL_EXCEPTIONS:
             pass
         return []
 
-    def _resolve_client_ip(self, request: Request, trusted_proxies: list[ipaddress._BaseNetwork]) -> Optional[str]:
+    def _resolve_client_ip(self, request: Request, trusted_proxies: list[ipaddress._BaseNetwork]) -> str | None:
         """Resolve client IP using X-Forwarded-For only when the peer is a trusted proxy.
 
         - If remote peer is in trusted_proxies and XFF present, use the first (leftmost) XFF IP.
@@ -101,9 +110,9 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
         peer = _get_peer_ip(request)
         try:
             peer_ip_obj = ipaddress.ip_address(peer) if peer else None
-        except Exception:
+        except ValueError:
             peer_ip_obj = None
-        def _is_trusted(ip: Optional[ipaddress._BaseAddress]) -> bool:
+        def _is_trusted(ip: ipaddress._BaseAddress | None) -> bool:
             return bool(ip and any(ip in net for net in trusted_proxies))
 
         if _is_trusted(peer_ip_obj):
@@ -113,7 +122,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                 try:
                     ipaddress.ip_address(xr.strip())
                     return xr.strip()
-                except Exception:
+                except ValueError:
                     pass
             fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
             if fwd:
@@ -121,7 +130,7 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
                     leftmost = fwd.split(",")[0].strip()
                     ipaddress.ip_address(leftmost)
                     return leftmost
-                except Exception:
+                except ValueError:
                     pass
         return peer
 
@@ -140,10 +149,10 @@ class SetupAccessGuardMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Convert client_ip to ip_address object for membership checks
-        client_ip_obj: Optional[ipaddress._BaseAddress] = None
+        client_ip_obj: ipaddress._BaseAddress | None = None
         try:
             client_ip_obj = ipaddress.ip_address(client_ip) if client_ip else None
-        except Exception:
+        except ValueError:
             client_ip_obj = None
 
         # Denylist takes precedence (except loopback handled above)

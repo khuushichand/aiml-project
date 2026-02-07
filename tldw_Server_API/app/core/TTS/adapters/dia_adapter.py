@@ -3,37 +3,33 @@
 #
 # Imports
 import asyncio
+import contextlib
 import os
 import re
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
+import numpy as np
+
 #
 # Third-party Imports
 import torch
-import numpy as np
 from loguru import logger
+
+from ..tts_exceptions import (
+    TTSGPUError,
+    TTSModelLoadError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
+)
+from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
+
 #
 # Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
-from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSModelLoadError,
-    TTSGenerationError,
-    TTSResourceError,
-    TTSGPUError
-)
-from ..tts_validation import validate_tts_request
-from ..tts_resource_manager import get_resource_manager
-from ..utils import parse_bool
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -79,7 +75,7 @@ class DiaAdapter(TTSAdapter):
     # Expose presets alias for tests and UI parity
     VOICE_PRESETS = DEFAULT_SPEAKERS
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Model configuration
@@ -136,7 +132,8 @@ class DiaAdapter(TTSAdapter):
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.model,
-                    cleanup_callback=self._cleanup_resources
+                    cleanup_callback=self._cleanup_resources,
+                    model_key=str(self.model_path),
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
@@ -156,7 +153,7 @@ class DiaAdapter(TTSAdapter):
                     f"GPU error initializing {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "device": self.device}
-                )
+                ) from e
             raise
         except Exception as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
@@ -165,7 +162,7 @@ class DiaAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def _load_dia_model(self) -> bool:
         """Load Dia processor and model. Split out for easier testing/mocking."""
@@ -178,7 +175,7 @@ class DiaAdapter(TTSAdapter):
                 "Failed to import required dependencies",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install transformers torch"}
-            )
+            ) from e
 
         # Load processor
         logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")
@@ -287,7 +284,7 @@ class DiaAdapter(TTSAdapter):
 
     async def _stream_audio_dia(
         self,
-        dialogue_parts: List[Dict[str, Any]],
+        dialogue_parts: list[dict[str, Any]],
         request: TTSRequest
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from Dia model"""
@@ -295,10 +292,7 @@ class DiaAdapter(TTSAdapter):
             raise ValueError("Dia model not initialized")
 
         # Import StreamingAudioWriter for format conversion
-        from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-            StreamingAudioWriter,
-            AudioNormalizer
-        )
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
@@ -319,13 +313,19 @@ class DiaAdapter(TTSAdapter):
             ).to(self.device)
 
             # Set generation parameters
+            extras = request.extra_params or {}
+            if not isinstance(extras, dict):
+                extras = {}
             gen_kwargs = {
-                "max_new_tokens": 2000,
-                "temperature": 0.8,
+                "max_new_tokens": int(extras.get("max_new_tokens", 2000)),
+                "temperature": extras.get("temperature", 0.8),
                 "do_sample": True,
-                "top_p": 0.95,
-                "pad_token_id": self.processor.tokenizer.eos_token_id
+                "top_p": extras.get("top_p", 0.95),
+                "pad_token_id": self.processor.tokenizer.eos_token_id,
             }
+            if extras.get("min_new_tokens") is not None:
+                with contextlib.suppress(Exception):
+                    gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
 
             # Add seed for consistent voice if specified
             if request.seed:
@@ -368,7 +368,7 @@ class DiaAdapter(TTSAdapter):
 
     async def _generate_complete_dia(
         self,
-        dialogue_parts: List[Dict[str, Any]],
+        dialogue_parts: list[dict[str, Any]],
         request: TTSRequest
     ) -> bytes:
         """Generate complete audio from Dia"""
@@ -380,8 +380,8 @@ class DiaAdapter(TTSAdapter):
     def _process_dialogue(
         self,
         text: str,
-        speakers: Optional[Dict[str, str]] = None
-    ) -> List[Dict[str, Any]]:
+        speakers: Optional[dict[str, str]] = None
+    ) -> list[dict[str, Any]]:
         """
         Process text into dialogue parts with speaker assignments.
         Returns list of dicts with speaker, text, and any nonverbal cues.
@@ -433,13 +433,13 @@ class DiaAdapter(TTSAdapter):
         pattern = r'^[A-Za-z0-9]+:\s*'
         return bool(re.search(pattern, text, re.MULTILINE))
 
-    def _split_on_quotes(self, text: str) -> List[str]:
+    def _split_on_quotes(self, text: str) -> list[str]:
         """Split text on quotation marks for dialogue detection"""
         # Split on quotes but keep the quotes
         parts = re.split(r'(["\'].*?["\'])', text)
         return [p for p in parts if p.strip()]
 
-    def _extract_nonverbal(self, text: str) -> Tuple[str, List[str]]:
+    def _extract_nonverbal(self, text: str) -> tuple[str, list[str]]:
         """Extract nonverbal cues from text"""
         nonverbal = []
         for tag in self.NONVERBAL_TAGS:
@@ -450,7 +450,7 @@ class DiaAdapter(TTSAdapter):
 
     def _format_dia_input(
         self,
-        dialogue_parts: List[Dict[str, Any]],
+        dialogue_parts: list[dict[str, Any]],
         request: TTSRequest
     ) -> str:
         """

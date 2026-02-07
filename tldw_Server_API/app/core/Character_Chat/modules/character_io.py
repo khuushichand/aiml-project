@@ -6,28 +6,87 @@ This module contains functions for importing and exporting character cards.
 
 import base64
 import binascii
+import contextlib
 import io
 import json
 import os
 import struct
 import time
 import uuid
-import yaml
 import zlib
-from typing import Dict, List, Optional, Tuple, Any, Union, Set
+from typing import Any, Optional, Union
 
-from PIL import Image
+import yaml
 from loguru import logger
+from PIL import Image
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError, ConflictError, InputError
 from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.core.Character_Chat.constants import MAX_PNG_METADATA_BYTES
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
 # Import validation and parsing functions from character_validation module
 from . import character_validation as _character_validation
 
 # Import database functions from character_db module
 from .character_db import create_new_character_from_data
+
+_CHARACTER_IO_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    SyntaxError,
+    zlib.error,
+    yaml.YAMLError,
+)
+_CHARACTER_IO_IMPORT_FAILURE_EXCEPTIONS = (
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+) + _CHARACTER_IO_NONCRITICAL_EXCEPTIONS
+
+MAX_IMPORT_AVATAR_BYTES = 200 * 1024
+ALLOWED_IMPORT_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+_IMPORT_TEXT_FIELDS = (
+    "name",
+    "description",
+    "personality",
+    "scenario",
+    "system_prompt",
+    "post_history_instructions",
+    "first_message",
+    "message_example",
+    "creator_notes",
+    "creator",
+    "character_version",
+)
+_DISALLOWED_IMPORT_PATTERNS = (
+    "<script",
+    "</script",
+    "javascript:",
+    "onerror=",
+    "onload=",
+    "<iframe",
+    "<object",
+    "<embed",
+)
 
 
 class DatabaseCountError(CharactersRAGDBError):
@@ -58,7 +117,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
     """
     file_name_for_log = "image_stream"
 
-    def _create_image_source() -> Tuple[Optional[io.BytesIO], Optional[bytes], str]:
+    def _create_image_source() -> tuple[Optional[io.BytesIO], Optional[bytes], str]:
         """Create BytesIO source from various input types. Returns (source, raw_bytes, filename)."""
         nonlocal file_name_for_log
         raw_bytes: Optional[bytes] = None
@@ -71,14 +130,12 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         elif hasattr(image_file_input, 'read'):  # File-like object
             if hasattr(image_file_input, 'name') and image_file_input.name:
                 file_name_for_log = image_file_input.name
-            try:
+            with contextlib.suppress(_CHARACTER_IO_NONCRITICAL_EXCEPTIONS):
                 image_file_input.seek(0)
-            except Exception:
-                pass
             raw_bytes = image_file_input.read()
             try:
                 image_file_input.seek(0)  # Reset original stream pointer
-            except Exception:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                 pass
         else:
             logger.error("extract_json_from_image_file: Invalid input type. Must be file path, bytes, or BytesIO.")
@@ -97,6 +154,14 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
     def _try_parse_json_text(raw_text: str) -> Optional[str]:
         trimmed = raw_text.strip()
         if not trimmed:
+            return None
+        if len(trimmed.encode("utf-8")) > MAX_PNG_METADATA_BYTES:
+            logger.warning(
+                "Rejected oversized PNG metadata text in '{}': {} bytes exceeds {} byte limit.",
+                file_name_for_log,
+                len(trimmed.encode("utf-8")),
+                MAX_PNG_METADATA_BYTES,
+            )
             return None
         if trimmed.startswith("data:") and "base64," in trimmed:
             trimmed = trimmed.split("base64,", 1)[1].strip()
@@ -127,6 +192,14 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     f"Error decoding '{context_label}' metadata from '{file_name_for_log}': {exc}"
                 )
             return None
+        if len(decoded) > MAX_PNG_METADATA_BYTES:
+            logger.warning(
+                "Rejected oversized decoded PNG metadata in '{}': {} bytes exceeds {} byte limit.",
+                file_name_for_log,
+                len(decoded),
+                MAX_PNG_METADATA_BYTES,
+            )
+            return None
         try:
             decoded_text = decoded.decode('utf-8').lstrip("\ufeff").strip()
         except UnicodeDecodeError as exc:
@@ -136,6 +209,14 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                 )
             return None
         if not decoded_text:
+            return None
+        if len(decoded_text.encode("utf-8")) > MAX_PNG_METADATA_BYTES:
+            logger.warning(
+                "Rejected oversized decoded PNG metadata text in '{}': {} bytes exceeds {} byte limit.",
+                file_name_for_log,
+                len(decoded_text.encode("utf-8")),
+                MAX_PNG_METADATA_BYTES,
+            )
             return None
         try:
             json.loads(decoded_text)
@@ -178,8 +259,8 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             return _try_base64_json(raw_value, context_label=context_label)
         return None
 
-    def _iter_metadata_items(metadata: Dict[str, Any]) -> List[Tuple[Any, Any]]:
-        items: List[Tuple[Any, Any]] = []
+    def _iter_metadata_items(metadata: dict[str, Any]) -> list[tuple[Any, Any]]:
+        items: list[tuple[Any, Any]] = []
         for key, value in metadata.items():
             items.append((key, value))
             if isinstance(value, dict):
@@ -187,11 +268,11 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     items.append((sub_key, sub_value))
         return items
 
-    def _extract_from_metadata_items(items: List[Tuple[Any, Any]], source_label: str) -> Optional[str]:
+    def _extract_from_metadata_items(items: list[tuple[Any, Any]], source_label: str) -> Optional[str]:
         if not items:
             return None
         preferred_keys = {"chara", "character"}
-        attempted_keys: Set[str] = set()
+        attempted_keys: set[str] = set()
         for key, value in items:
             normalized_key = _normalize_key(key)
             if normalized_key not in preferred_keys:
@@ -219,11 +300,11 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         )
         return None
 
-    def _extract_png_text_chunks(raw_bytes: bytes) -> Dict[str, str]:
+    def _extract_png_text_chunks(raw_bytes: bytes) -> dict[str, str]:
         if not raw_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
             return {}
         pos = 8
-        chunks: Dict[str, str] = {}
+        chunks: dict[str, str] = {}
 
         def _safe_decompress(data: bytes) -> Optional[bytes]:
             if not data:
@@ -240,7 +321,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     logger.warning("PNG metadata chunk exceeded max size after flush (>{} bytes).", max_bytes)
                     return None
                 return chunk
-            except Exception as exc:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to decompress PNG metadata chunk: {}", exc)
                 return None
 
@@ -250,9 +331,25 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             data_start = pos + 8
             data_end = data_start + length
             if data_end + 4 > len(raw_bytes):
-                break
+                logger.warning(
+                    "Malformed PNG metadata in '{}': chunk length exceeds file bounds.",
+                    file_name_for_log,
+                )
+                return {}
             data = raw_bytes[data_start:data_end]
+            crc_expected = struct.unpack(">I", raw_bytes[data_end:data_end + 4])[0]
+            crc_actual = binascii.crc32(chunk_type + data) & 0xFFFFFFFF
+            if crc_expected != crc_actual:
+                logger.warning(
+                    "Rejected PNG metadata in '{}': CRC mismatch for chunk '{}'.",
+                    file_name_for_log,
+                    chunk_type.decode("latin-1", errors="replace"),
+                )
+                return {}
             pos = data_end + 4
+
+            if chunk_type == b"IEND":
+                break
 
             if chunk_type == b'tEXt':
                 if b'\x00' not in data:
@@ -277,7 +374,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     if text is None:
                         continue
                     chunks[keyword.decode('latin-1', errors='ignore')] = text.decode('utf-8', errors='replace')
-                except Exception:
+                except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                     continue
             elif chunk_type == b'iTXt':
                 parts = data.split(b'\x00', 5)
@@ -294,7 +391,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                         text = _safe_decompress(text)
                         if text is None:
                             continue
-                    except Exception:
+                    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                         continue
                 if len(text) > MAX_PNG_METADATA_BYTES:
                     logger.warning("PNG iTXt metadata exceeded max size (>{} bytes).", MAX_PNG_METADATA_BYTES)
@@ -307,7 +404,7 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
             return None
         try:
             chunks = _extract_png_text_chunks(raw_bytes)
-        except Exception as e:
+        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to parse PNG text chunks for '{file_name_for_log}': {e}")
             return None
         if not chunks:
@@ -315,10 +412,20 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
         return _extract_from_metadata_items(list(chunks.items()), "png-chunks")
 
     def _extract_metadata(img_obj: Image.Image, raw_bytes: Optional[bytes]) -> Optional[str]:
-        metadata_sources: List[Tuple[str, Dict[str, Any]]] = []
-        if hasattr(img_obj, 'info') and isinstance(img_obj.info, dict):
-            metadata_sources.append(("info", img_obj.info))
-        text_metadata = getattr(img_obj, 'text', None)
+        metadata_sources: list[tuple[str, dict[str, Any]]] = []
+        info_metadata = None
+        try:
+            info_metadata = getattr(img_obj, "info", None)
+        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Unable to access image info metadata for '{}': {}", file_name_for_log, exc)
+        if isinstance(info_metadata, dict):
+            metadata_sources.append(("info", info_metadata))
+
+        try:
+            text_metadata = getattr(img_obj, 'text', None)
+        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Unable to access image text metadata for '{}': {}", file_name_for_log, exc)
+            text_metadata = None
         if isinstance(text_metadata, dict):
             metadata_sources.append(("text", text_metadata))
 
@@ -363,11 +470,9 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
                     return _extract_metadata(img_obj, raw_bytes)
                 finally:
                     if hasattr(img_obj, "close"):
-                        try:
+                        with contextlib.suppress(_CHARACTER_IO_NONCRITICAL_EXCEPTIONS):
                             img_obj.close()
-                        except Exception:
-                            pass
-        except IOError as e:
+        except (OSError, SyntaxError) as e:
             # Catches PIL.UnidentifiedImageError and other file I/O issues
             logger.error(
                 f"Cannot open or read image file (or not a valid image): {file_name_for_log}. Error: {e}",
@@ -379,12 +484,27 @@ def extract_json_from_image_file(image_file_input: Union[str, bytes, io.BytesIO]
 
     except FileNotFoundError:
         logger.error(f"Image file not found for JSON extraction: {file_name_for_log}")
-    except Exception as e:
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error extracting JSON from image '{file_name_for_log}': {e}", exc_info=True)
     return None
 
 
-def import_character_card_from_json_string(json_content_str: str) -> Optional[Dict[str, Any]]:
+def _format_import_validation_errors(validation_errors: list[str], *, max_items: int = 3) -> str:
+    if not validation_errors:
+        return "Failed to parse character data from file"
+    clipped = validation_errors[:max_items]
+    message = "; ".join(clipped)
+    remaining = len(validation_errors) - len(clipped)
+    if remaining > 0:
+        message = f"{message}; and {remaining} more validation error(s)"
+    return f"Import validation failed: {message}"
+
+
+def import_character_card_from_json_string(
+    json_content_str: str,
+    *,
+    include_validation_errors: bool = False,
+) -> Optional[dict[str, Any]] | tuple[Optional[dict[str, Any]], list[str]]:
     """Imports and parses a character card from a JSON string.
 
     This function attempts to parse a character card from the provided JSON
@@ -406,13 +526,23 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         invalid, the card structure is unrecognized, critical fields are
         missing (like 'name' after parsing), or any other parsing error occurs.
     """
+    validation_errors: list[str] = []
+
+    def _return(
+        parsed: Optional[dict[str, Any]],
+    ) -> Optional[dict[str, Any]] | tuple[Optional[dict[str, Any]], list[str]]:
+        if include_validation_errors:
+            return parsed, validation_errors
+        return parsed
+
     if not json_content_str or not json_content_str.strip():
         logger.error("JSON content string is empty or whitespace.")
-        return None
+        validation_errors.append("JSON content string is empty or whitespace.")
+        return _return(None)
     try:
         card_data_dict = json.loads(json_content_str.strip())
 
-        parsed_card: Optional[Dict[str, Any]] = None
+        parsed_card: Optional[dict[str, Any]] = None
 
         # Enhanced format detection supporting more character card formats
         # Check for various format indicators
@@ -425,7 +555,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         is_explicit_v2_version = is_explicit_v2_version_str.startswith("2.")
 
         # Check for Tavern/SillyTavern format
-        has_tavern_fields = all(field in card_data_dict for field in ['name', 'description', 'first_mes'])
+        all(field in card_data_dict for field in ['name', 'description', 'first_mes'])
 
         # Check for Pygmalion format
         has_pygmalion_fields = 'char_name' in card_data_dict and 'char_persona' in card_data_dict
@@ -443,7 +573,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
         if is_explicit_v3_spec or is_explicit_v3_version:
             logger.debug("Attempting V3 validation based on card structure/spec.")
             try:
-                from tldw_Server_API.app.core.Character_Chat.ccv3_parser import validate_v3_card, parse_v3_card
+                from tldw_Server_API.app.core.Character_Chat.ccv3_parser import parse_v3_card, validate_v3_card
                 is_valid_v3_struct, v3_errors = validate_v3_card(card_data_dict)
                 if is_valid_v3_struct:
                     parsed_card = parse_v3_card(card_data_dict)
@@ -453,7 +583,7 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
                         logger.warning("V3 parsing failed after validation; will try other formats.")
                 else:
                     logger.warning(f"V3 validation failed: {'; '.join(v3_errors)}; falling back.")
-            except Exception as e:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"V3 parsing import failed or not available: {e}")
 
         attempt_v2_processing = (parsed_card is None) and (
@@ -474,7 +604,8 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
                 logger.error(f"V2 Card structural validation failed: {'; '.join(v2_errors)}.")
                 if is_explicit_v2_spec or is_explicit_v2_version:
                     logger.error("Card explicitly declared as V2 but failed V2 structural validation. Import aborted.")
-                    return None
+                    validation_errors.extend(v2_errors)
+                    return _return(None)
                 else:  # Implicit V2 guess failed validation
                     logger.warning(
                         "Heuristically identified V2 card failed V2 structural validation. Will attempt V1 parsing as fallback.")
@@ -512,27 +643,33 @@ def import_character_card_from_json_string(json_content_str: str) -> Optional[Di
                 parsed_card = _character_validation.parse_v1_card(card_data_dict)
             except ValueError as ve_v1:
                 logger.error(f"V1 card parsing error (likely missing required V1 fields): {ve_v1}")
+                validation_errors.append(str(ve_v1))
                 parsed_card = None  # Ensure parsed_card is None on this error
 
         # Final check and return
         if parsed_card and parsed_card.get('name'):  # Name is fundamental
             logger.info(f"Successfully parsed card: '{parsed_card.get('name')}'")
-            return parsed_card
+            return _return(parsed_card)
         else:
             if parsed_card and not parsed_card.get('name'):
                 logger.error("Parsed card is missing 'name'. Import failed.")
+                validation_errors.append("Parsed card is missing 'name'.")
             else:  # parsed_card is None
                 logger.error("All parsing attempts (V2 and V1) failed to produce a valid card.")
-            return None
+            if not validation_errors:
+                validation_errors.append("All parsing attempts failed for this card.")
+            return _return(None)
 
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error from string: {e}. Content (start): {json_content_str[:150]}...")
-    except Exception as e:  # Catch any other unexpected errors during the process
+        validation_errors.append(f"JSON decode error: {e}")
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:  # Catch any other unexpected errors during the process
         logger.error(f"Unexpected error parsing card from JSON string: {e}", exc_info=True)
-    return None
+        validation_errors.append(f"Unexpected parser error: {e}")
+    return _return(None)
 
 
-def load_character_card_from_string_content(content_str: str) -> Optional[Dict[str, Any]]:
+def load_character_card_from_string_content(content_str: str) -> Optional[dict[str, Any]]:
     """Load a character card from a string (JSON or YAML format).
 
     Args:
@@ -554,7 +691,7 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
             parsed = import_character_card_from_json_string(content_str)
             if parsed:
                 return parsed
-        except Exception:
+        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
             logger.debug("Failed JSON parsing attempt for character card string.", exc_info=True)
 
     # Try YAML
@@ -570,7 +707,7 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
         raise
     except yaml.YAMLError as e:
         logger.error(f"Error parsing YAML frontmatter: {e}")
-    except Exception as e:
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error parsing YAML content: {e}", exc_info=True)
 
     # Fallback: treat the raw content as a plain-text description
@@ -586,7 +723,7 @@ def load_character_card_from_string_content(content_str: str) -> Optional[Dict[s
     }
     try:
         return import_character_card_from_json_string(json.dumps(fallback_payload))
-    except Exception as e:
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error parsing content: {e}", exc_info=True)
         return None
 
@@ -603,9 +740,9 @@ def _infer_character_name_from_filename(file_name: Optional[str]) -> str:
     return base_name or "Imported Character"
 
 
-def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[bytes]) -> Dict[str, Any]:
+def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[bytes]) -> dict[str, Any]:
     name = _infer_character_name_from_filename(file_name)
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "name": name,
         "description": "Imported from image file without embedded character data.",
         "personality": "Image-only import.",
@@ -620,6 +757,122 @@ def _build_image_only_character(file_name: Optional[str], image_bytes: Optional[
     return payload
 
 
+def _sanitize_import_text(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
+    return "".join(ch for ch in normalized if ch in ("\n", "\t") or ord(ch) >= 32)
+
+
+def _find_disallowed_import_pattern(value: str) -> Optional[str]:
+    lowered = value.lower()
+    for pattern in _DISALLOWED_IMPORT_PATTERNS:
+        if pattern in lowered:
+            return pattern
+    return None
+
+
+def _detect_image_mime(image_bytes: bytes) -> Optional[str]:
+    if len(image_bytes) >= 8 and image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    if len(image_bytes) >= 2 and image_bytes[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    return None
+
+
+def _validate_import_avatar_bytes(image_bytes: bytes) -> Optional[str]:
+    if len(image_bytes) > MAX_IMPORT_AVATAR_BYTES:
+        return (
+            f"Import validation failed: Avatar image exceeds max size of "
+            f"{MAX_IMPORT_AVATAR_BYTES} bytes."
+        )
+
+    detected_mime = _detect_image_mime(image_bytes)
+    if detected_mime not in ALLOWED_IMPORT_IMAGE_MIME_TYPES:
+        return (
+            "Import validation failed: Avatar MIME type is not allowed. "
+            f"Allowed types: {', '.join(sorted(ALLOWED_IMPORT_IMAGE_MIME_TYPES))}."
+        )
+
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.verify()
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
+        return "Import validation failed: Avatar image failed integrity validation."
+    return None
+
+
+def _decode_image_base64(value: str) -> tuple[Optional[bytes], Optional[str]]:
+    candidate = value
+    if "," in candidate and candidate.startswith("data:image"):
+        candidate = candidate.split(",", 1)[1]
+    candidate = "".join(candidate.split())
+    if not candidate:
+        return None, None
+    try:
+        return base64.b64decode(candidate, validate=True), None
+    except (binascii.Error, ValueError) as exc:
+        return None, f"Import validation failed: Invalid image_base64 payload ({exc})."
+
+
+def _sanitize_and_validate_parsed_card(parsed_card: dict[str, Any]) -> Optional[str]:
+    for field_name in _IMPORT_TEXT_FIELDS:
+        if field_name not in parsed_card or parsed_card[field_name] is None:
+            continue
+        raw_value = parsed_card[field_name]
+        if not isinstance(raw_value, str):
+            raw_value = str(raw_value)
+        sanitized = _sanitize_import_text(raw_value)
+        blocked_pattern = _find_disallowed_import_pattern(sanitized)
+        if blocked_pattern:
+            return (
+                f"Import validation failed: Field '{field_name}' contains "
+                f"disallowed content pattern '{blocked_pattern}'."
+            )
+        parsed_card[field_name] = sanitized
+
+    for list_field in ("alternate_greetings", "tags"):
+        list_value = parsed_card.get(list_field)
+        if list_value is None:
+            continue
+        if not isinstance(list_value, list):
+            return f"Import validation failed: Field '{list_field}' must be a list."
+        sanitized_list: list[str] = []
+        for idx, item in enumerate(list_value):
+            if not isinstance(item, str):
+                return (
+                    f"Import validation failed: Field '{list_field}[{idx}]' "
+                    "must be a string."
+                )
+            sanitized_item = _sanitize_import_text(item)
+            blocked_pattern = _find_disallowed_import_pattern(sanitized_item)
+            if blocked_pattern:
+                return (
+                    f"Import validation failed: Field '{list_field}[{idx}]' contains "
+                    f"disallowed content pattern '{blocked_pattern}'."
+                )
+            sanitized_list.append(sanitized_item)
+        parsed_card[list_field] = sanitized_list
+
+    image_bytes = parsed_card.get("image")
+    if isinstance(image_bytes, bytes):
+        image_error = _validate_import_avatar_bytes(image_bytes)
+        if image_error:
+            return image_error
+
+    image_base64_value = parsed_card.get("image_base64")
+    if isinstance(image_base64_value, str):
+        decoded_image, decode_error = _decode_image_base64(image_base64_value)
+        if decode_error:
+            return decode_error
+        if decoded_image:
+            image_error = _validate_import_avatar_bytes(decoded_image)
+            if image_error:
+                return image_error
+
+    return None
+
+
 def import_and_save_character_from_file(
     db: CharactersRAGDB,
     file_path: Optional[str] = None,
@@ -627,7 +880,7 @@ def import_and_save_character_from_file(
     file_type: Optional[str] = None,
     file_name: Optional[str] = None,
     allow_image_only: bool = False
-) -> Tuple[bool, str, Optional[int]]:
+) -> tuple[bool, str, Optional[int]]:
     """Import and save a character from a file.
 
     Args:
@@ -664,7 +917,7 @@ def import_and_save_character_from_file(
                 try:
                     with open(file_path, 'rb') as image_file_obj:
                         original_image_bytes = image_file_obj.read()
-                except Exception:
+                except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                     original_image_bytes = None
             elif file_content and isinstance(file_content, bytes):
                 json_str = extract_json_from_image_file(file_content)
@@ -673,7 +926,13 @@ def import_and_save_character_from_file(
                 return False, "Image file requires bytes content or file path", None
 
             if json_str:
-                parsed_card = import_character_card_from_json_string(json_str)
+                parsed_result = import_character_card_from_json_string(
+                    json_str,
+                    include_validation_errors=True,
+                )
+                parsed_card, parse_errors = parsed_result
+                if parsed_card is None:
+                    return False, _format_import_validation_errors(parse_errors), None
                 if parsed_card is not None and original_image_bytes:
                     parsed_card["image"] = original_image_bytes
                     parsed_card.pop("image_base64", None)
@@ -692,23 +951,32 @@ def import_and_save_character_from_file(
         elif file_type in ['json', 'yaml', 'text'] or file_content:
             # Handle text-based formats
             if file_content:
-                if isinstance(file_content, bytes):
-                    content_str = file_content.decode('utf-8')
-                else:
-                    content_str = file_content
+                content_str = file_content.decode('utf-8') if isinstance(file_content, bytes) else file_content
             elif file_path:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, encoding='utf-8') as f:
                     content_str = f.read()
             else:
                 return False, "No file content or path provided", None
 
-            parsed_card = load_character_card_from_string_content(content_str)
+            if file_type == "json":
+                parsed_result = import_character_card_from_json_string(
+                    content_str,
+                    include_validation_errors=True,
+                )
+                parsed_card, parse_errors = parsed_result
+                if parsed_card is None:
+                    return False, _format_import_validation_errors(parse_errors), None
+            else:
+                parsed_card = load_character_card_from_string_content(content_str)
 
         else:
             return False, f"Unsupported file type: {file_type}", None
 
         # Save to database if parsing successful
         if parsed_card:
+            sanitization_error = _sanitize_and_validate_parsed_card(parsed_card)
+            if sanitization_error:
+                return False, sanitization_error, None
             character_id = create_new_character_from_data(db, parsed_card)
             if character_id:
                 character_name = parsed_card.get('name', 'Unknown')
@@ -722,7 +990,7 @@ def import_and_save_character_from_file(
         return False, f"File not found: {file_path}", None
     except UnicodeDecodeError as e:
         return False, f"Failed to decode file content: {e}", None
-    except Exception as e:
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error importing character: {e}", exc_info=True)
         return False, f"Unexpected error: {str(e)}", None
 
@@ -734,7 +1002,7 @@ def load_chat_history_from_file_and_save_to_db(
     file_content: Optional[str] = None,
     title: Optional[str] = None,
     user_name_for_placeholders: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[int]]:
+) -> tuple[Optional[str], Optional[int]]:
     """Load chat history from a file and persist it for the given character.
 
     Historically this returned ``(conversation_id, character_id)``; the behaviour
@@ -761,14 +1029,14 @@ def load_chat_history_from_file_and_save_to_db(
         if file_content is not None:
             content = file_content
         elif file_path:
-            with open(file_path, "r", encoding="utf-8") as file_obj:
+            with open(file_path, encoding="utf-8") as file_obj:
                 content = file_obj.read()
         else:
             logger.error("No chat history source provided (file_path or file_content required).")
             return None, None
 
         # Parse content - prefer JSON, fall back to YAML, finally treat as plain text
-        def _normalise_chat_data(raw_data: Any) -> Optional[Dict[str, Any]]:
+        def _normalise_chat_data(raw_data: Any) -> Optional[dict[str, Any]]:
             if isinstance(raw_data, dict):
                 return raw_data
             if isinstance(raw_data, list):
@@ -791,7 +1059,7 @@ def load_chat_history_from_file_and_save_to_db(
         except json.JSONDecodeError:
             try:
                 chat_data_raw = yaml.safe_load(content)
-            except Exception:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                 chat_data_raw = None
 
         chat_data = _normalise_chat_data(chat_data_raw)
@@ -808,7 +1076,7 @@ def load_chat_history_from_file_and_save_to_db(
         def _normalize_message_content(raw_content: Any) -> Optional[str]:
             """Flatten structured message content into a plain string when possible."""
 
-            collected_parts: List[str] = []
+            collected_parts: list[str] = []
             appended_via_fallback = False
 
             def _collect(item: Any) -> None:
@@ -843,7 +1111,7 @@ def load_chat_history_from_file_and_save_to_db(
                         try:
                             collected_parts.append(json.dumps(item["arguments"], ensure_ascii=False))
                             appended_via_fallback = True
-                        except Exception:
+                        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                             pass
                     if "children" in item:
                         _collect(item["children"])
@@ -853,7 +1121,7 @@ def load_chat_history_from_file_and_save_to_db(
                         try:
                             collected_parts.append(json.dumps(item, ensure_ascii=False))
                             appended_via_fallback = True
-                        except Exception:
+                        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
                             collected_parts.append(str(item))
                     return
 
@@ -872,11 +1140,11 @@ def load_chat_history_from_file_and_save_to_db(
                 return None
             return None
 
-        user_aliases_for_resolution: Set[str] = {"user", "human", "speaker", "speaker1", "speaker 1", "speaker-1"}
+        user_aliases_for_resolution: set[str] = {"user", "human", "speaker", "speaker1", "speaker 1", "speaker-1"}
         if inferred_user_name:
             user_aliases_for_resolution.add(str(inferred_user_name).strip().lower())
 
-        def _resolve_sender(role_value: Any, entry_data: Any) -> Tuple[bool, Optional[str]]:
+        def _resolve_sender(role_value: Any, entry_data: Any) -> tuple[bool, Optional[str]]:
             """Determine whether a message is from the user and capture explicit role labels."""
             if role_value is None:
                 return True, None
@@ -926,7 +1194,7 @@ def load_chat_history_from_file_and_save_to_db(
             # Preserve unknown roles explicitly so downstream can inspect them.
             return False, normalized
 
-        from .character_chat import start_new_chat_session, post_message_to_conversation
+        from .character_chat import post_message_to_conversation, start_new_chat_session
         (
             conversation_id,
             char_data,
@@ -944,7 +1212,6 @@ def load_chat_history_from_file_and_save_to_db(
             return None, None
 
         character_name = (char_data or {}).get("name") or inferred_char_name or "Character"
-        user_name = inferred_user_name or "User"
 
         def _cleanup_failed_import() -> None:
             try:
@@ -961,7 +1228,7 @@ def load_chat_history_from_file_and_save_to_db(
                     conversation_id,
                     cleanup_exc,
                 )
-            except Exception as cleanup_exc:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                 logger.warning(
                     "Unexpected error while cleaning up conversation %s after import failure: %s",
                     conversation_id,
@@ -996,7 +1263,7 @@ def load_chat_history_from_file_and_save_to_db(
             messages_added = 0
             try:
                 current_message_count = db.count_messages_for_conversation(conversation_id)
-            except Exception as exc:
+            except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(
                     "Failed to count messages for conversation {}: {}",
                     conversation_id,
@@ -1030,7 +1297,7 @@ def load_chat_history_from_file_and_save_to_db(
                 current_message_count += 1
 
             # Helper to process pair-based history entries (legacy export format)
-            def _process_pair_history(entries: List[Any]) -> None:
+            def _process_pair_history(entries: list[Any]) -> None:
                 for idx, entry in enumerate(entries):
                     if not isinstance(entry, (list, tuple)):
                         logger.warning("Skipping malformed message pair at index {}: not a list", idx)
@@ -1085,12 +1352,15 @@ def load_chat_history_from_file_and_save_to_db(
                 logger.info("Chat history import completed but contained no valid messages.")
 
             return conversation_id, character_id
-        except Exception:
+        except _CHARACTER_IO_IMPORT_FAILURE_EXCEPTIONS:
             _cleanup_failed_import()
             raise
 
     except DatabaseCountError:
         raise
-    except Exception as exc:
+    except (CharactersRAGDBError, ConflictError, InputError) as exc:
+        logger.error("Error loading chat history: {}", exc, exc_info=True)
+        return None, None
+    except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Error loading chat history: {}", exc, exc_info=True)
         return None, None

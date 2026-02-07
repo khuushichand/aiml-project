@@ -11,15 +11,26 @@ full ResourceGovernor integration is rolled out.
 
 from __future__ import annotations
 
-import os
 import inspect
-from typing import Any, Dict, Tuple
+import os
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import is_key_over_budget
+
+_AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class AuthGovernor:
@@ -38,7 +49,7 @@ class AuthGovernor:
         api_key_id: int,
         *,
         fail_open: bool | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Check LLM budget state for a given API key and principal.
 
@@ -47,11 +58,12 @@ class AuthGovernor:
         selected identity metadata for observability.
         """
         if fail_open is None:
-            env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "1").lower()
+            # Default fail mode is closed unless explicitly set to open.
+            env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "0").lower()
             fail_open = env_val in {"1", "true", "yes", "on", "y"}
         try:
             result = await is_key_over_budget(api_key_id)
-        except Exception as exc:
+        except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"AuthGovernor: error during is_key_over_budget for key {api_key_id}: {exc}")
             if not fail_open:
                 return {
@@ -68,10 +80,10 @@ class AuthGovernor:
                         "org_ids": principal.org_ids,
                         "team_ids": principal.team_ids,
                     },
-                    "error": str(exc),
+                    "error": "budget_check_failed",
                 }
             # Fail open for budget checks if underlying inspection fails; callers can
-            # switch to fail-closed via AUTH_BUDGET_FAIL_OPEN=0.
+            # keep the default fail-closed behavior by leaving AUTH_BUDGET_FAIL_OPEN unset.
             return {
                 "over": False,
                 "reasons": [],
@@ -88,7 +100,7 @@ class AuthGovernor:
                 },
             }
 
-        out: Dict[str, Any] = dict(result or {})
+        out: dict[str, Any] = dict(result or {})
         limits = out.get("limits") or {}
         out["limits"] = limits
         out["principal"] = {
@@ -107,7 +119,7 @@ class AuthGovernor:
         *,
         attempt_type: str = "login",
         rate_limiter=None,
-    ) -> Tuple[bool, Any]:
+    ) -> tuple[bool, Any]:
         """
         Check lockout status for an identifier using the existing rate limiter.
 
@@ -118,12 +130,12 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
@@ -132,7 +144,7 @@ class AuthGovernor:
                     return await limiter.check_lockout(identifier, attempt_type=attempt_type)
                 except TypeError:
                     return await limiter.check_lockout(identifier)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor lockout check failed for {identifier}: {exc}")
         return False, None
 
@@ -142,7 +154,7 @@ class AuthGovernor:
         *,
         attempt_type: str = "login",
         rate_limiter=None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Record an authentication failure via the existing rate limiter.
 
@@ -153,18 +165,18 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
             try:
                 return await limiter.record_failed_attempt(identifier=identifier, attempt_type=attempt_type)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor record failure failed for {identifier}: {exc}")
 
         return {"is_locked": False, "remaining_attempts": 5}
@@ -177,7 +189,7 @@ class AuthGovernor:
         limit: int | None = None,
         window_minutes: int | None = None,
         rate_limiter=None,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Rate limit check delegated to the existing AuthNZ rate limiter.
 
@@ -187,12 +199,12 @@ class AuthGovernor:
         if limiter is None:
             try:
                 limiter = get_rate_limiter()
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
         if inspect.isawaitable(limiter):
             try:
                 limiter = await limiter
-            except Exception:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS:
                 limiter = None
 
         if limiter and getattr(limiter, "enabled", False):
@@ -205,7 +217,7 @@ class AuthGovernor:
                 )
             except TypeError:
                 return await limiter.check_rate_limit(identifier, endpoint)
-            except Exception as exc:
+            except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"AuthGovernor rate limit failed for {identifier}: {exc}")
 
         return True, {}

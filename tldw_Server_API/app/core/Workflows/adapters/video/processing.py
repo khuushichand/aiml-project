@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -25,11 +25,11 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
 )
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.video._config import (
-    VideoTrimConfig,
     VideoConcatConfig,
     VideoConvertConfig,
-    VideoThumbnailConfig,
     VideoExtractFramesConfig,
+    VideoThumbnailConfig,
+    VideoTrimConfig,
 )
 
 
@@ -41,7 +41,7 @@ from tldw_Server_API.app.core.Workflows.adapters.video._config import (
     config_model=VideoTrimConfig,
     tags=["video"],
 )
-async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_trim_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Trim a video file to a specific time range.
 
     Config:
@@ -64,7 +64,7 @@ async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "trimmed": False}
 
     start = config.get("start", "0")
@@ -88,7 +88,7 @@ async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
 
         return {"output_path": output_path, "trimmed": True}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video trim error: {e}")
         return {"error": str(e), "trimmed": False}
 
@@ -101,7 +101,7 @@ async def run_video_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
     config_model=VideoConcatConfig,
     tags=["video"],
 )
-async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_concat_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Concatenate multiple video files into one.
 
     Config:
@@ -122,7 +122,7 @@ async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, An
             p = _tmpl(p, context) or p
         try:
             resolved_inputs.append(str(resolve_workflow_file_path(p, context, config)))
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             continue
 
     if len(resolved_inputs) < 2:
@@ -146,7 +146,7 @@ async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, An
 
         return {"output_path": output_path, "concatenated": True, "file_count": len(resolved_inputs)}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video concat error: {e}")
         return {"error": str(e), "concatenated": False}
 
@@ -159,7 +159,7 @@ async def run_video_concat_adapter(config: Dict[str, Any], context: Dict[str, An
     config_model=VideoConvertConfig,
     tags=["video"],
 )
-async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_convert_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert video file to a different format.
 
     Config:
@@ -182,7 +182,7 @@ async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, A
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "converted": False}
 
     output_format = config.get("format", "mp4")
@@ -207,7 +207,7 @@ async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, A
 
         return {"output_path": output_path, "converted": True, "format": output_format}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video convert error: {e}")
         return {"error": str(e), "converted": False}
 
@@ -220,7 +220,7 @@ async def run_video_convert_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=VideoThumbnailConfig,
     tags=["video"],
 )
-async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_thumbnail_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a thumbnail image from a video.
 
     Config:
@@ -248,7 +248,7 @@ async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str,
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "generated": False}
 
     timestamp = config.get("timestamp", "00:00:05")
@@ -277,7 +277,7 @@ async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str,
 
         return {"output_path": output_path, "generated": True, "timestamp": timestamp}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video thumbnail error: {e}")
         return {"error": str(e), "generated": False}
 
@@ -290,7 +290,7 @@ async def run_video_thumbnail_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=VideoExtractFramesConfig,
     tags=["video"],
 )
-async def run_video_extract_frames_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_video_extract_frames_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract frames from a video at specified intervals.
 
     Config:
@@ -313,7 +313,7 @@ async def run_video_extract_frames_adapter(config: Dict[str, Any], context: Dict
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         return {"error": f"input_path_error: {e}", "frame_paths": [], "frame_count": 0}
 
     fps = float(config.get("fps", 1))
@@ -338,6 +338,6 @@ async def run_video_extract_frames_adapter(config: Dict[str, Any], context: Dict
 
         return {"frame_paths": frame_paths, "frame_count": len(frame_paths), "output_dir": str(art_dir)}
 
-    except Exception as e:
+    except (OSError, RuntimeError, TypeError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.exception(f"Video extract frames error: {e}")
         return {"error": str(e), "frame_paths": [], "frame_count": 0}

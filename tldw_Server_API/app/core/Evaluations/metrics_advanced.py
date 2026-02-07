@@ -6,18 +6,21 @@ and custom exporters for comprehensive observability.
 """
 
 import time
-from typing import Dict, Any, Optional, Callable, List
-from functools import wraps
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-from collections import defaultdict
+from typing import Optional
+
 from loguru import logger
 
 try:
     from prometheus_client import (
-        Counter, Histogram, Gauge, Info, Summary,
-        generate_latest, REGISTRY, CollectorRegistry,
-        push_to_gateway, Enum
+        REGISTRY,
+        CollectorRegistry,
+        Counter,
+        Gauge,
+        Histogram,
+        Summary,
+        generate_latest,
+        push_to_gateway,
     )
     PROMETHEUS_AVAILABLE = True
 except ImportError:
@@ -336,7 +339,7 @@ class AdvancedEvaluationMetrics:
         self,
         model: str,
         evaluation_type: str,
-        metrics: Dict[str, float]
+        metrics: dict[str, float]
     ):
         """Track model performance metrics."""
         if not self.enabled:
@@ -368,12 +371,10 @@ class AdvancedEvaluationMetrics:
             return
 
         start_time = time.time()
-        error_occurred = False
 
         try:
             yield
-        except Exception as e:
-            error_occurred = True
+        except Exception:
             self._error_count += 1
             raise
         finally:
@@ -456,7 +457,7 @@ class AdvancedEvaluationMetrics:
             self._request_count = 0
             self._error_count = 0
 
-    def update_active_users(self, tier_counts: Dict[str, Dict[str, int]]):
+    def update_active_users(self, tier_counts: dict[str, dict[str, int]]):
         """Update active user counts."""
         if not self.enabled:
             return

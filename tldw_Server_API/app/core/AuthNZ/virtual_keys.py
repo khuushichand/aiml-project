@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone, date
-from typing import Optional, Dict, Any
+import os
+from datetime import date, datetime, timezone
+from typing import Any
 
 from loguru import logger
-import os
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 
 
 def _debug_log(msg: str) -> None:
@@ -29,18 +29,15 @@ def _utc_today() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def _month_bounds_utc(dt: Optional[datetime] = None) -> tuple[str, str]:
+def _month_bounds_utc(dt: datetime | None = None) -> tuple[str, str]:
     now = dt or datetime.now(timezone.utc)
     start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if start.month == 12:
-        nxt = start.replace(year=start.year + 1, month=1)
-    else:
-        nxt = start.replace(month=start.month + 1)
+    nxt = start.replace(year=start.year + 1, month=1) if start.month == 12 else start.replace(month=start.month + 1)
     # Return ISO strings; callers will normalize tz-awareness
     return start.isoformat(), nxt.isoformat()
 
 
-async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
+async def get_key_limits(key_id: int) -> dict[str, Any] | None:
     pool: DatabasePool = await get_db_pool()
     # Route API-key limit lookups through the AuthNZ repository layer so
     # virtual-key logic no longer needs to embed backend-specific SQL.
@@ -51,8 +48,8 @@ async def get_key_limits(key_id: int) -> Optional[Dict[str, Any]]:
 
 
 async def summarize_usage_for_key_day(
-    key_id: int, day_iso: Optional[str | date] = None
-) -> Dict[str, Any]:
+    key_id: int, day_iso: str | date | None = None
+) -> dict[str, Any]:
     """
     Summarizes total tokens and USD cost for a given API key on a specific UTC day.
 
@@ -88,7 +85,7 @@ async def summarize_usage_for_key_day(
     return result
 
 
-async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
+async def summarize_usage_for_key_month(key_id: int) -> dict[str, Any]:
     """
     Summarizes token and USD usage for a key over a rolling 30-day UTC window.
 
@@ -109,7 +106,7 @@ async def summarize_usage_for_key_month(key_id: int) -> Dict[str, Any]:
     return out
 
 
-async def is_key_over_budget(key_id: int) -> Dict[str, Any]:
+async def is_key_over_budget(key_id: int) -> dict[str, Any]:
     """
     Determine whether the given API key has exceeded any configured consumption limits for its current day and rolling 30-day window.
 

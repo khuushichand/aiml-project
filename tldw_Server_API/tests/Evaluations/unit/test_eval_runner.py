@@ -1,5 +1,8 @@
 import asyncio
+from io import StringIO
+
 import pytest
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.eval_runner import EvaluationRunner
 
@@ -37,6 +40,52 @@ async def test_eval_summarization_parses_geval_dict(monkeypatch, tmp_path):
     assert result["scores"]["coherence"] == pytest.approx(0.8)
     assert result["scores"]["fluency"] == pytest.approx(1.0)
     assert result["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_eval_summarization_respects_thresholds_dict(monkeypatch, tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+
+    def mock_run_geval(*args, **kwargs):
+        return {
+            "metrics": {
+                "coherence": 4.0,
+                "fluency": 3.0,
+            }
+        }
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Evaluations.eval_runner.run_geval",
+        mock_run_geval,
+    )
+
+    sample = {"input": {"source_text": "source", "summary": "summary"}}
+    eval_spec = {
+        "metrics": ["coherence", "fluency"],
+        "thresholds": {"coherence": 0.85, "fluency": 0.9},
+        "evaluator_model": "openai",
+        "model": "gpt-4o-mini",
+    }
+
+    result = await runner._eval_summarization(sample, eval_spec, {}, "sample_000001")
+    assert result["scores"]["coherence"] == pytest.approx(0.8)
+    assert result["scores"]["fluency"] == pytest.approx(1.0)
+    assert result["passed"] is False
+
+
+def test_evaluate_passed_missing_metric_threshold_logs_warning(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    scores = {"coherence": 0.9}
+    eval_spec = {"thresholds": {"coherence": 0.8, "fluency": 0.9}}
+    log_buffer = StringIO()
+    handler_id = logger.add(log_buffer, level="WARNING")
+    try:
+        passed = runner._evaluate_passed(scores, avg_score=0.9, eval_spec=eval_spec, default_threshold=0.7)
+    finally:
+        logger.remove(handler_id)
+
+    assert passed is False
+    assert "missing scores" in log_buffer.getvalue()
 
 
 @pytest.mark.asyncio
@@ -181,6 +230,17 @@ async def test_includes_accepts_list_expected(tmp_path):
     result = await runner._eval_includes(sample, eval_spec, {}, "sample_000006")
     assert result["scores"]["includes"] == pytest.approx(0.5)
     assert result["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_includes_respects_thresholds_dict(tmp_path):
+    runner = EvaluationRunner(db_path=str(tmp_path / "evals.db"))
+    sample = {"input": {"output": "alpha beta"}, "expected": ["alpha", "gamma"]}
+    eval_spec = {"thresholds": {"includes": 0.6}}
+
+    result = await runner._eval_includes(sample, eval_spec, {}, "sample_000008")
+    assert result["scores"]["includes"] == pytest.approx(0.5)
+    assert result["passed"] is False
 
 
 @pytest.mark.asyncio

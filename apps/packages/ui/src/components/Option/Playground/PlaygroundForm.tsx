@@ -19,17 +19,17 @@ import {
 import { useWebUI } from "~/store/webui"
 import { defaultEmbeddingModelForRag } from "~/services/tldw-server"
 import {
+  ChevronDown,
   ChevronRight,
   EraserIcon,
   BookPlus,
   GitBranch,
   ImageIcon,
+  Globe,
   MicIcon,
   Headphones,
-  Hash,
   SlidersHorizontal,
   StopCircleIcon,
-  Star,
   X,
   FileIcon,
   FileText,
@@ -59,6 +59,8 @@ import { useVoiceChatSettings } from "@/hooks/useVoiceChatSettings"
 import { useVoiceChatStream } from "@/hooks/useVoiceChatStream"
 import { useVoiceChatMessages } from "@/hooks/useVoiceChatMessages"
 import { MentionsDropdown } from "./MentionsDropdown"
+import { ComposerTextarea } from "./ComposerTextarea"
+import { ComposerToolbar } from "./ComposerToolbar"
 import { otherUnsupportedTypes } from "../Knowledge/utils/unsupported-types"
 import { PASTED_TEXT_CHAR_LIMIT } from "@/utils/constant"
 import { isFireFoxPrivateMode } from "@/utils/is-private-mode"
@@ -76,17 +78,13 @@ import { fetchChatModels, fetchImageModels } from "@/services/tldw-server"
 import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import { useTldwAudioStatus } from "@/hooks/useTldwAudioStatus"
 import { useMcpTools } from "@/hooks/useMcpTools"
-import { tldwChat, tldwModels, type ChatMessage } from "@/services/tldw"
 import { tldwClient, type ConversationState } from "@/services/tldw/TldwApiClient"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
 import { ProviderIcons } from "@/components/Common/ProviderIcon"
 import type { Character } from "@/types/character"
 import { KnowledgePanel, type KnowledgeTab } from "@/components/Knowledge"
 import { BetaTag } from "@/components/Common/Beta"
-import {
-  SlashCommandMenu,
-  type SlashCommandItem
-} from "@/components/Sidepanel/Chat/SlashCommandMenu"
+import type { SlashCommandItem } from "@/components/Sidepanel/Chat/SlashCommandMenu"
 import { DocumentGeneratorDrawer } from "@/components/Common/Playground/DocumentGeneratorDrawer"
 import { useUiModeStore } from "@/store/ui-mode"
 import { useStoreChatModelSettings } from "@/store/model"
@@ -107,50 +105,18 @@ import { DISCUSS_MEDIA_PROMPT_SETTING } from "@/services/settings/ui-settings"
 import { Button as TldwButton } from "@/components/Common/Button"
 import { useSimpleForm } from "@/hooks/useSimpleForm"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
-
-const getPersistenceModeLabel = (
-  t: (...args: any[]) => any,
-  temporaryChat: boolean,
-  isConnectionReady: boolean,
-  serverChatId: string | null
-) => {
-  if (temporaryChat) {
-    return t(
-      "playground:composer.persistence.ephemeral",
-      "Not saved: cleared when you close this window."
-    )
-  }
-  if (serverChatId || isConnectionReady) {
-    return t(
-      "playground:composer.persistence.server",
-      "Saved to your tldw server (and locally)."
-    )
-  }
-  return t(
-    "playground:composer.persistence.local",
-    "Saved locally until your tldw server is connected."
-  )
-}
-
-type CollapsedRange = {
-  start: number
-  end: number
-}
-
-type ModelSortMode = "favorites" | "az" | "provider" | "localFirst"
-
-const LOCAL_PROVIDERS = new Set([
-  "lmstudio",
-  "llamafile",
-  "ollama",
-  "ollama2",
-  "llamacpp",
-  "vllm",
-  "custom",
-  "local",
-  "tldw",
-  "chrome"
-])
+import {
+  useModelSelector,
+  useComposerTokens,
+  useImageBackend,
+  useActionBarVisibility,
+  usePersistenceMode,
+  useSlashCommands,
+  useMessageCollapse,
+  useMcpToolsControl,
+  type CollapsedRange,
+  type ModelSortMode
+} from "@/hooks/playground"
 
 type Props = {
   droppedFiles: File[]
@@ -226,18 +192,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const isMobileViewport = useMobile()
   const [openModelSettings, setOpenModelSettings] = React.useState(false)
   const [openActorSettings, setOpenActorSettings] = React.useState(false)
-  const [modelDropdownOpen, setModelDropdownOpen] = React.useState(false)
-  const [modelSearchQuery, setModelSearchQuery] = React.useState("")
-  const [favoriteModels, setFavoriteModels] = useStorage<string[]>(
-    "favoriteChatModels",
-    []
-  )
-  const [modelSortMode, setModelSortMode] = useStorage<ModelSortMode>(
-    "modelSelectSortMode",
-    "provider"
-  )
-  const apiProvider = useStoreChatModelSettings((state) => state.apiProvider)
-  const numCtx = useStoreChatModelSettings((state) => state.numCtx)
   const systemPrompt = useStoreChatModelSettings((state) => state.systemPrompt)
   const setSystemPrompt = useStoreChatModelSettings(
     (state) => state.setSystemPrompt
@@ -264,9 +218,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   React.useEffect(() => {
     const next = voiceChatTriggerPhrases.join(", ")
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/voiceChatTriggerPhrases")
-    }
     setVoiceChatTriggerInput((prev) => (prev === next ? prev : next))
   }, [voiceChatTriggerPhrases])
 
@@ -277,8 +228,38 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     hasMcp,
     healthState: mcpHealthState,
     tools: mcpTools,
-    toolsLoading: mcpToolsLoading
+    toolsLoading: mcpToolsLoading,
+    catalogs: mcpCatalogs,
+    catalogsLoading: mcpCatalogsLoading,
+    toolCatalog,
+    toolCatalogId,
+    toolModules,
+    moduleOptions,
+    moduleOptionsLoading,
+    toolCatalogStrict,
+    setToolCatalog,
+    setToolCatalogId,
+    setToolModules,
+    setToolCatalogStrict
   } = useMcpTools()
+  const mcpCtrl = useMcpToolsControl({
+    hasMcp,
+    mcpHealthState,
+    mcpTools,
+    mcpToolsLoading,
+    mcpCatalogs,
+    toolCatalog,
+    toolCatalogId,
+    setToolCatalog,
+    setToolCatalogId,
+    toolChoice
+  })
+  const handleModuleSelect = React.useCallback(
+    (value?: string[]) => {
+      setToolModules(Array.isArray(value) ? value : [])
+    },
+    [setToolModules]
+  )
   const hasServerAudio =
     isConnectionReady && !capsLoading && capabilities?.hasAudio
   const { healthState: audioHealthState } = useTldwAudioStatus()
@@ -317,6 +298,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     React.useState(false)
   const [voiceModeSelectorOpen, setVoiceModeSelectorOpen] = React.useState(false)
   const [promptInsertOpen, setPromptInsertOpen] = React.useState(false)
+  const [toolsPopoverOpen, setToolsPopoverOpen] = React.useState(false)
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = React.useState(false)
+  const [sendMenuOpen, setSendMenuOpen] = React.useState(false)
   const [promptInsertChoice, setPromptInsertChoice] =
     React.useState<PromptInsertItem | null>(null)
   const [documentGeneratorSeed, setDocumentGeneratorSeed] = React.useState<{
@@ -344,10 +328,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   )
   const [sttSegEmbeddingsProvider] = useStorage("sttSegEmbeddingsProvider", "")
   const [sttSegEmbeddingsModel] = useStorage("sttSegEmbeddingsModel", "")
-  const [imageBackendDefault, setImageBackendDefault] = useStorage(
-    "imageBackendDefault",
-    ""
-  )
   const [selectedCharacter] = useSelectedCharacter<Character | null>(null)
   const [serverPersistenceHintSeen, setServerPersistenceHintSeen] = useStorage(
     "serverPersistenceHintSeen",
@@ -431,6 +411,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     enabled: true
   })
 
+  const {
+    modelDropdownOpen,
+    setModelDropdownOpen,
+    modelSearchQuery,
+    setModelSearchQuery,
+    modelSortMode,
+    setModelSortMode,
+    selectedModelMeta,
+    modelContextLength,
+    modelCapabilities,
+    resolvedMaxContext,
+    resolvedProviderKey,
+    providerLabel,
+    modelSummaryLabel,
+    apiModelLabel,
+    modelSelectorWarning,
+    favoriteModels,
+    favoriteModelSet,
+    toggleFavoriteModel,
+    filteredModels,
+    modelDropdownMenuItems,
+    isSmallModel
+  } = useModelSelector({
+    composerModels,
+    selectedModel,
+    setSelectedModel,
+    navigate
+  })
+
   // Ensure compare selection has a sensible default when enabling compare mode
   React.useEffect(() => {
     if (
@@ -480,22 +489,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   const compareModeActive = compareFeatureEnabled && compareMode
 
-  const modelSummaryLabel = React.useMemo(() => {
-    if (!selectedModel) {
-      return t(
-        "playground:composer.modelPlaceholder",
-        "API / model"
-      )
-    }
-    const models = (composerModels as any[]) || []
-    const match = models.find((m) => m.model === selectedModel)
-    return (
-      match?.nickname ||
-      match?.model ||
-      selectedModel
-    )
-  }, [composerModels, selectedModel, t])
-
   const voiceChatModelOptions = React.useMemo(() => {
     const options = [
       {
@@ -505,10 +498,10 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ]
     const models = (composerModels as any[]) || []
     for (const model of models) {
-      const providerLabel = getProviderDisplayName(model.provider || "")
+      const pLabel = getProviderDisplayName(model.provider || "")
       const modelLabel = model.nickname || model.model || model.name
-      const label = providerLabel
-        ? `${providerLabel} - ${modelLabel}`
+      const label = pLabel
+        ? `${pLabel} - ${modelLabel}`
         : modelLabel
       options.push({
         value: model.model || model.name,
@@ -517,339 +510,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
     return options
   }, [composerModels, t])
-
-  const selectedModelMeta = React.useMemo(() => {
-    if (!selectedModel) return null
-    const models = (composerModels as any[]) || []
-    return models.find((model) => model.model === selectedModel) || null
-  }, [composerModels, selectedModel])
-
-  const modelContextLength = React.useMemo(() => {
-    const value =
-      selectedModelMeta?.context_length ??
-      selectedModelMeta?.contextLength ??
-      selectedModelMeta?.details?.context_length
-    return typeof value === "number" && Number.isFinite(value) ? value : null
-  }, [selectedModelMeta])
-
-  const resolvedMaxContext = React.useMemo(() => {
-    if (typeof numCtx === "number" && Number.isFinite(numCtx) && numCtx > 0) {
-      return numCtx
-    }
-    if (typeof modelContextLength === "number" && modelContextLength > 0) {
-      return modelContextLength
-    }
-    return null
-  }, [modelContextLength, numCtx])
-
-  const resolvedProviderKey = React.useMemo(() => {
-    const fromOverride = typeof apiProvider === "string" ? apiProvider.trim() : ""
-    if (fromOverride) return fromOverride.toLowerCase()
-    const provider =
-      typeof selectedModelMeta?.provider === "string"
-        ? selectedModelMeta.provider
-        : "custom"
-    return provider.toLowerCase()
-  }, [apiProvider, selectedModelMeta])
-
-  const providerLabel = React.useMemo(
-    () => tldwModels.getProviderDisplayName(resolvedProviderKey || "custom"),
-    [resolvedProviderKey]
-  )
-
-  const apiModelLabel = React.useMemo(() => {
-    if (!selectedModel) {
-      return t(
-        "playground:composer.selectModel",
-        "Select a model"
-      )
-    }
-    return `${providerLabel} / ${modelSummaryLabel}`
-  }, [modelSummaryLabel, providerLabel, selectedModel, t])
-
-  // Whether model selector should show warning state (no model selected)
-  const modelSelectorWarning = !selectedModel
-
-  const favoriteModelSet = React.useMemo(
-    () => new Set((favoriteModels || []).map((value) => String(value))),
-    [favoriteModels]
-  )
-
-  const toggleFavoriteModel = React.useCallback(
-    (modelId: string) => {
-      void setFavoriteModels((prev) => {
-        const list = Array.isArray(prev) ? prev.map(String) : []
-        const next = new Set(list)
-        if (next.has(modelId)) {
-          next.delete(modelId)
-        } else {
-          next.add(modelId)
-        }
-        return Array.from(next)
-      })
-      setModelDropdownOpen(true)
-    },
-    [setFavoriteModels]
-  )
-
-  const filteredModels = React.useMemo(() => {
-    const list = (composerModels as any[]) || []
-    const q = modelSearchQuery.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((model) => {
-      const providerRaw = String(model.provider || "").toLowerCase()
-      const providerLabel = getProviderDisplayName(providerRaw).toLowerCase()
-      const name = String(model.nickname || model.model || "").toLowerCase()
-      const modelId = String(model.model || "").toLowerCase()
-      return (
-        providerRaw.includes(q) ||
-        providerLabel.includes(q) ||
-        name.includes(q) ||
-        modelId.includes(q)
-      )
-    })
-  }, [composerModels, modelSearchQuery])
-
-  const modelDropdownMenuItems = React.useMemo(() => {
-    const models = filteredModels || []
-    const allModels = (composerModels as any[]) || []
-
-    if (allModels.length === 0) {
-      return [
-        {
-          key: "no-models",
-          disabled: true,
-          label: (
-            <div className="px-1 py-1 text-xs text-text-muted">
-              {t(
-                "playground:composer.noModelsAvailable",
-                "No models available. Connect your server in Settings."
-              )}
-            </div>
-          )
-        },
-        {
-          type: "divider" as const,
-          key: "no-models-divider"
-        },
-        {
-          key: "open-model-settings",
-          label: t(
-            "playground:composer.openModelSettings",
-            "Open model settings"
-          ),
-          onClick: () => navigate("/settings/tldw")
-        }
-      ]
-    }
-
-    if (models.length === 0) {
-      return [
-        {
-          key: "no-matches",
-          disabled: true,
-          label: (
-            <div className="px-1 py-1 text-xs text-text-muted">
-              {t(
-                "playground:composer.noModelsMatch",
-                "No models match your search."
-              )}
-            </div>
-          )
-        }
-      ]
-    }
-
-    const toProviderKey = (provider?: string) =>
-      typeof provider === "string" && provider.trim()
-        ? provider.trim().toLowerCase()
-        : "other"
-
-    const toGroupKey = (providerRaw: string) =>
-      providerRaw === "chrome"
-        ? "default"
-        : LOCAL_PROVIDERS.has(providerRaw)
-          ? "custom"
-          : providerRaw
-
-    const byLabel = (a: any, b: any) => {
-      const aProvider = getProviderDisplayName(toProviderKey(a.provider))
-      const bProvider = getProviderDisplayName(toProviderKey(b.provider))
-      const aLabel = `${aProvider} ${a.nickname || a.model}`.toLowerCase()
-      const bLabel = `${bProvider} ${b.nickname || b.model}`.toLowerCase()
-      return aLabel.localeCompare(bLabel)
-    }
-
-    // Find first favorite for "(Recommended)" tag
-    const firstFavoriteModel = favoriteModels?.length
-      ? models.find(m => favoriteModels.includes(String(m.model)))?.model
-      : null
-
-    // Generate a brief description for a model based on its capabilities
-    const getModelDescription = (model: any, capabilities: string[], contextLength: number | undefined) => {
-      const parts: string[] = []
-      const providerDisplay = getProviderDisplayName(toProviderKey(model.provider))
-
-      // Add provider context
-      parts.push(`${providerDisplay} model.`)
-
-      // Add capability descriptions
-      if (capabilities.includes("vision") || model.supportsVision) {
-        parts.push("Can analyze images.")
-      }
-      if (capabilities.includes("tools") || model.supportsTools) {
-        parts.push("Supports tool use and function calling.")
-      }
-      if (typeof contextLength === "number") {
-        if (contextLength > 100000) {
-          parts.push(`Long context (${Math.round(contextLength / 1000)}k tokens).`)
-        } else if (contextLength > 0) {
-          parts.push(`Context: ${Math.round(contextLength / 1000)}k tokens.`)
-        }
-      }
-      if (capabilities.includes("fast") || model.fast) {
-        parts.push("Optimized for speed.")
-      }
-
-      return parts.join(" ")
-    }
-
-    const buildItem = (model: any) => {
-      const providerRaw = toProviderKey(model.provider)
-      const modelLabel = model.nickname || model.model
-      const isFavorite = favoriteModelSet.has(String(model.model))
-      const isRecommended = firstFavoriteModel && String(model.model) === String(firstFavoriteModel)
-      const favoriteTitle = isFavorite
-        ? t("playground:composer.favoriteRemove", "Remove from favorites")
-        : t("playground:composer.favoriteAdd", "Add to favorites")
-
-      // Build capability badges (max 2)
-      const capabilities = model.details?.capabilities || model.capabilities || []
-      const contextLength = model.context_length ?? model.contextLength ?? model.details?.context_length
-      const capabilityBadges: string[] = []
-      if (capabilities.includes("vision") || model.supportsVision) capabilityBadges.push("Vision")
-      if (capabilities.includes("fast") || model.fast) capabilityBadges.push("Fast")
-      if (typeof contextLength === "number" && contextLength > 100000) capabilityBadges.push("Long context")
-      if (capabilities.includes("tools") || model.supportsTools) capabilityBadges.push("Tools")
-
-      // Generate tooltip description
-      const modelDescription = getModelDescription(model, capabilities, contextLength)
-
-      return {
-        key: model.model,
-        label: (
-          <Tooltip
-            title={modelDescription}
-            placement="right"
-            mouseEnterDelay={0.5}
-            overlayStyle={{ maxWidth: 280 }}
-          >
-            <div className="flex items-center gap-2 text-sm">
-              <ProviderIcons provider={providerRaw} className="h-3 w-3 text-text-subtle" />
-              <span className="truncate flex-1">{modelLabel}</span>
-              {isRecommended && (
-                <span className="rounded-full bg-blue-100 dark:bg-blue-900/30 px-1.5 py-0.5 text-[10px] text-blue-600 dark:text-blue-400">
-                  {t("playground:composer.recommended", "Recommended")}
-                </span>
-              )}
-              {capabilityBadges.slice(0, 2).map(cap => (
-                <span key={cap} className="rounded bg-surface2 px-1 py-0.5 text-[9px] text-text-muted">
-                  {cap}
-                </span>
-              ))}
-              <button
-                type="button"
-                className="rounded p-0.5 text-text-subtle transition hover:bg-surface2"
-                onMouseDown={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                }}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  toggleFavoriteModel(String(model.model))
-                }}
-                aria-label={favoriteTitle}
-                title={favoriteTitle}
-              >
-                <Star
-                  className={`h-3.5 w-3.5 ${
-                    isFavorite ? "fill-warn text-warn" : "text-text-subtle"
-                  }`}
-                />
-              </button>
-            </div>
-          </Tooltip>
-        ),
-        onClick: () => setSelectedModel(model.model)
-      }
-    }
-
-    if (modelSortMode === "az") {
-      return models.slice().sort(byLabel).map(buildItem)
-    }
-
-    if (modelSortMode === "favorites") {
-      const favorites = models.filter((model) =>
-        favoriteModelSet.has(String(model.model))
-      )
-      const others = models.filter(
-        (model) => !favoriteModelSet.has(String(model.model))
-      )
-      const items: any[] = []
-      if (favorites.length > 0) {
-        items.push({
-          type: "group" as const,
-          key: "favorites",
-          label: t("playground:composer.favorites", "Favorites"),
-          children: favorites.slice().sort(byLabel).map(buildItem)
-        })
-      }
-      items.push(...others.slice().sort(byLabel).map(buildItem))
-      return items
-    }
-
-    const groups = new Map<string, any[]>()
-    for (const model of models) {
-      const providerRaw = toProviderKey(model.provider)
-      const groupKey = toGroupKey(providerRaw)
-      if (!groups.has(groupKey)) groups.set(groupKey, [])
-      groups.get(groupKey)!.push(buildItem(model))
-    }
-
-    const entries = Array.from(groups.entries())
-    if (modelSortMode === "localFirst") {
-      entries.sort(([aKey], [bKey]) => {
-        const aLocal = LOCAL_PROVIDERS.has(aKey) || aKey === "default"
-        const bLocal = LOCAL_PROVIDERS.has(bKey) || bKey === "default"
-        if (aLocal !== bLocal) return aLocal ? -1 : 1
-        return aKey.localeCompare(bKey)
-      })
-    }
-
-    return entries.map(([key, children]) => ({
-      type: "group" as const,
-      key: `group-${key}`,
-      label: (
-        <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-text-subtle">
-          <ProviderIcons provider={key} className="h-3 w-3" />
-          <span>{getProviderDisplayName(key)}</span>
-        </div>
-      ),
-      children
-    }))
-  }, [
-    composerModels,
-    favoriteModels,
-    favoriteModelSet,
-    filteredModels,
-    modelSearchQuery,
-    modelSortMode,
-    navigate,
-    setSelectedModel,
-    t,
-    toggleFavoriteModel
-  ])
 
   const sendLabel = React.useMemo(() => {
     if (compareModeActive && compareSelectedModels.length > 1) {
@@ -915,43 +575,29 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setFieldValueRef.current = form.setFieldValue
   }, [form.setFieldValue])
 
-  const pendingCaretRef = React.useRef<number | null>(null)
-  const lastDisplaySelectionRef = React.useRef<{
-    start: number
-    end: number
-  } | null>(null)
-  const pendingCollapsedStateRef = React.useRef<{
-    message: string
-    range: CollapsedRange
-    caret: number
-  } | null>(null)
-  const pointerDownRef = React.useRef(false)
-  const selectionFromPointerRef = React.useRef(false)
-  const [isMessageCollapsed, setIsMessageCollapsed] = React.useState(false)
-  const [collapsedRange, setCollapsedRange] =
-    React.useState<CollapsedRange | null>(null)
-  const [hasExpandedLargeText, setHasExpandedLargeText] = React.useState(false)
-  const normalizeCollapsedRange = React.useCallback(
-    (range: CollapsedRange, messageLength: number): CollapsedRange => {
-      const start = Math.max(0, Math.min(range.start, messageLength))
-      const end = Math.max(start, Math.min(range.end, messageLength))
-      return { start, end }
-    },
-    []
-  )
-
-  const parseCollapsedRange = React.useCallback(
-    (value: unknown, messageLength: number): CollapsedRange | null => {
-      if (!value || typeof value !== "object") return null
-      const start = Number((value as { start?: number }).start)
-      const end = Number((value as { end?: number }).end)
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return null
-      const range = normalizeCollapsedRange({ start, end }, messageLength)
-      if (range.end <= range.start) return null
-      return range
-    },
-    [normalizeCollapsedRange]
-  )
+  const msgCollapse = useMessageCollapse({ textareaRef })
+  const {
+    isMessageCollapsed,
+    setIsMessageCollapsed,
+    collapsedRange,
+    setCollapsedRange,
+    hasExpandedLargeText,
+    setHasExpandedLargeText,
+    pendingCaretRef,
+    lastDisplaySelectionRef,
+    pendingCollapsedStateRef,
+    pointerDownRef,
+    selectionFromPointerRef,
+    normalizeCollapsedRange,
+    parseCollapsedRange,
+    buildCollapsedMessageLabel,
+    getCollapsedDisplayMeta,
+    getDisplayCaretFromMessage,
+    getMessageCaretFromDisplay,
+    collapseLargeMessage,
+    expandLargeMessage,
+    restoreMessageValue: restoreCollapseState
+  } = msgCollapse
 
   const restoreMessageValue = React.useCallback(
     (
@@ -959,150 +605,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       metadata?: { wasExpanded?: boolean; collapsedRange?: CollapsedRange | null }
     ) => {
       setFieldValueRef.current("message", value)
-      if (value.length <= PASTED_TEXT_CHAR_LIMIT) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(false)
-        setCollapsedRange(null)
-        return
-      }
-      const wasExpanded = Boolean(metadata?.wasExpanded)
-      if (wasExpanded) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(true)
-        setCollapsedRange(null)
-        return
-      }
-      const range =
-        parseCollapsedRange(metadata?.collapsedRange, value.length) ?? {
-          start: 0,
-          end: value.length
-        }
-      setIsMessageCollapsed(true)
-      setHasExpandedLargeText(false)
-      setCollapsedRange(range)
+      restoreCollapseState(value, metadata)
     },
-    [parseCollapsedRange]
-  )
-
-  const buildCollapsedMessageLabel = React.useCallback(
-    (text: string) => {
-      // Avoid allocating an array for very large messages.
-      const lineCount =
-        text ? (text.match(/\r\n|\r|\n/g)?.length ?? 0) + 1 : 0
-      return t(
-        "playground:composer.collapsedMessageLabel",
-        "[{lines, plural, one {# line} other {# lines}}/{chars, plural, one {# char} other {# chars}} in message]",
-        { lines: lineCount, chars: text.length }
-      )
-    },
-    [t]
-  )
-
-  const getCollapsedDisplayMeta = React.useCallback(
-    (text: string, range: CollapsedRange) => {
-      const normalizedRange = normalizeCollapsedRange(range, text.length)
-      const collapsedText = text.slice(
-        normalizedRange.start,
-        normalizedRange.end
-      )
-      const label = buildCollapsedMessageLabel(collapsedText)
-      const prefix = text.slice(0, normalizedRange.start)
-      const suffix = text.slice(normalizedRange.end)
-      const labelStart = prefix.length
-      const labelEnd = labelStart + label.length
-      const blockLength = normalizedRange.end - normalizedRange.start
-      return {
-        display: `${prefix}${label}${suffix}`,
-        label,
-        labelStart,
-        labelEnd,
-        labelLength: label.length,
-        blockLength,
-        rangeStart: normalizedRange.start,
-        rangeEnd: normalizedRange.end,
-        messageLength: text.length
-      }
-    },
-    [buildCollapsedMessageLabel, normalizeCollapsedRange]
-  )
-
-  const getDisplayCaretFromMessage = React.useCallback(
-    (
-      messageCaret: number,
-      meta: ReturnType<typeof getCollapsedDisplayMeta>
-    ) => {
-      if (messageCaret <= meta.rangeStart) return messageCaret
-      if (messageCaret >= meta.rangeEnd) {
-        return (
-          messageCaret -
-          meta.blockLength +
-          meta.labelLength
-        )
-      }
-      return meta.labelEnd
-    },
-    []
-  )
-
-  const getMessageCaretFromDisplay = React.useCallback(
-    (
-      displayCaret: number,
-      meta: ReturnType<typeof getCollapsedDisplayMeta>,
-      options?: { prefer?: "before" | "after" }
-    ) => {
-      if (displayCaret <= meta.labelStart) return displayCaret
-      if (displayCaret >= meta.labelEnd) {
-        return (
-          displayCaret -
-          meta.labelLength +
-          meta.blockLength
-        )
-      }
-      return options?.prefer === "before"
-        ? meta.rangeStart
-        : meta.rangeEnd
-    },
-    []
-  )
-
-  const collapseLargeMessage = React.useCallback(
-    (text: string, options?: { force?: boolean; range?: CollapsedRange }) => {
-      if (text.length <= PASTED_TEXT_CHAR_LIMIT) {
-        setIsMessageCollapsed(false)
-        setHasExpandedLargeText(false)
-        setCollapsedRange(null)
-        return
-      }
-      if (!options?.force && hasExpandedLargeText) return
-      const range =
-        options?.range ?? { start: 0, end: text.length }
-      const normalizedRange = normalizeCollapsedRange(range, text.length)
-      setIsMessageCollapsed(true)
-      setHasExpandedLargeText(false)
-      setCollapsedRange(normalizedRange)
-    },
-    [hasExpandedLargeText, normalizeCollapsedRange]
-  )
-
-  const expandLargeMessage = React.useCallback(
-    (options?: { caret?: number; force?: boolean }) => {
-      if (!isMessageCollapsed && !options?.force) return
-      setIsMessageCollapsed(false)
-      setHasExpandedLargeText(true)
-      setCollapsedRange(null)
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (!el) return
-        const caret =
-          typeof options?.caret === "number"
-            ? Math.min(options.caret, el.value.length)
-            : pendingCaretRef.current ?? el.value.length
-        pendingCaretRef.current = null
-        el.focus()
-        el.setSelectionRange(caret, caret)
-      })
-    },
-    [isMessageCollapsed, textareaRef]
+    [restoreCollapseState]
   )
 
   const setMessageValue = React.useCallback(
@@ -1164,273 +669,127 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     setValueWithMetadata: restoreMessageValue
   })
 
-  const numberFormatter = React.useMemo(() => new Intl.NumberFormat(), [])
-  const formatNumber = React.useCallback(
-    (value: number | null) => {
-      if (typeof value !== "number" || !Number.isFinite(value)) return "—"
-      return numberFormatter.format(Math.round(value))
-    },
-    [numberFormatter]
-  )
-
-  const estimateTokensForText = React.useCallback((text: string) => {
-    const trimmed = text.trim()
-    if (!trimmed) return 0
-    return tldwChat.estimateTokens([
-      { role: "user", content: trimmed }
-    ])
-  }, [])
-
-  const draftTokenCount = React.useMemo(
-    () => estimateTokensForText(form.values.message || ""),
-    [estimateTokensForText, form.values.message]
-  )
-
-  const conversationTokenCountRef = React.useRef(0)
-  const conversationTokenCount = React.useMemo(() => {
-    if (isSending) {
-      return conversationTokenCountRef.current
-    }
-    const convoMessages: ChatMessage[] = []
-    const trimmedSystem = systemPrompt?.trim()
-    if (trimmedSystem) {
-      convoMessages.push({ role: "system", content: trimmedSystem })
-    }
-    messages.forEach((message) => {
-      const content = typeof message.message === "string" ? message.message.trim() : ""
-      if (!content) return
-      if (message.isBot) {
-        convoMessages.push({ role: "assistant", content })
-      } else {
-        convoMessages.push({ role: "user", content })
-      }
-    })
-    if (convoMessages.length === 0) return 0
-    const count = tldwChat.estimateTokens(convoMessages)
-    conversationTokenCountRef.current = count
-    return count
-  }, [isSending, messages, systemPrompt])
-
-  const promptTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.prompt", "prompt")} ${formatNumber(draftTokenCount)}`,
-    [draftTokenCount, formatNumber, t]
-  )
-  const convoTokenLabel = React.useMemo(
-    () =>
-      `${t("playground:tokens.total", "tokens")} ${formatNumber(conversationTokenCount)}`,
-    [conversationTokenCount, formatNumber, t]
-  )
-  const contextTokenLabel = React.useMemo(
-    () => `${formatNumber(resolvedMaxContext)} ctx`,
-    [formatNumber, resolvedMaxContext]
-  )
-  const tokenUsageLabel = React.useMemo(
-    () => `${promptTokenLabel} · ${convoTokenLabel} / ${contextTokenLabel}`,
-    [contextTokenLabel, convoTokenLabel, promptTokenLabel]
-  )
-  const tokenUsageCompactLabel = React.useMemo(() => {
-    const prompt = formatNumber(draftTokenCount)
-    const convo = formatNumber(conversationTokenCount)
-    const ctx = formatNumber(resolvedMaxContext)
-    return `${prompt} · ${convo}/${ctx} ctx`
-  }, [conversationTokenCount, draftTokenCount, formatNumber, resolvedMaxContext])
+  const {
+    draftTokenCount,
+    conversationTokenCount,
+    tokenUsageLabel,
+    tokenUsageCompactLabel,
+    tokenUsageTooltip
+  } = useComposerTokens({
+    message: form.values.message || "",
+    messages,
+    systemPrompt,
+    resolvedMaxContext,
+    apiModelLabel,
+    isSending
+  })
   const tokenUsageDisplay = isProMode
     ? tokenUsageLabel
     : tokenUsageCompactLabel
-  const contextLabel = React.useMemo(
-    () =>
-      t(
-        "common:modelSettings.form.numCtx.label",
-        "Context Window Size (num_ctx)"
-      ),
-    [t]
-  )
-  const tokenUsageTooltip = React.useMemo(
-    () =>
-      `${apiModelLabel} · ${promptTokenLabel} · ${convoTokenLabel} · ${contextLabel} ${formatNumber(resolvedMaxContext)}`,
-    [
-      apiModelLabel,
-      contextLabel,
-      convoTokenLabel,
-      formatNumber,
-      promptTokenLabel,
-      resolvedMaxContext
-    ]
-  )
 
-  const imageBackendOptions = React.useMemo<
-    { value: string; label: string; provider?: string }[]
-  >(() => {
-    const dynamicOptions = (imageModels || [])
-      .filter((model: any) => model && model.id)
-      .map((model: any) => ({
-        value: String(model.id),
-        label: String(model.name || model.id),
-        provider: model.provider ? String(model.provider) : undefined
-      }))
+  const {
+    imageBackendDefault: imageBackendDefaultTrimmed,
+    setImageBackendDefault,
+    imageBackendOptions,
+    imageBackendLabel,
+    imageBackendActiveKey,
+    imageBackendMenuItems,
+    imageBackendBadgeLabel
+  } = useImageBackend({ imageModels })
 
-    const fallbackOptions = [
-      {
-        value: "tldw_server-Flux-Klein",
-        label: t("playground:imageBackend.fluxKlein", "Flux-Klein"),
-        provider: undefined
-      },
-      {
-        value: "tldw_server-ZTurbo",
-        label: t("playground:imageBackend.zTurbo", "ZTurbo"),
-        provider: undefined
-      }
-    ]
-
-    const baseOptions = dynamicOptions.length > 0 ? dynamicOptions : fallbackOptions
-    return [
-      {
-        value: "",
-        label: t("playground:imageBackend.none", "None")
-      },
-      ...baseOptions
-    ]
-  }, [imageModels, t])
-  const imageBackendDefaultTrimmed = React.useMemo(
-    () => (imageBackendDefault || "").trim(),
-    [imageBackendDefault]
-  )
-  const imageBackendLabel = React.useMemo(() => {
-    if (!imageBackendDefaultTrimmed) {
-      return t("playground:imageBackend.none", "None")
-    }
-    const match = imageBackendOptions.find(
-      (option) => option.value === imageBackendDefaultTrimmed
-    )
-    if (match?.provider) {
-      return `${getProviderDisplayName(match.provider)} · ${match.label}`
-    }
-    return match?.label || imageBackendDefaultTrimmed
-  }, [imageBackendDefaultTrimmed, imageBackendOptions, t])
-  const imageBackendActiveKey =
-    imageBackendDefaultTrimmed.length > 0 ? imageBackendDefaultTrimmed : "none"
-  const imageBackendMenuItems = React.useMemo(
-    () =>
-      imageBackendOptions.map((option: any) => {
-        const providerLabel = option.provider
-          ? getProviderDisplayName(option.provider)
-          : null
-        const labelText = providerLabel
-          ? `${providerLabel} · ${option.label}`
-          : option.label
-        return {
-          key: option.value || "none",
-          label: (
-            <div className="flex items-center gap-2 text-sm">
-              <ImageIcon className="h-3 w-3 text-text-subtle" />
-              <span className="truncate">{labelText}</span>
-            </div>
-          ),
-          onClick: () => setImageBackendDefault(option.value)
+  const modelSelectButton = (
+    <Dropdown
+      open={modelDropdownOpen}
+      onOpenChange={(open) => {
+        setModelDropdownOpen(open)
+        if (!open) {
+          setModelSearchQuery("")
         }
-      }),
-    [imageBackendOptions, setImageBackendDefault]
-  )
-  const imageBackendBadgeLabel = imageBackendDefaultTrimmed
-    ? t("playground:imageBackend.badge", "Image: {{backend}}", {
-        backend: imageBackendLabel
-      })
-    : t("playground:imageBackend.noneBadge", "Image: none")
-
-  const showModelLabel = !isProMode
-  const modelUsageBadge = (
-    <div className="inline-flex items-center gap-2">
-      {showModelLabel && (
-        <Dropdown
-          open={modelDropdownOpen}
-          onOpenChange={(open) => {
-            setModelDropdownOpen(open)
-            if (!open) {
-              setModelSearchQuery("")
-            }
-          }}
-          menu={{
-            items: modelDropdownMenuItems,
-            className: "no-scrollbar",
-            activeKey: selectedModel ?? undefined
-          }}
-          dropdownRender={(menu) => (
-            <div className="bg-surface rounded-lg shadow-lg border border-border">
-              <div className="p-2 border-b border-border flex items-center gap-2">
-                <Input
-                  size="small"
-                  placeholder={t("playground:composer.modelSearchPlaceholder", "Search models")}
-                  value={modelSearchQuery}
-                  allowClear
-                  className="flex-1"
-                  onChange={(event) => setModelSearchQuery(event.target.value)}
-                  onKeyDown={(event) => event.stopPropagation()}
-                />
-                <Select
-                  size="small"
-                  value={modelSortMode}
-                  onChange={(value) => setModelSortMode(value as ModelSortMode)}
-                  options={[
-                    { value: "favorites", label: t("playground:composer.sort.favorites", "Favorites") },
-                    { value: "az", label: t("playground:composer.sort.az", "A-Z") },
-                    { value: "provider", label: t("playground:composer.sort.provider", "Provider") },
-                    { value: "localFirst", label: t("playground:composer.sort.localFirst", "Local-first") }
-                  ]}
-                  className="min-w-[120px]"
-                  onKeyDown={(event) => event.stopPropagation()}
-                />
-              </div>
-              <div className="max-h-[400px] overflow-y-auto no-scrollbar">
-                {menu}
-              </div>
-              <div className="p-2 border-t border-border">
-                <Link
-                  to="/docs/models"
-                  className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
-                  onClick={() => setModelDropdownOpen(false)}
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                  <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
-                  <ArrowRight className="h-3 w-3" />
-                </Link>
-              </div>
-            </div>
-          )}
-          trigger={["click"]}
-          placement="topLeft"
-        >
-          <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
-            <button
-              type="button"
-              title={apiModelLabel}
-              aria-label={apiModelLabel}
-              data-testid="model-selector"
-              className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 h-9 text-[10px] cursor-pointer transition-colors ${
-                modelSelectorWarning
-                  ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
-                  : "border-border bg-surface hover:bg-surface-hover"
-              }`}
+      }}
+      menu={{
+        items: modelDropdownMenuItems,
+        className: "no-scrollbar",
+        activeKey: selectedModel ?? undefined
+      }}
+      popupRender={(menu) => (
+        <div className="bg-surface rounded-lg shadow-lg border border-border">
+          <div className="p-2 border-b border-border flex items-center gap-2">
+            <Input
+              size="small"
+              placeholder={t("playground:composer.modelSearchPlaceholder", "Search models")}
+              value={modelSearchQuery}
+              allowClear
+              className="flex-1"
+              onChange={(event) => setModelSearchQuery(event.target.value)}
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+            <Select
+              size="small"
+              value={modelSortMode}
+              onChange={(value) => setModelSortMode(value as ModelSortMode)}
+              options={[
+                { value: "favorites", label: t("playground:composer.sort.favorites", "Favorites") },
+                { value: "az", label: t("playground:composer.sort.az", "A-Z") },
+                { value: "provider", label: t("playground:composer.sort.provider", "Provider") },
+                { value: "localFirst", label: t("playground:composer.sort.localFirst", "Local-first") }
+              ]}
+              className="min-w-[120px]"
+              onKeyDown={(event) => event.stopPropagation()}
+            />
+          </div>
+          <div className="max-h-[400px] overflow-y-auto no-scrollbar">
+            {menu}
+          </div>
+          <div className="p-2 border-t border-border">
+            <Link
+              to="/docs/models"
+              className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 transition-colors"
+              onClick={() => setModelDropdownOpen(false)}
             >
-              <ProviderIcons
-                provider={resolvedProviderKey}
-                className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
-              />
-              <span className="truncate max-w-[120px]">
-                {apiModelLabel}
-              </span>
-            </button>
-          </Tooltip>
-        </Dropdown>
+              <HelpCircle className="h-3.5 w-3.5" />
+              <span>{t("playground:composer.helpMeChoose", "Help me choose a model")}</span>
+              <ArrowRight className="h-3 w-3" />
+            </Link>
+          </div>
+        </div>
       )}
-      <TokenProgressBar
-        conversationTokens={conversationTokenCount}
-        draftTokens={draftTokenCount}
-        maxTokens={resolvedMaxContext}
-        modelLabel={isProMode ? apiModelLabel : undefined}
-        compact={!isProMode}
-      />
-    </div>
+      trigger={["click"]}
+      placement="topLeft"
+    >
+      <Tooltip title={modelSelectorWarning ? t("playground:composer.selectModelTooltip", "Click to select a model") : apiModelLabel} placement="top">
+        <button
+          type="button"
+          title={apiModelLabel}
+          aria-label={apiModelLabel}
+          aria-haspopup="listbox"
+          aria-expanded={modelDropdownOpen}
+          data-testid="model-selector"
+          className={`inline-flex min-w-0 items-center gap-1 rounded-full border px-2 min-h-[44px] text-[10px] cursor-pointer transition-colors ${
+            modelSelectorWarning
+              ? "border-warn/50 bg-warn/10 text-warn hover:bg-warn/20"
+              : "border-border bg-surface hover:bg-surface-hover"
+          }`}
+        >
+          <ProviderIcons
+            provider={resolvedProviderKey}
+            className={`h-3 w-3 ${modelSelectorWarning ? "text-warn" : "text-text-subtle"}`}
+          />
+          <span className="truncate max-w-[120px]">
+            {apiModelLabel}
+          </span>
+        </button>
+      </Tooltip>
+    </Dropdown>
+  )
+
+  const modelUsageBadge = (
+    <TokenProgressBar
+      conversationTokens={conversationTokenCount}
+      draftTokens={draftTokenCount}
+      maxTokens={resolvedMaxContext}
+      modelLabel={isProMode ? apiModelLabel : undefined}
+      compact={!isProMode}
+    />
   )
   const imageProviderControl = (
     <Dropdown
@@ -1548,9 +907,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [textAreaFocus])
 
   React.useEffect(() => {
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/defaultInternetSearchOn")
-    }
     if (defaultInternetSearchOn && !webSearch) {
       setWebSearch(true)
     }
@@ -1563,9 +919,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   }, [isConnectionReady])
 
   React.useEffect(() => {
-    if (import.meta?.env?.DEV) {
-      console.count("PlaygroundForm/queuedMessagesBanner")
-    }
     const next = queuedMessages.length > 0
     setShowQueuedBanner((prev) => (prev === next ? prev : next))
   }, [queuedMessages.length])
@@ -1986,6 +1339,150 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }
 
+  // --- ComposerTextarea callback handlers (extracted from inline JSX) ---
+  const handleCompositionStart = React.useCallback(() => {
+    if (!isFirefoxTarget) {
+      setTyping(true)
+    }
+  }, [])
+
+  const handleCompositionEnd = React.useCallback(() => {
+    if (!isFirefoxTarget) {
+      setTyping(false)
+    }
+  }, [])
+
+  const handleTextareaMouseDown = React.useCallback(() => {
+    if (isMessageCollapsed) {
+      pointerDownRef.current = true
+      selectionFromPointerRef.current = true
+    }
+  }, [isMessageCollapsed])
+
+  const handleTextareaMouseUp = React.useCallback(() => {
+    pointerDownRef.current = false
+    if (selectionFromPointerRef.current) {
+      requestAnimationFrame(() => {
+        selectionFromPointerRef.current = false
+      })
+    }
+  }, [])
+
+  const handleTextareaKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (handleCollapsedKeyDown(e)) return
+    handleKeyDown(e)
+  }
+
+  const handleTextareaFocus = React.useCallback(() => {
+    handleDisconnectedFocus()
+    if (!isMessageCollapsed) return
+    const wasPointer = pointerDownRef.current
+    pointerDownRef.current = false
+    if (wasPointer) return
+    const textarea = textareaRef.current
+    if (pendingCaretRef.current === null && textarea) {
+      lastDisplaySelectionRef.current = {
+        start: textarea.selectionStart ?? 0,
+        end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
+      }
+    }
+    syncCollapsedCaret()
+  }, [handleDisconnectedFocus, isMessageCollapsed, syncCollapsedCaret, textareaRef])
+
+  const handleTextareaChange = React.useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      if (isMessageCollapsed) return
+      form.getInputProps("message").onChange(e)
+      if (tabMentionsEnabled && textareaRef.current) {
+        handleTextChange(
+          e.target.value,
+          textareaRef.current.selectionStart || 0
+        )
+      }
+    },
+    [isMessageCollapsed, form, tabMentionsEnabled, textareaRef, handleTextChange]
+  )
+
+  const handleTextareaSelect = React.useCallback(() => {
+    const textarea = textareaRef.current
+    if (textarea) {
+      lastDisplaySelectionRef.current = {
+        start: textarea.selectionStart ?? 0,
+        end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
+      }
+    }
+    if (isMessageCollapsed && collapsedRange) {
+      const message = form.values.message || ""
+      if (!message || !textarea) return
+      const meta =
+        collapsedDisplayMeta ??
+        getCollapsedDisplayMeta(message, collapsedRange)
+      const selectionStart = textarea.selectionStart ?? meta.labelStart
+      const selectionEnd = textarea.selectionEnd ?? selectionStart
+      const displayStart = Math.min(selectionStart, selectionEnd)
+      const displayEnd = Math.max(selectionStart, selectionEnd)
+      const hasSelection = displayStart !== displayEnd
+      const selectionTouchesLabel =
+        displayStart < meta.labelEnd && displayEnd > meta.labelStart
+      const fromPointer = selectionFromPointerRef.current
+      selectionFromPointerRef.current = false
+      if (hasSelection) {
+        pendingCaretRef.current = null
+        return
+      }
+      const caretInsideLabel =
+        displayStart > meta.labelStart && displayStart < meta.labelEnd
+      if (selectionTouchesLabel && fromPointer && caretInsideLabel) {
+        pendingCaretRef.current = meta.rangeEnd
+        expandLargeMessage({ force: true })
+        return
+      }
+      const prefer =
+        caretInsideLabel &&
+        (pendingCaretRef.current ?? meta.rangeEnd) <= meta.rangeStart
+          ? "before"
+          : "after"
+      const caret = getMessageCaretFromDisplay(displayStart, meta, {
+        prefer: caretInsideLabel ? prefer : undefined
+      })
+      pendingCaretRef.current = caret
+      if (caretInsideLabel) {
+        syncCollapsedCaret({ caret })
+      }
+      return
+    }
+    if (tabMentionsEnabled && textareaRef.current) {
+      handleTextChange(
+        textareaRef.current.value,
+        textareaRef.current.selectionStart || 0
+      )
+    }
+  }, [
+    textareaRef,
+    isMessageCollapsed,
+    collapsedRange,
+    form.values.message,
+    collapsedDisplayMeta,
+    getCollapsedDisplayMeta,
+    expandLargeMessage,
+    getMessageCaretFromDisplay,
+    syncCollapsedCaret,
+    tabMentionsEnabled,
+    handleTextChange
+  ])
+
+  const handleMentionSelect = React.useCallback(
+    (tab: any) =>
+      insertMention(tab, form.values.message, (value: string) =>
+        form.setFieldValue("message", value)
+      ),
+    [insertMention, form]
+  )
+
+  const handleMentionRefetch = React.useCallback(async () => {
+    await reloadTabs()
+  }, [reloadTabs])
+
   // Match sidepanel textarea sizing: Pro mode gets more space
   const textareaMaxHeight = isProMode ? 160 : 120
   useDynamicTextareaSize(textareaRef, messageDisplayValue, textareaMaxHeight)
@@ -2010,6 +1507,35 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const speechAvailable =
     browserSupportsSpeechRecognition || canUseServerAudio
   const speechUsesServer = canUseServerAudio
+
+  const speechTooltipText = React.useMemo(() => {
+    if (!speechAvailable) {
+      return t(
+        "playground:actions.speechUnavailableBody",
+        "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
+      ) as string
+    }
+    if (speechUsesServer) {
+      return (
+        (t("playground:tooltip.speechToTextServer", "Dictation via your tldw server") as string) +
+        " " +
+        (t("playground:tooltip.speechToTextDetails", "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.", {
+          model: sttModel || "whisper-1",
+          task: sttTask === "translate" ? "translate" : "transcribe",
+          format: (sttResponseFormat || "json").toUpperCase()
+        } as any) as string)
+      )
+    }
+    return t("playground:tooltip.speechToTextBrowser", "Dictation via browser speech recognition") as string
+  }, [speechAvailable, speechUsesServer, sttModel, sttTask, sttResponseFormat, t])
+
+  const handleTemplateSelect = React.useCallback(
+    (template: { content: string }) => {
+      setSystemPrompt(template.content)
+      setSelectedSystemPrompt(undefined)
+    },
+    [setSystemPrompt, setSelectedSystemPrompt]
+  )
 
   React.useEffect(() => {
     if (isListening) {
@@ -2826,239 +2352,31 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     fileInputRef.current?.click()
   }, [])
 
-  const slashCommands = React.useMemo<SlashCommandItem[]>(
-    () => [
-      {
-        id: "slash-search",
-        command: "search",
-        label: t(
-          "common:commandPalette.toggleKnowledgeSearch",
-          "Toggle Search & Context"
-        ),
-        description: t(
-          "common:commandPalette.toggleKnowledgeSearchDesc",
-          "Search your knowledge base and context"
-        ),
-        keywords: ["rag", "context", "knowledge", "search"],
-        action: () => setChatMode(chatMode === "rag" ? "normal" : "rag")
-      },
-      {
-        id: "slash-web",
-        command: "web",
-        label: t(
-          "common:commandPalette.toggleWebSearch",
-          "Toggle Web Search"
-        ),
-        description: t(
-          "common:commandPalette.toggleWebDesc",
-          "Search the internet"
-        ),
-        keywords: ["web", "internet", "browse"],
-        action: () => setWebSearch(!webSearch)
-      },
-      {
-        id: "slash-vision",
-        command: "vision",
-        label: t("playground:actions.upload", "Attach image"),
-        description: t(
-          "playground:composer.slashVisionDesc",
-          "Attach an image for vision"
-        ),
-        keywords: ["image", "ocr", "vision"],
-        action: handleImageUpload
-      },
-      {
-        id: "slash-generate-image",
-        command: "generate-image",
-        label: t(
-          "playground:composer.slashGenerateImage",
-          "Generate image"
-        ),
-        description: imageBackendDefaultTrimmed
-          ? t(
-              "playground:composer.slashGenerateImageDescDefault",
-              "Generate an image (default: {{backend}}). Use /generate-image:<provider> to override.",
-              { backend: imageBackendLabel }
-            )
-          : t(
-              "playground:composer.slashGenerateImageDesc",
-              "Generate an image. Use /generate-image:<provider> <prompt>."
-            ),
-        keywords: ["image", "image gen", "flux", "zturbo", "art"],
-        insertText: imageBackendDefaultTrimmed
-          ? "/generate-image "
-          : "/generate-image:"
-      },
-      {
-        id: "slash-model",
-        command: "model",
-        label: t("common:commandPalette.switchModel", "Switch Model"),
-        description: t(
-          "common:currentChatModelSettings",
-          "Open current chat settings"
-        ),
-        keywords: ["settings", "parameters", "temperature"],
-        action: () => setOpenModelSettings(true)
-      }
-    ],
-    [
-      chatMode,
-      handleImageUpload,
-      imageBackendDefaultTrimmed,
-      imageBackendLabel,
-      setChatMode,
-      setWebSearch,
-      t,
-      webSearch,
-      setOpenModelSettings
-    ]
-  )
-
-  const slashCommandLookup = React.useMemo(
-    () => new Map(slashCommands.map((command) => [command.command, command])),
-    [slashCommands]
-  )
-
-  const slashMatch = React.useMemo(
-    () => form.values.message.match(/^\s*\/([\w-]*)$/),
-    [form.values.message]
-  )
-  const slashQuery = slashMatch?.[1] ?? ""
-  const showSlashMenu = Boolean(slashMatch)
-  const [slashActiveIndex, setSlashActiveIndex] = React.useState(0)
-
-  const filteredSlashCommands = React.useMemo(() => {
-    if (!slashQuery) return slashCommands
-    const q = slashQuery.toLowerCase()
-    return slashCommands.filter((command) => {
-      if (command.command.startsWith(q)) return true
-      if (command.label.toLowerCase().includes(q)) return true
-      return (command.keywords || []).some((keyword) =>
-        keyword.toLowerCase().includes(q)
-      )
-    })
-  }, [slashCommands, slashQuery])
-
-  React.useEffect(() => {
-    if (!showSlashMenu) {
-      setSlashActiveIndex(0)
-      return
-    }
-    setSlashActiveIndex((prev) => {
-      if (filteredSlashCommands.length === 0) return 0
-      return Math.min(prev, filteredSlashCommands.length - 1)
-    })
-  }, [showSlashMenu, filteredSlashCommands.length, slashQuery])
-
-  const parseSlashInput = React.useCallback((text: string) => {
-    const trimmed = text.trimStart()
-    const match = trimmed.match(/^\/(\w+)(?:\s+([\s\S]*))?$/)
-    if (!match) return null
-    return {
-      command: match[1].toLowerCase(),
-      remainder: match[2] || ""
-    }
-  }, [])
-
-  const parseImageSlashCommand = React.useCallback(
-    (text: string) => {
-      const trimmed = text.trim()
-      if (!trimmed.toLowerCase().startsWith("/generate-image")) return null
-      const remainder = trimmed.slice("/generate-image".length)
-      const colonMatch = remainder.match(
-        /^\s*:\s*([^\s]+)(?:\s+([\s\S]*))?$/i
-      )
-      if (colonMatch) {
-        const provider = colonMatch[1]?.trim() || ""
-        const prompt = (colonMatch[2] || "").trim()
-        const missingProvider = provider.length === 0
-        return {
-          provider,
-          prompt,
-          invalid: missingProvider,
-          missingProvider
-        }
-      }
-
-      const prompt = remainder.trim()
-      if (imageBackendDefaultTrimmed) {
-        return {
-          provider: imageBackendDefaultTrimmed,
-          prompt,
-          invalid: false,
-          missingProvider: false
-        }
-      }
-
-      return {
-        provider: "",
-        prompt,
-        invalid: true,
-        missingProvider: true
-      }
-    },
-    [imageBackendDefaultTrimmed]
-  )
-
-  const applySlashCommand = React.useCallback(
-    (text: string) => {
-      const parsed = parseSlashInput(text)
-      if (!parsed) {
-        return { handled: false, message: text }
-      }
-      const command = slashCommandLookup.get(parsed.command)
-      if (!command) {
-        return { handled: false, message: text }
-      }
-      command.action()
-      return { handled: true, message: parsed.remainder }
-    },
-    [parseSlashInput, slashCommandLookup]
-  )
-
-  const resolveSubmissionIntent = React.useCallback(
-    (rawMessage: string) => {
-      const imageCommand = parseImageSlashCommand(rawMessage)
-      if (imageCommand) {
-        return {
-          handled: true,
-          message: imageCommand.prompt,
-          imageBackendOverride: imageCommand.provider,
-          isImageCommand: true,
-          invalidImageCommand: imageCommand.invalid,
-          imageCommandMissingProvider: Boolean(imageCommand.missingProvider)
-        }
-      }
-      const slashResult = applySlashCommand(rawMessage)
-      return {
-        handled: slashResult.handled,
-        message: slashResult.handled ? slashResult.message : rawMessage,
-        imageBackendOverride: undefined,
-        isImageCommand: false,
-        invalidImageCommand: false,
-        imageCommandMissingProvider: false
-      }
-    },
-    [applySlashCommand, parseImageSlashCommand]
-  )
-  const activeImageCommand = React.useMemo(
-    () => Boolean(parseImageSlashCommand(form.values.message)),
-    [form.values.message, parseImageSlashCommand]
-  )
+  const {
+    showSlashMenu,
+    slashActiveIndex,
+    setSlashActiveIndex,
+    filteredSlashCommands,
+    resolveSubmissionIntent,
+    activeImageCommand,
+    handleSlashCommandSelect: slashHandleSelect
+  } = useSlashCommands({
+    chatMode,
+    setChatMode,
+    webSearch,
+    setWebSearch,
+    handleImageUpload,
+    imageBackendDefaultTrimmed,
+    imageBackendLabel,
+    setOpenModelSettings,
+    currentMessage: form.values.message
+  })
 
   const handleSlashCommandSelect = React.useCallback(
     (command: SlashCommandItem) => {
-      const parsed = parseSlashInput(form.values.message)
-      if (command.insertText) {
-        form.setFieldValue("message", command.insertText)
-        requestAnimationFrame(() => textareaRef.current?.focus())
-        return
-      }
-      command.action?.()
-      form.setFieldValue("message", parsed?.remainder || "")
-      requestAnimationFrame(() => textareaRef.current?.focus())
+      slashHandleSelect(command, form.setFieldValue.bind(form), textareaRef)
     },
-    [form, parseSlashInput, textareaRef]
+    [slashHandleSelect, form, textareaRef]
   )
 
   const serverRecorderRef = React.useRef<MediaRecorder | null>(null)
@@ -3445,55 +2763,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
   // State for collapsible advanced section in tools popover
   const [advancedToolsExpanded, setAdvancedToolsExpanded] = React.useState(isProMode)
+  const { mcpSettingsOpen, setMcpSettingsOpen } = mcpCtrl
 
   const moreToolsContent = React.useMemo(
     () => (
       <div className="flex w-72 flex-col gap-2 p-1">
-        {/* SEARCH & CONTEXT Section */}
-        <div className="flex flex-col gap-2">
-          <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
-            {t("playground:tools.searchContext", "Search & Context")}
-          </span>
-          <button
-            type="button"
-            onClick={() => toggleKnowledgePanel("search")}
-            aria-pressed={contextToolsOpen}
-            title={
-              contextToolsOpen
-                ? (t(
-                    "playground:composer.contextKnowledgeClose",
-                    "Close Search & Context"
-                  ) as string)
-                : (t(
-                    "playground:composer.contextKnowledge",
-                    "Knowledge Search"
-                  ) as string)
-            }
-            className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition ${
-              contextToolsOpen
-                ? "bg-surface2 text-accent"
-                : "text-text hover:bg-surface2"
-            }`}
-          >
-            <span>
-              {t("playground:composer.contextKnowledge", "Knowledge Search")}
-            </span>
-            <Search className="h-4 w-4" />
-          </button>
-          <div className="flex items-center justify-between px-2">
-            <span className="text-sm text-text">
-              {t("playground:actions.webSearchOff", "Web search")}
-            </span>
-            <Switch
-              size="small"
-              checked={webSearch}
-              onChange={(value) => setWebSearch(value)}
-            />
-          </div>
-        </div>
-
-        <div className="border-t border-border my-1" />
-
         {/* ATTACHMENTS Section */}
         <div className="flex flex-col gap-2">
           <span className="text-[10px] font-semibold uppercase text-text-muted tracking-wider px-2">
@@ -3507,6 +2781,19 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
             <span>{t("playground:attachments.manageContext", "Manage in Knowledge Panel")}</span>
             <Settings2 className="h-4 w-4" />
           </button>
+        </div>
+
+        <div className="border-t border-border my-1" />
+
+        <div className="flex items-center justify-between px-2">
+          <span className="text-sm text-text">
+            {t("useOCR")}
+          </span>
+          <Switch
+            size="small"
+            checked={useOCR}
+            onChange={(value) => setUseOCR(value)}
+          />
         </div>
 
         <div className="border-t border-border my-1" />
@@ -3559,49 +2846,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
 
             {imageProviderControl}
 
-            {/* MCP Tools Summary */}
-            {hasMcp && (
-              <div className="px-2 py-1">
-                <div className="text-xs font-semibold text-text-muted mb-1">
-                  {t("playground:composer.mcpToolsLabel", "MCP tools")}
-                </div>
-                <span className="text-xs text-text-muted">
-                  {mcpToolsLoading
-                    ? t("playground:composer.mcpToolsLoading", "Loading tools...")
-                    : t("playground:tools.mcpSummary", "{{count}} tools available", { count: mcpTools.length })}
-                </span>
-              </div>
-            )}
-
-            {/* Tool Choice */}
-            <div className="px-2">
-              <div className="text-xs font-semibold text-text-muted mb-1">
-                {t("playground:composer.toolChoiceLabel", "Tool choice")}
-              </div>
-              <Radio.Group
-                size="small"
-                value={toolChoice}
-                onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
-                className="flex flex-wrap gap-1"
-                aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
-                disabled={
-                  !hasMcp ||
-                  mcpHealthState === "unhealthy" ||
-                  mcpToolsLoading ||
-                  mcpTools.length === 0
-                }
-              >
-                <Radio.Button value="auto">
-                  {t("playground:composer.toolChoiceAuto", "Auto")}
-                </Radio.Button>
-                <Radio.Button value="required">
-                  {t("playground:composer.toolChoiceRequired", "Required")}
-                </Radio.Button>
-                <Radio.Button value="none">
-                  {t("playground:composer.toolChoiceNone", "None")}
-                </Radio.Button>
-              </Radio.Group>
-            </div>
           </div>
         )}
 
@@ -3630,28 +2874,20 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     ),
     [
       advancedToolsExpanded,
-      contextToolsOpen,
       handleClearContext,
       openKnowledgePanel,
-      toggleKnowledgePanel,
       handleVoiceChatToggle,
       history.length,
       imageProviderControl,
       isSending,
-      setWebSearch,
-      setToolChoice,
+      useOCR,
+      setUseOCR,
       t,
-      toolChoice,
       voiceChatAvailable,
       voiceChatEnabled,
       voiceChat.state,
       voiceChatSettingsFields,
-      voiceChatStatusLabel,
-      webSearch,
-      hasMcp,
-      mcpHealthState,
-      mcpTools,
-      mcpToolsLoading
+      voiceChatStatusLabel
     ]
   )
 
@@ -3966,71 +3202,124 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     }
   }
 
-  const persistenceModeLabel = React.useMemo(
-    () =>
-      getPersistenceModeLabel(
-        t,
-        temporaryChat,
-        isConnectionReady,
-        serverChatId
-      ),
-    [isConnectionReady, serverChatId, temporaryChat, t]
-  )
+  const {
+    persistenceTooltip,
+    focusConnectionCard,
+    getPersistenceModeLabel
+  } = usePersistenceMode({
+    temporaryChat,
+    serverChatId,
+    isConnectionReady
+  })
 
-  const persistencePillLabel = React.useMemo(() => {
-    if (temporaryChat) {
-      return t(
-        "playground:composer.persistence.ephemeralPill",
-        "Not saved"
-      )
-    }
-    if (serverChatId || isConnectionReady) {
-      return t(
-        "playground:composer.persistence.serverPill",
-        "Server"
-      )
-    }
-    return t(
-      "playground:composer.persistence.localPill",
-      "Local"
-    )
-  }, [isConnectionReady, serverChatId, temporaryChat, t])
+  const externalPinSources =
+    contextToolsOpen ||
+    promptInsertOpen ||
+    Boolean(promptInsertChoice) ||
+    mcpSettingsOpen ||
+    openModelSettings ||
+    openActorSettings ||
+    documentGeneratorOpen ||
+    voiceModeSelectorOpen ||
+    modelDropdownOpen ||
+    mcpCtrl.mcpPopoverOpen ||
+    toolsPopoverOpen ||
+    attachmentMenuOpen ||
+    sendMenuOpen
 
-  const persistenceTooltip = React.useMemo(
-    () => (
-      <div className="flex flex-col gap-0.5 text-xs">
-        <span className="font-medium">{persistencePillLabel}</span>
-        <span className="text-text-subtle">{persistenceModeLabel}</span>
+  const {
+    actionBarVisible,
+    composerFocusWithin,
+    actionBarVisibilityClass,
+    handlers: actionBarHandlers
+  } = useActionBarVisibility({ externalPinSources })
+
+  const mcpControlContent = (
+    <div className="flex w-64 flex-col gap-2 p-2">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+        {t("playground:composer.mcpToolsLabel", "MCP tools")}
       </div>
-    ),
-    [persistenceModeLabel, persistencePillLabel]
+      <div className="text-xs text-text-muted">{mcpCtrl.mcpSummaryLabel}</div>
+      <div className="flex flex-col gap-1">
+        <div className="text-xs font-semibold text-text-muted">
+          {t("playground:composer.toolChoiceLabel", "Tool choice")}
+        </div>
+        <Radio.Group
+          size="small"
+          value={toolChoice}
+          onChange={(e) => setToolChoice(e.target.value as typeof toolChoice)}
+          className="flex flex-wrap gap-1"
+          aria-label={t("playground:composer.toolChoiceLabel", "Tool choice")}
+          disabled={
+            !hasMcp ||
+            mcpHealthState === "unhealthy" ||
+            mcpToolsLoading ||
+            mcpTools.length === 0
+          }
+        >
+          <Radio.Button value="auto">
+            {t("playground:composer.toolChoiceAuto", "Auto")}
+          </Radio.Button>
+          <Radio.Button value="required">
+            {t("playground:composer.toolChoiceRequired", "Required")}
+          </Radio.Button>
+          <Radio.Button value="none">
+            {t("playground:composer.toolChoiceNone", "None")}
+          </Radio.Button>
+        </Radio.Group>
+        <button
+          type="button"
+          onClick={() => {
+            mcpCtrl.setMcpPopoverOpen(false)
+            setMcpSettingsOpen(true)
+          }}
+          className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-primary hover:text-primaryStrong"
+        >
+          {t("playground:composer.mcpConfigure", "Configure tools")}
+        </button>
+      </div>
+    </div>
   )
 
-  const focusConnectionCard = React.useCallback(() => {
-    try {
-      const card = document.getElementById("server-connection-card")
-      if (card) {
-        card.scrollIntoView({ block: "nearest", behavior: "smooth" })
-        ;(card as HTMLElement).focus()
-        return
-      }
-    } catch {
-      // ignore DOM errors and fall through to hash navigation
-    }
-    try {
-      const base =
-        window.location.href.replace(/#.*$/, "") || "/options.html"
-      const target = `${base}#/settings/tldw`
-      window.location.href = target
-    } catch {
-      // ignore navigation failures
-    }
-  }, [])
+  const mcpControlButton = (
+    <TldwButton
+      variant="outline"
+      size="md"
+      shape="pill"
+      ariaLabel={mcpCtrl.mcpAriaLabel}
+      title={mcpCtrl.mcpAriaLabel}
+      disabled={!hasMcp || mcpHealthState === "unhealthy"}
+      className="gap-1.5 min-h-[44px]"
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <span className="text-[11px] font-semibold">MCP</span>
+        <span className="text-[11px] text-text-muted">{mcpCtrl.mcpChoiceLabel}</span>
+        {!mcpToolsLoading && hasMcp && mcpTools.length > 0 && (
+          <span className="rounded-full bg-surface2 px-1.5 py-0.5 text-[10px] text-text-muted">
+            {mcpTools.length}
+          </span>
+        )}
+        <ChevronDown className="h-3.5 w-3.5 text-text-subtle" aria-hidden="true" />
+      </span>
+    </TldwButton>
+  )
 
-  const hasContext =
-    form.values.image.length > 0 ||
-    selectedDocuments.length > 0 ||
-    uploadedFiles.length > 0
+  const mcpControl =
+    !hasMcp || mcpHealthState === "unhealthy" ? (
+      <Tooltip title={mcpCtrl.mcpDisabledReason}>
+        <span>{mcpControlButton}</span>
+      </Tooltip>
+    ) : (
+      <Popover
+        trigger="click"
+        placement="topRight"
+        content={mcpControlContent}
+        open={mcpCtrl.mcpPopoverOpen}
+        onOpenChange={mcpCtrl.setMcpPopoverOpen}
+      >
+        {mcpControlButton}
+      </Popover>
+    )
 
   const voiceChatButton = voiceChatAvailable ? (
     <Tooltip
@@ -4067,7 +3356,9 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       trigger="click"
       placement="topRight"
       content={moreToolsContent}
-      overlayClassName="playground-more-tools">
+      overlayClassName="playground-more-tools"
+      open={toolsPopoverOpen}
+      onOpenChange={setToolsPopoverOpen}>
       <TldwButton
         variant="outline"
         size="sm"
@@ -4101,28 +3392,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const attachmentMenu = React.useMemo(
     () => (
       <div className="flex w-56 flex-col gap-1 p-1">
-        <Tooltip title={imageAttachmentDisabled || undefined}>
-          <span className="block">
-            <button
-              type="button"
-              onClick={handleImageUpload}
-              disabled={chatMode === "rag"}
-              title={t("playground:actions.upload", "Attach image") as string}
-              className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm text-text transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-40 disabled:text-text-muted"
-            >
-              <span className="flex flex-col items-start">
-                <span>{t("playground:actions.attachImage", "Attach image")}</span>
-                <span className="text-[10px] text-text-muted">
-                  {t(
-                    "playground:actions.attachImageHint",
-                    "JPG/PNG (Vision)"
-                  )}
-                </span>
-              </span>
-              <ImageIcon className="h-4 w-4" />
-            </button>
-          </span>
-        </Tooltip>
         <button
           type="button"
           onClick={handleDocumentUpload}
@@ -4152,51 +3421,72 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       </div>
     ),
     [
-      chatMode,
       handleDocumentUpload,
-      handleImageUpload,
-      imageAttachmentDisabled,
       openKnowledgePanel,
       t
     ]
   )
 
   const attachmentButton = (
-    <Popover
-      trigger="click"
-      placement="topRight"
-      content={attachmentMenu}
-      overlayClassName="playground-attachment-menu"
-    >
-      <TldwButton
-        variant="outline"
-        size="sm"
-        shape={isProMode ? "rounded" : "pill"}
-        iconOnly={!isProMode}
-        ariaLabel={t("playground:actions.attach", "Attach") as string}
-        title={t("playground:actions.attach", "Attach") as string}
-        data-testid="attachment-button"
+    <div className="inline-flex items-center">
+      <Tooltip title={imageAttachmentDisabled || undefined}>
+        <span>
+          <TldwButton
+            variant="outline"
+            size="sm"
+            shape={isProMode ? "rounded" : "pill"}
+            iconOnly={!isProMode}
+            ariaLabel={t("playground:actions.attachImage", "Attach image") as string}
+            title={t("playground:actions.attachImage", "Attach image") as string}
+            disabled={chatMode === "rag"}
+            data-testid="attachment-button"
+            onClick={handleImageUpload}
+            className="rounded-r-none"
+          >
+            {isProMode ? (
+              <span className="inline-flex items-center gap-1.5">
+                <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+                <span>{t("playground:actions.attach", "Attach")}</span>
+              </span>
+            ) : (
+              <>
+                <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">
+                  {t("playground:actions.attachImage", "Attach image")}
+                </span>
+              </>
+            )}
+          </TldwButton>
+        </span>
+      </Tooltip>
+      <Popover
+        trigger="click"
+        placement="topRight"
+        content={attachmentMenu}
+        overlayClassName="playground-attachment-menu"
+        open={attachmentMenuOpen}
+        onOpenChange={setAttachmentMenuOpen}
       >
-        {isProMode ? (
-          <span className="inline-flex items-center gap-1.5">
-            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
-            <span>{t("playground:actions.attach", "Attach")}</span>
-          </span>
-        ) : (
-          <>
-            <PaperclipIcon className="h-4 w-4" aria-hidden="true" />
-            <span className="sr-only">
-              {t("playground:actions.attach", "Attach")}
-            </span>
-          </>
-        )}
-      </TldwButton>
-    </Popover>
+        <TldwButton
+          variant="outline"
+          size="sm"
+          shape={isProMode ? "rounded" : "pill"}
+          iconOnly
+          ariaLabel={t("playground:actions.attachMore", "More attachments") as string}
+          title={t("playground:actions.attachMore", "More attachments") as string}
+          className="-ml-px rounded-l-none"
+        >
+          <ChevronDown className="h-4 w-4" aria-hidden="true" />
+        </TldwButton>
+      </Popover>
+    </div>
   )
 
   const sendControl = !isSending ? (
     <Dropdown.Button
       size={isProMode ? "middle" : "small"}
+      open={sendMenuOpen}
+      onOpenChange={(open) => setSendMenuOpen(open)}
       htmlType="submit"
       disabled={isSending || !isConnectionReady}
       title={
@@ -4244,18 +3534,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                   setSendWhenEnter(e.target.checked)
                 }>
                 {t("sendWhenEnter")}
-              </Checkbox>
-            )
-          },
-          {
-            key: 2,
-            label: (
-              <Checkbox
-                checked={useOCR}
-                onChange={(e) =>
-                  setUseOCR(e.target.checked)
-                }>
-                {t("useOCR")}
               </Checkbox>
             )
           }
@@ -4306,6 +3584,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     </Tooltip>
   )
 
+
   return (
     <div className="flex w-full flex-col items-center px-4 pb-6">
       <div
@@ -4315,7 +3594,11 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         <div className="relative flex w-full flex-row justify-center">
           <div
             data-istemporary-chat={temporaryChat}
-            className={`relative w-full rounded-3xl border border-border/80 bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
+            onMouseEnter={actionBarHandlers.onMouseEnter}
+            onMouseLeave={actionBarHandlers.onMouseLeave}
+            onFocusCapture={actionBarHandlers.onFocusCapture}
+            onBlurCapture={actionBarHandlers.onBlurCapture}
+            className={`relative w-full rounded-3xl border border-transparent bg-surface/95 p-3 text-text shadow-card backdrop-blur-lg transition-all duration-200 data-[istemporary-chat='true']:border-t-4 data-[istemporary-chat='true']:border-t-purple-500 data-[istemporary-chat='true']:border-dashed data-[istemporary-chat='true']:opacity-90 ${
               !isConnectionReady ? "opacity-80" : ""
             }`}>
             {/* Attachments summary (collapsed context management) */}
@@ -4459,7 +3742,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                       className={contextToolsOpen ? "mb-2" : "hidden"}
                       aria-hidden={!contextToolsOpen}
                     >
-                      <div className="rounded-md border border-border bg-surface p-3">
+                      <div className="rounded-md bg-surface2/50 p-3">
                         <div className="flex flex-col gap-4">
                           <div>
                             <div className="mb-2 text-xs font-semibold text-text">
@@ -4537,202 +3820,51 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           </button>
                         </div>
                       )}
-                      <div className="relative rounded-2xl border border-border/70 bg-surface/80 px-1 py-1.5 transition focus-within:border-focus/60 focus-within:ring-2 focus-within:ring-focus/30">
-                        <SlashCommandMenu
-                          open={showSlashMenu}
-                          commands={filteredSlashCommands}
-                          activeIndex={slashActiveIndex}
-                          onActiveIndexChange={setSlashActiveIndex}
-                          onSelect={handleSlashCommandSelect}
-                          emptyLabel={t(
-                            "common:commandPalette.noResults",
-                            "No results found"
-                          )}
-                          className="absolute bottom-full left-3 right-3 mb-2"
-                        />
-                        <textarea
-                          id="textarea-message"
-                          data-testid="chat-input"
-                          onCompositionStart={() => {
-                            if (!isFirefoxTarget) {
-                              setTyping(true)
-                            }
-                          }}
-                          onCompositionEnd={() => {
-                            if (!isFirefoxTarget) {
-                              setTyping(false)
-                            }
-                          }}
-                          onMouseDown={() => {
-                            if (isMessageCollapsed) {
-                              pointerDownRef.current = true
-                              selectionFromPointerRef.current = true
-                            }
-                          }}
-                          onMouseUp={() => {
-                            pointerDownRef.current = false
-                            if (selectionFromPointerRef.current) {
-                              requestAnimationFrame(() => {
-                                selectionFromPointerRef.current = false
-                              })
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (handleCollapsedKeyDown(e)) return
-                            handleKeyDown(e)
-                          }}
-                          onFocus={() => {
-                            handleDisconnectedFocus()
-                            if (!isMessageCollapsed) return
-                            const wasPointer = pointerDownRef.current
-                            pointerDownRef.current = false
-                            if (wasPointer) return
-                            const textarea = textareaRef.current
-                            if (pendingCaretRef.current === null && textarea) {
-                              lastDisplaySelectionRef.current = {
-                                start: textarea.selectionStart ?? 0,
-                                end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-                              }
-                            }
-                            syncCollapsedCaret()
-                          }}
-                          ref={textareaRef}
-                          className={`w-full resize-none bg-transparent text-base leading-6 text-text placeholder:text-text-muted/80 focus-within:outline-none focus:ring-0 focus-visible:ring-0 ring-0 border-0 ${
-                            !isConnectionReady
-                              ? "cursor-not-allowed text-text-muted placeholder:text-text-subtle"
-                              : ""
-                          } ${isProMode ? "px-3 py-2.5" : "px-3 py-2"}`}
-                          onPaste={handlePaste}
-                          aria-expanded={!isMessageCollapsed}
-                          rows={1}
-                          style={{ minHeight: isProMode ? "60px" : "44px" }}
-                          tabIndex={0}
-                          placeholder={
-                            isConnectionReady
-                              ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
-                              : t(
-                                  "playground:composer.connectionPlaceholder",
-                                  "Connect to tldw to start chatting."
-                                )
-                          }
-                          {...form.getInputProps("message")}
-                          value={messageDisplayValue}
-                          onChange={(e) => {
-                            if (isMessageCollapsed) return
-                            form.getInputProps("message").onChange(e)
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                e.target.value,
-                                textareaRef.current.selectionStart || 0
+                      <ComposerTextarea
+                        textareaRef={textareaRef}
+                        value={form.values.message}
+                        displayValue={messageDisplayValue}
+                        onChange={handleTextareaChange}
+                        onKeyDown={handleTextareaKeyDown}
+                        onPaste={handlePaste}
+                        onFocus={handleTextareaFocus}
+                        onSelect={handleTextareaSelect}
+                        onCompositionStart={handleCompositionStart}
+                        onCompositionEnd={handleCompositionEnd}
+                        onMouseDown={handleTextareaMouseDown}
+                        onMouseUp={handleTextareaMouseUp}
+                        placeholder={
+                          isConnectionReady
+                            ? t("playground:composer.placeholderWithSlash", "Type a message... (/ for commands)")
+                            : t(
+                                "playground:composer.connectionPlaceholder",
+                                "Connect to tldw to start chatting."
                               )
-                            }
-                          }}
-                          onSelect={() => {
-                            const textarea = textareaRef.current
-                            if (textarea) {
-                              lastDisplaySelectionRef.current = {
-                                start: textarea.selectionStart ?? 0,
-                                end: textarea.selectionEnd ?? textarea.selectionStart ?? 0
-                              }
-                            }
-                            if (isMessageCollapsed && collapsedRange) {
-                              const message = form.values.message || ""
-                              if (!message || !textarea) return
-                              const meta =
-                                collapsedDisplayMeta ??
-                                getCollapsedDisplayMeta(
-                                  message,
-                                  collapsedRange
-                                )
-                              const selectionStart =
-                                textarea.selectionStart ?? meta.labelStart
-                              const selectionEnd =
-                                textarea.selectionEnd ?? selectionStart
-                              const displayStart = Math.min(
-                                selectionStart,
-                                selectionEnd
-                              )
-                              const displayEnd = Math.max(
-                                selectionStart,
-                                selectionEnd
-                              )
-                              const hasSelection = displayStart !== displayEnd
-                              const selectionTouchesLabel =
-                                displayStart < meta.labelEnd &&
-                                displayEnd > meta.labelStart
-                              const fromPointer = selectionFromPointerRef.current
-                              selectionFromPointerRef.current = false
-                              if (hasSelection) {
-                                pendingCaretRef.current = null
-                                return
-                              }
-                              const caretInsideLabel =
-                                displayStart > meta.labelStart &&
-                                displayStart < meta.labelEnd
-                              if (
-                                selectionTouchesLabel &&
-                                fromPointer &&
-                                caretInsideLabel
-                              ) {
-                                pendingCaretRef.current = meta.rangeEnd
-                                expandLargeMessage({ force: true })
-                                return
-                              }
-                              const prefer =
-                                caretInsideLabel &&
-                                (pendingCaretRef.current ?? meta.rangeEnd) <=
-                                  meta.rangeStart
-                                  ? "before"
-                                  : "after"
-                              const caret = getMessageCaretFromDisplay(
-                                displayStart,
-                                meta,
-                                {
-                                  prefer: caretInsideLabel ? prefer : undefined
-                                }
-                              )
-                              pendingCaretRef.current = caret
-                              if (caretInsideLabel) {
-                                syncCollapsedCaret({ caret })
-                              }
-                              return
-                            }
-                            if (tabMentionsEnabled && textareaRef.current) {
-                              handleTextChange(
-                                textareaRef.current.value,
-                                textareaRef.current.selectionStart || 0
-                              )
-                            }
-                          }}
-                        />
-
-                        <MentionsDropdown
-                          show={showMentions}
-                          tabs={filteredTabs}
-                          mentionPosition={mentionPosition}
-                          onSelectTab={(tab) =>
-                            insertMention(tab, form.values.message, (value) =>
-                              form.setFieldValue("message", value)
-                            )
-                          }
-                          onClose={closeMentions}
-                          textareaRef={textareaRef}
-                          refetchTabs={async () => {
-                            await reloadTabs()
-                          }}
-                          onMentionsOpen={handleMentionsOpen}
-                        />
-                        {/* Draft saved indicator */}
-                        {draftSaved && (
-                          <span
-                            className="absolute bottom-1 right-2 text-label text-text-subtle transition-opacity pointer-events-none"
-                            role="status"
-                            aria-live="polite"
-                          >
-                            {t("sidepanel:composer.draftSaved", "Draft saved")}
-                          </span>
+                        }
+                        isProMode={isProMode}
+                        isMobile={isMobileViewport}
+                        isConnectionReady={isConnectionReady}
+                        isCollapsed={isMessageCollapsed}
+                        ariaExpanded={!isMessageCollapsed}
+                        formInputProps={form.getInputProps("message")}
+                        showSlashMenu={showSlashMenu}
+                        slashCommands={filteredSlashCommands}
+                        slashActiveIndex={slashActiveIndex}
+                        onSlashSelect={handleSlashCommandSelect}
+                        onSlashActiveIndexChange={setSlashActiveIndex}
+                        slashEmptyLabel={t(
+                          "common:commandPalette.noResults",
+                          "No results found"
                         )}
-                      </div>
+                        showMentions={showMentions}
+                        filteredTabs={filteredTabs}
+                        mentionPosition={mentionPosition}
+                        onMentionSelect={handleMentionSelect}
+                        onMentionsClose={closeMentions}
+                        onMentionRefetch={handleMentionRefetch}
+                        onMentionsOpen={handleMentionsOpen}
+                        draftSaved={draftSaved}
+                      />
                     </div>
                     {/* Inline error message with shake animation */}
                     {form.errors.message && (
@@ -4778,517 +3910,60 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                         ) : null}
                       </div>
                     )}
-                    {isProMode ? (
-                      <div className="mt-2 flex flex-col gap-1">
-                        <div className="mt-1 flex flex-col gap-2">
-                          <div className="flex flex-wrap items-start gap-3">
-                            <div className="flex flex-col gap-0.5 text-xs text-text">
-                              <Tooltip title={persistenceTooltip}>
-                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                                    <Switch
-                                      size="small"
-                                      checked={!temporaryChat}
-                                      disabled={privateChatLocked || isFireFoxPrivateMode}
-                                      onChange={(checked) =>
-                                        handleToggleTemporaryChat(!checked)
-                                      }
-                                    aria-label={
-                                      temporaryChat
-                                        ? (t(
-                                            "playground:actions.temporaryOn",
-                                            "Don't save chat"
-                                          ) as string)
-                                        : (t(
-                                            "playground:actions.temporaryOff",
-                                            "Save chat to history"
-                                          ) as string)
-                                    }
-                                  />
-                                  <span>
-                                    {temporaryChat
-                                      ? t(
-                                          "playground:actions.temporaryOn",
-                                          "Don't save chat"
-                                        )
-                                      : t(
-                                          "playground:actions.temporaryOff",
-                                          "Save chat to history"
-                                        )}
-                                  </span>
-                                </div>
-                              </Tooltip>
-                              {!temporaryChat && !isConnectionReady && (
-                                <button
-                                  type="button"
-                                  onClick={focusConnectionCard}
-                                  title={
-                                    t(
-                                      "playground:composer.persistence.connectToSave",
-                                      "Connect your server to sync chats."
-                                    ) as string
-                                  }
-                                  className="mt-1 inline-flex w-fit items-center gap-1 text-[11px] font-medium text-primary hover:text-primaryStrong">
-                                  {t(
-                                    "playground:composer.persistence.connectToSave",
-                                    "Connect your server to sync chats."
-                                  )}
-                                </button>
-                              )}
-                              {!temporaryChat && serverChatId && showServerPersistenceHint && (
-                                <p className="mt-1 max-w-md text-[11px] text-text-muted">
-                                  <span className="font-semibold">
-                                    {t(
-                                      "playground:composer.persistence.serverInlineTitle",
-                                      "Saved locally + on your server"
-                                    )}
-                                    {": "}
-                                  </span>
-                                  {t(
-                                    "playground:composer.persistence.serverInlineBody",
-                                    "This chat is stored both in this browser and on your tldw server, so you can reopen it from server history, keep a long-term record, and analyze it alongside other conversations."
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setShowServerPersistenceHint(false)}
-                                    title={t("common:dismiss", "Dismiss") as string}
-                                    className="ml-1 text-[11px] font-medium text-primary hover:text-primaryStrong"
-                                  >
-                                    {t("common:dismiss", "Dismiss")}
-                                  </button>
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                          {/* Enhanced Playground Features Row */}
-                          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <ParameterPresets compact />
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <SystemPromptTemplatesButton
-                                onSelect={(template: PromptTemplate) => {
-                                  setSystemPrompt(template.content)
-                                  setSelectedSystemPrompt(undefined)
-                                }}
-                              />
-                              {messages.length > 0 && (
-                                <SessionCostEstimation
-                                  modelId={selectedModel}
-                                  provider={resolvedProviderKey}
-                                  messages={messages}
-                                />
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
-                              <button
-                                type="button"
-                                onClick={() => toggleKnowledgePanel("search")}
-                                title={
-                                  contextToolsOpen
-                                    ? (t(
-                                        "playground:composer.contextKnowledgeClose",
-                                        "Close Search & Context"
-                                      ) as string)
-                                    : (t(
-                                        "playground:composer.contextKnowledge",
-                                        "Search & Context"
-                                      ) as string)
-                                }
-                                aria-pressed={contextToolsOpen}
-                                aria-expanded={contextToolsOpen}
-                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition ${
-                                  contextToolsOpen
-                                    ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                    : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                                }`}
-                              >
-                                <Search className="h-3 w-3" />
-                                <span>
-                                  {contextToolsOpen
-                                    ? t(
-                                        "playground:composer.contextKnowledgeClose",
-                                        "Close Search & Context"
-                                      )
-                                    : t(
-                                        "playground:composer.contextKnowledge",
-                                        "Search & Context"
-                                      )}
-                                </span>
-                              </button>
-                              {selectedDocuments.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const chips =
-                                      document.querySelector<HTMLElement>(
-                                        "[data-playground-tabs='true']"
-                                      )
-                                    if (chips) {
-                                      chips.focus()
-                                      chips.scrollIntoView({ block: "nearest" })
-                                    }
-                                  }}
-                                  title={
-                                    t(
-                                      "playground:composer.contextTabsHint",
-                                      "Review or remove referenced tabs, or add more from your open browser tabs."
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                  <FileText className="h-3 w-3 text-text-subtle" />
-                                  <span>
-                                    {t("playground:composer.contextTabs", {
-                                      defaultValue: "{{count}} tabs",
-                                      count: selectedDocuments.length
-                                    } as any) as string}
-                                  </span>
-                                </button>
-                              )}
-                              {uploadedFiles.length > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const files =
-                                      document.querySelector<HTMLElement>(
-                                        "[data-playground-uploads='true']"
-                                      )
-                                    if (files) {
-                                      files.focus()
-                                      files.scrollIntoView({ block: "nearest" })
-                                    }
-                                  }}
-                                  title={
-                                    t(
-                                      "playground:composer.contextFilesHint",
-                                      "Review attached files, remove them, or add more."
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-transparent px-2 py-0.5 hover:border-border hover:bg-surface2">
-                                  <FileIcon className="h-3 w-3 text-text-subtle" />
-                                  <span>
-                                    {t("playground:composer.contextFiles", {
-                                      defaultValue: "{{count}} files",
-                                      count: uploadedFiles.length
-                                    } as any) as string}
-                                  </span>
-                                </button>
-                              )}
-                            </div>
-                            <div className="flex items-center justify-end gap-3 flex-wrap">
-                              <CharacterSelect
-                                className="min-w-0 min-h-0 rounded-full border border-border px-2 py-1 text-text-muted hover:bg-surface2 hover:text-text"
-                                iconClassName="h-4 w-4"
-                              />
-                              <Tooltip
-                                title={
-                                  t(
-                                    "option:promptInsert.useInChat",
-                                    "Insert prompt"
-                                  ) as string
-                                }>
-                                <button
-                                  type="button"
-                                  onClick={() => setPromptInsertOpen(true)}
-                                  aria-label={
-                                    t(
-                                      "option:promptInsert.useInChat",
-                                      "Insert prompt"
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-                                >
-                                  <BookPlus className="h-4 w-4" />
-                                  <span className="hidden text-xs font-medium sm:inline">
-                                    {t(
-                                      "option:promptInsert.useInChat",
-                                      "Insert prompt"
-                                    )}
-                                  </span>
-                                </button>
-                              </Tooltip>
-                              {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                                <Tooltip
-                                  title={
-                                    !speechAvailable
-                                      ? t(
-                                          "playground:actions.speechUnavailableBody",
-                                          "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                        )
-                                      : speechUsesServer
-                                        ? t(
-                                            "playground:tooltip.speechToTextServer",
-                                            "Dictation via your tldw server"
-                                          ) +
-                                          " " +
-                                          t(
-                                            "playground:tooltip.speechToTextDetails",
-                                            "Uses {{model}} · {{task}} · {{format}}. Configure in Settings → General → Speech-to-Text.",
-                                            {
-                                              model: sttModel || "whisper-1",
-                                              task:
-                                                sttTask === "translate"
-                                                  ? "translate"
-                                                  : "transcribe",
-                                              format: (sttResponseFormat || "json").toUpperCase()
-                                            } as any
-                                          )
-                                        : t(
-                                            "playground:tooltip.speechToTextBrowser",
-                                            "Dictation via browser speech recognition"
-                                          )
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                    disabled={!speechAvailable || voiceChatEnabled}
-                                    className={`inline-flex items-center justify-center rounded-full border text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                      speechAvailable &&
-                                      ((speechUsesServer && isServerDictating) ||
-                                        (!speechUsesServer && isListening))
-                                        ? "border-primary text-primaryStrong"
-                                        : "border-border text-text-muted"
-                                    } ${isProMode ? "px-2 py-1" : "h-9 w-9 p-0"}`}
-                                    aria-label={
-                                      !speechAvailable
-                                        ? (t(
-                                            "playground:actions.speechUnavailableTitle",
-                                            "Dictation unavailable"
-                                          ) as string)
-                                        : speechUsesServer
-                                          ? (isServerDictating
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                          : (isListening
-                                              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                              : (t("playground:actions.speechStart", "Start dictation") as string))
-                                    }
-                                  >
-                                    <MicIcon className="h-4 w-4" />
-                                  </button>
-                                </Tooltip>
-                              )}
-                              {modelUsageBadge}
-                              <Tooltip
-                                title={
-                                  t(
-                                    "common:currentChatModelSettings"
-                                  ) as string
-                                }>
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenModelSettings(true)}
-                                  aria-label={
-                                    t(
-                                      "common:currentChatModelSettings"
-                                    ) as string
-                                  }
-                                  className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs text-text transition hover:bg-surface2">
-                                  <Gauge
-                                    className="h-4 w-4"
-                                    aria-hidden="true"
-                                  />
-                                  <span className="flex flex-col items-start text-left">
-                                    <span className="font-medium">
-                                      {t("playground:composer.chatSettings", "Chat Settings")}
-                                    </span>
-                                    <span className="text-[11px] text-text-muted">
-                                      {modelSummaryLabel} • {promptSummaryLabel}
-                                    </span>
-                                  </span>
-                                </button>
-                              </Tooltip>
-                              {voiceChatButton}
-                              {attachmentButton}
-                              {toolsButton}
-                              {sendControl}
-                            </div>
-                          </div>
-                        </div>
+                    {actionBarVisible ? (
+                      <div
+                        className={`transition-all duration-200 overflow-hidden ${actionBarVisibilityClass}`}
+                      >
+                        <ComposerToolbar
+                          isProMode={isProMode}
+                          isMobile={isMobileViewport}
+                          isConnectionReady={isConnectionReady}
+                          isSending={isSending}
+                          modelSelectButton={modelSelectButton}
+                          mcpControl={mcpControl}
+                          sendControl={sendControl}
+                          attachmentButton={attachmentButton}
+                          toolsButton={toolsButton}
+                          voiceChatButton={voiceChatButton}
+                          modelUsageBadge={modelUsageBadge}
+                          selectedSystemPrompt={selectedSystemPrompt}
+                          setSelectedSystemPrompt={setSelectedSystemPrompt}
+                          setSelectedQuickPrompt={setSelectedQuickPrompt}
+                          temporaryChat={temporaryChat}
+                          onToggleTemporaryChat={handleToggleTemporaryChat}
+                          privateChatLocked={privateChatLocked}
+                          isFireFoxPrivateMode={isFireFoxPrivateMode}
+                          persistenceTooltip={persistenceTooltip}
+                          contextToolsOpen={contextToolsOpen}
+                          onToggleKnowledgePanel={toggleKnowledgePanel}
+                          webSearch={webSearch}
+                          onToggleWebSearch={() => setWebSearch(!webSearch)}
+                          hasWebSearch={!!capabilities?.hasWebSearch}
+                          onOpenPromptInsert={() => setPromptInsertOpen(true)}
+                          onOpenModelSettings={() => setOpenModelSettings(true)}
+                          modelSummaryLabel={modelSummaryLabel}
+                          promptSummaryLabel={promptSummaryLabel}
+                          hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
+                          speechAvailable={speechAvailable}
+                          speechUsesServer={speechUsesServer}
+                          isListening={isListening}
+                          isServerDictating={isServerDictating}
+                          voiceChatEnabled={voiceChatEnabled}
+                          speechTooltip={speechTooltipText}
+                          onDictationToggle={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
+                          onTemplateSelect={handleTemplateSelect}
+                          selectedModel={selectedModel}
+                          resolvedProviderKey={resolvedProviderKey}
+                          messages={messages}
+                          selectedDocumentsCount={selectedDocuments.length}
+                          uploadedFilesCount={uploadedFiles.length}
+                          serverChatId={serverChatId}
+                          showServerPersistenceHint={showServerPersistenceHint}
+                          onDismissServerPersistenceHint={() => setShowServerPersistenceHint(false)}
+                          onFocusConnectionCard={focusConnectionCard}
+                        />
                       </div>
-                    ) : (
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-nowrap">
-                          <Tooltip title={persistenceTooltip}>
-                            <div className="flex items-center gap-1">
-                                <Switch
-                                  size="small"
-                                  checked={!temporaryChat}
-                                  disabled={privateChatLocked || isFireFoxPrivateMode}
-                                  onChange={(checked) =>
-                                    handleToggleTemporaryChat(!checked)
-                                  }
-                                aria-label={
-                                  temporaryChat
-                                    ? (t(
-                                        "playground:actions.temporaryOn",
-                                        "Don't save chat"
-                                      ) as string)
-                                    : (t(
-                                        "playground:actions.temporaryOff",
-                                        "Save chat to history"
-                                      ) as string)
-                                }
-                              />
-                              <span className="text-xs text-text whitespace-nowrap">
-                                {temporaryChat
-                                  ? t(
-                                      "playground:actions.temporaryOn",
-                                      "Don't save chat"
-                                    )
-                                  : t(
-                                      "playground:actions.temporaryOff",
-                                      "Save chat to history"
-                                    )}
-                              </span>
-                            </div>
-                          </Tooltip>
-                          <button
-                            type="button"
-                            onClick={() => toggleKnowledgePanel("search")}
-                            title={
-                              contextToolsOpen
-                                ? (t(
-                                    "playground:composer.contextKnowledgeClose",
-                                    "Close Search & Context"
-                                  ) as string)
-                                : (t(
-                                    "playground:composer.contextKnowledge",
-                                    "Search & Context"
-                                  ) as string)
-                            }
-                            aria-pressed={contextToolsOpen}
-                            aria-expanded={contextToolsOpen}
-                            className={`inline-flex min-w-0 max-w-[140px] items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-medium transition ${
-                              contextToolsOpen
-                                ? "border-accent bg-surface2 text-accent hover:bg-surface"
-                                : "border-border text-text-muted hover:bg-surface2 hover:text-text"
-                            }`}
-                          >
-                            <Search className="h-3 w-3" />
-                            <span className="truncate">
-                              {contextToolsOpen
-                                ? t(
-                                    "playground:composer.contextKnowledgeClose",
-                                    "Close Search & Context"
-                                  )
-                                : t(
-                                    "playground:composer.contextKnowledge",
-                                    "Search & Context"
-                                  )}
-                            </span>
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-2 flex-nowrap">
-                          <CharacterSelect
-                            showLabel={false}
-                            className="min-w-0 min-h-0 h-9 w-9 rounded-full border border-border text-text-muted hover:bg-surface2 hover:text-text"
-                            iconClassName="h-4 w-4"
-                          />
-                          <Tooltip
-                            title={
-                              t(
-                                "option:promptInsert.useInChat",
-                                "Insert prompt"
-                              ) as string
-                            }>
-                            <button
-                              type="button"
-                              onClick={() => setPromptInsertOpen(true)}
-                              aria-label={
-                                t(
-                                  "option:promptInsert.useInChat",
-                                  "Insert prompt"
-                                ) as string
-                              }
-                              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-border text-text-muted transition hover:bg-surface2 hover:text-text"
-                            >
-                              <BookPlus className="h-4 w-4" />
-                            </button>
-                          </Tooltip>
-                          {(browserSupportsSpeechRecognition || hasServerAudio) && (
-                            <Tooltip
-                              title={
-                                !speechAvailable
-                                  ? t(
-                                      "playground:actions.speechUnavailableBody",
-                                      "Connect to a tldw server that exposes the audio transcriptions API to use dictation."
-                                    )
-                                  : speechUsesServer
-                                    ? t(
-                                        "playground:tooltip.speechToTextServer",
-                                        "Dictation via your tldw server"
-                                      )
-                                    : t(
-                                        "playground:tooltip.speechToTextBrowser",
-                                        "Dictation via browser speech recognition"
-                                      )
-                              }>
-                              <button
-                                type="button"
-                                onClick={speechUsesServer ? handleServerDictationToggle : handleSpeechToggle}
-                                disabled={!speechAvailable || voiceChatEnabled}
-                                className={`inline-flex items-center justify-center rounded-full border px-2 py-1 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  speechAvailable &&
-                                  ((speechUsesServer && isServerDictating) ||
-                                    (!speechUsesServer && isListening))
-                                    ? "border-primary text-primaryStrong"
-                                    : "border-border text-text-muted"
-                                }`}
-                                aria-label={
-                                  !speechAvailable
-                                    ? (t(
-                                        "playground:actions.speechUnavailableTitle",
-                                        "Dictation unavailable"
-                                      ) as string)
-                                    : speechUsesServer
-                                      ? (isServerDictating
-                                          ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                          : (t("playground:actions.speechStart", "Start dictation") as string))
-                                      : (isListening
-                                          ? (t("playground:actions.speechStop", "Stop dictation") as string)
-                                          : (t("playground:actions.speechStart", "Start dictation") as string))
-                                }>
-                                <MicIcon className="h-4 w-4" />
-                              </button>
-                            </Tooltip>
-                          )}
-                          {modelUsageBadge}
-                          <Tooltip
-                            title={
-                              t(
-                                "common:currentChatModelSettings"
-                              ) as string
-                            }>
-                            <TldwButton
-                              variant="outline"
-                              shape="pill"
-                              iconOnly
-                              onClick={() => setOpenModelSettings(true)}
-                              ariaLabel={
-                                t(
-                                  "common:currentChatModelSettings"
-                                ) as string
-                              }
-                              className="text-text-muted">
-                              <Gauge className="h-4 w-4" aria-hidden="true" />
-                              <span className="sr-only">
-                                {t(
-                                  "playground:composer.chatSettings",
-                                  "Chat Settings"
-                                )}
-                              </span>
-                            </TldwButton>
-                          </Tooltip>
-                          {voiceChatButton}
-                          {attachmentButton}
-                          {toolsButton}
-                          {sendControl}
-                        </div>
-                      </div>
-                    )}
+                    ) : null}
                     {showConnectBanner && !isConnectionReady && (
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500 dark:bg-[#2a2310] dark:text-amber-100">
                         <p className="max-w-xs text-left">
@@ -5461,6 +4136,159 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
               })}
             </Button>
           </div>
+        </div>
+      </Modal>
+      <Modal
+        open={mcpSettingsOpen}
+        onCancel={() => setMcpSettingsOpen(false)}
+        footer={null}
+        width={560}
+        title={t("playground:composer.mcpSettingsTitle", "MCP tool settings")}
+      >
+        <div className="flex flex-col gap-4">
+          <div className="text-xs text-text-muted">{mcpCtrl.mcpStatusLabel}</div>
+          {!hasMcp ? (
+            <div className="text-sm text-text-muted">
+              {t("playground:composer.mcpToolsUnavailable", "MCP tools unavailable")}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogLabel", "Catalog")}
+                </label>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  loading={mcpCatalogsLoading}
+                  value={toolCatalogId ?? undefined}
+                  placeholder={t("playground:composer.mcpCatalogSelectPlaceholder", "Select a catalog")}
+                  onChange={(value) => mcpCtrl.handleCatalogSelect(value as number | undefined)}
+                  optionFilterProp="label"
+                  className="w-full"
+                >
+                  {mcpCtrl.catalogGroups.team.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogTeam", "Team catalogs")}>
+                      {mcpCtrl.catalogGroups.team.map((catalog) => (
+                        <Select.Option
+                          key={`team-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                  {mcpCtrl.catalogGroups.org.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogOrg", "Org catalogs")}>
+                      {mcpCtrl.catalogGroups.org.map((catalog) => (
+                        <Select.Option
+                          key={`org-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                  {mcpCtrl.catalogGroups.global.length > 0 && (
+                    <Select.OptGroup label={t("playground:composer.mcpCatalogGlobal", "Global catalogs")}>
+                      {mcpCtrl.catalogGroups.global.map((catalog) => (
+                        <Select.Option
+                          key={`global-${catalog.id}`}
+                          value={catalog.id}
+                          label={catalog.name}
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-sm">{catalog.name}</span>
+                            <span className="text-[11px] text-text-muted">ID {catalog.id}</span>
+                          </div>
+                        </Select.Option>
+                      ))}
+                    </Select.OptGroup>
+                  )}
+                </Select>
+                <Input
+                  size="small"
+                  placeholder={t("playground:composer.mcpCatalogPlaceholder", "catalog name")}
+                  value={mcpCtrl.catalogDraft}
+                  onChange={(e) => mcpCtrl.setCatalogDraft(e.target.value)}
+                  onBlur={mcpCtrl.commitCatalog}
+                  onPressEnter={mcpCtrl.commitCatalog}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogIdLabel", "Catalog ID")}
+                </label>
+                <InputNumber
+                  size="small"
+                  min={0}
+                  value={toolCatalogId ?? undefined}
+                  onChange={(value) =>
+                    setToolCatalogId(
+                      typeof value === "number" && Number.isFinite(value)
+                        ? value
+                        : null
+                    )
+                  }
+                  placeholder={t("playground:composer.mcpCatalogIdPlaceholder", "optional")}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-text-muted">
+                  {t("playground:composer.mcpCatalogStrictLabel", "Strict catalog filter")}
+                </span>
+                <Switch
+                  size="small"
+                  checked={toolCatalogStrict}
+                  onChange={(checked) => setToolCatalogStrict(checked)}
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-text-muted">
+                  {t("playground:composer.mcpModuleLabel", "Module")}
+                </label>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  mode="multiple"
+                  loading={moduleOptionsLoading}
+                  disabled={moduleOptionsLoading || moduleOptions.length === 0}
+                  value={toolModules.length > 0 ? toolModules : undefined}
+                  placeholder={t("playground:composer.mcpModuleSelectPlaceholder", "Select modules")}
+                  onChange={(value) => handleModuleSelect(value as string[] | undefined)}
+                  optionFilterProp="label"
+                  className="w-full"
+                >
+                  {moduleOptions.map((moduleId) => (
+                    <Select.Option key={moduleId} value={moduleId} label={moduleId}>
+                      <span className="text-sm">{moduleId}</span>
+                    </Select.Option>
+                  ))}
+                </Select>
+              </div>
+              {isSmallModel && (
+                <div className="rounded-md border border-border bg-surface2/60 px-2 py-1 text-[11px] text-text-muted">
+                  {t(
+                    "playground:composer.mcpSmallModelHint",
+                    "Small/fast model: use catalog/module filters or the discovery tools (mcp.catalogs.list → mcp.modules.list → mcp.tools.list) to keep tool context light."
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Modal>
       <CurrentChatModelSettings

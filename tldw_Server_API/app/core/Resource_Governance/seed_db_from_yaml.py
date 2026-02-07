@@ -3,19 +3,28 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, Set
+from typing import Any
 
 import yaml
 from loguru import logger
 
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import AuthNZPolicyAdmin
 
+_RG_SEED_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    yaml.YAMLError,
+)
+
 
 def _resolve_policy_path(path: Path) -> Path:
     try:
         resolved = path.expanduser()
-    except Exception as exc:
+    except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
         logger.opt(exception=exc).debug("Failed to expand RG policy path: {}", path)
         return path
     if resolved.exists():
@@ -25,7 +34,7 @@ def _resolve_policy_path(path: Path) -> Path:
     if not resolved.is_absolute():
         try:
             candidates.append((base / resolved).resolve())
-        except Exception as exc:
+        except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
             logger.opt(exception=exc).debug("Failed to resolve RG policy candidate from {}", resolved)
     name = resolved.name or "resource_governor_policies.yaml"
     candidates.append(base / "Config_Files" / name)
@@ -35,7 +44,7 @@ def _resolve_policy_path(path: Path) -> Path:
             if candidate.exists():
                 logger.info("RG policy file not found at {}; using {}", resolved, candidate)
                 return candidate
-        except Exception as exc:
+        except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
             logger.opt(exception=exc).debug("Failed to stat RG policy candidate {}", candidate)
     return resolved
 
@@ -52,7 +61,7 @@ def _default_policy_path() -> Path:
 _DEFAULT_POLICY_PATH = _default_policy_path()
 
 
-def _iter_route_map_policy_ids(route_map: Dict[str, Any]) -> Iterable[str]:
+def _iter_route_map_policy_ids(route_map: dict[str, Any]) -> Iterable[str]:
     by_path = route_map.get("by_path") or {}
     if isinstance(by_path, dict):
         for v in by_path.values():
@@ -66,7 +75,7 @@ def _iter_route_map_policy_ids(route_map: Dict[str, Any]) -> Iterable[str]:
                 yield v.strip()
 
 
-def _load_policy_file(path: Path) -> Dict[str, Any]:
+def _load_policy_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"RG policy file not found: {path}")
     with path.open("r", encoding="utf-8") as f:
@@ -98,11 +107,8 @@ async def seed_db_policies_from_yaml(
     if not isinstance(route_map, dict):
         route_map = {}
 
-    referenced: Set[str] = set(_iter_route_map_policy_ids(route_map))
-    if seed_all:
-        to_seed = set(str(k) for k in policies.keys() if str(k).strip())
-    else:
-        to_seed = referenced
+    referenced: set[str] = set(_iter_route_map_policy_ids(route_map))
+    to_seed = {str(k) for k in policies if str(k).strip()} if seed_all else referenced
 
     admin = AuthNZPolicyAdmin()
     await admin.initialize()
@@ -110,7 +116,7 @@ async def seed_db_policies_from_yaml(
     created = 0
     skipped_existing = 0
     missing_in_yaml: list[str] = []
-    known_in_db: Set[str] = set()
+    known_in_db: set[str] = set()
 
     for policy_id in sorted(to_seed):
         rec = await admin.get_policy_record(policy_id)
@@ -183,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 seed_all=bool(args.seed_all),
             )
         )
-    except Exception as exc:
+    except _RG_SEED_NONCRITICAL_EXCEPTIONS as exc:
         print(f"ERROR: failed to seed RG DB policies: {exc}")
         return 1
 

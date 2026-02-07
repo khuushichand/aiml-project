@@ -1,10 +1,9 @@
 # evaluation_metrics.py
 # Calculate evaluation metrics for prompt testing
 
-import json
-from typing import Dict, List, Any, Optional
 from difflib import SequenceMatcher
-from loguru import logger
+from typing import Any, Optional
+
 
 class EvaluationMetrics:
     """Calculate various evaluation metrics for prompt testing."""
@@ -74,9 +73,9 @@ class EvaluationMetrics:
 
     @staticmethod
     def calculate_composite_score(
-        expected: Dict[str, Any],
-        actual: Dict[str, Any],
-        weights: Optional[Dict[str, float]] = None
+        expected: dict[str, Any],
+        actual: dict[str, Any],
+        weights: Optional[dict[str, float]] = None
     ) -> float:
         """
         Calculate composite score using multiple metrics.
@@ -117,7 +116,7 @@ class EvaluationMetrics:
         return total_score / total_weight if total_weight > 0 else 0.0
 
     @staticmethod
-    def calculate_aggregate_metrics(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def calculate_aggregate_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Calculate aggregate metrics for multiple test results.
 
@@ -163,7 +162,7 @@ class EvaluationMetrics:
         }
 
     @staticmethod
-    def compare_evaluations(eval1: Dict[str, Any], eval2: Dict[str, Any]) -> Dict[str, Any]:
+    def compare_evaluations(eval1: dict[str, Any], eval2: dict[str, Any]) -> dict[str, Any]:
         """
         Compare two evaluation runs.
 

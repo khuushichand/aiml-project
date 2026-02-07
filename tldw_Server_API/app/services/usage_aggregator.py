@@ -2,16 +2,25 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+_USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
-async def aggregate_usage_daily(db_pool: Optional[DatabasePool] = None, day: Optional[str] = None) -> None:
+async def aggregate_usage_daily(db_pool: DatabasePool | None = None, day: str | None = None) -> None:
     """
     Aggregate per-request usage from usage_log into usage_daily.
 
@@ -26,13 +35,13 @@ async def aggregate_usage_daily(db_pool: Optional[DatabasePool] = None, day: Opt
         if day:
             try:
                 day_val = datetime.fromisoformat(day).date()
-            except Exception:
+            except (TypeError, ValueError):
                 day_val = datetime.now(timezone.utc).date()
 
         repo = AuthnzUsageRepo(pool)
         await repo.aggregate_usage_daily_for_day(day=day_val)
         logger.debug(f"usage_daily aggregated for {day_val.isoformat()}")
-    except Exception as e:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"usage_daily aggregation skipped/failed: {e}")
 
 
@@ -50,11 +59,11 @@ async def _aggregator_loop(stop_event: asyncio.Event):
                 await asyncio.wait_for(stop_event.wait(), timeout=interval_minutes * 60)
             except asyncio.TimeoutError:
                 continue
-    except Exception as e:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Usage aggregator loop exited: {e}")
 
 
-async def start_usage_aggregator() -> Optional[asyncio.Task]:
+async def start_usage_aggregator() -> asyncio.Task | None:
     """Start background aggregator if enabled; return task or None."""
     settings = get_settings()
     if not getattr(settings, "USAGE_LOG_ENABLED", False):
@@ -66,7 +75,7 @@ async def start_usage_aggregator() -> Optional[asyncio.Task]:
     return task
 
 
-async def stop_usage_aggregator(task: Optional[asyncio.Task]) -> None:
+async def stop_usage_aggregator(task: asyncio.Task | None) -> None:
     if not task:
         return
     try:
@@ -74,5 +83,5 @@ async def stop_usage_aggregator(task: Optional[asyncio.Task]) -> None:
         if isinstance(stop_event, asyncio.Event):
             stop_event.set()
         task.cancel()
-    except Exception:
+    except _USAGE_AGGREGATOR_NONCRITICAL_EXCEPTIONS:
         pass

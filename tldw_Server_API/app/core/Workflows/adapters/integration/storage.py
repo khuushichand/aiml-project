@@ -8,13 +8,13 @@ This module includes adapters for cloud storage operations:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_workflow_file_path
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import S3UploadConfig, S3DownloadConfig
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import S3DownloadConfig, S3UploadConfig
 
 
 @registry.register(
@@ -25,7 +25,7 @@ from tldw_Server_API.app.core.Workflows.adapters.integration._config import S3Up
     tags=["integration", "storage"],
     config_model=S3UploadConfig,
 )
-async def run_s3_upload_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_s3_upload_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Upload content to S3-compatible storage."""
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
@@ -91,7 +91,7 @@ async def run_s3_upload_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["integration", "storage"],
     config_model=S3DownloadConfig,
 )
-async def run_s3_download_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_s3_download_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Download content from S3-compatible storage."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}

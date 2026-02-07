@@ -74,6 +74,28 @@ runner_env = HOME=/Users/macbook-dev/Documents/GitHub/tldw_server2/tldw_Server_A
 # Startup timeout for runner initialize.
 startup_timeout_ms = 10000
 
+[ACP-SANDBOX]
+# Enable ACP sandbox mode (runs ACP in container/VM and exposes web SSH).
+enabled = false
+# Sandbox runtime (docker|firecracker|lima). Docker only is supported initially.
+runtime = docker
+# Base image for ACP sandbox (must include sshd + tldw-agent-acp).
+base_image = tldw/acp-agent:latest
+# Network policy for ACP sandbox (allow_all|allowlist|deny_all).
+network_policy = allow_all
+# SSH settings
+ssh_enabled = true
+ssh_user = acp
+ssh_host = 127.0.0.1
+ssh_port_min = 2222
+ssh_port_max = 2299
+# Downstream agent command (inside container)
+agent_command =
+# JSON array or shell-style args
+agent_args = []
+# JSON or comma-separated key=value env
+agent_env = {}
+
 [Audit]
 # Auto-switch audit exports to streaming when max_rows exceeds this threshold to avoid large in-memory buffers.
 export_stream_auto_max_rows = 5000
@@ -473,6 +495,24 @@ max_models_in_memory = 3
 max_model_memory_gb = 8
 model_lru_ttl_seconds = 3600
 
+# FVA (Falsification-Verification Alignment) Settings
+# Enable FVA for enhanced claim verification with counter-evidence retrieval
+FVA_ENABLED = true
+# Confidence threshold below which falsification is triggered (0.0-1.0)
+FVA_CONFIDENCE_THRESHOLD = 0.7
+# Threshold for CONTESTED status when evidence is balanced (0.0-0.5)
+FVA_CONTESTED_THRESHOLD = 0.4
+# Maximum concurrent falsification operations
+FVA_MAX_CONCURRENT = 5
+# Timeout for falsification operations in seconds
+FVA_TIMEOUT_SECONDS = 30.0
+# Maximum budget ratio for FVA operations (0.0-1.0)
+FVA_MAX_BUDGET_RATIO = 0.3
+# Claim types that always trigger falsification (comma-separated)
+FVA_FORCE_CLAIM_TYPES =
+# Minimum confidence to skip falsification entirely (0.0-1.0)
+FVA_MIN_CONFIDENCE_FOR_SKIP = 0.9
+
 [ClaimsMonitoring]
 CLAIMS_MONITORING_ENABLED = false
 CLAIMS_ALERT_THRESHOLD_DEFAULT = 0.2
@@ -509,6 +549,12 @@ semantic_cache_enabled = true
 cache_similarity_threshold = 0.85
 enable_reranking = true
 rerank_top_k = 10
+# FlashRank reranker model cache directory.
+# Relative paths resolve from repo root in server code.
+# Recommended: keep bundled FlashRank model files under models/flashrank/<model_name>/
+flashrank_cache_dir = models/flashrank
+# FlashRank model family name (directory name under cache_dir)
+flashrank_model_name = ms-marco-TinyBERT-L-2-v2
 llm_reranker_provider = openai
 llm_reranker_model =
 llama_reranker_binary = llama-embedding
@@ -994,6 +1040,16 @@ skip_audio_prevalidation = false
 # Add extra roots via USER_DB_BASE_DIR_ALLOWED_ROOTS and/or
 # TLDW_USER_DB_BASE_DIR_ALLOWED_ROOTS (comma- or colon-separated); values are merged.
 USER_DB_BASE_DIR = Databases/user_databases
+
+# TTS history settings
+# For privacy, set TTS_HISTORY_HASH_KEY in the environment (recommended) or here.
+tts_history_enabled = True
+tts_history_store_text = True
+tts_history_store_failed = True
+tts_history_hash_key =
+tts_history_retention_days = 90
+tts_history_max_rows_per_user = 10000
+tts_history_purge_interval_hours = 24
 
 local_tts_device = cpu
 default_tts_provider = kokoro

@@ -1,19 +1,47 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import time
-import json
-from typing import Optional, Dict, Any
+from sqlite3 import Error as SQLiteError
+from typing import Any
+
 from loguru import logger
 
 from .audit_bridge import submit_job_audit_event
+
+try:
+    import psycopg  # type: ignore
+    _PSYCOPG_EXCEPTIONS: tuple[type[Exception], ...] = (psycopg.Error,)
+except ImportError:
+    _PSYCOPG_EXCEPTIONS = ()
+
+_EVENT_AUDIT_EXCEPTIONS = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_EVENT_LOG_EXCEPTIONS = (OSError, RuntimeError, TypeError, ValueError)
+_OUTBOX_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+    ConnectionError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+) + _PSYCOPG_EXCEPTIONS
 
 
 def _events_enabled() -> bool:
     return str(os.getenv("JOBS_EVENTS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}
 
 
-def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: Optional[Dict[str, Any]] = None) -> None:
+def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict[str, Any] | None = None) -> None:
     """Best-effort no-op event emitter.
 
     If `JOBS_EVENTS_ENABLED=true`, logs a compact event line. In future this can
@@ -21,7 +49,7 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
     """
     try:
         submit_job_audit_event(event, job=job, attrs=attrs)
-    except Exception:
+    except _EVENT_AUDIT_EXCEPTIONS:
         # Audit integration is best-effort. Errors should never break job flow.
         pass
     # Only skip entirely when neither logging nor outbox are enabled
@@ -35,10 +63,8 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
     if attrs:
         meta.update(attrs)
     if _events_enabled():
-        try:
+        with contextlib.suppress(_EVENT_LOG_EXCEPTIONS):
             logger.bind(job_event=True).info(f"job_event event={event} attrs={meta}")
-        except Exception:
-            pass
     # Outbox write (append-only) when enabled
     # Optional soft rate-limit for extremely high churn
     try:
@@ -46,7 +72,7 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
             # Basic rate limiter: drop writes if exceeding JOBS_EVENTS_RATE_LIMIT_HZ
             try:
                 hz = float(os.getenv("JOBS_EVENTS_RATE_LIMIT_HZ", "0") or "0")
-            except Exception:
+            except (TypeError, ValueError):
                 hz = 0.0
             if hz > 0:
                 now = time.time()
@@ -62,7 +88,6 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
             _db_url = os.getenv("JOBS_DB_URL", "").strip()
             if _db_url.startswith("postgres"):
                 try:
-                    import psycopg  # type: ignore
                     from .pg_util import negotiate_pg_dsn
                     _dsn = negotiate_pg_dsn(_db_url)
                     with psycopg.connect(_dsn) as _conn:
@@ -86,16 +111,14 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
                             )
                             _conn.commit()
                     return
-                except Exception:
+                except _OUTBOX_NONCRITICAL_EXCEPTIONS:
                     # Fall back to JobManager-based path if direct insert fails
                     pass
 
             from tldw_Server_API.app.core.Jobs.manager import JobManager
             # Admin context for outbox writes (RLS bypass)
-            try:
+            with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                 JobManager.set_rls_context(is_admin=True, domain_allowlist=None, owner_user_id=None)
-            except Exception:
-                pass
             jm = JobManager()
             conn = jm._connect()
             try:
@@ -139,17 +162,13 @@ def emit_job_event(event: str, *, job: Optional[Dict[str, Any]] = None, attrs: O
                     )
                     conn.commit()
             finally:
-                try:
+                with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                     conn.close()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(_OUTBOX_NONCRITICAL_EXCEPTIONS):
                     JobManager.clear_rls_context()
-                except Exception:
-                    pass
-    except Exception:
+    except _OUTBOX_NONCRITICAL_EXCEPTIONS:
         # Swallow outbox errors; logging already occurred
         pass
 
 # Module-level state for soft rate limiter
-_rate_state: Dict[str, float] = {}
+_rate_state: dict[str, float] = {}

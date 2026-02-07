@@ -11,18 +11,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path as PathlibPath
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from fastapi.responses import FileResponse, StreamingResponse
-from loguru import logger
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from tldw_Server_API.app.api.v1.schemas.storage_schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     BulkMoveRequest,
     BulkMoveResponse,
-    CombinedQuotaResponse,
+    CategoryUsage,
     FileCategory,
     FolderCreateRequest,
     FolderInfo,
@@ -43,18 +41,15 @@ from tldw_Server_API.app.api.v1.schemas.storage_schemas import (
     TeamQuotaResponse,
     TrashListResponse,
     UsageBreakdownResponse,
-    CategoryUsage,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    QuotaExceededError,
-    UserNotFoundError,
     StorageError,
+    UserNotFoundError,
 )
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import FILE_CATEGORY_VOICE_CLONE
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
@@ -105,7 +100,7 @@ def _resolve_storage_base_dir(user_id: int, record: dict) -> PathlibPath:
     return DatabasePaths.get_user_outputs_dir(user_id)
 
 
-def _parse_datetime(value) -> Optional[datetime]:
+def _parse_datetime(value) -> datetime | None:
     """Parse datetime from various formats."""
     if value is None:
         return None
@@ -144,10 +139,10 @@ async def list_files(
     user: User = Depends(get_request_user),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-    file_category: Optional[FileCategory] = Query(default=None),
-    source_feature: Optional[SourceFeature] = Query(default=None),
-    folder_tag: Optional[str] = Query(default=None),
-    search: Optional[str] = Query(default=None, max_length=100),
+    file_category: FileCategory | None = Query(default=None),
+    source_feature: SourceFeature | None = Query(default=None),
+    folder_tag: str | None = Query(default=None),
+    search: str | None = Query(default=None, max_length=100),
     include_deleted: bool = Query(default=False),
 ):
     """
@@ -232,7 +227,7 @@ async def download_file(
             raise HTTPException(status_code=403, detail="Invalid file path")
         full_path = resolved_path
     except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid file path")
+        raise HTTPException(status_code=403, detail="Invalid file path") from None
 
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
@@ -662,9 +657,9 @@ async def set_user_quota(
             ),
         )
     except UserNotFoundError:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found") from None
     except StorageError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.put("/admin/quotas/team/{team_id}", response_model=SetQuotaResponse)
@@ -680,7 +675,7 @@ async def set_team_quota(
 
     service = await _get_service()
 
-    result = await service.set_team_quota(
+    await service.set_team_quota(
         team_id,
         request.quota_mb,
         soft_limit_pct=request.soft_limit_pct,
@@ -708,7 +703,7 @@ async def set_org_quota(
 
     service = await _get_service()
 
-    result = await service.set_org_quota(
+    await service.set_org_quota(
         org_id,
         request.quota_mb,
         soft_limit_pct=request.soft_limit_pct,

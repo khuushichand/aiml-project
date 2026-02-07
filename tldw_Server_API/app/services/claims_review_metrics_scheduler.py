@@ -11,35 +11,47 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-from typing import Callable, List, Optional
+from typing import Callable
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
     aggregate_claims_review_extractor_metrics_daily,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    content_db_settings,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    content_db_settings,
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
-def _enumerate_sqlite_user_ids() -> List[int]:
+def _enumerate_sqlite_user_ids() -> list[int]:
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"claims_review_metrics: failed to resolve user db base dir: {exc}")
         return []
-    user_ids: List[int] = []
+    user_ids: list[int] = []
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -54,7 +66,7 @@ def _enumerate_sqlite_user_ids() -> List[int]:
     if not user_ids:
         try:
             user_ids = [DatabasePaths.get_single_user_id()]
-        except Exception as exc:
+        except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"claims_review_metrics: failed to derive single_user_id: {exc}")
             user_ids = []
     return sorted(set(user_ids))
@@ -62,18 +74,18 @@ def _enumerate_sqlite_user_ids() -> List[int]:
 
 async def run_claims_review_metrics_once(
     *,
-    aggregator: Optional[Callable[..., int]] = None,
-    lookback_days: Optional[int] = None,
-    report_date: Optional[str] = None,
-    db: Optional[MediaDatabase] = None,
-    target_user_id: Optional[str] = None,
+    aggregator: Callable[..., int] | None = None,
+    lookback_days: int | None = None,
+    report_date: str | None = None,
+    db: MediaDatabase | None = None,
+    target_user_id: str | None = None,
 ) -> int:
     agg_fn = aggregator or aggregate_claims_review_extractor_metrics_daily
     try:
         lookback_val = int(
             lookback_days if lookback_days is not None else settings.get("CLAIMS_REVIEW_METRICS_LOOKBACK_DAYS", 2)
         )
-    except Exception:
+    except (TypeError, ValueError):
         lookback_val = 2
 
     if db is not None:
@@ -89,19 +101,17 @@ async def run_claims_review_metrics_once(
     if content_db_settings.backend_type == BackendType.POSTGRESQL:
         try:
             media_db = create_media_database(client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-        except Exception as exc:
+        except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"claims_review_metrics: failed to create media db: {exc}")
             return 0
         try:
-            try:
+            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                 media_db.initialize_db()
-            except Exception:
-                pass
             user_ids = media_db.list_claims_review_user_ids()
             if not user_ids:
                 try:
                     user_ids = [str(DatabasePaths.get_single_user_id())]
-                except Exception:
+                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS:
                     user_ids = []
             for user_id in user_ids:
                 try:
@@ -112,13 +122,11 @@ async def run_claims_review_metrics_once(
                         report_date=report_date,
                         lookback_days=lookback_val,
                     )
-                except Exception as exc:
+                except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                 media_db.close_connection()
-            except Exception:
-                pass
     else:
         user_ids = _enumerate_sqlite_user_ids()
         for user_id in user_ids:
@@ -127,14 +135,12 @@ async def run_claims_review_metrics_once(
                     client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                     db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
                 )
-            except Exception as exc:
+            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"claims_review_metrics: failed to open user db {user_id}: {exc}")
                 continue
             try:
-                try:
+                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                     user_db.initialize_db()
-                except Exception:
-                    pass
                 processed += await asyncio.to_thread(
                     agg_fn,
                     db=user_db,
@@ -142,17 +148,15 @@ async def run_claims_review_metrics_once(
                     report_date=report_date,
                     lookback_days=lookback_val,
                 )
-            except Exception as exc:
+            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"claims_review_metrics: aggregation failed for user {user_id}: {exc}")
             finally:
-                try:
+                with contextlib.suppress(_CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS):
                     user_db.close_connection()
-                except Exception:
-                    pass
     return processed
 
 
-async def start_claims_review_metrics_scheduler() -> Optional[asyncio.Task]:
+async def start_claims_review_metrics_scheduler() -> asyncio.Task | None:
     enabled = _is_truthy(os.getenv("CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED")) or bool(
         settings.get("CLAIMS_REVIEW_METRICS_SCHEDULER_ENABLED", False)
     )
@@ -164,7 +168,7 @@ async def start_claims_review_metrics_scheduler() -> Optional[asyncio.Task]:
             os.getenv("CLAIMS_REVIEW_METRICS_INTERVAL_SEC")
             or settings.get("CLAIMS_REVIEW_METRICS_INTERVAL_SEC", 86400)
         )
-    except Exception:
+    except (TypeError, ValueError):
         interval = 86400
 
     async def _runner() -> None:
@@ -172,7 +176,7 @@ async def start_claims_review_metrics_scheduler() -> Optional[asyncio.Task]:
         while True:
             try:
                 await run_claims_review_metrics_once()
-            except Exception as exc:
+            except _CLAIMS_REVIEW_METRICS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Claims review metrics scheduler loop error: {exc}")
             await asyncio.sleep(interval)
 

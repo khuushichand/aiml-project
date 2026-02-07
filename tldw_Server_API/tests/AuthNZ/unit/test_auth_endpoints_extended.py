@@ -1,7 +1,8 @@
 from types import SimpleNamespace
+import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import Response
@@ -89,6 +90,230 @@ async def test_reset_password_weak_and_success(monkeypatch):
         password_service=_StubPwd(weak=False),
     )
     assert "success" in out.get("message", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_forgot_password_rate_limited_returns_generic_message(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _deny_rg(*args, **kwargs):
+        return False, 1
+
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/forgot-password",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    out = await auth.forgot_password(
+        request=request,
+        data=auth.ForgotPasswordRequest(email="rate@example.com"),
+        db=object(),
+        jwt_service=object(),
+    )
+    assert out["message"] == "If the email exists, a reset link has been sent"
+
+
+@pytest.mark.asyncio
+async def test_reserve_auth_rg_requests_uses_fallback_when_governor_missing(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _Limiter:
+        def __init__(self):
+            self.calls = []
+
+        async def check_rate_limit_fallback(self, **kwargs):
+            self.calls.append(kwargs)
+            return False, {"retry_after": 9}
+
+    limiter = _Limiter()
+    monkeypatch.setattr(auth, "get_rate_limiter", lambda: limiter)
+
+    async def _no_governor(_request):
+        return None
+
+    monkeypatch.setattr(auth, "_get_auth_endpoint_rg_governor", _no_governor)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/magic-link/request",
+        "headers": [],
+        "client": ("203.0.113.21", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "state": {},
+        "app": SimpleNamespace(state=SimpleNamespace()),
+    }
+    request = Request(scope)
+
+    allowed, retry_after = await auth._reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.request",
+        entity="ip:203.0.113.21",
+    )
+    assert allowed is False
+    assert retry_after == 9
+    assert len(limiter.calls) == 1
+    call = limiter.calls[0]
+    assert call["endpoint"] == "auth:authnz.magic_link.request"
+    assert call["limit"] == 10
+    assert call["window_minutes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_login_lockout_uses_trusted_forwarded_client_ip(monkeypatch):
+    monkeypatch.setenv("AUTH_TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("AUTH_TRUSTED_PROXY_IPS", "10.0.0.0/8")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    captured: dict[str, str] = {}
+
+    class _StubGov:
+        async def check_lockout(self, identifier: str, *, attempt_type: str = "login", rate_limiter=None):
+            _ = attempt_type
+            _ = rate_limiter
+            captured["identifier"] = identifier
+            return True, datetime.now(timezone.utc) + timedelta(minutes=15)
+
+        async def record_auth_failure(self, *args, **kwargs):
+            _ = args
+            _ = kwargs
+            return {"is_locked": False, "remaining_attempts": 5}
+
+    class _StubLimiter:
+        enabled = True
+
+    async def _fake_get_auth_governor():
+        return _StubGov()
+
+    monkeypatch.setattr(auth, "get_auth_governor", _fake_get_auth_governor)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/login",
+        "headers": [(b"x-forwarded-for", b"198.51.100.77, 10.1.2.3")],
+        "client": ("10.1.2.3", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    response = Response()
+    form_data = SimpleNamespace(username="user1", password="wrong-password")
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.login(
+            request=request,
+            response=response,
+            form_data=form_data,
+            db=object(),
+            jwt_service=object(),
+            password_service=object(),
+            session_manager=object(),
+            rate_limiter=_StubLimiter(),
+            settings=auth.get_settings(),
+        )
+
+    assert exc.value.status_code == 429
+    assert captured["identifier"] == "198.51.100.77"
+
+
+@pytest.mark.asyncio
+async def test_reserve_auth_rg_requests_ignores_untrusted_forwarded_ip(monkeypatch):
+    monkeypatch.setenv("AUTH_TRUST_X_FORWARDED_FOR", "true")
+    monkeypatch.setenv("AUTH_TRUSTED_PROXY_IPS", "10.0.0.0/8")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _StubGovernor:
+        def __init__(self):
+            self.entities = []
+
+        async def reserve(self, request_obj, op_id: str):
+            _ = op_id
+            self.entities.append(request_obj.entity)
+            return SimpleNamespace(allowed=True, retry_after=None), None
+
+    governor = _StubGovernor()
+
+    async def _get_governor(_request):
+        return governor
+
+    monkeypatch.setattr(auth, "_get_auth_endpoint_rg_governor", _get_governor)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/forgot-password",
+        "headers": [(b"x-forwarded-for", b"198.51.100.88, 203.0.113.9")],
+        "client": ("203.0.113.9", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "state": {},
+        "app": SimpleNamespace(state=SimpleNamespace()),
+    }
+    request = Request(scope)
+
+    allowed, retry_after = await auth._reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.forgot_password",
+    )
+
+    assert allowed is True
+    assert retry_after is None
+    assert governor.entities == ["ip:203.0.113.9"]
+
+
+@pytest.mark.asyncio
+async def test_reset_password_rate_limited_returns_429(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _deny_rg(*args, **kwargs):
+        return False, 7
+
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/reset-password",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.reset_password(
+            data=auth.ResetPasswordRequest(token="tok", new_password="Strong@12345"),
+            request=request,
+            db=object(),
+            jwt_service=object(),
+            password_service=object(),
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "7"
 
 
 @pytest.mark.asyncio
@@ -419,6 +644,261 @@ async def test_mfa_login_completes_tokens(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_setup_mfa_accepts_dict_current_user(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    class _StubMFA:
+        async def get_user_mfa_status(self, user_id: int):
+            return {"enabled": False}
+
+        def generate_secret(self) -> str:
+            return "DICTSECRET"
+
+        def generate_totp_uri(self, secret: str, username: str) -> str:
+            return f"otpauth://totp/{username}?secret={secret}"
+
+        def generate_qr_code(self, _uri: str) -> bytes:
+            return b"png"
+
+        def generate_backup_codes(self) -> list[str]:
+            return ["code-a", "code-b"]
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.redis_client = object()
+            self.cached = {}
+
+        async def initialize(self):
+            return None
+
+        async def store_ephemeral_value(self, key: str, value: str, ttl_seconds: int):
+            self.cached[key] = (value, ttl_seconds)
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
+    sm = _StubSessionManager()
+
+    out = await auth.setup_mfa(
+        current_user={
+            "id": 7,
+            "username": "dictuser",
+            "email": "dict@example.com",
+            "is_active": True,
+            "is_verified": True,
+        },
+        db=None,
+        session_manager=sm,
+    )
+
+    assert out.secret == "DICTSECRET"
+    assert out.qr_code.startswith("data:image/png;base64,")
+    assert len(out.backup_codes) == 2
+    assert auth._mfa_setup_cache_key(7) in sm.cached
+
+
+@pytest.mark.asyncio
+async def test_verify_mfa_setup_succeeds_when_email_send_fails(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    class _StubMFA:
+        def verify_totp(self, _secret: str, _token: str) -> bool:
+            return True
+
+        async def enable_mfa(self, user_id: int, secret: str, backup_codes: list[str]) -> bool:
+            return bool(user_id and secret and backup_codes)
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.redis_client = object()
+            self.deleted = []
+            self.values = {
+                auth._mfa_setup_cache_key(9): json.dumps(
+                    {"secret": "SECRET", "backup_codes": ["b1", "b2"]}
+                )
+            }
+
+        async def initialize(self):
+            return None
+
+        async def get_ephemeral_value(self, key: str):
+            return self.values.get(key)
+
+        async def delete_ephemeral_value(self, key: str):
+            self.deleted.append(key)
+
+    class _FailingEmail:
+        async def send_mfa_enabled_email(self, **kwargs):
+            raise RuntimeError("mail provider unavailable")
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
+    monkeypatch.setattr(auth, "_get_email_service", lambda: _FailingEmail())
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/mfa/verify",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    sm = _StubSessionManager()
+    out = await auth.verify_mfa_setup(
+        data=auth.MFAVerifyRequest(token="123456"),
+        request=request,
+        current_user={
+            "id": 9,
+            "username": "dictmfa",
+            "email": "dictmfa@example.com",
+            "is_active": True,
+            "is_verified": True,
+        },
+        session_manager=sm,
+    )
+
+    assert "enabled" in out.get("message", "").lower()
+    assert out.get("backup_codes") == ["b1", "b2"]
+    assert auth._mfa_setup_cache_key(9) in sm.deleted
+
+
+@pytest.mark.asyncio
+async def test_verify_mfa_setup_rate_limited_returns_429(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.redis_client = object()
+            self.values = {auth._mfa_setup_cache_key(9): json.dumps({"secret": "SECRET"})}
+
+        async def initialize(self):
+            return None
+
+        async def get_ephemeral_value(self, key: str):
+            return self.values.get(key)
+
+    class _StubMFA:
+        def verify_totp(self, _secret: str, _token: str) -> bool:
+            return True
+
+    async def _deny_rg(*args, **kwargs):
+        return False, 3
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_get_mfa_service", lambda: _StubMFA())
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/mfa/verify",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.verify_mfa_setup(
+            data=auth.MFAVerifyRequest(token="123456"),
+            request=request,
+            current_user={"id": 9, "username": "u9", "email": "u9@example.com"},
+            session_manager=_StubSessionManager(),
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "3"
+
+
+@pytest.mark.asyncio
+async def test_mfa_login_rate_limited_returns_429(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "multi_user")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    async def _fake_is_pg() -> bool:
+        return True
+
+    class _StubSessionManager:
+        def __init__(self):
+            self.redis_client = object()
+            self.ephemeral = {auth._mfa_login_cache_key("session-token"): '{"user_id": 5, "session_id": 55}'}
+
+        async def initialize(self):
+            return None
+
+        async def get_ephemeral_value(self, key: str):
+            return self.ephemeral.get(key)
+
+    class _StubLimiter:
+        enabled = False
+
+        async def reset_failed_attempts(self, *args, **kwargs):
+            return None
+
+    async def _deny_rg(*args, **kwargs):
+        return False, 9
+
+    monkeypatch.setattr(auth, "is_postgres_backend", _fake_is_pg)
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_rg)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/mfa/login",
+        "headers": [],
+        "client": ("203.0.113.10", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+    response = Response()
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.mfa_login(
+            data=auth.MFALoginRequest(session_token="session-token", mfa_token="123456"),
+            request=request,
+            response=response,
+            db=object(),
+            jwt_service=object(),
+            session_manager=_StubSessionManager(),
+            rate_limiter=_StubLimiter(),
+            settings=auth.get_settings(),
+        )
+
+    assert exc.value.status_code == 429
+    assert exc.value.headers.get("Retry-After") == "9"
+
+
+@pytest.mark.asyncio
 async def test_logout_accepts_lowercase_bearer(monkeypatch):
     reset_settings()
 
@@ -476,6 +956,234 @@ async def test_logout_accepts_lowercase_bearer(monkeypatch):
 
     assert result.message == "Successfully logged out"
     assert captured["revoked"] is True
+
+
+@pytest.mark.asyncio
+async def test_logout_all_devices_uses_session_manager_only(monkeypatch):
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    captured = {"calls": 0, "user_id": None, "reason": None}
+
+    class _StubSessionManager:
+        async def revoke_all_user_sessions(
+            self,
+            *,
+            user_id: int,
+            except_session_id: int | None = None,
+            reason: str = "",
+        ) -> int:
+            captured["calls"] += 1
+            captured["user_id"] = user_id
+            captured["reason"] = reason
+            return 4
+
+    class _BlacklistShouldNotBeCalled:
+        async def revoke_all_user_tokens(self, **kwargs):
+            raise AssertionError("logout(all_devices=true) should not call revoke_all_user_tokens directly")
+
+        async def revoke_token(self, **kwargs):
+            raise AssertionError("single-token revoke path should not run for logout(all_devices=true)")
+
+    monkeypatch.setattr(auth, "get_token_blacklist", lambda: _BlacklistShouldNotBeCalled())
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [(b"authorization", b"Bearer unused-for-all-devices")],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    result = await auth.logout(
+        data=auth.LogoutRequest(all_devices=True),
+        request=request,
+        current_user=SimpleNamespace(id=12),
+        session_manager=_StubSessionManager(),
+        jwt_service=object(),
+    )
+
+    assert result.message == "Logged out from 4 device(s)"
+    assert captured["calls"] == 1
+    assert captured["user_id"] == 12
+    assert captured["reason"] == "User requested logout from all devices"
+
+
+@pytest.mark.asyncio
+async def test_logout_all_devices_ignores_blacklist_factory_failure(monkeypatch):
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _StubSessionManager:
+        async def revoke_all_user_sessions(
+            self,
+            *,
+            user_id: int,
+            except_session_id: int | None = None,
+            reason: str = "",
+        ) -> int:
+            return 1
+
+    def _failing_blacklist_factory():
+        raise RuntimeError("blacklist unavailable")
+
+    monkeypatch.setattr(auth, "get_token_blacklist", _failing_blacklist_factory)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    result = await auth.logout(
+        data=auth.LogoutRequest(all_devices=True),
+        request=request,
+        current_user=SimpleNamespace(id=12),
+        session_manager=_StubSessionManager(),
+        jwt_service=object(),
+    )
+
+    assert result.message == "Logged out from 1 device(s)"
+
+
+@pytest.mark.asyncio
+async def test_logout_all_devices_raises_when_session_revoke_fails(monkeypatch):
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _FailingSessionManager:
+        async def revoke_all_user_sessions(
+            self,
+            *,
+            user_id: int,
+            except_session_id: int | None = None,
+            reason: str = "",
+        ) -> int:
+            raise RuntimeError("session revoke failed")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.logout(
+            data=auth.LogoutRequest(all_devices=True),
+            request=request,
+            current_user=SimpleNamespace(id=12),
+            session_manager=_FailingSessionManager(),
+            jwt_service=object(),
+        )
+
+    assert exc.value.status_code == 500
+    assert "revoke sessions" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_revoke_all_sessions_returns_revoked_count():
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    captured = {}
+
+    class _StubSessionManager:
+        async def revoke_all_user_sessions(
+            self,
+            *,
+            user_id: int,
+            except_session_id: int | None = None,
+            reason: str = "",
+        ) -> int:
+            captured["user_id"] = user_id
+            captured["except_session_id"] = except_session_id
+            captured["reason"] = reason
+            return 3
+
+    result = await auth.revoke_all_sessions(
+        current_user={"id": 77, "username": "carol"},
+        session_manager=_StubSessionManager(),
+    )
+
+    assert result.message == "Successfully revoked 3 sessions"
+    assert result.details == {"sessions_revoked": 3}
+    assert captured["user_id"] == 77
+    assert captured["except_session_id"] is None
+    assert captured["reason"] == "User requested logout from all devices"
+
+
+@pytest.mark.asyncio
+async def test_logout_raises_when_access_token_revoke_fails(monkeypatch):
+    reset_settings()
+
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+
+    class _StubJWT:
+        def extract_jti(self, token: str) -> str:
+            return "jti-fail"
+
+        def verify_token(self, token: str):
+            return {"exp": 1_700_000_000, "session_id": 456}
+
+    class _FailingBlacklist:
+        async def revoke_all_user_tokens(self, **kwargs):
+            return 0
+
+        async def revoke_token(self, **kwargs):
+            raise RuntimeError("blacklist write failed")
+
+    class _StubSessionManager:
+        async def revoke_all_user_sessions(self, **kwargs):
+            return None
+
+        async def revoke_session(self, **kwargs):
+            return None
+
+    monkeypatch.setattr(auth, "get_token_blacklist", lambda: _FailingBlacklist())
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/logout",
+        "headers": [(b"authorization", b"Bearer token-to-revoke")],
+        "client": ("203.0.113.5", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+    }
+    request = Request(scope)
+
+    with pytest.raises(auth.HTTPException) as exc:
+        await auth.logout(
+            data=auth.LogoutRequest(all_devices=False),
+            request=request,
+            current_user=SimpleNamespace(id=42),
+            session_manager=_StubSessionManager(),
+            jwt_service=_StubJWT(),
+        )
+
+    assert exc.value.status_code == 500
+    assert "revoke access token" in exc.value.detail.lower()
 
 
 @pytest.mark.asyncio

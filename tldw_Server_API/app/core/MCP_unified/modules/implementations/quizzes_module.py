@@ -7,12 +7,33 @@ Supports quiz creation, question management, attempt tracking, and AI generation
 
 import asyncio
 import json
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
-from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
 from ....config import load_and_log_configs
+from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError
+from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
+
+_QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 class QuizzesModule(BaseModule):
@@ -24,29 +45,27 @@ class QuizzesModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Quizzes module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = CharactersRAGDB
             checks["driver_available"] = True
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["driver_available"] = False
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["disk_space"] = False
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             # Quiz CRUD
             create_tool_definition(
@@ -287,7 +306,7 @@ class QuizzesModule(BaseModule):
             ),
         ]
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "quizzes.list":
             q = arguments.get("q")
             if q is not None and (not isinstance(q, str) or len(q) > 500):
@@ -406,12 +425,12 @@ class QuizzesModule(BaseModule):
             if provider is not None and (not isinstance(provider, str) or not provider.strip()):
                 raise ValueError("provider must be a non-empty string")
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+        except (TypeError, ValueError) as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         if tool_name == "quizzes.list":
             return await self._list_quizzes(args, context)
@@ -454,12 +473,12 @@ class QuizzesModule(BaseModule):
     def _get_client_id(self, context: Any) -> str:
         try:
             return context.client_id or "mcp_quizzes"
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             return "mcp_quizzes"
 
     # Quiz CRUD
 
-    async def _list_quizzes(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_quizzes(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         q = args.get("q")
         media_id = args.get("media_id")
         workspace_tag = args.get("workspace_tag")
@@ -477,7 +496,7 @@ class QuizzesModule(BaseModule):
         workspace_tag: Optional[str],
         limit: int,
         offset: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             result = db.list_quizzes(
@@ -499,14 +518,14 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _get_quiz(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         quiz_id = args.get("quiz_id")
         return await asyncio.to_thread(self._get_quiz_sync, context, quiz_id)
 
-    def _get_quiz_sync(self, context: Any, quiz_id: int) -> Dict[str, Any]:
+    def _get_quiz_sync(self, context: Any, quiz_id: int) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz = db.get_quiz(quiz_id)
@@ -516,13 +535,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _create_quiz(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_quiz_sync, context, args)
 
-    def _create_quiz_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_quiz_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = db.create_quiz(
@@ -539,13 +558,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _update_quiz(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _update_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._update_quiz_sync, context, args)
 
-    def _update_quiz_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_quiz_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = args.get("quiz_id")
@@ -566,13 +585,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _delete_quiz(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _delete_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._delete_quiz_sync, context, args)
 
-    def _delete_quiz_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _delete_quiz_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = args.get("quiz_id")
@@ -595,15 +614,15 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Questions
 
-    async def _list_questions(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_questions(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._list_questions_sync, context, args)
 
-    def _list_questions_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _list_questions_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = args.get("quiz_id")
@@ -630,13 +649,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _create_question(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_question_sync, context, args)
 
-    def _create_question_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_question_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             question_id = db.create_question(
@@ -658,13 +677,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _update_question(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _update_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._update_question_sync, context, args)
 
-    def _update_question_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_question_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             question_id = args.get("question_id")
@@ -685,13 +704,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _delete_question(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _delete_question(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._delete_question_sync, context, args)
 
-    def _delete_question_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _delete_question_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             question_id = args.get("question_id")
@@ -714,15 +733,15 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Attempts
 
-    async def _start_attempt(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _start_attempt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._start_attempt_sync, context, args)
 
-    def _start_attempt_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _start_attempt_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = args.get("quiz_id")
@@ -736,13 +755,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _submit_attempt(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _submit_attempt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._submit_attempt_sync, context, args)
 
-    def _submit_attempt_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _submit_attempt_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             attempt_id = args.get("attempt_id")
@@ -757,13 +776,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _list_attempts(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_attempts(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._list_attempts_sync, context, args)
 
-    def _list_attempts_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _list_attempts_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             quiz_id = args.get("quiz_id")
@@ -786,13 +805,13 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
-    async def _get_attempt(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_attempt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._get_attempt_sync, context, args)
 
-    def _get_attempt_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_attempt_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             attempt_id = args.get("attempt_id")
@@ -809,12 +828,12 @@ class QuizzesModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")
 
     # Generation
 
-    async def _generate_quiz(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_quiz(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """AI-generate a quiz from media content."""
         media_id = args.get("media_id")
         name = args.get("name") or f"Quiz from Media {media_id}"
@@ -849,9 +868,9 @@ class QuizzesModule(BaseModule):
         try:
             response_text = await self._call_llm(prompt, provider=provider, model=model)
             questions_data = self._parse_generated_questions(response_text)
-        except Exception as e:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Quiz generation failed: {e}")
-            raise ValueError(f"Failed to generate quiz: {e}")
+            raise ValueError(f"Failed to generate quiz: {e}") from e
 
         # Create quiz and questions
         return await asyncio.to_thread(
@@ -874,7 +893,7 @@ class QuizzesModule(BaseModule):
                 return media.get("content") or media.get("transcript") or media.get("summary")
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get media content: {e}")
             return None
 
@@ -882,9 +901,9 @@ class QuizzesModule(BaseModule):
         self,
         content: str,
         num_questions: int,
-        question_types: List[str],
+        question_types: list[str],
         difficulty: str,
-        focus_topics: Optional[List[str]],
+        focus_topics: Optional[list[str]],
     ) -> str:
         types_str = ", ".join(question_types)
         topics_str = f"\nFocus on these topics: {', '.join(focus_topics)}" if focus_topics else ""
@@ -911,7 +930,7 @@ Return the questions as a JSON array with this structure:
 
 Return ONLY the JSON array, no other text."""
 
-    def _parse_generated_questions(self, response: str) -> List[Dict[str, Any]]:
+    def _parse_generated_questions(self, response: str) -> list[dict[str, Any]]:
         """Parse LLM response into question data."""
         try:
             # Try to extract JSON from response
@@ -922,15 +941,15 @@ Return ONLY the JSON array, no other text."""
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse generated questions: {e}")
-            raise ValueError("Failed to parse generated questions from LLM response")
+            raise ValueError("Failed to parse generated questions from LLM response") from e
 
-    def _resolve_llm_settings(self, args: Dict[str, Any]) -> tuple[str, Optional[str]]:
+    def _resolve_llm_settings(self, args: dict[str, Any]) -> tuple[str, Optional[str]]:
         """Resolve provider/model for quiz generation from args or config defaults."""
         provider = args.get("provider")
         model = args.get("model")
         try:
             settings = load_and_log_configs() or {}
-        except Exception:
+        except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS:
             settings = {}
         if not provider:
             provider = str(settings.get("default_api") or "").strip() or None
@@ -989,8 +1008,8 @@ Return ONLY the JSON array, no other text."""
         context: Any,
         name: str,
         media_id: int,
-        questions_data: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        questions_data: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Create quiz and questions from generated data."""
         db = self._open_db(context)
         try:
@@ -1017,7 +1036,7 @@ Return ONLY the JSON array, no other text."""
                         client_id=client_id,
                     )
                     created_questions.append(qid)
-                except Exception as e:
+                except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create question {i}: {e}")
 
             quiz = db.get_quiz(quiz_id)
@@ -1030,5 +1049,5 @@ Return ONLY the JSON array, no other text."""
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to close DB: {exc}")

@@ -128,6 +128,67 @@ def test_ip_filter_ignores_untrusted_forwarded_header():
     assert resolved == "198.51.100.10"
 
 
+def test_ip_filter_ignores_untrusted_real_ip_header():
+    controller = ip_filter.IPAccessController(
+        allowed=[],
+        blocked=[],
+        trust_x_forwarded_for=True,
+        trusted_proxy_depth=0,
+        trusted_proxies=[],
+    )
+    resolved = controller.resolve_client_ip("198.51.100.10", None, "203.0.113.5")
+    assert resolved == "198.51.100.10"
+
+
+def test_ip_filter_falls_back_to_remote_when_proxy_depth_insufficient():
+    controller = ip_filter.IPAccessController(
+        allowed=[],
+        blocked=[],
+        trust_x_forwarded_for=True,
+        trusted_proxy_depth=2,
+        trusted_proxies=["127.0.0.1/32"],
+    )
+    resolved = controller.resolve_client_ip("127.0.0.1", "203.0.113.5", None)
+    assert resolved == "127.0.0.1"
+
+
+def test_ip_filter_uses_single_hop_xff_when_depth_one():
+    controller = ip_filter.IPAccessController(
+        allowed=[],
+        blocked=[],
+        trust_x_forwarded_for=True,
+        trusted_proxy_depth=1,
+        trusted_proxies=["127.0.0.1/32"],
+    )
+    # Single trusted proxy should surface the original client when depth is 1.
+    resolved = controller.resolve_client_ip("127.0.0.1", "203.0.113.5", None)
+    assert resolved == "203.0.113.5"
+
+
+def test_ip_filter_does_not_trust_real_ip_without_remote_peer():
+    controller = ip_filter.IPAccessController(
+        allowed=[],
+        blocked=[],
+        trust_x_forwarded_for=True,
+        trusted_proxy_depth=0,
+        trusted_proxies=["127.0.0.1/32"],
+    )
+    resolved = controller.resolve_client_ip(None, None, "203.0.113.5")
+    assert resolved is None
+
+
+def test_ip_filter_accepts_real_ip_from_trusted_proxy_when_enabled():
+    controller = ip_filter.IPAccessController(
+        allowed=[],
+        blocked=[],
+        trust_x_forwarded_for=True,
+        trusted_proxy_depth=0,
+        trusted_proxies=["127.0.0.1/32"],
+    )
+    resolved = controller.resolve_client_ip("127.0.0.1", None, "10.0.0.1")
+    assert resolved == "10.0.0.1"
+
+
 def test_enforce_http_security_rejects_invalid_cert_value(monkeypatch):
     from types import SimpleNamespace
 

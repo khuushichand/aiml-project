@@ -8,11 +8,13 @@ Provides health status monitoring for:
 - Search index status
 """
 
-import time
 import asyncio
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, asdict
+import contextlib
+import time
+from dataclasses import asdict, dataclass
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 from .vector_stores.base import VectorStoreAdapter
@@ -33,10 +35,10 @@ class ComponentHealth:
     status: HealthStatus
     message: str
     response_time: Optional[float] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     last_check: float = 0.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         result = asdict(self)
         result["status"] = self.status.value
@@ -60,7 +62,7 @@ class RAGHealthChecker:
         """
         self.vector_store = vector_store
         self.check_interval = check_interval
-        self._health_cache: Dict[str, ComponentHealth] = {}
+        self._health_cache: dict[str, ComponentHealth] = {}
         self._running = False
         self._check_task: Optional[asyncio.Task] = None
 
@@ -78,10 +80,8 @@ class RAGHealthChecker:
         self._running = False
         if self._check_task:
             self._check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._check_task
-            except asyncio.CancelledError:
-                pass
         logger.info("RAG health checker stopped")
 
     async def _periodic_check(self):
@@ -96,7 +96,7 @@ class RAGHealthChecker:
                 logger.error(f"Error in periodic health check: {e}")
                 await asyncio.sleep(self.check_interval)
 
-    async def check_all(self) -> Dict[str, ComponentHealth]:
+    async def check_all(self) -> dict[str, ComponentHealth]:
         """
         Check health of all components.
 
@@ -168,10 +168,10 @@ class RAGHealthChecker:
 
         try:
             import sqlite3
-            from ....core.config import db_config
 
             # Quick SQLite connectivity test
-            conn = sqlite3.connect(db_config.get("db_path", ":memory:"), timeout=1.0)
+            db_path = self._resolve_sqlite_db_path()
+            conn = sqlite3.connect(db_path, timeout=1.0)
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             cursor.close()
@@ -247,10 +247,10 @@ class RAGHealthChecker:
 
         try:
             import sqlite3
-            from ....core.config import db_config
 
             # Check FTS5 index
-            conn = sqlite3.connect(db_config.get("db_path", ":memory:"), timeout=1.0)
+            db_path = self._resolve_sqlite_db_path()
+            conn = sqlite3.connect(db_path, timeout=1.0)
             cursor = conn.cursor()
 
             # Check if FTS table exists and is accessible
@@ -295,6 +295,19 @@ class RAGHealthChecker:
                 last_check=time.time()
             )
 
+    def _resolve_sqlite_db_path(self) -> str:
+        try:
+            from ....core.config import load_and_log_configs
+
+            cfg = load_and_log_configs() or {}
+            db_url = cfg.get("DATABASE_URL")
+            if isinstance(db_url, str) and db_url.startswith("sqlite:///"):
+                return db_url.replace("sqlite:///", "")
+        except Exception as e:
+            logger.debug(f"Health check db path fallback: {e}")
+
+        return ":memory:"
+
     def get_overall_health(self) -> HealthStatus:
         """
         Get overall system health based on component statuses.
@@ -316,7 +329,7 @@ class RAGHealthChecker:
         else:
             return HealthStatus.UNKNOWN
 
-    def get_health_summary(self) -> Dict[str, Any]:
+    def get_health_summary(self) -> dict[str, Any]:
         """
         Get health summary for all components.
 

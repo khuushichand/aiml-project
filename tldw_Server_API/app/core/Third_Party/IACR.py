@@ -5,14 +5,14 @@ Example: https://www.iacr.org/cryptodb/data/api/conf.php?year=2017&venue=crypto
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://www.iacr.org/cryptodb/data/api/conf.php"
 
 
-def fetch_conference(venue: str, year: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def fetch_conference(venue: str, year: int) -> tuple[dict[str, Any] | None, str | None]:
     """Returns parsed JSON for the requested conference."""
     try:
         params = {"venue": venue, "year": str(year)}
@@ -22,7 +22,7 @@ def fetch_conference(venue: str, year: int) -> Tuple[Optional[Dict[str, Any]], O
         return None, f"IACR error: {str(e)}"
 
 
-def fetch_conference_raw(venue: str, year: int) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def fetch_conference_raw(venue: str, year: int) -> tuple[bytes | None, str | None, str | None]:
     """Returns raw bytes and media type for the requested conference."""
     try:
         params = {"venue": venue, "year": str(year)}

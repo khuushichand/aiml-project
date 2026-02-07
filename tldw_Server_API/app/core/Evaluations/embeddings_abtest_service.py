@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import hashlib
 import json
 import os
 import time
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from loguru import logger
@@ -14,9 +13,9 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestConfig,
 )
+from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking import Chunker, ChunkerConfig
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     ABTEST_JOBS_CLEANUP_TYPE,
@@ -25,18 +24,33 @@ from tldw_Server_API.app.core.Evaluations.embeddings_abtest_jobs import (
     abtest_jobs_manager,
     abtest_jobs_queue,
 )
-from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
-    recall_at_k, mrr, ndcg, hit_at_k,
-)
 from tldw_Server_API.app.core.Evaluations.embeddings_abtest_metrics import (
     record_abtest_arm_build,
     record_abtest_run,
 )
+from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
+    hit_at_k,
+    mrr,
+    ndcg,
+    recall_at_k,
+)
 from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import RerankingStrategy
+
+_ABTEST_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+)
 
 
 class EmbeddingsABTestRunError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = True, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = True, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
@@ -50,7 +64,7 @@ class EmbeddingsABTestPolicyError(EmbeddingsABTestRunError):
         *,
         policy_type: str,
         status_code: int,
-        details: Optional[Dict[str, object]] = None,
+        details: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message, retryable=False)
         self.policy_type = policy_type
@@ -58,28 +72,28 @@ class EmbeddingsABTestPolicyError(EmbeddingsABTestRunError):
         self.details = details or {}
 
 
-def _parse_abtest_quota(raw: object) -> Optional[int]:
+def _parse_abtest_quota(raw: object) -> int | None:
     if raw is None:
         return None
     try:
         value = int(str(raw).strip())
-    except Exception:
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
         return None
     return value if value > 0 else None
 
 
-def _load_abtest_quota(name: str) -> Optional[int]:
+def _load_abtest_quota(name: str) -> int | None:
     raw = os.getenv(name)
     if raw is None:
         try:
             from tldw_Server_API.app.core.config import settings as app_settings
             raw = app_settings.get(name)
-        except Exception:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS:
             raw = None
     return _parse_abtest_quota(raw)
 
 
-def _model_allowed(model: str, allowed_models: List[str]) -> bool:
+def _model_allowed(model: str, allowed_models: list[str]) -> bool:
     for pat in allowed_models:
         if pat.endswith("*") and model.startswith(pat[:-1]):
             return True
@@ -88,17 +102,20 @@ def _model_allowed(model: str, allowed_models: List[str]) -> bool:
     return False
 
 
-def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: Optional[object] = None) -> None:
+def validate_abtest_policy(config: EmbeddingsABTestConfig, *, user: object | None = None) -> None:
     try:
         from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
-            _get_allowed_providers,
             _get_allowed_models,
+            _get_allowed_providers,
             _should_enforce_policy,
         )
-    except Exception:
-        _get_allowed_providers = lambda: None
-        _get_allowed_models = lambda: None
-        _should_enforce_policy = lambda _user=None: False
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
+        def _get_allowed_providers():
+            return None
+        def _get_allowed_models():
+            return None
+        def _should_enforce_policy(_user=None):
+            return False
 
     enforce_policy = bool(_should_enforce_policy(user))
     allowed_providers = _get_allowed_providers()
@@ -183,9 +200,9 @@ def _compute_pipeline_hash(config: EmbeddingsABTestConfig) -> str:
 async def _embed_texts(
     provider: str,
     model: str,
-    texts: List[str],
-    metadata: Optional[Dict[str, Any]] = None,
-) -> List[List[float]]:
+    texts: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> list[list[float]]:
     from tldw_Server_API.app.api.v1.endpoints.embeddings_v5_production_enhanced import (
         create_embeddings_batch_async,
     )
@@ -195,7 +212,7 @@ async def _embed_texts(
         model_id=model,
         metadata=metadata,
     )
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for v in vectors:
         arr = np.array(v, dtype=np.float32)
         nrm = float(np.linalg.norm(arr))
@@ -205,8 +222,8 @@ async def _embed_texts(
     return out
 
 
-def _get_model_revision(provider: str, model: str) -> Dict[str, Optional[str]]:
-    meta: Dict[str, Optional[str]] = {"hf_revision": None, "onnx_sha": None}
+def _get_model_revision(provider: str, model: str) -> dict[str, str | None]:
+    meta: dict[str, str | None] = {"hf_revision": None, "onnx_sha": None}
     try:
         if provider.lower() == "huggingface":
             from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import COMMIT_HASHES
@@ -214,7 +231,7 @@ def _get_model_revision(provider: str, model: str) -> Dict[str, Optional[str]]:
         elif provider.lower() == "onnx":
             from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import COMMIT_HASHES
             meta["onnx_sha"] = COMMIT_HASHES.get(model)
-    except Exception:
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
         pass
     return meta
 
@@ -222,7 +239,7 @@ def _get_model_revision(provider: str, model: str) -> Dict[str, Optional[str]]:
 def _collection_exists(manager: ChromaDBManager, name: str) -> bool:
     try:
         collections = manager.list_collections()
-    except Exception:
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
         return False
     for coll in collections:
         if isinstance(coll, dict):
@@ -240,7 +257,7 @@ async def build_collections_vector_only(
     test_id: str,
     user_id: str,
     media_db: MediaDatabase,
-) -> List[Dict[str, str]]:
+) -> list[dict[str, str]]:
     """Chunk, embed, and store vectors per arm into per-user collections.
 
     Returns list of {arm_id, collection_name} for each arm.
@@ -251,7 +268,7 @@ async def build_collections_vector_only(
 
     manager = ChromaDBManager(user_id=str(user_id), user_embedding_config=embedding_config)
 
-    results: List[Dict[str, str]] = []
+    results: list[dict[str, str]] = []
     pipeline_hash = _compute_pipeline_hash(config)
     existing_arms = {}
     for arm in db.get_abtest_arms(test_id) or []:
@@ -279,7 +296,7 @@ async def build_collections_vector_only(
     created_by = test_row.get("created_by")
 
     # Load corpus content
-    corpus_texts: List[Tuple[int, str]] = []  # (media_id, text)
+    corpus_texts: list[tuple[int, str]] = []  # (media_id, text)
     for mid in config.media_ids:
         item = media_db.get_media_by_id(int(mid))
         if not item or not item.get("content"):
@@ -296,7 +313,7 @@ async def build_collections_vector_only(
         if not corpus_texts and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}:
             # Use index-based synthetic media IDs to avoid collisions
             corpus_texts = [(100000 + i, q.text) for i, q in enumerate(config.queries or [])]
-    except Exception:
+    except _ABTEST_NONCRITICAL_EXCEPTIONS:
         pass
 
     for i, arm in enumerate(config.arms):
@@ -348,12 +365,12 @@ async def build_collections_vector_only(
             try:
                 if reuse_arm.get("stats_json"):
                     stats_payload = json.loads(reuse_arm.get("stats_json") or "{}")
-            except Exception:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS:
                 stats_payload = None
             try:
                 if reuse_arm.get("metadata_json"):
                     meta_payload = json.loads(reuse_arm.get("metadata_json") or "{}")
-            except Exception:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS:
                 meta_payload = None
             if shared_origin_test_id:
                 if meta_payload is None:
@@ -374,7 +391,7 @@ async def build_collections_vector_only(
                         try:
                             if reuse_arm.get("stats_json"):
                                 origin_stats = json.loads(reuse_arm.get("stats_json") or "{}")
-                        except Exception:
+                        except _ABTEST_NONCRITICAL_EXCEPTIONS:
                             origin_stats = None
                         db.upsert_abtest_arm(
                             test_id=reuse_arm.get("test_id"),
@@ -389,7 +406,7 @@ async def build_collections_vector_only(
                             stats_json=origin_stats,
                             metadata_json=origin_meta,
                         )
-                except Exception:
+                except _ABTEST_NONCRITICAL_EXCEPTIONS:
                     pass
 
             arm_id = db.upsert_abtest_arm(
@@ -407,15 +424,13 @@ async def build_collections_vector_only(
             )
             arm_logger = arm_logger.bind(arm_id=arm_id)
             results.append({"arm_id": arm_id, "collection_name": reuse_collection_name})
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="reused",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except Exception:
-                pass
             arm_logger.info("Embeddings A/B collection reused")
             continue
 
@@ -435,13 +450,13 @@ async def build_collections_vector_only(
             try:
                 if _collection_exists(manager, collection_name):
                     manager.delete_collection(collection_name)
-            except Exception:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Chunk entire corpus
-            all_texts: List[str] = []
-            metadatas: List[Dict[str, str]] = []
-            ids: List[str] = []
+            all_texts: list[str] = []
+            metadatas: list[dict[str, str]] = []
+            ids: list[str] = []
             for (mid, text) in corpus_texts:
                 chunks = chunker.chunk_text_with_metadata(
                     text=text,
@@ -499,18 +514,16 @@ async def build_collections_vector_only(
             )
 
             results.append({"arm_id": arm_id, "collection_name": collection_name})
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="built",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except Exception:
-                pass
             arm_logger.info("Embeddings A/B collection build completed")
-        except Exception as exc:
-            try:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 db.upsert_abtest_arm(
                     test_id=test_id,
                     arm_index=i,
@@ -523,17 +536,13 @@ async def build_collections_vector_only(
                     status='failed',
                     stats_json={"error": str(exc)},
                 )
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
                 record_abtest_arm_build(
                     duration_seconds=time.monotonic() - arm_start,
                     status="failed",
                     provider=arm.provider,
                     model=arm.model,
                 )
-            except Exception:
-                pass
             arm_logger.warning(f"Embeddings A/B collection build failed: {exc}")
             raise EmbeddingsABTestRunError(
                 f"Failed to build collection for arm {arm.provider}/{arm.model}: {exc}",
@@ -548,8 +557,8 @@ async def run_vector_search_and_score(
     config: EmbeddingsABTestConfig,
     test_id: str,
     user_id: str,
-    arm_collections: List[Dict[str, str]],
-) -> Dict[str, Dict[str, float]]:
+    arm_collections: list[dict[str, str]],
+) -> dict[str, dict[str, float]]:
     """Run vector-only search across arms and compute metrics, storing results in DB.
 
     Returns aggregate metrics per arm_id.
@@ -570,16 +579,16 @@ async def run_vector_search_and_score(
     else:
         texts = [r.get('text','') for r in qrows]
         qids = [r.get('query_id') for r in qrows]
-        def _parse_ids(s: Optional[str]) -> List[str]:
+        def _parse_ids(s: str | None) -> list[str]:
             if not s:
                 return []
             try:
                 v = json.loads(s)
                 return [str(x) for x in (v or [])]
-            except Exception:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS:
                 return []
         gt_lookup = {r.get('query_id'): _parse_ids(r.get('ground_truth_ids')) for r in qrows}
-    query_vecs_per_arm: Dict[str, List[List[float]]] = {}
+    query_vecs_per_arm: dict[str, list[list[float]]] = {}
     # Use sequential arm order
     query_metadata = {"user_id": str(user_id)}
     for i, arm in enumerate(config.arms):
@@ -587,7 +596,7 @@ async def run_vector_search_and_score(
         query_vecs_per_arm[key] = await _embed_texts(arm.provider, arm.model, texts, metadata=query_metadata)
 
     # Run searches and score
-    aggregates: Dict[str, Dict[str, float]] = {}
+    aggregates: dict[str, dict[str, float]] = {}
     metric_level = config.metric_level or "media"
     include_media_ids = config.media_ids or None
     for i, mapping in enumerate(arm_collections):
@@ -601,11 +610,11 @@ async def run_vector_search_and_score(
         per_query_scores = {"recall": [], "mrr": [], "ndcg": [], "hit": [], "latency_ms": []}
         for q_idx, qid in enumerate(qids):
             start = time.time()
-            ranked: List[str] = []
-            distances: List[List[float]] = [[]]
-            metadatas: List[List[Dict[str, Any]]] = [[]]
-            documents: List[List[str]] = [[]]
-            rerank_scores_out: Optional[List[float]] = None
+            ranked: list[str] = []
+            distances: list[list[float]] = [[]]
+            metadatas: list[list[dict[str, Any]]] = [[]]
+            documents: list[list[str]] = [[]]
+            rerank_scores_out: list[float] | None = None
             if (config.retrieval.search_mode or 'vector') == 'hybrid':
                 try:
                     from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
@@ -627,13 +636,13 @@ async def run_vector_search_and_score(
                         documents[0].append(str(getattr(d, "content", "")))
                         score = getattr(d, "score", None)
                         distances[0].append(1.0 - float(score) if score is not None else 0.0)
-                except Exception as e:
+                except _ABTEST_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Hybrid pipeline failed for {collection_name}: {e}")
                     continue
             else:
                 qvec = qvecs[q_idx]
                 collection = manager.get_or_create_collection(collection_name)
-                ranked: List[str] = []
+                ranked: list[str] = []
                 try:
                     # Chroma include: valid keys are documents, embeddings, metadatas, distances, uris, data
                     # 'ids' are returned by default and not a valid include key on some versions.
@@ -647,15 +656,19 @@ async def run_vector_search_and_score(
                     documents = res.get("documents") or [[]]
                     distances = res.get("distances") or [[]]
                     ranked = [str(x) for x in (ids[0] if ids else [])]
-                except Exception as e:
+                except _ABTEST_NONCRITICAL_EXCEPTIONS as e:
                     # Fallback: no results but still proceed, so toggle-on rerank can persist baseline scores
                     logger.warning(f"Vector search failed for {collection_name}; proceeding with empty results: {e}")
                 # Optional rerank controlled by toggle
                 if getattr(config.retrieval, 're_ranker', None) and bool(getattr(config.retrieval, 'apply_reranker', False)):
-                    from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument, DataSource
-                    from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import create_reranker, RerankingConfig
+                    from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
+                        RerankingConfig,
+                        create_reranker,
+                    )
+                    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource
+                    from tldw_Server_API.app.core.RAG.rag_service.types import Document as RagDocument
 
-                    def _map_strategy(provider: Optional[str], model: Optional[str]) -> RerankingStrategy:
+                    def _map_strategy(provider: str | None, model: str | None) -> RerankingStrategy:
                         p = (provider or '').lower()
                         m = (model or '').lower()
                         # Explicit FlashRank
@@ -684,8 +697,8 @@ async def run_vector_search_and_score(
                         return RerankingStrategy.FLASHRANK
 
                     # Build documents and baseline scores up-front so we always record rerank_scores when toggled on
-                    docs: List[RagDocument] = []
-                    orig_scores: List[float] = []
+                    docs: list[RagDocument] = []
+                    orig_scores: list[float] = []
                     for i2 in range(len(ranked)):
                         md = metadatas[0][i2] if metadatas and metadatas[0] else {}
                         content = documents[0][i2] if documents and documents[0] else ""
@@ -703,8 +716,8 @@ async def run_vector_search_and_score(
                         rconf = RerankingConfig(strategy=strat, top_k=k, model_name=(getattr(rr, 'model', None) if rr else None))
                         reranker = create_reranker(strat, rconf)
                         scored = await reranker.rerank(query=texts[q_idx], documents=docs, original_scores=orig_scores)
-                        new_ranked: List[str] = []
-                        new_scores: List[float] = []
+                        new_ranked: list[str] = []
+                        new_scores: list[float] = []
                         for sd in scored:
                             mid = None
                             md = sd.document.metadata if hasattr(sd.document, 'metadata') else None
@@ -717,20 +730,20 @@ async def run_vector_search_and_score(
                         if new_scores:
                             distances = [[1.0 - s for s in new_scores]]
                             rerank_scores_out = list(new_scores)
-                    except Exception as e:
+                    except _ABTEST_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Reranking failed; using original ordering: {e}")
             elapsed = (time.time() - start) * 1000.0
 
-            def _parse_media_id_from_chunk_id(rid: str) -> Optional[str]:
+            def _parse_media_id_from_chunk_id(rid: str) -> str | None:
                 if not rid.startswith("mid"):
                     return None
                 try:
                     head = rid.split("_", 1)[0]
                     return head[3:] if head.startswith("mid") else None
-                except Exception:
+                except _ABTEST_NONCRITICAL_EXCEPTIONS:
                     return None
 
-            ranked_media_ids: List[str] = []
+            ranked_media_ids: list[str] = []
             if metadatas and metadatas[0]:
                 for idx, rid in enumerate(ranked):
                     md = metadatas[0][idx] if idx < len(metadatas[0]) else {}
@@ -772,7 +785,7 @@ async def run_vector_search_and_score(
             )
 
         # Aggregate
-        def _avg(xs: List[float]) -> float:
+        def _avg(xs: list[float]) -> float:
             return float(sum(xs) / len(xs)) if xs else 0.0
 
         aggregates[arm_id] = {
@@ -807,16 +820,14 @@ async def run_abtest_full(
         aggregates = await run_vector_search_and_score(db, config, test_id, user_id, arm_info)
         sig = compute_significance(db, test_id, metric='ndcg')
         db.set_abtest_status(test_id, 'completed', stats_json={"aggregates": aggregates, "significance": sig, "progress": {"phase": 1.0}})
-        try:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="completed")
-        except Exception:
-            pass
         run_logger.info("Embeddings A/B test run completed")
         cleanup = getattr(config, "cleanup_policy", None)
         if cleanup and bool(getattr(cleanup, "on_complete", False)):
             try:
                 cleanup_abtest_resources(db, user_id, test_id, delete_db=True, delete_idempotency=True)
-            except Exception as exc:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to cleanup A/B test {test_id} after completion: {exc}")
         elif cleanup and getattr(cleanup, "ttl_hours", None):
             try:
@@ -835,20 +846,16 @@ async def run_abtest_full(
                         available_at=datetime.now(timezone.utc) + timedelta(hours=ttl_hours),
                         idempotency_key=abtest_jobs_idempotency_key(test_id, "cleanup"),
                     )
-            except Exception as exc:
+            except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to enqueue cleanup job for A/B test {test_id}: {exc}")
     except EmbeddingsABTestRunError as exc:
-        try:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
-        except Exception:
-            pass
         run_logger.warning(f"Embeddings A/B test run failed: {exc}")
         raise
-    except Exception as exc:
-        try:
+    except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
+        with contextlib.suppress(_ABTEST_NONCRITICAL_EXCEPTIONS):
             record_abtest_run(duration_seconds=time.monotonic() - run_start, status="failed")
-        except Exception:
-            pass
         run_logger.warning(f"Embeddings A/B test run failed: {exc}")
         raise EmbeddingsABTestRunError(f"A/B test {test_id} failed: {exc}", retryable=True) from exc
 
@@ -860,8 +867,8 @@ def cleanup_abtest_resources(
     *,
     delete_db: bool,
     delete_idempotency: bool,
-    created_by: Optional[str] = None,
-) -> Dict[str, int]:
+    created_by: str | None = None,
+) -> dict[str, int]:
     from tldw_Server_API.app.core.config import settings as app_settings
 
     deleted = 0
@@ -875,20 +882,20 @@ def cleanup_abtest_resources(
             continue
         try:
             meta = json.loads(arm.get("metadata_json") or "{}") if arm.get("metadata_json") else {}
-        except Exception:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS:
             meta = {}
         if isinstance(meta, dict) and meta.get("shared_collection"):
             continue
         try:
             manager.delete_collection(cname)
             deleted += 1
-        except Exception as exc:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Cleanup failed for collection {cname}: {exc}")
     db_deleted = 0
     if delete_db:
         try:
             db_deleted = int(db.delete_abtest(test_id, delete_idempotency=delete_idempotency, created_by=created_by))
-        except Exception as exc:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Cleanup failed for A/B test rows {test_id}: {exc}")
     return {"collections_deleted": deleted, "abtests_deleted": db_deleted}
 
@@ -908,7 +915,7 @@ def _sign_test_pvalue(wins: int, losses: int) -> float:
     return p
 
 
-def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'ndcg') -> Dict[str, Dict[str, float]]:
+def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'ndcg') -> dict[str, dict[str, float]]:
     """Compute pairwise significance (sign test) over per-query metrics by arm.
 
     Returns nested dict {arm_i: {arm_j: p_value}}.
@@ -917,7 +924,7 @@ def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'n
     queries = db.get_abtest_queries(test_id)
     qids = [r['query_id'] for r in queries]
     # Build per-arm metrics per query
-    per_arm: Dict[str, Dict[str, float]] = {a['arm_id']: {} for a in arms}
+    per_arm: dict[str, dict[str, float]] = {a['arm_id']: {} for a in arms}
     # Fetch all results (could paginate if large)
     rows, _total = db.list_abtest_results(test_id, limit=100000, offset=0)
     for r in rows:
@@ -927,15 +934,15 @@ def compute_significance(db: EvaluationsDatabase, test_id: str, metric: str = 'n
             m = json.loads(r.get('metrics_json') or '{}')
             val = float(m.get(metric, 0.0))
             per_arm.setdefault(arm_id, {})[qid] = val
-        except Exception:
+        except _ABTEST_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Pairwise p-values
-    pvals: Dict[str, Dict[str, float]] = {}
-    for i, ai in enumerate(arms):
+    pvals: dict[str, dict[str, float]] = {}
+    for _i, ai in enumerate(arms):
         a_id = ai['arm_id']
         pvals[a_id] = {}
-        for j, aj in enumerate(arms):
+        for _j, aj in enumerate(arms):
             b_id = aj['arm_id']
             if a_id == b_id:
                 pvals[a_id][b_id] = 1.0

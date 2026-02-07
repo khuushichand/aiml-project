@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Set, Tuple
+from typing import Any
 
 
 def _extract_waf_name(entry: Any) -> str:
@@ -13,12 +13,12 @@ def _extract_waf_name(entry: Any) -> str:
     return ""
 
 
-def generate_recommendations(results: Dict[str, Any]) -> Dict[str, List[str]]:
+def generate_recommendations(results: dict[str, Any]) -> dict[str, list[str]]:
     """
     Generate a list of recommended tools and strategy tips based on analyzer results.
     """
-    tools: Set[str] = set()
-    strategy: Set[str] = set()
+    tools: set[str] = set()
+    strategy: set[str] = set()
 
     if results.get("js", {}).get("js_required"):
         tools.add("A headless browser such as Playwright or Selenium for JavaScript rendering.")
@@ -75,9 +75,9 @@ def generate_recommendations(results: Dict[str, Any]) -> Dict[str, List[str]]:
     if integrity.get("status") == "success":
         modified_functions = integrity.get("modified_functions", {}) or {}
         if modified_functions:
-            has_canvas_mods = any("Canvas" in func for func in modified_functions.keys())
+            has_canvas_mods = any("Canvas" in func for func in modified_functions)
             has_timing_mods = any(
-                ("Date.now" in func or "performance.now" in func) for func in modified_functions.keys()
+                ("Date.now" in func or "performance.now" in func) for func in modified_functions
             )
 
             if has_canvas_mods:

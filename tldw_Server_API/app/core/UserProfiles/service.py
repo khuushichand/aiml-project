@@ -4,10 +4,11 @@ User profile service for assembling profile sections.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from collections.abc import Iterable
+from datetime import datetime, timezone
+from typing import Any
 
 from loguru import logger
 
@@ -18,14 +19,13 @@ from tldw_Server_API.app.core.AuthNZ.repos.user_provider_secrets_repo import (
     AuthnzUserProviderSecretsRepo,
 )
 from tldw_Server_API.app.core.UserProfiles.overrides_repo import (
-    UserProfileOverridesRepo,
     OrgProfileOverridesRepo,
     TeamProfileOverridesRepo,
+    UserProfileOverridesRepo,
 )
 from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
 
-
-KNOWN_SECTIONS: Set[str] = {
+KNOWN_SECTIONS: set[str] = {
     "identity",
     "memberships",
     "security",
@@ -33,7 +33,7 @@ KNOWN_SECTIONS: Set[str] = {
     "preferences",
     "effective_config",
 }
-SUPPORTED_SECTIONS: Set[str] = {
+SUPPORTED_SECTIONS: set[str] = {
     "identity",
     "memberships",
     "security",
@@ -41,7 +41,7 @@ SUPPORTED_SECTIONS: Set[str] = {
     "preferences",
     "effective_config",
 }
-DEFAULT_SECTIONS: Set[str] = {
+DEFAULT_SECTIONS: set[str] = {
     "identity",
     "memberships",
     "security",
@@ -52,6 +52,24 @@ DEFAULT_SECTIONS: Set[str] = {
 
 _PROFILE_METRICS_REGISTERED = False
 
+_PROFILE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 class UserProfileService:
     """Service that assembles user profile data from multiple sources."""
@@ -61,14 +79,14 @@ class UserProfileService:
         self._orgs_repo = AuthnzOrgsTeamsRepo(db_pool)
 
     @staticmethod
-    def parse_sections(raw: Optional[Iterable[str]] | Optional[str]) -> Optional[Set[str]]:
+    def parse_sections(raw: Iterable[str] | None | str | None) -> set[str] | None:
         """Normalize a sections query parameter into a set."""
         if raw is None:
             return None
         if isinstance(raw, str):
             parts = [p.strip() for p in raw.split(",") if p.strip()]
             return set(parts) if parts else None
-        parts: List[str] = []
+        parts: list[str] = []
         for entry in raw:
             if entry is None:
                 continue
@@ -79,7 +97,7 @@ class UserProfileService:
         return set(parts) if parts else None
 
     @staticmethod
-    def _catalog_entry_map(catalog: Any) -> Dict[str, Any]:
+    def _catalog_entry_map(catalog: Any) -> dict[str, Any]:
         return {str(entry.key): entry for entry in getattr(catalog, "entries", []) or []}
 
     @staticmethod
@@ -87,9 +105,9 @@ class UserProfileService:
         key: str,
         value: Any,
         *,
-        catalog_map: Dict[str, Any],
+        catalog_map: dict[str, Any],
         mask_secrets: bool,
-    ) -> Tuple[Any, bool, Optional[str]]:
+    ) -> tuple[Any, bool, str | None]:
         entry = catalog_map.get(str(key))
         sensitivity = str(getattr(entry, "sensitivity", "internal")).strip().lower()
         if sensitivity != "secret":
@@ -105,8 +123,8 @@ class UserProfileService:
         value: Any,
         *,
         include_sources: bool,
-        source: Optional[str],
-        catalog_map: Dict[str, Any],
+        source: str | None,
+        catalog_map: dict[str, Any],
         mask_secrets: bool,
     ) -> Any:
         masked_value, masked, hint = self._mask_value(
@@ -117,7 +135,7 @@ class UserProfileService:
         )
         if not include_sources:
             return masked_value
-        payload: Dict[str, Any] = {"value": masked_value, "source": source}
+        payload: dict[str, Any] = {"value": masked_value, "source": source}
         if masked:
             payload["masked"] = True
         if hint:
@@ -132,7 +150,7 @@ class UserProfileService:
                 MetricType,
                 get_metrics_registry,
             )
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Profile metrics unavailable: {}", exc)
             return None
 
@@ -234,7 +252,7 @@ class UserProfileService:
             return default
 
     @classmethod
-    def profile_sla_threshold_ms(cls, scope: str) -> Optional[int]:
+    def profile_sla_threshold_ms(cls, scope: str) -> int | None:
         scope_key = str(scope or "").strip().lower()
         if scope_key not in {"self", "admin"}:
             return None
@@ -260,7 +278,7 @@ class UserProfileService:
         return int(seconds * 1000.0)
 
     @staticmethod
-    def _normalize_timestamp(value: Any) -> Optional[datetime]:
+    def _normalize_timestamp(value: Any) -> datetime | None:
         if value is None:
             return None
         if isinstance(value, datetime):
@@ -272,7 +290,7 @@ class UserProfileService:
                     ts = datetime.fromisoformat(candidate)
                 else:
                     return None
-            except Exception:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS:
                 return None
         if ts.tzinfo is None:
             return ts.replace(tzinfo=timezone.utc)
@@ -286,7 +304,7 @@ class UserProfileService:
             return False
         return current_ts == expected_ts
 
-    def _build_identity(self, user: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_identity(self, user: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": user["id"],
             "uuid": str(user.get("uuid")) if user.get("uuid") else None,
@@ -300,7 +318,7 @@ class UserProfileService:
             "last_login": user.get("last_login"),
         }
 
-    async def _attach_lockout_status(self, identity: Dict[str, Any]) -> None:
+    async def _attach_lockout_status(self, identity: dict[str, Any]) -> None:
         username = identity.get("username")
         if not username:
             return
@@ -310,10 +328,10 @@ class UserProfileService:
             limiter = get_rate_limiter()
             is_locked, _ = await limiter.check_lockout(str(username), attempt_type="login")
             identity["is_locked"] = bool(is_locked)
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Lockout lookup failed for user {}: {}", identity.get("id"), exc)
 
-    async def _build_memberships(self, user_id: int) -> Dict[str, Any]:
+    async def _build_memberships(self, user_id: int) -> dict[str, Any]:
         orgs = await self._orgs_repo.list_org_memberships_for_user(user_id)
         teams = await self._orgs_repo.list_memberships_for_user(user_id)
         org_ids = [
@@ -344,8 +362,8 @@ class UserProfileService:
             ],
         }
 
-    async def _build_org_policy_summaries(self, org_ids: List[int]) -> Dict[int, Dict[str, Any]]:
-        summaries: Dict[int, Dict[str, Any]] = {}
+    async def _build_org_policy_summaries(self, org_ids: list[int]) -> dict[int, dict[str, Any]]:
+        summaries: dict[int, dict[str, Any]] = {}
         if not org_ids:
             return summaries
         try:
@@ -353,7 +371,7 @@ class UserProfileService:
             from tldw_Server_API.app.core.External_Sources.policy import (
                 get_default_policy_from_env,
             )
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Org policy helpers unavailable: {}", exc)
             return summaries
 
@@ -368,7 +386,7 @@ class UserProfileService:
                         "connectors": policy,
                         "source": source,
                     }
-                except Exception as exc:
+                except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("Org policy summary failed for org_id {}: {}", org_id, exc)
 
         try:
@@ -378,11 +396,11 @@ class UserProfileService:
                     await _load_with_conn(conn)
             else:
                 await _load_with_conn(self._db_pool)
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Org policy summary connection failure: {}", exc)
         return summaries
 
-    async def _get_membership_ids(self, user_id: int) -> tuple[List[int], List[int]]:
+    async def _get_membership_ids(self, user_id: int) -> tuple[list[int], list[int]]:
         orgs = await self._orgs_repo.list_org_memberships_for_user(user_id)
         teams = await self._orgs_repo.list_memberships_for_user(user_id)
         org_ids = sorted(
@@ -401,8 +419,8 @@ class UserProfileService:
         )
         return org_ids, team_ids
 
-    async def _build_quotas(self, user: Dict[str, Any]) -> Dict[str, Any]:
-        quotas: Dict[str, Any] = {
+    async def _build_quotas(self, user: dict[str, Any]) -> dict[str, Any]:
+        quotas: dict[str, Any] = {
             "storage_quota_mb": int(user.get("storage_quota_mb", 0) or 0),
             "storage_used_mb": float(user.get("storage_used_mb", 0.0) or 0.0),
         }
@@ -442,7 +460,7 @@ class UserProfileService:
                     else None
                 ),
             }
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Audio quotas unavailable for user {}: {}", user_id, exc)
 
         try:
@@ -458,7 +476,7 @@ class UserProfileService:
                 "usage": summary.get("usage", {}),
                 "remaining": summary.get("remaining", {}),
             }
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Evaluations quotas unavailable for user {}: {}", user_id, exc)
 
         try:
@@ -474,7 +492,7 @@ class UserProfileService:
                     "submits_per_min": effective.get("limits.prompt_studio_submits_per_min"),
                 }
             }
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Prompt Studio quotas unavailable for user {}: {}", user_id, exc)
 
         return quotas
@@ -485,7 +503,7 @@ class UserProfileService:
         *,
         include_sources: bool,
         mask_secrets: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         effective = await self._build_effective_config(
             user_id,
             include_sources=include_sources,
@@ -503,7 +521,7 @@ class UserProfileService:
         *,
         include_sources: bool,
         mask_secrets: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         catalog = load_user_profile_catalog()
         catalog_map = self._catalog_entry_map(catalog)
         entries = [
@@ -520,8 +538,8 @@ class UserProfileService:
             if row.get("value") is not None
         }
 
-        org_overrides: Dict[str, Dict[str, Any]] = {}
-        team_overrides: Dict[str, Dict[str, Any]] = {}
+        org_overrides: dict[str, dict[str, Any]] = {}
+        team_overrides: dict[str, dict[str, Any]] = {}
         try:
             org_ids, team_ids = await self._get_membership_ids(user_id)
             if org_ids:
@@ -534,10 +552,10 @@ class UserProfileService:
                 await team_repo.ensure_tables()
                 team_rows = await team_repo.list_overrides_for_teams(team_ids)
                 team_overrides = self._select_lowest_id_overrides(team_rows, id_field="team_id")
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Org/team overrides unavailable for user {}: {}", user_id, exc)
 
-        effective: Dict[str, Any] = {}
+        effective: dict[str, Any] = {}
         for entry in entries:
             key = str(entry.key)
             if key in overrides:
@@ -569,10 +587,10 @@ class UserProfileService:
         user_id: int,
         *,
         mask_secrets: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         catalog = load_user_profile_catalog()
         catalog_map = self._catalog_entry_map(catalog)
-        raw: Dict[str, Any] = {"user": [], "orgs": [], "teams": []}
+        raw: dict[str, Any] = {"user": [], "orgs": [], "teams": []}
 
         repo = UserProfileOverridesRepo(self._db_pool)
         await repo.ensure_tables()
@@ -621,28 +639,28 @@ class UserProfileService:
                             team_id=int(team_id) if team_id is not None else None,
                         )
                     )
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Raw override load failed for user {}: {}", user_id, exc)
 
         return raw
 
     def _build_raw_entry(
         self,
-        row: Dict[str, Any],
+        row: dict[str, Any],
         key: str,
-        catalog_map: Dict[str, Any],
+        catalog_map: dict[str, Any],
         *,
         mask_secrets: bool,
-        org_id: Optional[int] = None,
-        team_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        org_id: int | None = None,
+        team_id: int | None = None,
+    ) -> dict[str, Any]:
         masked_value, masked, hint = self._mask_value(
             key,
             row.get("value"),
             catalog_map=catalog_map,
             mask_secrets=mask_secrets,
         )
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "key": key,
             "value": masked_value,
             "updated_at": row.get("updated_at"),
@@ -660,11 +678,11 @@ class UserProfileService:
 
     @staticmethod
     def _select_lowest_id_overrides(
-        rows: List[Dict[str, Any]],
+        rows: list[dict[str, Any]],
         *,
         id_field: str,
-    ) -> Dict[str, Dict[str, Any]]:
-        selected: Dict[str, Dict[str, Any]] = {}
+    ) -> dict[str, dict[str, Any]]:
+        selected: dict[str, dict[str, Any]] = {}
         for row in rows:
             key = row.get("key")
             if not key:
@@ -674,7 +692,7 @@ class UserProfileService:
                 continue
             try:
                 entity_id = int(row.get(id_field))
-            except Exception:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS:
                 continue
             current = selected.get(str(key))
             if current is None or entity_id < current["id"]:
@@ -685,7 +703,7 @@ class UserProfileService:
         self,
         *,
         user_id: int,
-        user_updated_at: Optional[Any] = None,
+        user_updated_at: Any | None = None,
     ) -> datetime:
         user_ts = self._normalize_timestamp(user_updated_at)
         if user_ts is None:
@@ -695,17 +713,17 @@ class UserProfileService:
             )
             user_ts = self._normalize_timestamp(row.get("updated_at") if row else None)
 
-        override_ts: Optional[datetime] = None
+        override_ts: datetime | None = None
         try:
             repo = UserProfileOverridesRepo(self._db_pool)
             await repo.ensure_tables()
             override_raw = await repo.get_latest_update_for_user(user_id)
             override_ts = self._normalize_timestamp(override_raw)
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Overrides timestamp lookup failed for user {}: {}", user_id, exc)
 
-        org_override_ts: Optional[datetime] = None
-        team_override_ts: Optional[datetime] = None
+        org_override_ts: datetime | None = None
+        team_override_ts: datetime | None = None
         try:
             org_ids, team_ids = await self._get_membership_ids(user_id)
             if org_ids:
@@ -720,7 +738,7 @@ class UserProfileService:
                 team_override_ts = self._normalize_timestamp(
                     await team_repo.get_latest_update_for_teams(team_ids)
                 )
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Org/team override timestamp lookup failed for user {}: {}", user_id, exc)
 
         candidates = [
@@ -743,7 +761,7 @@ class UserProfileService:
         user_id: int,
         session_manager: Any,
         api_key_manager: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         mfa_service = get_mfa_service()
         mfa_status = await mfa_service.get_user_mfa_status(user_id)
         sessions = await session_manager.get_user_sessions(user_id)
@@ -752,7 +770,7 @@ class UserProfileService:
             include_revoked=False,
         )
 
-        byok_keys: List[Dict[str, Any]] = []
+        byok_keys: list[dict[str, Any]] = []
         try:
             repo = await self._get_byok_repo()
             secrets = await repo.list_secrets_for_user(user_id)
@@ -760,7 +778,7 @@ class UserProfileService:
                 {"provider": str(row.get("provider") or ""), "has_key": True}
                 for row in secrets
             ]
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("BYOK metadata unavailable for user {}: {}", user_id, exc)
 
         return {
@@ -780,21 +798,21 @@ class UserProfileService:
     async def build_profile(
         self,
         *,
-        user: Dict[str, Any],
-        sections: Optional[Set[str]] = None,
-        security: Optional[Dict[str, Any]] = None,
+        user: dict[str, Any],
+        sections: set[str] | None = None,
+        security: dict[str, Any] | None = None,
         include_sources: bool = False,
         include_raw: bool = False,
         mask_secrets: bool = True,
-        metrics_scope: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        metrics_scope: str | None = None,
+    ) -> dict[str, Any]:
         catalog = load_user_profile_catalog()
         registry = self._get_metrics_registry()
         scope_label = metrics_scope or "unknown"
         overall_start = time.perf_counter()
         requested = sections or set(DEFAULT_SECTIONS)
-        section_errors: Dict[str, str] = {}
-        response: Dict[str, Any] = {
+        section_errors: dict[str, str] = {}
+        response: dict[str, Any] = {
             "catalog_version": catalog.version,
         }
         try:
@@ -802,7 +820,7 @@ class UserProfileService:
                 user_id=int(user["id"]),
                 user_updated_at=user.get("updated_at"),
             )
-        except Exception as exc:
+        except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to resolve profile version: {}", exc)
             response["profile_version"] = datetime.now(timezone.utc)
 
@@ -822,7 +840,7 @@ class UserProfileService:
                 identity = self._build_identity(user)
                 await self._attach_lockout_status(identity)
                 response["user"] = identity
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build identity section: {}", exc)
                 section_errors["identity"] = "failed_to_build"
                 if registry:
@@ -842,7 +860,7 @@ class UserProfileService:
             section_start = time.perf_counter()
             try:
                 response["memberships"] = await self._build_memberships(int(user["id"]))
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build memberships section: {}", exc)
                 section_errors["memberships"] = "failed_to_build"
                 if registry:
@@ -862,7 +880,7 @@ class UserProfileService:
             section_start = time.perf_counter()
             try:
                 response["quotas"] = await self._build_quotas(user)
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build quotas section: {}", exc)
                 section_errors["quotas"] = "failed_to_build"
                 if registry:
@@ -878,10 +896,10 @@ class UserProfileService:
                     labels={"scope": scope_label, "section": "quotas"},
                 )
 
-        effective_cache: Optional[Dict[str, Any]] = None
-        effective_error: Optional[Exception] = None
+        effective_cache: dict[str, Any] | None = None
+        effective_error: Exception | None = None
 
-        async def _get_effective_config() -> Dict[str, Any]:
+        async def _get_effective_config() -> dict[str, Any]:
             nonlocal effective_cache, effective_error
             if effective_cache is not None:
                 return effective_cache
@@ -894,7 +912,7 @@ class UserProfileService:
                     mask_secrets=mask_secrets,
                 )
                 return effective_cache
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 effective_error = exc
                 raise
 
@@ -907,7 +925,7 @@ class UserProfileService:
                     for key, value in effective.items()
                     if str(key).startswith("preferences.")
                 }
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build preferences section: {}", exc)
                 section_errors["preferences"] = "failed_to_build"
                 if registry:
@@ -927,7 +945,7 @@ class UserProfileService:
             section_start = time.perf_counter()
             try:
                 response["effective_config"] = await _get_effective_config()
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build effective config section: {}", exc)
                 section_errors["effective_config"] = "failed_to_build"
                 if registry:
@@ -968,7 +986,7 @@ class UserProfileService:
                     int(user["id"]),
                     mask_secrets=mask_secrets,
                 )
-            except Exception as exc:
+            except _PROFILE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error("Failed to build raw overrides section: {}", exc)
                 section_errors["raw_overrides"] = "failed_to_build"
 

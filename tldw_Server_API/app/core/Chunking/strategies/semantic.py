@@ -4,12 +4,13 @@ Semantic chunking strategy.
 Groups text based on semantic similarity using TF-IDF vectors and cosine similarity.
 """
 
-from typing import List, Optional, Generator, Dict, Any
+import importlib
 import threading
-from loguru import logger
-import warnings
+from collections.abc import Generator
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from loguru import logger
+
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import ChunkingError
 
 
@@ -50,8 +51,8 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         """Check if required dependencies are available."""
         # Check scikit-learn
         try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
+            importlib.import_module("sklearn.feature_extraction.text")
+            importlib.import_module("sklearn.metrics.pairwise")
             self._sklearn_available = True
         except ImportError:
             self._sklearn_available = False
@@ -82,7 +83,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text based on semantic similarity.
 
@@ -109,16 +110,14 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
             )
 
         # Import here to avoid import errors if not available
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        from sklearn.metrics.pairwise import cosine_similarity
 
         # Get options
-        unit = options.get('unit', 'words')
+        options.get('unit', 'words')
         tokenizer_name = options.get('tokenizer_name_or_path') or options.get('tokenizer_name')
         if isinstance(tokenizer_name, str) and tokenizer_name.strip():
             self._tokenizer_name = tokenizer_name.strip()
-        similarity_threshold = options.get('similarity_threshold', self.similarity_threshold)
-        min_chunk_size = options.get('min_chunk_size', max_size // 2)
+        options.get('similarity_threshold', self.similarity_threshold)
+        options.get('min_chunk_size', max_size // 2)
 
         chunk_spans = self._chunk_text_with_spans(text, max_size, overlap, **options)
         return [chunk for chunk, _start, _end in chunk_spans]
@@ -129,7 +128,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         max_size: int,
         overlap: int = 0,
         **options,
-    ) -> List[tuple[str, int, int]]:
+    ) -> list[tuple[str, int, int]]:
         """Return chunks with exact source spans for semantic splitting."""
         if not self.validate_parameters(text, max_size, overlap):
             return []
@@ -189,11 +188,11 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
             return [(chunk_text, start, end)]
 
         # Build chunks based on semantic similarity with exact offsets
-        chunks: List[tuple[str, int, int]] = []
-        current_chunk: List[tuple[str, int, int]] = []
+        chunks: list[tuple[str, int, int]] = []
+        current_chunk: list[tuple[str, int, int]] = []
         current_size = 0
 
-        def _emit_chunk(block: List[tuple[str, int, int]]) -> None:
+        def _emit_chunk(block: list[tuple[str, int, int]]) -> None:
             if not block:
                 return
             start = block[0][1]
@@ -255,7 +254,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
 
         return chunks
 
-    def _split_sentences(self, text: str) -> List[str]:
+    def _split_sentences(self, text: str) -> list[str]:
         """
         Split text into sentences.
 
@@ -270,7 +269,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
             return [s for s, _start, _end in spans]
         return []
 
-    def _split_sentences_with_spans(self, text: str) -> List[tuple[str, int, int]]:
+    def _split_sentences_with_spans(self, text: str) -> list[tuple[str, int, int]]:
         """Split sentences and return (sentence, start, end) spans."""
         if not text:
             return []
@@ -318,7 +317,7 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         import re
 
         sentence_pattern = r'(?<=[.!?])\s+(?=[A-Z])'
-        spans: List[tuple[str, int, int]] = []
+        spans: list[tuple[str, int, int]] = []
         pos = 0
         for match in re.finditer(sentence_pattern, text):
             end = match.start()
@@ -460,14 +459,13 @@ class SemanticChunkingStrategy(BaseChunkingStrategy):
         """
         # Semantic chunking needs full text analysis, so compute all chunks first
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks
 
     def chunk_with_metadata(self,
                            text: str,
                            max_size: int,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text and return results with metadata.
 

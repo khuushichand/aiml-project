@@ -24,34 +24,39 @@
 # Imports
 import json
 import os
-import subprocess
+import string
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence, List, Dict, Any, Callable
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
+
 #
 # External Imports
 import yt_dlp
+
 #
 # Local Imports
 from tldw_Server_API.app.core.config import loaded_config_data
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Utils.Utils import downloaded_files, \
-    sanitize_filename, logging, get_project_root
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
-from tldw_Server_API.app.core.http_client import download as http_download, fetch as http_fetch, RetryPolicy
-from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.http_client import RetryPolicy
+from tldw_Server_API.app.core.http_client import download as http_download
+
 # Lazy wrappers to avoid importing heavy transcription deps at module import time
 # Use the ConversionError defined in the transcription library to ensure
 # exception handling is consistent across modules (enables pytest fallback).
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
     ConversionError as TranscriptionConversionError,
 )
-from tldw_Server_API.app.core.exceptions import TranscriptionCancelled
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import extract_metadata
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
+
 
 def speech_to_text(*args, **kwargs):
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
@@ -64,7 +69,10 @@ def convert_to_wav(*args, **kwargs):
         convert_to_wav as _convert_to_wav,
     )
     return _convert_to_wav(*args, **kwargs)
+import contextlib
+
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
+
 #
 #######################################################################################################################
 # Constants
@@ -105,11 +113,32 @@ class AudioConversionError(AudioProcessingError):
     """Raised when audio format conversion fails."""
     pass
 
+
+_AUDIO_FILES_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    TranscriptionCancelled,
+    TranscriptionConversionError,
+    AudioDownloadError,
+    AudioFileSizeError,
+    AudioCookieError,
+    AudioProcessingError,
+    AudioTranscriptionError,
+    AudioConversionError,
+)
+
 #######################################################################################################################
 # Function Definitions
 #
 
-def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
+def check_transcription_model_status(model_name: str) -> dict[str, Any]:
     """
     Check if a transcription model is available or needs to be downloaded.
 
@@ -122,11 +151,11 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
         - 'message': Human-readable status message
         - 'model': The model name
     """
+    from tldw_Server_API.app.core.config import get_stt_config
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
         check_model_exists,
         validate_whisper_model_identifier,
     )
-    from tldw_Server_API.app.core.config import get_stt_config
 
     model_name = (model_name or "").strip()
     model_lower = model_name.lower()
@@ -136,7 +165,7 @@ def check_transcription_model_status(model_name: str) -> Dict[str, Any]:
     if "vibevoice" in model_lower:
         try:
             stt_cfg = get_stt_config() or {}
-        except Exception:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         vibevoice_enabled = bool(stt_cfg.get("vibevoice_enabled"))
         vibevoice_vllm_enabled = bool(stt_cfg.get("vibevoice_vllm_enabled"))
@@ -240,11 +269,22 @@ def _unique_path(target_path: Path) -> Path:
     unique_suffix = uuid.uuid4().hex[:UUID_LENGTH]
     return target_path.with_name(f"{stem}_{unique_suffix}{suffix}")
 
+
+def _default_title_from_audio_path(audio_path: str | Path) -> str:
+    stem = Path(audio_path).stem
+    marker_len = int(UUID_LENGTH)
+    if marker_len > 0 and len(stem) > marker_len + 1 and stem[-(marker_len + 1)] == "_":
+        suffix = stem[-marker_len:]
+        if all(char in string.hexdigits for char in suffix):
+            trimmed = stem[: -(marker_len + 1)]
+            return trimmed or stem
+    return stem
+
 def download_audio_file(
     url: str,
     target_temp_dir: str,
     use_cookies: bool = False,
-    cookies: Optional[str | Dict] = None,
+    cookies: Optional[str | dict] = None,
     downloader: Optional[Callable[..., Any]] = None,
 ) -> str:
     """
@@ -308,7 +348,7 @@ def download_audio_file(
                 original_filename = Path(urlparse(url).path).name
                 if not original_filename:  # Handle case where path ends in /
                     original_filename = f"downloaded_audio_{uuid.uuid4().hex[:UUID_LENGTH]}"
-            except Exception:
+            except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
                 original_filename = f"downloaded_audio_{uuid.uuid4().hex[:UUID_LENGTH]}"
 
         # Normalize any surrounding quotes/whitespace on filename
@@ -349,7 +389,7 @@ def download_audio_file(
                         # Close/open new path confident after we finish
                         nonlocal save_path
                         save_path = nonlocal_save
-                except Exception:
+                except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
                     pass
             # Fail fast if Content-Length header exceeds limit
             clen = resp.headers.get('content-length')
@@ -367,14 +407,10 @@ def download_audio_file(
                         continue
                     total += len(chunk)
                     if MAX_FILE_SIZE and total > MAX_FILE_SIZE:
-                        try:
+                        with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                             f.close()
-                        except Exception:
-                            pass
-                        try:
+                        with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                             Path(save_path).unlink(missing_ok=True)
-                        except Exception:
-                            pass
                         raise AudioFileSizeError(
                             f"Downloaded content for {url} exceeded the {MAX_FILE_SIZE / (1024*1024):.0f}MB limit."
                         )
@@ -398,27 +434,23 @@ def download_audio_file(
                 require_content_type="audio/",
                 max_bytes_total=int(MAX_FILE_SIZE) if MAX_FILE_SIZE else None,
             )
-        except Exception as e:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
             # Map size-related failures to AudioFileSizeError
             msg = str(e)
             if any(k in msg.lower() for k in ["disk quota exceeded", "quota exceeded", "exceed", "exceeds"]):
-                try:
+                with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                     Path(save_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
                 raise AudioFileSizeError(
                     f"Downloaded content for {url} exceeded the configured limit."
                 ) from e
             # Clean up and wrap remaining errors
-            try:
+            with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                 Path(save_path).unlink(missing_ok=True)
-            except Exception:
-                pass
             raise AudioDownloadError(f"Download failed for {url}: {e}") from e
         # Success path
         try:
             downloaded_bytes = Path(save_path).stat().st_size
-        except Exception:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
             downloaded_bytes = 0
         logging.info(
             f"Audio file downloaded successfully from {url}: {save_path} ({downloaded_bytes / (1024*1024):.2f} MB)"
@@ -431,7 +463,7 @@ def download_audio_file(
         try:
             if 'save_path' in locals():
                 Path(save_path).unlink(missing_ok=True)
-        except Exception as cleanup_err:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as cleanup_err:
             logging.warning(f"Failed to clean up partial audio file '{save_path}': {cleanup_err}")
         raise
     except AudioDownloadError:
@@ -445,14 +477,14 @@ def download_audio_file(
     except TypeError as e: # Handles cookie type issues
         logging.error(f"Type error with cookies for {url}: {e}")
         raise AudioCookieError(f"Cookie type error for {url}: {e}") from e
-    except Exception as e:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Unexpected error downloading audio file from {url}: {type(e).__name__} - {e}", exc_info=True)
         raise AudioDownloadError(f"Unexpected download error for {url}: {type(e).__name__} - {str(e)}") from e
 
 
 def process_audio_files(
     # Use 'inputs' to accept both URLs and local paths
-    inputs: List[str],
+    inputs: list[str],
     # Processing parameters
     transcription_model: str,
     transcription_language: Optional[str] = 'en', # Default to 'en'
@@ -482,7 +514,7 @@ def process_audio_files(
     author: Optional[str] = None,
     temp_dir: Optional[str] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes a list of audio inputs (URLs or local file paths).
 
@@ -572,9 +604,9 @@ def process_audio_files(
         RuntimeError: Can be raised if critical setup like temporary directory creation fails.
                       Individual item processing errors are caught and reported in the 'results' list.
     """
-    batch_items_results: List[Dict[str, Any]] = []
-    progress_log: List[str] = []
-    temp_files_to_clean: List[str] = []
+    batch_items_results: list[dict[str, Any]] = []
+    progress_log: list[str] = []
+    temp_files_to_clean: list[str] = []
     start_time_all = time.time()
 
     # --- Setup Temporary Directory ---
@@ -593,7 +625,7 @@ def process_audio_files(
             temp_directory_manager = tempfile.TemporaryDirectory(prefix="audio_proc_")
             processing_temp_dir_path = Path(temp_directory_manager.name)
             logging.info(f"Created managed temporary directory: {processing_temp_dir_path}")
-        except Exception as e:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Failed to create temporary directory: {e}", exc_info=True)
             # Cannot proceed without a temp directory
             return {
@@ -620,11 +652,11 @@ def process_audio_files(
             return False
         try:
             return bool(cancel_check())
-        except Exception as exc:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as exc:
             logging.warning(f"cancel_check raised an error: {exc}", exc_info=True)
             return False
 
-    def _cancelled_result(input_ref: str, processing_source: str) -> Dict[str, Any]:
+    def _cancelled_result(input_ref: str, processing_source: str) -> dict[str, Any]:
         """Build a standard cancelled result payload."""
         return {
             "status": "Cancelled",
@@ -656,7 +688,7 @@ def process_audio_files(
     # Optional: preflight model availability check for Whisper models.
     # This is informational only and does not block processing; downloads
     # still occur lazily on first use inside the transcription library.
-    preflight_model_status: Optional[Dict[str, Any]] = None
+    preflight_model_status: Optional[dict[str, Any]] = None
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
             parse_transcription_model,
@@ -667,7 +699,7 @@ def process_audio_files(
             msg = preflight_model_status.get("message")
             if msg:
                 update_progress(f"Model status: {msg}")
-    except Exception as _status_exc:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as _status_exc:
         logging.debug(f"Model preflight check skipped for {transcription_model}: {_status_exc}")
 
     try:
@@ -678,7 +710,7 @@ def process_audio_files(
             input_ref = input_item if is_url else Path(input_item).name
             update_progress(f"--- Processing item {i}/{len(inputs)}: {input_ref} ---")
 
-            item_result: Dict[str, Any] = { # Explicit typing
+            item_result: dict[str, Any] = { # Explicit typing
                 "status": "Pending",
                 "input_ref": input_ref,
                 "processing_source": input_item, # Initial source
@@ -726,7 +758,7 @@ def process_audio_files(
 
                         if is_youtube:
                             # Use yt-dlp for YouTube URLs
-                            update_progress(f"Detected YouTube URL, using yt-dlp for extraction...")
+                            update_progress("Detected YouTube URL, using yt-dlp for extraction...")
                             downloaded_path, download_message = download_youtube_audio(
                                 input_item,
                                 use_cookies=use_cookies,
@@ -757,7 +789,9 @@ def process_audio_files(
                             # Move or copy to our managed temp dir if different
                             target_path = processing_temp_dir_path / Path(downloaded_path).name
                             if Path(downloaded_path).parent != processing_temp_dir_path:
-                                Path(downloaded_path).rename(target_path)
+                                import shutil
+                                target_path = _unique_path(target_path)
+                                shutil.move(str(downloaded_path), str(target_path))
                                 current_audio_path = str(target_path)
                                 # Clean up original download dir if empty? Maybe too complex.
                             else:
@@ -765,8 +799,11 @@ def process_audio_files(
 
                         item_result["processing_source"] = current_audio_path
                         item_temp_files.append(current_audio_path) # Mark for potential cleanup
-                        item_result["metadata"]["title"] = item_result["metadata"].get("title") or Path(current_audio_path).stem.replace("_"+uuid.uuid4().hex[:8],"") # Basic title
-                    except Exception as download_err:
+                        item_result["metadata"]["title"] = (
+                            item_result["metadata"].get("title")
+                            or _default_title_from_audio_path(current_audio_path)
+                        )
+                    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as download_err:
                         err_msg = f"Failed to download/prepare URL: {download_err}"
                         update_progress(err_msg)
                         item_result.update({"status": "Error", "error": err_msg})
@@ -809,7 +846,7 @@ def process_audio_files(
                             shutil.copy2(local_path, target_path)
                             current_audio_path = str(target_path)
                             item_temp_files.append(current_audio_path)
-                        except Exception as copy_err:
+                        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as copy_err:
                              # Log the specific error
                              logging.error(f"shutil.copy2 failed for source '{local_path}' to target '{target_path}': {copy_err}", exc_info=True)
                              raise RuntimeError(f"Failed to copy local file to temp directory: {copy_err}") from copy_err
@@ -857,10 +894,8 @@ def process_audio_files(
                             item_result["content"] = "[Test placeholder transcript]"
                             item_result["segments"] = [{"start_seconds": 0, "end_seconds": 0, "Text": item_result["content"]}]
                             # Update processing_source to reflect intended WAV target (test expectation)
-                            try:
+                            with contextlib.suppress(_AUDIO_FILES_NONCRITICAL_EXCEPTIONS):
                                 item_result["processing_source"] = str(Path(current_audio_path).with_suffix('.wav'))
-                            except Exception:
-                                pass
                             # Continue to chunking/analysis with placeholder
                             wav_file_path = current_audio_path  # keep a reference to avoid None
                         else:
@@ -914,7 +949,7 @@ def process_audio_files(
                                 )
                                 item_result["analysis"] = analysis_result or "Analysis API returned no result."
                                 item_result["analysis_details"] = {"analysis_model": api_name}
-                        except Exception as _ana_exc:
+                        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as _ana_exc:
                             # Do not fail the request because analysis on placeholder failed
                             item_result.setdefault("warnings", []).append(f"Analysis skipped due to error: {_ana_exc}")
                         # Replace raw_segments with a minimal valid segment structure
@@ -997,7 +1032,7 @@ def process_audio_files(
                                 item_result.setdefault("warnings", [])
                                 item_result["warnings"].append("Chunking process yielded empty text chunks.")
                                 text_to_process_for_analysis = []
-                    except Exception as chunk_err:
+                    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as chunk_err:
                          err_msg = f"Chunking failed: {chunk_err}"
                          update_progress(err_msg)
                          item_result.setdefault("warnings", [])
@@ -1023,7 +1058,7 @@ def process_audio_files(
                                 custom_prompt_input = _load_prompt("audio", "Transcription Analysis Summary") or custom_prompt_input
                             if not system_prompt_input:
                                 system_prompt_input = _load_prompt("audio", "System Prompt") or system_prompt_input
-                        except Exception:
+                        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
                             pass
                         analysis_result = analyze(
                             api_name=api_name,
@@ -1043,7 +1078,7 @@ def process_audio_files(
                         item_result["analysis_details"] = {"analysis_model": api_name}
                         update_progress("Analysis completed.")
 
-                    except Exception as exc:
+                    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as exc:
                         err_msg = f"Analysis failed: {exc}"
                         update_progress(err_msg)
                         item_result["analysis"] = "[Analysis Failed]"
@@ -1081,7 +1116,7 @@ def process_audio_files(
                 item_result["status"] = "Cancelled"
                 item_result["error"] = "Cancelled by user"
                 cancel_remaining = True
-            except Exception as item_processing_exc:
+            except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as item_processing_exc:
                 # Catch ANY exception raised during the item's processing steps
                 # (including re-raised conversion/transcription errors or others)
                 error_message = f"Failed to process item {i} ({input_ref}): {type(item_processing_exc).__name__} - {item_processing_exc}"
@@ -1107,7 +1142,7 @@ def process_audio_files(
 
         # --- End of Loop ---
 
-    except Exception as outer_exc:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as outer_exc:
          logging.error(f"Fatal error during audio processing batch setup or loop: {outer_exc}", exc_info=True)
          # This case is for errors *outside* the item processing loop, e.g., in setup.
          # If it occurs, remaining items won't be processed.
@@ -1167,7 +1202,7 @@ def process_audio_files(
             try:
                  temp_directory_manager.cleanup()
                  update_progress(f"Removed managed temporary directory: {processing_temp_dir_path}")
-            except Exception as e:
+            except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
                  logging.warning(f"Could not remove managed temporary directory {processing_temp_dir_path}: {e}")
 
 
@@ -1190,7 +1225,7 @@ def process_audio_files(
     return final_output
 
 
-def format_transcription_with_timestamps(segments: List[Dict[str, Any]], keep_timestamps: bool = True) -> str:
+def format_transcription_with_timestamps(segments: list[dict[str, Any]], keep_timestamps: bool = True) -> str:
     """
     Formats transcription segments into a single string, optionally with timestamps.
 
@@ -1255,9 +1290,9 @@ HTTPONLY_PREFIX = '#HttpOnly_'
 _HTTPONLY_PREFIX_LOWER = HTTPONLY_PREFIX.lower()
 
 
-def _parse_netscape_cookie_export(text: str) -> List[str]:
+def _parse_netscape_cookie_export(text: str) -> list[str]:
     """Return cookie name=value pairs from a Netscape/Mozilla cookie export blob."""
-    pairs: List[str] = []
+    pairs: list[str] = []
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
@@ -1302,7 +1337,7 @@ def _cookies_to_header_value(cookies) -> Optional[str]:
                 parts.append(f"{k}={v}")
             return "; ".join(parts) if parts else None
         return None
-    except Exception:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -1310,7 +1345,7 @@ def download_youtube_audio(
     url: str,
     *,
     use_cookies: bool = False,
-    cookies: Optional[str | Dict[str, Any]] = None,
+    cookies: Optional[str | dict[str, Any]] = None,
     output_dir: Optional[str | Path] = None,
 ) -> tuple[Optional[str], str]:
     """
@@ -1411,7 +1446,7 @@ def download_youtube_audio(
                         destination_dir = Path(downloads_root)
                     else:
                         destination_dir = Path(get_project_root()) / 'Databases' / 'downloads' / 'audio'
-                except Exception:
+                except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS:
                     destination_dir = Path("downloads")
 
             destination_dir.mkdir(parents=True, exist_ok=True)
@@ -1426,7 +1461,7 @@ def download_youtube_audio(
                 downloaded_files.append(str(destination_path))
 
             return str(destination_path), f"Audio downloaded successfully: {destination_path.name}"
-    except Exception as e:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
         return None, f"Error downloading audio: {str(e)}"
 
 
@@ -1540,8 +1575,11 @@ def process_podcast(
             cleaned = 0
             for f_path in temp_files:
                 if f_path and Path(f_path).exists():
-                    try: Path(f_path).unlink() ; cleaned += 1
-                    except OSError as e: update_progress(f"Warning: Failed to remove temp file {f_path}: {e}")
+                    try:
+                        Path(f_path).unlink()
+                        cleaned += 1
+                    except OSError as e:
+                        update_progress(f"Warning: Failed to remove temp file {f_path}: {e}")
             update_progress(f"Cleaned {cleaned} temporary podcast files.")
 
     try:
@@ -1584,12 +1622,16 @@ def process_podcast(
                   elif isinstance(current_keywords, list):
                        kw_list = current_keywords
 
-                  if metadata.get('series'): kw_list.append(f"series:{metadata['series']}")
-                  if metadata.get('episode'): kw_list.append(f"episode:{metadata['episode']}")
-                  if metadata.get('season'): kw_list.append(f"season:{metadata['season']}")
+                  if metadata.get('series'):
+                      kw_list.append(f"series:{metadata['series']}")
+                  if metadata.get('episode'):
+                      kw_list.append(f"episode:{metadata['episode']}")
+                  if metadata.get('season'):
+                      kw_list.append(f"season:{metadata['season']}")
                   # Add tags as keywords if available
                   tags = metadata.get('tags')
-                  if isinstance(tags, list): kw_list.extend(tags)
+                  if isinstance(tags, list):
+                      kw_list.extend(tags)
 
                   result["metadata"]["keywords"] = list(set(kw_list)) # Store as unique list
 
@@ -1602,7 +1644,7 @@ def process_podcast(
                   if isinstance(result["metadata"]["keywords"], str): # Ensure keywords is a list
                        result["metadata"]["keywords"] = [k.strip() for k in result["metadata"]["keywords"].split(',') if k.strip()]
 
-        except Exception as meta_err:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as meta_err:
              update_progress(f"Warning: Metadata extraction failed: {meta_err}")
              result["warnings"].append(f"Metadata extraction failed: {meta_err}")
              # Ensure basic metadata exists
@@ -1669,7 +1711,7 @@ def process_podcast(
         result["status"] = "Warning" if result.get("warnings") else result.get("status", "Success") # Final status update
 
 
-    except Exception as e:
+    except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
         error_message = f"Error processing podcast {url}: {type(e).__name__} - {str(e)}"
         update_progress(f"Processing failed: {error_message}")
         logging.error(error_message, exc_info=True)
@@ -1681,7 +1723,7 @@ def process_podcast(
         try:
             temp_directory_manager.cleanup()
             update_progress(f"Removed podcast temp directory: {processing_temp_dir}")
-        except Exception as e:
+        except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as e:
              logging.warning(f"Could not remove podcast temp directory {processing_temp_dir}: {e}")
 
 

@@ -41,28 +41,31 @@ import stat
 import tempfile
 import zipfile
 from datetime import datetime
-import defusedxml.ElementTree as ET
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Any, Optional, Union
+
+import defusedxml.ElementTree as ET  # noqa: N817
+import ebooklib
+import html2text
+
 #
 # External Imports
 from bs4 import BeautifulSoup
-import ebooklib
 from ebooklib import epub
-import html2text
+
+from tldw_Server_API.app.core.Chunking import ChunkingError, InvalidChunkingMethodError, improved_chunking_process
 
 #
 # Import Local
 from tldw_Server_API.app.core.DB_Management.DB_Manager import add_media_with_keywords, create_media_database
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Chunking import improved_chunking_process, ChunkingError, \
-    InvalidChunkingMethodError
-from tldw_Server_API.app.core.Metrics.metrics_logger import (log_counter, log_histogram)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -71,7 +74,31 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 MAX_ZIP_MEMBERS = 500
 MAX_ZIP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 
-def extract_epub_metadata_from_text(content: str) -> Tuple[Optional[str], Optional[str]]:
+_BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ChunkingError,
+    ConnectionError,
+    EOFError,
+    ET.ParseError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InvalidChunkingMethodError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+)
+
+def extract_epub_metadata_from_text(content: str) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts Title and Author from a string if specific headers are present.
 
@@ -111,15 +138,10 @@ def format_toc_item(item: Union[epub.Link, epub.Section, Any], level: int) -> st
              Returns an empty string if an error occurs during formatting.
     """
     try:
-        if isinstance(item, epub.Link):
-            title = item.title
-        elif isinstance(item, epub.Section):
-            title = item.title
-        else:
-            title = str(item)
+        title = item.title if isinstance(item, (epub.Link, epub.Section)) else str(item)
 
         return f"{'  ' * (level - 1)}- [{title}](#{slugify(title)})\n"
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Error formatting TOC item: {str(e)}")
         return ""
 
@@ -152,7 +174,7 @@ def slugify(text: str) -> str:
 #
 # File Conversion Functions
 
-def epub_to_markdown(epub_path: str) -> Tuple[str, Optional[epub.EpubBook]]:
+def epub_to_markdown(epub_path: str) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Converts an EPUB file to Markdown format.
 
@@ -178,7 +200,6 @@ def epub_to_markdown(epub_path: str) -> Tuple[str, Optional[epub.EpubBook]]:
         logging.info(f"Converting EPUB to Markdown from {epub_path}")
         book = epub.read_epub(epub_path)
         markdown_content = "# Table of Contents\n\n"
-        chapters = []
 
         # Extract and format the table of contents
         toc = book.toc
@@ -224,12 +245,12 @@ def epub_to_markdown(epub_path: str) -> Tuple[str, Optional[epub.EpubBook]]:
         logging.debug("EPUB to Markdown conversion completed.")
         return markdown_content, book # Return book object too
 
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Error converting EPUB to Markdown: {str(e)}")
         # Still return None for the book object on error
         return f"# Error converting EPUB\n\n{e}", book # Return error message and potentially None book
 
-def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[str], Optional[str]]:
+def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts title and author directly from an `ebooklib.epub.EpubBook` object's metadata.
 
@@ -249,7 +270,7 @@ def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[s
         metadata = book.get_metadata('DC', 'title')
         if metadata:
             title = metadata[0][0]
-    except Exception:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS:
         logging.debug("Could not extract DC:title metadata.")
 
     try:
@@ -260,7 +281,7 @@ def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[s
                  author = metadata[0][0]
             else: # Fallback if it's just a simple string
                  author = str(metadata[0])
-    except Exception:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS:
         logging.debug("Could not extract DC:creator metadata.")
 
     return title, author
@@ -274,7 +295,7 @@ def extract_epub_metadata_from_epub_obj(book: epub.EpubBook) -> Tuple[Optional[s
 #
 # epub parsing Functions
 
-def read_epub_filtered(epub_path) -> Tuple[str, Optional[epub.EpubBook]]:
+def read_epub_filtered(epub_path) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Reads an EPUB file by following its spine, attempting to skip known front matter.
 
@@ -383,11 +404,11 @@ def read_epub_filtered(epub_path) -> Tuple[str, Optional[epub.EpubBook]]:
         full_text = re.sub(r'\n\s*\n+', '\n\n', full_text)  # collapse multiple blank lines
         return full_text, book # Return book object
 
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Failed to parse EPUB: {str(e)}")
         return "", book # Return empty string and potentially None book
 
-def read_epub(file_path) -> Tuple[str, Optional[epub.EpubBook]]:
+def read_epub(file_path) -> tuple[str, Optional[epub.EpubBook]]:
     """
     Reads and extracts text from an EPUB file, cleaning up messy spacing.
 
@@ -452,7 +473,7 @@ def read_epub(file_path) -> Tuple[str, Optional[epub.EpubBook]]:
          logging.error(f"Ebooklib error reading EPUB {file_path}: {epub_err}", exc_info=True)
          # Reraise as ValueError for process_epub to catch nicely
          raise ValueError(f"Invalid or corrupted EPUB file: {epub_err}") from epub_err
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Error reading EPUB file: {str(e)}")
         # Re-raise or return error indication
         # Reraise as a generic error
@@ -562,11 +583,11 @@ def process_epub(
     file_path: str,
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     custom_prompt: Optional[str] = None,
     system_prompt: Optional[str] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     # Removed custom_chapter_pattern - should be inside chunk_options if needed
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
@@ -574,7 +595,7 @@ def process_epub(
     summarize_recursively: bool = False,
     extraction_method: str = 'filtered', # 'markdown', 'filtered', 'basic'
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Processes an EPUB file: extracts content & metadata, chunks, and optionally summarizes.
     Returns a dictionary with processed data, status, and errors. *No DB interaction.*
@@ -653,7 +674,7 @@ def process_epub(
               especially if a fallback occurred (e.g., "read_epub (fallback)").
     """
     start_time = datetime.now()
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": file_path,
         "processing_source": file_path,
@@ -696,9 +717,12 @@ def process_epub(
         ebook_obj = None
         extractor_func: Optional[callable] = None
 
-        if extraction_method == 'markdown': extractor_func = epub_to_markdown
-        elif extraction_method == 'filtered': extractor_func = read_epub_filtered
-        else: extractor_func = read_epub # Default fallback
+        if extraction_method == 'markdown':
+            extractor_func = epub_to_markdown
+        elif extraction_method == 'filtered':
+            extractor_func = read_epub_filtered
+        else:
+            extractor_func = read_epub # Default fallback
 
         try:
             extracted_text, ebook_obj = extractor_func(file_path)
@@ -711,7 +735,7 @@ def process_epub(
             except (ValueError, RuntimeError) as fallback_err:
                  # If fallback also fails, it's a critical error
                  raise ValueError(f"Failed to extract text from EPUB '{Path(file_path).name}' even with fallback: {fallback_err}") from fallback_err
-        except Exception as primary_extract_err: # Catch unexpected errors
+        except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as primary_extract_err: # Catch unexpected errors
             logging.warning(f"Unexpected error with extractor '{extraction_method}' for {file_path}: {primary_extract_err}. Trying basic read_epub.", exc_info=True)
             result["warnings"].append(f"Extraction method '{extraction_method}' failed (unexpected), used basic fallback.")
             result["parser_used"] = "read_epub (fallback)"
@@ -801,7 +825,7 @@ def process_epub(
                 result["warnings"].append(f"Chunking failed: {str(ce)}")
                 processed_chunks = [{'text': extracted_text, 'metadata': {'chunk_num': 0, 'error': f"Chunking failed: {str(ce)}"}}]
                 result["chunks"] = processed_chunks
-            except Exception as chunk_err: # Catch any other unexpected errors during chunking
+            except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as chunk_err: # Catch any other unexpected errors during chunking
                 logging.error(f"Unexpected error during chunking for {file_path}: {chunk_err}", exc_info=True)
                 result["warnings"].append(f"Chunking failed (unexpected): {str(chunk_err)}")
                 # Fallback: use full text as one chunk
@@ -853,7 +877,7 @@ def process_epub(
                         else:
                             chunk_metadata['analysis'] = None
                             logging.debug(f"Summarization yielded empty result for chunk {i+1}/{len(processed_chunks)} of {file_path}.")
-                    except Exception as summ_err:
+                    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as summ_err:
                         logging.warning(f"Summarization failed for chunk {i+1}/{len(processed_chunks)} of {file_path}: {summ_err}", exc_info=True)
                         chunk_metadata['analysis'] = f"[Summarization Error: {str(summ_err)}]"
                         result["warnings"].append(f"Summarization failed for chunk {i+1}: {str(summ_err)}")
@@ -885,7 +909,7 @@ def process_epub(
                         else:
                              log_counter("epub_recursive_summarization_success", labels={"file_path": file_path})
 
-                    except Exception as rec_summ_err:
+                    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                          logging.error(f"Recursive summarization failed for {file_path}: {rec_summ_err}", exc_info=True)
                          final_analysis = f"[Recursive Summarization Error: {str(rec_summ_err)}]\n\n" + "\n\n---\n\n".join(chunk_summaries)
                          result["warnings"].append(f"Recursive summarization failed: {str(rec_summ_err)}")
@@ -893,8 +917,10 @@ def process_epub(
                 else:
                     # Simple join if not recursive or only one summary
                     final_analysis = "\n\n---\n\n".join(chunk_summaries)
-                    if len(chunk_summaries) > 1 : logging.info(f"Combined {len(chunk_summaries)} chunk summaries (non-recursive).")
-                    else: logging.info(f"Using single chunk analysis as final analysis.")
+                    if len(chunk_summaries) > 1 :
+                        logging.info(f"Combined {len(chunk_summaries)} chunk summaries (non-recursive).")
+                    else:
+                        logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis # Store final combined analysis
             log_counter("epub_chunks_summarized", value=len(chunk_summaries), labels={"file_path": file_path})
@@ -906,7 +932,8 @@ def process_epub(
             logging.warning(f"Summarization skipped for EPUB '{final_title}': API name not provided.")
         elif not processed_chunks:
             logging.warning(f"Summarization skipped for EPUB '{final_title}': No processable chunks available.")
-        else: logging.warning(f"Summarization skipped for EPUB '{final_title}' due to unknown condition.")
+        else:
+            logging.warning(f"Summarization skipped for EPUB '{final_title}' due to unknown condition.")
 
 
         # Final status determination
@@ -935,7 +962,7 @@ def process_epub(
          result["status"] = "Error"
          result["error"] = str(rterr)
          log_counter("epub_processing_error", labels={"file_path": file_path, "error": "RuntimeError"})
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Unexpected error processing EPUB {file_path}: {str(e)}")
         result["status"] = "Error"
         result["error"] = f"Unexpected processing error: {str(e)}"
@@ -966,11 +993,11 @@ def process_epub(
 
 def process_zip_of_epubs(
     zip_file_path: str,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     base_dir: Optional[Path] = None,
     # Pass all other relevant options down to process_epub
     **epub_options # Collects title_override, author_override, perform_chunking, chunk_options etc.
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
     """
     Processes a ZIP file containing multiple EPUB files.
 
@@ -1085,7 +1112,7 @@ def process_zip_of_epubs(
                      "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
                      "error": f"Invalid or corrupted ZIP file: {zip_err}"
                  }]
-            except Exception as extract_err:
+            except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as extract_err:
                  logging.error(f"Failed to extract ZIP file {zip_file_path}: {extract_err}", exc_info=True)
                  return [{
                      "status": "Error", "input_ref": zip_file_path, "media_type": "zip",
@@ -1119,7 +1146,7 @@ def process_zip_of_epubs(
                     result["original_filename_in_zip"] = epub_filename
                     # processing_source is already set to epub_path by process_epub
                     results.append(result)
-                except Exception as single_epub_err:
+                except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as single_epub_err:
                      # Catch errors during the processing of a single epub from the zip
                      logging.exception(f"Error processing '{epub_filename}' from zip {zip_file_path}: {single_epub_err}")
                      results.append({
@@ -1138,7 +1165,7 @@ def process_zip_of_epubs(
             logging.info(f"Completed processing all EPUB files in the ZIP: {zip_file_path}")
             log_counter("zip_processing_success", labels={"zip_path": zip_file_path})
 
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         # Catch errors related to Temp dir creation or other unexpected issues
         logging.exception(f"Error processing ZIP file {zip_file_path}: {str(e)}")
         log_counter("zip_processing_error", labels={"zip_path": zip_file_path, "error": str(e)})
@@ -1159,9 +1186,9 @@ def _process_markup_or_plain_text(
     file_type: str, # 'html', 'xml', 'opml', 'text'
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -1169,7 +1196,7 @@ def _process_markup_or_plain_text(
     system_prompt: Optional[str] = None,
     summarize_recursively: bool = False,
     base_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Internal helper to process HTML, XML, OPML, or plain text files.
 
@@ -1218,7 +1245,7 @@ def _process_markup_or_plain_text(
     final_title_for_logging = Path(file_path).name
 
     media_type = file_type if file_type in ['html', 'xml', 'opml', 'text'] else "document"
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending", "input_ref": file_path, "processing_source": file_path,
         "media_type": media_type, "source_format": file_type, "content": None,
         "metadata": {"title": None, "author": None, "raw": None}, "chunks": None,
@@ -1235,7 +1262,7 @@ def _process_markup_or_plain_text(
     markdown_content: Optional[str] = None
     extracted_title: Optional[str] = None
     extracted_author: str = "Unknown"
-    raw_metadata: Dict[str, Any] = {}
+    raw_metadata: dict[str, Any] = {}
 
     try:
         logging.info(f"Processing {file_type} file from {file_path}")
@@ -1263,7 +1290,7 @@ def _process_markup_or_plain_text(
                 if meta_author_tag and meta_author_tag.get('content'):
                      extracted_author = meta_author_tag['content'].strip()
                 raw_metadata = {'html_title': extracted_title, 'html_author': extracted_author}
-            except Exception as html_err:
+            except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as html_err:
                  raise ValueError(f"Failed to parse HTML file {file_path}: {html_err}") from html_err
 
         elif file_type == 'xml':
@@ -1305,9 +1332,10 @@ def _process_markup_or_plain_text(
                     markdown_content = handle.read().decode("utf-8")
                 epub_title, epub_author = extract_epub_metadata_from_text(markdown_content)
                 extracted_title = epub_title
-                if epub_author: extracted_author = epub_author
+                if epub_author:
+                    extracted_author = epub_author
                 raw_metadata = {'maybe_epub_title': epub_title, 'maybe_epub_author': epub_author}
-            except Exception as text_err:
+            except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as text_err:
                  raise ValueError(f"Failed to read text file {file_path}: {text_err}") from text_err
         else:
             raise ValueError(f"Unsupported file type for processing: {file_type}")
@@ -1358,7 +1386,7 @@ def _process_markup_or_plain_text(
 
                 result["chunks"] = processed_chunks
 
-            except Exception as chunk_err:
+            except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as chunk_err:
                 logging.error(f"Chunking failed for {file_path}: {chunk_err}", exc_info=True)
                 result["warnings"].append(f"Chunking failed: {chunk_err}")
                 processed_chunks = [{'text': markdown_content, 'metadata': {'chunk_num': 0, 'error': f"Chunking failed: {chunk_err}"}}]
@@ -1389,7 +1417,7 @@ def _process_markup_or_plain_text(
                         else:
                             chunk_metadata['summary'] = None
                             logging.debug(f"Summarization yielded empty result for chunk {i} of {file_path}.")
-                    except Exception as summ_err:
+                    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as summ_err:
                         logging.warning(f"Summarization failed for chunk {i} of {file_path}: {summ_err}")
                         chunk_metadata['summary'] = f"[Summarization Error: {summ_err}]"
                         result["warnings"].append(f"Summarization failed for chunk {i}: {summ_err}")
@@ -1418,7 +1446,7 @@ def _process_markup_or_plain_text(
                             result["warnings"].append("Recursive summarization yielded empty result.")
                         else:
                              log_counter(f"{file_type}_recursive_summarization_success", labels={"file_path": file_path})
-                    except Exception as rec_summ_err:
+                    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                          logging.error(f"Recursive summarization failed for {file_path}: {rec_summ_err}")
                          final_analysis = f"[Recursive Summarization Error: {rec_summ_err}]\n\n" + "\n\n---\n\n".join(chunk_summaries)
                          result["warnings"].append(f"Recursive summarization failed: {rec_summ_err}")
@@ -1454,7 +1482,7 @@ def _process_markup_or_plain_text(
          result["status"] = "Error"
          result["error"] = str(ve)
          log_counter(f"{file_type}_processing_error", labels={"file_path": file_path, "error": "ValueError"})
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Error processing {file_type} file {file_path}: {str(e)}")
         result["status"] = "Error"
         result["error"] = str(e)
@@ -1473,7 +1501,7 @@ def _process_markup_or_plain_text(
     return result
 
 
-def extract_epub_metadata(content: str) -> Tuple[Optional[str], Optional[str]]:
+def extract_epub_metadata(content: str) -> tuple[Optional[str], Optional[str]]:
     """
     Extracts Title and Author from a string based on "Title:" and "Author:" prefixes.
 
@@ -1575,7 +1603,7 @@ def ingest_text_file(file_path, title=None, author=None, keywords=None, base_dir
 
         logging.info(f"Text file '{title}' by {author} ingested successfully.")
         return f"Text file '{title}' by {author} ingested successfully."
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error ingesting text file: {str(e)}")
         return f"Error ingesting text file: {str(e)}"
 
@@ -1617,7 +1645,7 @@ def ingest_folder(folder_path, keywords=None, base_dir: Optional[Path] = None):
                 )
                 results.append(result)
         logging.info("Completed ingestion of all text files in the folder.")
-    except Exception as e:
+    except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logging.exception(f"Error ingesting folder: {str(e)}")
         return f"Error ingesting folder: {str(e)}"
 

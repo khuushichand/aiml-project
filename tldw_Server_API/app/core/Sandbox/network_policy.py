@@ -1,35 +1,48 @@
 from __future__ import annotations
 
+import contextlib
 import ipaddress
-import os
 import socket
 import subprocess
-from typing import Callable, Iterable, List, Optional, Sequence, Dict, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Callable
+
 from loguru import logger
 
+_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    IndexError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    subprocess.SubprocessError,
+)
 
-def _truthy(v: Optional[str]) -> bool:
+
+def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
-def default_resolver(host: str) -> List[str]:
+def default_resolver(host: str) -> list[str]:
     """Resolve hostname to IPv4 addresses using getaddrinfo; return unique list.
 
     Avoids raising on DNS errors, returns empty list if resolution fails.
     """
-    out: List[str] = []
+    out: list[str] = []
     try:
         infos = socket.getaddrinfo(host, None, family=socket.AF_INET)
         for _fam, _sock, _proto, _canon, sa in infos:
             ip = sa[0]
             if ip not in out:
                 out.append(ip)
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         return []
     return out
 
 
-def _normalize_host_token(token: str) -> Tuple[str, bool, bool]:
+def _normalize_host_token(token: str) -> tuple[str, bool, bool]:
     """Normalize a hostname-like token and detect wildcard/suffix semantics.
 
     Returns (host, is_wildcard, is_suffix).
@@ -64,9 +77,9 @@ def _normalize_host_token(token: str) -> Tuple[str, bool, bool]:
 def expand_allowlist_to_targets(
     raw_allowlist: Sequence[str] | str | None,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> List[str]:
+) -> list[str]:
     """Expand allowlist inputs (CIDR, IP, hostname, wildcard *.domain) into CIDR/IP targets.
 
     - CIDR tokens: validated and returned as-is
@@ -91,21 +104,21 @@ def expand_allowlist_to_targets(
                 _ = ipaddress.ip_network(tok, strict=False)
                 results.add(str(tok))
                 continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Literal IP
         try:
             ipaddress.ip_address(tok)
             results.add(f"{tok}/32")
             continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Hostname (supports wildcard prefix "*." and suffix ".domain")
         host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
             continue
         # Resolve apex and a small set of common subdomains for wildcard tokens
-        to_resolve: List[str] = []
+        to_resolve: list[str] = []
         if is_wild:
             subs = list(wildcard_subdomains or ("",))
             for sub in subs:
@@ -118,7 +131,7 @@ def expand_allowlist_to_targets(
                 try:
                     ipaddress.ip_address(ip)
                     results.add(f"{ip}/32")
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
     return sorted(results)
 
@@ -126,9 +139,9 @@ def expand_allowlist_to_targets(
 def pin_dns_map(
     raw_allowlist: Sequence[str] | str | None,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> Dict[str, List[str]]:
+) -> dict[str, list[str]]:
     """Return a mapping of normalized host tokens to resolved IPv4 addresses.
 
     CIDR and literal IP inputs are returned as themselves (keyed by the token),
@@ -140,7 +153,7 @@ def pin_dns_map(
         tokens = [t.strip() for t in raw_allowlist.split(',') if t.strip()]
     else:
         tokens = [str(t).strip() for t in raw_allowlist if str(t).strip()]
-    out: Dict[str, List[str]] = {}
+    out: dict[str, list[str]] = {}
     for tok in tokens:
         # CIDR or IP
         try:
@@ -148,33 +161,33 @@ def pin_dns_map(
                 ipaddress.ip_network(tok, strict=False)
                 out.setdefault(tok, [])
                 continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             ipaddress.ip_address(tok)
             out.setdefault(tok, [tok])
             continue
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         # Host tokens
         host, is_wild, _is_suffix = _normalize_host_token(tok)
         if not host:
             continue
-        hosts: List[str] = []
+        hosts: list[str] = []
         if is_wild:
             for sub in list(wildcard_subdomains or ("",)):
                 fqdn = f"{sub}.{host}" if sub else host
                 hosts.append(fqdn)
         else:
             hosts.append(host)
-        ips: List[str] = []
+        ips: list[str] = []
         for h in hosts:
             for ip in resolver(h):
                 try:
                     ipaddress.ip_address(ip)
                     if ip not in ips:
                         ips.append(ip)
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
         out[host] = ips
     return out
@@ -185,18 +198,16 @@ def refresh_egress_rules(
     raw_allowlist: Sequence[str] | str | None,
     label: str,
     *,
-    resolver: Callable[[str], List[str]] = default_resolver,
+    resolver: Callable[[str], list[str]] = default_resolver,
     wildcard_subdomains: Sequence[str] | None = ("", "www", "api"),
-) -> List[str]:
+) -> list[str]:
     """Revoke existing rules by label and apply pinned rules for the current allowlist.
 
     Performs a best-effort deletion via delete_rules_by_label(), then applies
     new rules computed from the current DNS resolution of hostnames.
     """
-    try:
+    with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
         delete_rules_by_label(label)
-    except Exception:
-        pass
     targets = expand_allowlist_to_targets(raw_allowlist, resolver=resolver, wildcard_subdomains=wildcard_subdomains)
     return apply_egress_rules_atomic(container_ip, targets, label)
 
@@ -205,7 +216,7 @@ def _build_restore_blob(container_ip: str, targets: Iterable[str], label: str) -
     """Build an iptables-restore filter table blob that appends ACCEPT rules for targets
     and a final DROP for the container IP, labeled for later cleanup.
     """
-    lines: List[str] = ["*filter"]
+    lines: list[str] = ["*filter"]
     for tgt in targets:
         dspec = tgt if "/" in tgt else f"{tgt}/32"
         lines.append(
@@ -218,13 +229,13 @@ def _build_restore_blob(container_ip: str, targets: Iterable[str], label: str) -
     return "\n".join(lines)
 
 
-def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: str) -> List[str]:
+def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: str) -> list[str]:
     """Apply iptables rules via iptables-restore --noflush for atomicity.
 
     Returns a list of rule specs (as in `iptables -S` without the initial action) for deletion fallback.
     On failure, attempts iterative application with `iptables` commands.
     """
-    rule_specs: List[str] = []
+    rule_specs: list[str] = []
     try:
         blob = _build_restore_blob(container_ip, targets, label)
         proc = subprocess.run(["iptables-restore", "--noflush"], input=blob.encode("utf-8"), check=False)
@@ -236,7 +247,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
             return rule_specs
         else:
             logger.debug("iptables-restore failed; falling back to iterative iptables invocations")
-    except Exception as e:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"iptables-restore invocation failed: {e}")
     # Fallback path: iterative `iptables` calls
     for tgt in targets:
@@ -248,7 +259,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
                 "-m", "comment", "--comment", label,
             ], check=False)
             rule_specs.append(f"DOCKER-USER -s {container_ip} -d {dspec} -j ACCEPT -m comment --comment {label}")
-        except Exception:
+        except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
             pass
     try:
         subprocess.run([
@@ -257,7 +268,7 @@ def apply_egress_rules_atomic(container_ip: str, targets: Sequence[str], label: 
             "-m", "comment", "--comment", label,
         ], check=False)
         rule_specs.append(f"DOCKER-USER -s {container_ip} -j DROP -m comment --comment {label}")
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
     return rule_specs
 
@@ -272,21 +283,19 @@ def delete_rules_by_label(label: str) -> None:
         out = subprocess.check_output(["iptables", "-L", "DOCKER-USER", "--line-numbers", "-n", "-v"], text=True)
         lines = out.splitlines()
         # Skip header lines, find those with the comment
-        numbered: List[int] = []
+        numbered: list[int] = []
         for ln in lines:
             if label in ln:
                 try:
                     num = int(ln.split()[0])
                     numbered.append(num)
-                except Exception:
+                except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
                     continue
         for num in sorted(numbered, reverse=True):
-            try:
+            with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                 subprocess.run(["iptables", "-D", "DOCKER-USER", str(num)], check=False)
-            except Exception:
-                pass
         return
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback: translate `iptables -S` specs into deletions
     try:
@@ -296,9 +305,7 @@ def delete_rules_by_label(label: str) -> None:
                 parts = line.strip().split()
                 if parts and parts[0] in {"-A", "-I"}:
                     parts[0] = "-D"
-                    try:
+                    with contextlib.suppress(_SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS):
                         subprocess.run(["iptables"] + parts, check=False)
-                    except Exception:
-                        pass
-    except Exception:
+    except _SANDBOX_NET_POLICY_NONCRITICAL_EXCEPTIONS:
         pass

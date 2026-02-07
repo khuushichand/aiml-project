@@ -5,17 +5,18 @@ Provides dynamic configuration loading and reloading from YAML files,
 environment-specific overrides, and runtime configuration updates.
 """
 
-import copy
-import os
-import yaml
 import asyncio
-from typing import Dict, Any, Optional, List
-from pathlib import Path
+import copy
+import hashlib
+import os
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
 from loguru import logger
-import threading
-import hashlib
 
 from tldw_Server_API.app.core.config import get_config_section
 from tldw_Server_API.app.core.config_paths import resolve_module_yaml
@@ -24,6 +25,16 @@ from tldw_Server_API.app.core.config_utils import (
     load_module_yaml,
     merge_config_layers,
     section_to_nested_dict,
+)
+
+_EVAL_CONFIG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    yaml.YAMLError,
 )
 
 
@@ -41,7 +52,7 @@ class RateLimitTierConfig:
     description: str = ""
 
     @classmethod
-    def from_dict(cls, tier_name: str, data: Dict[str, Any]) -> "RateLimitTierConfig":
+    def from_dict(cls, tier_name: str, data: dict[str, Any]) -> "RateLimitTierConfig":
         """Create config from dictionary data."""
         return cls(
             tier=tier_name,
@@ -64,10 +75,10 @@ class CircuitBreakerConfig:
     success_threshold: int
     timeout_seconds: float
     recovery_timeout_seconds: float
-    expected_exceptions: List[str] = field(default_factory=list)
+    expected_exceptions: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, provider_name: str, data: Dict[str, Any]) -> "CircuitBreakerConfig":
+    def from_dict(cls, provider_name: str, data: dict[str, Any]) -> "CircuitBreakerConfig":
         """Create config from dictionary data."""
         return cls(
             provider=provider_name,
@@ -102,10 +113,7 @@ class EvaluationsConfigManager:
         """
         if config_path is None:
             env_path = os.getenv("EVALUATIONS_CONFIG_PATH")
-            if env_path:
-                config_path = Path(env_path).expanduser()
-            else:
-                config_path = resolve_module_yaml("evaluations")
+            config_path = Path(env_path).expanduser() if env_path else resolve_module_yaml("evaluations")
         if config_path is None:
             config_path = Path("evaluations_config.yaml")
 
@@ -114,15 +122,15 @@ class EvaluationsConfigManager:
         self.enable_hot_reload = enable_hot_reload
 
         # Configuration cache
-        self._config: Dict[str, Any] = {}
-        self._config_sources: Dict[str, Any] = {}
+        self._config: dict[str, Any] = {}
+        self._config_sources: dict[str, Any] = {}
         self._config_hash: Optional[str] = None
         self._last_loaded: Optional[datetime] = None
         self._lock = threading.RLock()
 
         # Parsed configurations
-        self._rate_limit_tiers: Dict[str, RateLimitTierConfig] = {}
-        self._circuit_breaker_configs: Dict[str, CircuitBreakerConfig] = {}
+        self._rate_limit_tiers: dict[str, RateLimitTierConfig] = {}
+        self._circuit_breaker_configs: dict[str, CircuitBreakerConfig] = {}
 
         # Hot reload task
         self._reload_task: Optional[asyncio.Task] = None
@@ -214,7 +222,7 @@ class EvaluationsConfigManager:
             logger.info(f"Environment: {self.environment}")
             return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to load configuration: {e}")
             return False
 
@@ -227,14 +235,14 @@ class EvaluationsConfigManager:
             logger.info(f"Applying {self.environment} environment overrides")
             self._deep_merge(self._config, env_config)
 
-    def _load_env_overrides(self) -> Dict[str, Any]:
+    def _load_env_overrides(self) -> dict[str, Any]:
         """Load env-provided config overrides (YAML/JSON payload)."""
         raw = os.getenv("EVALUATIONS_CONFIG_OVERRIDES")
         if not raw:
             return {}
         try:
             data = yaml.safe_load(raw)
-        except Exception as exc:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Invalid EVALUATIONS_CONFIG_OVERRIDES payload: {exc}")
             return {}
         if not isinstance(data, dict):
@@ -242,7 +250,7 @@ class EvaluationsConfigManager:
             return {}
         return data
 
-    def _deep_merge(self, base: Dict[str, Any], override: Dict[str, Any]):
+    def _deep_merge(self, base: dict[str, Any], override: dict[str, Any]):
         """Recursively merge override config into base config."""
         for key, value in override.items():
             if key in base and isinstance(base[key], dict) and isinstance(value, dict):
@@ -260,7 +268,7 @@ class EvaluationsConfigManager:
             try:
                 tier_config = RateLimitTierConfig.from_dict(tier_name, tier_data)
                 self._rate_limit_tiers[tier_name] = tier_config
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Invalid rate limit config for tier '{tier_name}': {e}")
 
         logger.info(f"Loaded {len(self._rate_limit_tiers)} rate limit tier configurations")
@@ -275,7 +283,7 @@ class EvaluationsConfigManager:
             try:
                 cb_config = CircuitBreakerConfig.from_dict(provider_name, provider_data)
                 self._circuit_breaker_configs[provider_name] = cb_config
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Invalid circuit breaker config for provider '{provider_name}': {e}")
 
         logger.info(f"Loaded {len(self._circuit_breaker_configs)} circuit breaker configurations")
@@ -301,7 +309,7 @@ class EvaluationsConfigManager:
                         else:
                             logger.error("Failed to reload configuration")
 
-            except Exception as e:
+            except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Hot reload error: {e}")
                 await asyncio.sleep(30)  # Wait longer on error
 
@@ -339,7 +347,7 @@ class EvaluationsConfigManager:
         """
         return self._rate_limit_tiers.get(tier)
 
-    def get_all_rate_limit_tiers(self) -> Dict[str, RateLimitTierConfig]:
+    def get_all_rate_limit_tiers(self) -> dict[str, RateLimitTierConfig]:
         """Get all rate limit tier configurations."""
         return self._rate_limit_tiers.copy()
 
@@ -362,14 +370,14 @@ class EvaluationsConfigManager:
 
         return config
 
-    def get_all_circuit_breaker_configs(self) -> Dict[str, CircuitBreakerConfig]:
+    def get_all_circuit_breaker_configs(self) -> dict[str, CircuitBreakerConfig]:
         """Get all circuit breaker configurations."""
         return self._circuit_breaker_configs.copy()
 
     def update_tier_config(
         self,
         tier: str,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         persist: bool = False
     ) -> bool:
         """
@@ -402,7 +410,7 @@ class EvaluationsConfigManager:
                 logger.info(f"Updated tier '{tier}' configuration: {updates}")
                 return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update tier configuration: {e}")
             return False
 
@@ -415,11 +423,11 @@ class EvaluationsConfigManager:
             logger.info(f"Configuration persisted to {self.config_path}")
             return True
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to persist configuration: {e}")
             return False
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get configuration manager status.
 
@@ -438,7 +446,7 @@ class EvaluationsConfigManager:
                 "config_sections": list(self._config.keys()) if self._config else []
             }
 
-    def get_config_snapshot(self) -> Dict[str, Any]:
+    def get_config_snapshot(self) -> dict[str, Any]:
         """Return a snapshot of the effective config and source tags."""
         with self._lock:
             return {
@@ -452,7 +460,7 @@ class EvaluationsConfigManager:
         self._config_hash = None  # Force reload
         return self.load_config()
 
-    def validate_config(self) -> List[str]:
+    def validate_config(self) -> list[str]:
         """
         Validate current configuration.
 
@@ -501,7 +509,7 @@ class EvaluationsConfigManager:
                             if field not in provider_data:
                                 errors.append(f"Missing field '{field}' in circuit breaker '{provider_name}'")
 
-        except Exception as e:
+        except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS as e:
             errors.append(f"Configuration validation error: {e}")
 
         return errors
@@ -515,7 +523,7 @@ config_manager = EvaluationsConfigManager(
 
 try:
     config_manager.ensure_hot_reload_started()
-except Exception:
+except _EVAL_CONFIG_NONCRITICAL_EXCEPTIONS:
     # Best-effort: avoid import-time crashes if no loop is running yet
     pass
 
@@ -531,7 +539,7 @@ def get_circuit_breaker_config(provider: str) -> Optional[CircuitBreakerConfig]:
     return config_manager.get_circuit_breaker_config(provider)
 
 
-def get_config_snapshot() -> Dict[str, Any]:
+def get_config_snapshot() -> dict[str, Any]:
     """Get the current evaluations config and source tags."""
     return config_manager.get_config_snapshot()
 
@@ -546,6 +554,6 @@ def reload_config() -> bool:
     return config_manager.reload()
 
 
-def validate_config() -> List[str]:
+def validate_config() -> list[str]:
     """Validate current configuration."""
     return config_manager.validate_config()

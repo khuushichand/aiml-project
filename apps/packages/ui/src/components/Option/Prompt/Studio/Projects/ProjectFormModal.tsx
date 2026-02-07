@@ -137,7 +137,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
             })
       }
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       {isEditing && isLoadingProject ? (
         <Skeleton paragraph={{ rows: 3 }} />

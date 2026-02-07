@@ -75,6 +75,11 @@ const STATUS_CONFIG: Record<
     icon: <Hand className="w-4 h-4" />,
     label: "Waiting"
   },
+  waiting_approval: {
+    color: "warning",
+    icon: <Hand className="w-4 h-4" />,
+    label: "Waiting Approval"
+  },
   cancelled: {
     color: "default",
     icon: <XCircle className="w-4 h-4" />,
@@ -212,7 +217,7 @@ export const ExecutionPanel = ({ className = "" }: ExecutionPanelProps) => {
 
   const isRunning = status === "running"
   const isPaused = status === "paused"
-  const isWaiting = status === "waiting_human"
+  const isWaiting = status === "waiting_human" || status === "waiting_approval"
   const isIdle = status === "idle"
   const isCompleted = status === "completed" || status === "failed" || status === "cancelled"
 

@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.http_client import create_client, RetryPolicy
+from tldw_Server_API.app.core.http_client import create_client
+
 from .base import EmbeddingsProvider
 
 
 class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
     name = "huggingface-embeddings"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "dimensions_default": None,
             "max_batch_size": 128,
@@ -28,18 +29,18 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
         import os
         return os.getenv("HUGGINGFACE_INFERENCE_BASE_URL", "https://api-inference.huggingface.co/models").rstrip("/")
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _normalize(self, raw: Union[List[Any], Dict[str, Any]], *, multi: bool) -> Dict[str, Any]:
+    def _normalize(self, raw: list[Any] | dict[str, Any], *, multi: bool) -> dict[str, Any]:
         # HF returns list[list[float]] or sometimes dict containing embeddings
         if isinstance(raw, dict) and "data" in raw:
             return raw  # already normalized by caller
         if not multi:
-            vec: List[float] = []
+            vec: list[float] = []
             if isinstance(raw, list):
                 # Some models return [[...]] for single input
                 vec = raw[0] if raw and isinstance(raw[0], list) else raw  # type: ignore[assignment]
@@ -47,7 +48,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
                 vec = raw.get("embeddings") or []
             return {"data": [{"index": 0, "embedding": vec}], "object": "list", "model": None}
         # multi
-        data: List[Dict[str, Any]] = []
+        data: list[dict[str, Any]] = []
         if isinstance(raw, list):
             # Could be [vec1, vec2, ...] or [[...],[...]]
             arr = raw
@@ -64,7 +65,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
                 data.append({"index": i, "embedding": vec})
         return {"data": data, "object": "list", "model": None}
 
-    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         inputs = request.get("input")
         model = request.get("model")
         api_key = request.get("api_key")
@@ -75,7 +76,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
         if self._use_native_http():
             url = f"{self._base_url()}/{model}"
             headers = self._headers(api_key)
-            payload: Dict[str, Any]
+            payload: dict[str, Any]
             if isinstance(inputs, list):
                 payload = {"inputs": inputs, "options": {"wait_for_model": True}}
                 multi = True
@@ -91,7 +92,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
                 return self._normalize(data, multi=multi)
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         # Fallback: do not attempt legacy path; endpoint will fall back
         msg = (

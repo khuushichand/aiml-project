@@ -1,42 +1,103 @@
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any
 from urllib.parse import urlparse
 
 import aiofiles
 from loguru import logger
 
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.http_client import (
+    _validate_egress_or_raise,
+)
+from tldw_Server_API.app.core.http_client import (
+    afetch as _m_afetch,
+)
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
+    resolve_safe_local_path,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
     EXT_TO_MEDIA_TYPE_KEY,
     _extension_candidates,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
-from tldw_Server_API.app.core.http_client import (
-    afetch as _m_afetch,
-    create_async_client as _create_async_client,
-    _validate_egress_or_raise,
+
+_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+try:
+    from requests.exceptions import RequestException as _REQUESTS_REQUEST_EXCEPTION
+except ImportError:
+    _REQUESTS_REQUEST_EXCEPTION = None
+
+try:
+    from httpx import HTTPError as _HTTPX_HTTP_ERROR
+    from httpx import RequestError as _HTTPX_REQUEST_ERROR
+except ImportError:
+    _HTTPX_HTTP_ERROR = None
+    _HTTPX_REQUEST_ERROR = None
+
+_DOWNLOAD_UTILS_DOWNLOAD_EXCEPTIONS = (
+    *_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS,
+    *((_REQUESTS_REQUEST_EXCEPTION,) if _REQUESTS_REQUEST_EXCEPTION else ()),
+    *((_HTTPX_REQUEST_ERROR,) if _HTTPX_REQUEST_ERROR else ()),
+    *((_HTTPX_HTTP_ERROR,) if _HTTPX_HTTP_ERROR else ()),
 )
 
 
-def _get_media_processing_config() -> Dict[str, Any]:
+def _validate_target_path(target_dir: Path, filename: str) -> Path:
+    """
+    Validate that the constructed path stays within target_dir.
+
+    Raises ValueError if path traversal is detected.
+    """
+    if filename in {".", ".."}:
+        raise ValueError("Unsafe filename for download.")
+    # Path construction is intentional here; resolve_safe_local_path validates containment.
+    # nosec B108  # noqa: S108  # codeql[py/path-injection]: validated by resolve_safe_local_path
+    candidate = target_dir / filename
+    resolved = resolve_safe_local_path(candidate, target_dir)
+    if resolved is None:
+        raise ValueError(
+            f"Path traversal detected: filename '{filename}' escapes target directory"
+        )
+    return resolved
+
+
+def _get_media_processing_config() -> dict[str, Any]:
     try:
         cfg = loaded_config_data.get("media_processing", {}) if loaded_config_data else {}
         return cfg or {}
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         return {}
 
 
-def _resolve_media_type_from_suffix(suffix: Optional[str]) -> Optional[str]:
+def _resolve_media_type_from_suffix(suffix: str | None) -> str | None:
     if not suffix:
         return None
     return EXT_TO_MEDIA_TYPE_KEY.get(suffix.lower())
 
 
-def _resolve_media_type_from_content_type(content_type: str) -> Optional[str]:
+def _resolve_media_type_from_content_type(content_type: str) -> str | None:
     content_map = {
         "application/json": "document",
         "application/pdf": "pdf",
@@ -58,7 +119,7 @@ def _resolve_media_type_from_content_type(content_type: str) -> Optional[str]:
 def _extension_candidates_from_name(name: str) -> list[str]:
     try:
         return _extension_candidates(name)
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         suffixes = [s.lower() for s in Path(name).suffixes if s]
         candidates: list[str] = []
         for idx in range(len(suffixes)):
@@ -80,15 +141,15 @@ def _strip_all_suffixes(name: str) -> str:
 
 def _pick_allowed_candidate(
     candidates: list[str],
-    allowed_extensions: Set[str],
-) -> Optional[str]:
+    allowed_extensions: set[str],
+) -> str | None:
     for candidate in candidates:
         if candidate in allowed_extensions:
             return candidate
     return None
 
 
-def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
+def _max_bytes_for_media_type(media_type_key: str | None) -> int | None:
     if not media_type_key:
         return None
     config = DEFAULT_MEDIA_TYPE_CONFIG.get(media_type_key.lower())
@@ -104,7 +165,7 @@ def _max_bytes_for_media_type(media_type_key: Optional[str]) -> Optional[int]:
     return None
 
 
-def _fallback_max_bytes() -> Optional[int]:
+def _fallback_max_bytes() -> int | None:
     cfg = _get_media_processing_config()
     size_mb = cfg.get("max_unknown_file_size_mb")
     if size_mb is None:
@@ -116,11 +177,11 @@ def _fallback_max_bytes() -> Optional[int]:
 
 def _resolve_max_bytes(
     *,
-    max_bytes: Optional[int],
-    media_type_key: Optional[str],
-    effective_suffix: Optional[str],
+    max_bytes: int | None,
+    media_type_key: str | None,
+    effective_suffix: str | None,
     content_type: str,
-) -> Optional[int]:
+) -> int | None:
     if isinstance(max_bytes, int) and max_bytes > 0:
         return max_bytes
     resolved_media_type = (
@@ -138,8 +199,8 @@ def _resolve_max_bytes(
 
 def _enforce_max_bytes_from_headers(
     url: str,
-    content_length: Optional[str],
-    max_bytes: Optional[int],
+    content_length: str | None,
+    max_bytes: int | None,
 ) -> None:
     if not max_bytes:
         return
@@ -160,7 +221,7 @@ async def _write_response_to_path(
     url: str,
     resp: Any,
     target_path: Path,
-    max_bytes: Optional[int],
+    max_bytes: int | None,
 ) -> None:
     total = 0
     async with aiofiles.open(target_path, "wb") as f:
@@ -176,15 +237,15 @@ async def _write_response_to_path(
             await f.write(chunk)
 
 async def download_url_async(
-    client: Optional[Any],
+    client: Any | None,
     url: str,
     target_dir: Path,
-    allowed_extensions: Optional[Set[str]] = None,
+    allowed_extensions: set[str] | None = None,
     check_extension: bool = True,
-    disallow_content_types: Optional[Set[str]] = None,
+    disallow_content_types: set[str] | None = None,
     allow_redirects: bool = True,
-    max_bytes: Optional[int] = None,
-    media_type_key: Optional[str] = None,
+    max_bytes: int | None = None,
+    media_type_key: str | None = None,
 ) -> Path:
     """
     Minimal core-backed URL downloader used by tests and modular endpoints.
@@ -203,10 +264,7 @@ async def download_url_async(
     - Enforce per-media size caps (or explicit max_bytes) before and during
       streaming to prevent oversized downloads.
     """
-    if allowed_extensions is None:
-        allowed_extensions = set()
-    else:
-        allowed_extensions = {ext.lower() for ext in allowed_extensions}
+    allowed_extensions = set() if allowed_extensions is None else {ext.lower() for ext in allowed_extensions}
 
     # Enforce outbound policy early to avoid bypassing central egress controls.
     _validate_egress_or_raise(url)
@@ -215,7 +273,7 @@ async def download_url_async(
     try:
         url_obj = urlparse(url)
         seed_segment = url_obj.path.split("/")[-1] or f"downloaded_{hash(url)}.tmp"
-    except Exception:
+    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
         seed_segment = f"downloaded_{hash(url)}.tmp"
 
     test_mode_active = bool(is_test_mode()) or bool(__import__("os").getenv("PYTEST_CURRENT_TEST"))
@@ -230,14 +288,14 @@ async def download_url_async(
     # Plain stream-only clients are only honored in test mode; otherwise we fall
     # back to the central HTTP client helpers.
     stream_only_client = None
-    client_for_afetch: Optional[Any] = client if client and hasattr(client, "request") else None
+    client_for_afetch: Any | None = client if client and hasattr(client, "request") else None
     if client is not None and not hasattr(client, "request"):
         if test_mode_active and hasattr(client, "stream"):
             stream_only_client = client
         else:
             client_for_afetch = None
 
-    resp: Optional[Any] = None
+    resp: Any | None = None
     owns_client = False
     try:
         # Some tests supply lightweight clients that only implement `.stream`
@@ -263,16 +321,14 @@ async def download_url_async(
                 if "filename=" in cd:
                     try:
                         part = cd.split("filename=", 1)[1]
-                        if part.startswith("\""):
-                            part = part.split("\"", 2)[1]
-                        else:
-                            part = part.split(";", 1)[0]
+                        part = part.split('"', 2)[1] if part.startswith('"') else part.split(";", 1)[0]
                         part = part.strip()
                         if part:
                             filename = part
-                    except Exception:
+                    except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                         pass
-                # Basic sanitization
+                # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
+                # nosec B108  # noqa: S108  # codeql[py/path-injection]: safe_name validated at line 353
                 safe_name = "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in filename) or seed_segment
                 # Determine effective suffix, checking allowed_extensions when requested.
                 candidates = _extension_candidates_from_name(safe_name)
@@ -287,7 +343,7 @@ async def download_url_async(
                             alt_seg = resp.url.path.split("/")[-1]
                             alt_candidates = _extension_candidates_from_name(alt_seg)
                             alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
-                        except Exception:
+                        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                             alt_suffix = ""
                         if alt_suffix:
                             effective_suffix = alt_suffix
@@ -332,21 +388,20 @@ async def download_url_async(
                     resp.headers.get("content-length"),
                     resolved_max_bytes,
                 )
-                target_path = target_dir / safe_name
+                target_path = _validate_target_path(target_dir, safe_name)
                 counter = 1
                 stem = target_path.stem
                 suffix = target_path.suffix
                 while target_path.exists():
-                    target_path = target_dir / f"{stem}_{counter}{suffix}"
+                    collision_name = f"{stem}_{counter}{suffix}"
+                    target_path = _validate_target_path(target_dir, collision_name)
                     counter += 1
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
-                except Exception:
-                    try:
+                except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
+                    with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                         target_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
                     raise
                 logger.info("Downloaded {} to {}", url, target_path)
                 return target_path
@@ -384,17 +439,15 @@ async def download_url_async(
             try:
                 # naive parse: filename="name.ext"
                 part = cd.split("filename=", 1)[1]
-                if part.startswith("\""):
-                    part = part.split("\"", 2)[1]
-                else:
-                    part = part.split(";", 1)[0]
+                part = part.split('"', 2)[1] if part.startswith('"') else part.split(";", 1)[0]
                 part = part.strip()
                 if part:
                     filename = part
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 pass
 
-        # Basic sanitization
+        # Basic sanitization; seed_segment fallback is validated via _validate_target_path below.
+        # nosec B108  # noqa: S108  # codeql[py/path-injection]: safe_name validated at line 483
         safe_name = "".join(
             c if c.isalnum() or c in ("-", "_", ".") else "_"
             for c in filename
@@ -413,7 +466,7 @@ async def download_url_async(
                     alt_seg = resp.url.path.split("/")[-1]
                     alt_candidates = _extension_candidates_from_name(alt_seg)
                     alt_suffix = _pick_allowed_candidate(alt_candidates, allowed_extensions) or ""
-                except Exception:
+                except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                     alt_suffix = ""
                 if alt_suffix:
                     effective_suffix = alt_suffix
@@ -461,27 +514,26 @@ async def download_url_async(
             resolved_max_bytes,
         )
 
-        target_path = target_dir / safe_name
+        target_path = _validate_target_path(target_dir, safe_name)
         counter = 1
         stem = target_path.stem
         suffix = target_path.suffix
         while target_path.exists():
-            target_path = target_dir / f"{stem}_{counter}{suffix}"
+            collision_name = f"{stem}_{counter}{suffix}"
+            target_path = _validate_target_path(target_dir, collision_name)
             counter += 1
 
         target_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             await _write_response_to_path(url, resp, target_path, resolved_max_bytes)
-        except Exception:
-            try:
+        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
+            with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                 target_path.unlink(missing_ok=True)
-            except Exception:
-                pass
             raise
 
         logger.info("Downloaded {} to {}", url, target_path)
         return target_path
-    except Exception as exc:
+    except _DOWNLOAD_UTILS_DOWNLOAD_EXCEPTIONS as exc:
         # In test mode, allow a graceful fallback to a tiny stub file so that
         # offline URL acceptance tests can proceed without external network.
         if test_mode_active and target_dir:
@@ -493,6 +545,8 @@ async def download_url_async(
                 "allowed extension" in str(exc).lower()
                 or "unsupported" in str(exc).lower()
                 or "exceeds maximum allowed size" in str(exc).lower()
+                or "unsafe filename" in str(exc).lower()
+                or "path traversal" in str(exc).lower()
             ):
                 raise
 
@@ -505,8 +559,13 @@ async def download_url_async(
                 fallback_ext = sorted(allowed_extensions)[0] if allowed_extensions else ".tmp"
             if fallback_ext and not fallback_ext.startswith("."):
                 fallback_ext = f".{fallback_ext}"
-            fallback_name = f"{seed_segment}{fallback_ext if not seed_segment.endswith(fallback_ext) else ''}"
-            target_path = Path(target_dir) / fallback_name
+            # Sanitize seed_segment to prevent path traversal in test-mode fallback
+            safe_seed = "".join(
+                c if c.isalnum() or c in ("-", "_", ".") else "_"
+                for c in seed_segment
+            ) or "downloaded"
+            fallback_name = f"{safe_seed}{fallback_ext if not safe_seed.endswith(fallback_ext) else ''}"
+            target_path = _validate_target_path(Path(target_dir), fallback_name)
             target_path.parent.mkdir(parents=True, exist_ok=True)
             payload = b"TEST offline fallback content license FastAPI Example Domain"
             try:
@@ -520,7 +579,7 @@ async def download_url_async(
                     sample_pdf = repo_root / "tests/Media_Ingestion_Modification/test_media/sample.pdf"
                     if sample_pdf.exists():
                         payload = sample_pdf.read_bytes()
-            except Exception:
+            except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
                 payload = b"TEST"
             async with aiofiles.open(target_path, "wb") as f:
                 await f.write(payload)
@@ -531,10 +590,8 @@ async def download_url_async(
         try:
             if resp is not None:
                 await resp.aclose()
-        except Exception:
+        except _DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS:
             pass
         if owns_client and client_for_afetch is not None:
-            try:
+            with contextlib.suppress(_DOWNLOAD_UTILS_NONCRITICAL_EXCEPTIONS):
                 await client_for_afetch.aclose()
-            except Exception:
-                pass

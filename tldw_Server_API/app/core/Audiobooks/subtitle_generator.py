@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-import os
-from typing import Iterable, List, Optional, Sequence
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Utils.common import parse_boolean
-from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     AlignmentPayload,
     AlignmentWord,
@@ -18,6 +16,8 @@ from tldw_Server_API.app.api.v1.schemas.audiobook_schemas import (
     SubtitleMode,
     SubtitleVariant,
 )
+from tldw_Server_API.app.core.config import get_config_value
+from tldw_Server_API.app.core.Utils.common import parse_boolean
 
 
 @dataclass(frozen=True)
@@ -34,12 +34,12 @@ def generate_subtitles(
     format: SubtitleFormat,
     mode: SubtitleMode,
     variant: SubtitleVariant,
-    source_text: Optional[str] = None,
-    enable_spacy: Optional[bool] = None,
-    words_per_cue: Optional[int] = None,
-    max_chars: Optional[int] = None,
-    max_lines: Optional[int] = None,
-    max_duration_ms: Optional[int] = None,
+    source_text: str | None = None,
+    enable_spacy: bool | None = None,
+    words_per_cue: int | None = None,
+    max_chars: int | None = None,
+    max_lines: int | None = None,
+    max_duration_ms: int | None = None,
 ) -> str:
     """Generate subtitle content for the requested format."""
     words = alignment.words
@@ -60,7 +60,7 @@ def generate_subtitles(
         cues = _build_cues(words, mode, effective_words_per_cue, source_text=source_text)
     line_sep = "\\N" if format == "ass" else "\n"
 
-    rendered: List[SubtitleCue] = []
+    rendered: list[SubtitleCue] = []
     for idx, cue_words in enumerate(cues, start=1):
         start_ms = cue_words[0].start_ms
         end_ms = cue_words[-1].end_ms
@@ -90,7 +90,7 @@ def generate_subtitles(
     raise ValueError(f"unsupported subtitle format: {format}")
 
 
-def _resolve_max_chars(max_chars: Optional[int], variant: SubtitleVariant) -> Optional[int]:
+def _resolve_max_chars(max_chars: int | None, variant: SubtitleVariant) -> int | None:
     if max_chars is not None:
         return max_chars
     if variant == "narrow":
@@ -105,8 +105,8 @@ def _build_cues(
     mode: SubtitleMode,
     words_per_cue: int,
     *,
-    source_text: Optional[str],
-) -> List[List[AlignmentWord]]:
+    source_text: str | None,
+) -> list[list[AlignmentWord]]:
     if mode == "highlight":
         return [[word] for word in words]
     if mode == "word_count":
@@ -116,8 +116,8 @@ def _build_cues(
     return _chunk_lines(words, source_text=source_text)
 
 
-def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> List[List[AlignmentWord]]:
-    cues: List[List[AlignmentWord]] = []
+def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> list[list[AlignmentWord]]:
+    cues: list[list[AlignmentWord]] = []
     for i in range(0, len(words), words_per_cue):
         cues.append(list(words[i : i + words_per_cue]))
     return cues
@@ -126,15 +126,15 @@ def _chunk_words(words: Sequence[AlignmentWord], words_per_cue: int) -> List[Lis
 def _chunk_sentences(
     words: Sequence[AlignmentWord],
     *,
-    source_text: Optional[str],
-    enable_spacy: Optional[bool],
-) -> List[List[AlignmentWord]]:
+    source_text: str | None,
+    enable_spacy: bool | None,
+) -> list[list[AlignmentWord]]:
     if source_text and _should_use_spacy(enable_spacy):
         spacy_cues = _chunk_sentences_spacy(words, source_text)
         if spacy_cues:
             return spacy_cues
-    cues: List[List[AlignmentWord]] = []
-    current: List[AlignmentWord] = []
+    cues: list[list[AlignmentWord]] = []
+    current: list[AlignmentWord] = []
     for word in words:
         current.append(word)
         if word.word.strip().endswith((".", "!", "?")):
@@ -148,7 +148,7 @@ def _chunk_sentences(
 def _chunk_sentences_spacy(
     words: Sequence[AlignmentWord],
     source_text: str,
-) -> Optional[List[List[AlignmentWord]]]:
+) -> list[list[AlignmentWord]] | None:
     nlp = _load_spacy_model()
     if nlp is None:
         return None
@@ -161,8 +161,8 @@ def _chunk_sentences_spacy(
     if not sentences:
         return None
 
-    cues: List[List[AlignmentWord]] = []
-    current: List[AlignmentWord] = []
+    cues: list[list[AlignmentWord]] = []
+    current: list[AlignmentWord] = []
     sent_idx = 0
     current_end = sentences[0].end_char
     for word in words:
@@ -180,7 +180,7 @@ def _chunk_sentences_spacy(
     return cues if cues else None
 
 
-def _should_use_spacy(enable_spacy: Optional[bool]) -> bool:
+def _should_use_spacy(enable_spacy: bool | None) -> bool:
     if enable_spacy is not None:
         return enable_spacy
     env_value = os.getenv("AUDIOBOOK_ENABLE_SPACY")
@@ -211,12 +211,12 @@ def _load_spacy_model():
 def _chunk_lines(
     words: Sequence[AlignmentWord],
     *,
-    source_text: Optional[str],
-) -> List[List[AlignmentWord]]:
+    source_text: str | None,
+) -> list[list[AlignmentWord]]:
     if source_text and all(word.char_start is not None for word in words):
         return _chunk_lines_from_source(words, source_text)
-    cues: List[List[AlignmentWord]] = []
-    current: List[AlignmentWord] = []
+    cues: list[list[AlignmentWord]] = []
+    current: list[AlignmentWord] = []
     for word in words:
         current.append(word)
         if "\n" in word.word:
@@ -230,9 +230,9 @@ def _chunk_lines(
 def _chunk_lines_from_source(
     words: Sequence[AlignmentWord],
     source_text: str,
-) -> List[List[AlignmentWord]]:
-    cues: List[List[AlignmentWord]] = []
-    current: List[AlignmentWord] = []
+) -> list[list[AlignmentWord]]:
+    cues: list[list[AlignmentWord]] = []
+    current: list[AlignmentWord] = []
     text_len = len(source_text)
     for idx, word in enumerate(words):
         current.append(word)
@@ -261,7 +261,7 @@ def _chunk_lines_from_source(
 
 def _should_fallback_sentence(
     cues: Sequence[Sequence[AlignmentWord]],
-    max_chars: Optional[int],
+    max_chars: int | None,
     max_duration_ms: int,
 ) -> bool:
     for cue in cues:
@@ -290,8 +290,8 @@ def _clamp_cue_duration(start_ms: int, end_ms: int) -> tuple[int, int]:
 
 def _render_text(
     words: Sequence[AlignmentWord],
-    max_chars: Optional[int],
-    max_lines: Optional[int],
+    max_chars: int | None,
+    max_lines: int | None,
     line_sep: str,
 ) -> str:
     tokens = [word.word for word in words]
@@ -300,10 +300,7 @@ def _render_text(
     if max_chars is not None and max_chars <= 0:
         raise ValueError("max_chars must be positive")
 
-    if line_sep == "\n":
-        raw_text = " ".join(tokens).replace("\n", " ").strip()
-    else:
-        raw_text = " ".join(tokens).strip()
+    raw_text = " ".join(tokens).replace("\n", " ").strip() if line_sep == "\n" else " ".join(tokens).strip()
     if max_chars is None and max_lines is None:
         return raw_text
 
@@ -311,16 +308,13 @@ def _render_text(
         if max_lines is None:
             return raw_text
         # split lines only on explicit newlines for line mode cues
-        if line_sep == "\n":
-            lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
-        else:
-            lines = [raw_text]
+        lines = [line.strip() for line in raw_text.split("\n") if line.strip()] if line_sep == "\n" else [raw_text]
         if max_lines is not None and len(lines) > max_lines:
             merged = " ".join(lines[max_lines - 1 :])
             lines = lines[: max_lines - 1] + [merged]
         return line_sep.join(lines).strip()
-    lines: List[str] = []
-    current: List[str] = []
+    lines: list[str] = []
+    current: list[str] = []
     for token in tokens:
         candidate = " ".join(current + [token]) if current else token
         if len(candidate) <= max_chars or not current:
@@ -333,15 +327,12 @@ def _render_text(
     if max_lines is not None and len(lines) > max_lines:
         merged = " ".join(lines[max_lines - 1 :])
         lines = lines[: max_lines - 1] + [merged]
-    if line_sep == "\n":
-        rendered = line_sep.join(lines).replace("\n\n", "\n").strip()
-    else:
-        rendered = line_sep.join(lines).strip()
+    rendered = line_sep.join(lines).replace("\n\n", "\n").strip() if line_sep == "\n" else line_sep.join(lines).strip()
     return rendered
 
 
 def _format_srt(cues: Iterable[SubtitleCue]) -> str:
-    blocks: List[str] = []
+    blocks: list[str] = []
     for cue in cues:
         start = _format_srt_time(cue.start_ms)
         end = _format_srt_time(cue.end_ms)
@@ -350,7 +341,7 @@ def _format_srt(cues: Iterable[SubtitleCue]) -> str:
 
 
 def _format_vtt(cues: Iterable[SubtitleCue], variant: SubtitleVariant) -> str:
-    blocks: List[str] = ["WEBVTT"]
+    blocks: list[str] = ["WEBVTT"]
     settings = " align:center" if variant == "centered" else ""
     for cue in cues:
         start = _format_vtt_time(cue.start_ms)
@@ -373,7 +364,7 @@ def _format_ass(cues: Iterable[SubtitleCue], variant: SubtitleVariant) -> str:
         "[Events]\n"
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text"
     )
-    lines: List[str] = [header]
+    lines: list[str] = [header]
     for cue in cues:
         start = _format_ass_time(cue.start_ms)
         end = _format_ass_time(cue.end_ms)

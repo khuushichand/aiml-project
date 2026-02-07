@@ -1,34 +1,35 @@
 from __future__ import annotations
-from typing import Generator
-from pathlib import Path
-import os
+
 import inspect
-import numpy as np
 import re
+from collections.abc import Generator
+from pathlib import Path
+
+import numpy as np
 
 # Defer heavy imports; set to None if missing and import lazily where needed
 try:  # pragma: no cover
     import torch  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     torch = None  # type: ignore
 
 try:  # pragma: no cover
     import librosa  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     librosa = None  # type: ignore
 
 # Try to import perth; fall back to local stub if unavailable
 try:
     import perth  # type: ignore
-except Exception:  # pragma: no cover - dev env fallback
+except ImportError:  # pragma: no cover - dev env fallback
     try:
         from vendor_stubs import perth  # type: ignore
-    except Exception:
+    except ImportError:
         perth = None  # type: ignore
 
 try:
-    from neucodec import NeuCodec, DistillNeuCodec  # type: ignore
-except Exception:  # pragma: no cover - adapter will gracefully handle missing dep
+    from neucodec import DistillNeuCodec, NeuCodec  # type: ignore
+except ImportError:  # pragma: no cover - adapter will gracefully handle missing dep
     NeuCodec = None  # type: ignore
     DistillNeuCodec = None  # type: ignore
 
@@ -136,7 +137,7 @@ class NeuTTSAir:
                 n_gpu_layers=-1 if backbone_device == "gpu" else 0,
                 n_ctx=self.max_context,
                 mlock=True,
-                flash_attn=True if backbone_device == "gpu" else False,
+                flash_attn=backbone_device == "gpu",
             )
             self._is_quantized_model = True
 
@@ -145,7 +146,8 @@ class NeuTTSAir:
             global AutoTokenizer, AutoModelForCausalLM
             if AutoTokenizer is None or AutoModelForCausalLM is None:
                 try:
-                    from transformers import AutoTokenizer as _AT, AutoModelForCausalLM as _AM  # type: ignore
+                    from transformers import AutoModelForCausalLM as _AM
+                    from transformers import AutoTokenizer as _AT  # type: ignore
                     AutoTokenizer, AutoModelForCausalLM = _AT, _AM
                 except Exception as e:  # pragma: no cover
                     raise ImportError(

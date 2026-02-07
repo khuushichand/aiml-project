@@ -3,6 +3,7 @@ import uuid
 import io
 import zipfile
 import sqlite3
+from datetime import datetime
 import pytest
 from fastapi.testclient import TestClient
 from loguru import logger
@@ -267,6 +268,7 @@ def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
     r = client_with_flashcards_db.put(f"/api/v1/flashcards/{uuid}/tags", json={"tags": ["alpha", "beta"]}, headers=AUTH_HEADERS)
     assert r.status_code == 200
     updated = r.json()
+    assert updated.get("tags") == ["alpha", "beta"]
     # tags_json returns JSON string
     tags_json = updated.get("tags_json")
     assert tags_json
@@ -280,6 +282,61 @@ def test_set_tags_and_linkage(client_with_flashcards_db: TestClient):
     items = data.get("items", [])
     kw_texts = {kw.get("keyword") for kw in items}
     assert {"alpha", "beta"}.issubset(kw_texts)
+
+
+def test_get_flashcard_alias_path_returns_card(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "AliasDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Alias Q",
+        "back": "Alias A",
+        "tags": ["t1"]
+    }, headers=AUTH_HEADERS)
+    card = r.json()
+    uuid = card["uuid"]
+
+    r = client_with_flashcards_db.get(f"/api/v1/flashcards/{uuid}", headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["uuid"] == uuid
+    assert data.get("tags") == ["t1"]
+
+
+def test_create_flashcard_normalizes_model_fields(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "NormalizeDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Cloze {{c1::x}}",
+        "back": "",
+        "is_cloze": True
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    card = r.json()
+    assert card["model_type"] == "cloze"
+    assert card["is_cloze"] is True
+    assert card["reverse"] is False
+
+
+def test_bulk_create_rejects_invalid_cloze(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "BulkDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards/bulk", json=[{
+        "deck_id": deck_id,
+        "front": "No cloze pattern here",
+        "back": "",
+        "model_type": "cloze"
+    }], headers=AUTH_HEADERS)
+    assert r.status_code == 400
+
+
+def test_review_missing_flashcard_returns_404(client_with_flashcards_db: TestClient):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/review", json={
+        "card_uuid": str(uuid.uuid4()),
+        "rating": 3
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 404
 
 
 def test_patch_partial_update_keeps_required_fields(client_with_flashcards_db: TestClient):
@@ -614,6 +671,53 @@ def test_round_trip_import_export_extra_reverse(client_with_flashcards_db: TestC
                         has_two = True
                         break
                 assert has_two
+            finally:
+                conn.close()
+    finally:
+        zf.close()
+
+
+def test_export_apkg_uses_due_at_for_review_cards(client_with_flashcards_db: TestClient, flashcards_db: CharactersRAGDB):
+    r = client_with_flashcards_db.post("/api/v1/flashcards/decks", json={"name": "DueDeck"}, headers=AUTH_HEADERS)
+    deck_id = r.json()["id"]
+    r = client_with_flashcards_db.post("/api/v1/flashcards", json={
+        "deck_id": deck_id,
+        "front": "Due Q",
+        "back": "Due A"
+    }, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    card = r.json()
+    card_uuid = card["uuid"]
+
+    # Force a review state with a specific due_at
+    due_at = "2030-01-15T00:00:00Z"
+    with flashcards_db.transaction() as conn:
+        conn.execute(
+            "UPDATE flashcards SET repetitions = 3, interval_days = 10, due_at = ? WHERE uuid = ?",
+            (due_at, card_uuid),
+        )
+
+    r = client_with_flashcards_db.get("/api/v1/flashcards/export", params={"format": "apkg"}, headers=AUTH_HEADERS)
+    assert r.status_code == 200
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    try:
+        with zf.open('collection.anki2') as f:
+            data = f.read()
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, 'col.anki2')
+            with open(p, 'wb') as fh:
+                fh.write(data)
+            conn = sqlite3.connect(p)
+            try:
+                col = conn.execute("SELECT crt FROM col").fetchone()
+                assert col
+                crt = int(col[0])
+                due_dt = datetime.fromisoformat(due_at.replace('Z', '+00:00'))
+                expected_due = max(1, int((due_dt.timestamp() - crt) / 86400.0))
+                note_id = conn.execute("SELECT id FROM notes WHERE flds LIKE ?", ("Due Q%",)).fetchone()[0]
+                due = conn.execute("SELECT due FROM cards WHERE nid = ?", (note_id,)).fetchone()[0]
+                assert due == expected_due
             finally:
                 conn.close()
     finally:

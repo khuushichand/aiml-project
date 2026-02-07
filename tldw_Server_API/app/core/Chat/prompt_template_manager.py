@@ -5,13 +5,15 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any, Optional
 
 from jinja2.sandbox import SandboxedEnvironment
+from loguru import logger
+
 #
 # Third-party Libraries
-from pydantic import BaseModel, Field
-from loguru import logger
+from pydantic import BaseModel
+
 #
 # Local Imports
 #
@@ -34,9 +36,9 @@ PROMPT_TEMPLATES_DIR.mkdir(exist_ok=True)
 # Functions:
 
 class PromptTemplatePlaceholders(BaseModel):
-    system: Optional[List[str]] = None
-    user: Optional[List[str]] = None
-    assistant: Optional[List[str]] = None
+    system: Optional[list[str]] = None
+    user: Optional[list[str]] = None
+    assistant: Optional[list[str]] = None
 
 class PromptTemplate(BaseModel):
     name: str
@@ -46,7 +48,7 @@ class PromptTemplate(BaseModel):
     assistant_message_content_template: Optional[str] = None
     placeholders: Optional[PromptTemplatePlaceholders] = None
 
-_loaded_templates: Dict[str, PromptTemplate] = {}
+_loaded_templates: dict[str, PromptTemplate] = {}
 
 def load_template(template_name: str) -> Optional[PromptTemplate]:
     """Loads a single prompt template from a JSON file.
@@ -87,7 +89,7 @@ def load_template(template_name: str) -> Optional[PromptTemplate]:
         logger.warning(f"Prompt template '{template_name}' not found at {resolved_path}")
         return None
     try:
-        with open(resolved_path, 'r', encoding='utf-8') as f:
+        with open(resolved_path, encoding='utf-8') as f:
             data = json.load(f)
             template = PromptTemplate(**data)
             _loaded_templates[template_name] = template
@@ -142,7 +144,7 @@ def safe_render(template_str: str, data: dict[str, Any]) -> str:
         return template_str      # fail closed: return raw
 
 
-def apply_template_to_string(template_string: Optional[str], data: Dict[str, Any]) -> Optional[str]:
+def apply_template_to_string(template_string: Optional[str], data: dict[str, Any]) -> Optional[str]:
     """
     Applies data to a template string using Jinja2 safe rendering.
     Missing placeholders will typically render as empty strings by Jinja2 default.
@@ -162,7 +164,7 @@ def apply_template_to_string(template_string: Optional[str], data: Dict[str, Any
         return template_string # Return original on error
 
 
-def get_available_templates() -> List[str]:
+def get_available_templates() -> list[str]:
     """Returns a list of available template names (without .json extension).
 
     Security: Only returns files that are actually within the templates directory.

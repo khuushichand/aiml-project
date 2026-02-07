@@ -11,6 +11,8 @@ import type {
   RunDetailResponse,
   ScrapedItem,
   ScrapedItemUpdate,
+  SourceSeenResetResponse,
+  SourceSeenStats,
   SourcesBulkCreateResponse,
   SourcesImportResponse,
   WatchlistClusterSubscription,
@@ -29,7 +31,8 @@ import type {
   WatchlistSourceUpdate,
   WatchlistTag,
   WatchlistTemplate,
-  WatchlistTemplateCreate
+  WatchlistTemplateCreate,
+  WatchlistTemplateVersionSummary
 } from "@/types/watchlists"
 
 // Helper to build query string (supports array params)
@@ -142,6 +145,28 @@ export const exportOpml = async (params?: {
   return bgRequest<string>({
     path: `/api/v1/watchlists/sources/export${qs}` as any,
     method: "GET"
+  })
+}
+
+export const getSourceSeenStats = async (
+  sourceId: number,
+  params?: { target_user_id?: number; keys_limit?: number }
+): Promise<SourceSeenStats> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<SourceSeenStats>({
+    path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const clearSourceSeen = async (
+  sourceId: number,
+  params?: { target_user_id?: number; clear_backoff?: boolean }
+): Promise<SourceSeenResetResponse> => {
+  const qs = buildQuery(params || {})
+  return bgRequest<SourceSeenResetResponse>({
+    path: `/api/v1/watchlists/sources/${sourceId}/seen${qs}` as any,
+    method: "DELETE"
   })
 }
 
@@ -297,6 +322,13 @@ export interface FetchRunsParams {
   size?: number
 }
 
+export interface ExportRunsCsvParams extends FetchRunsParams {
+  scope?: "global" | "job"
+  job_id?: number
+  include_tallies?: boolean
+  tallies_mode?: "per_run" | "aggregate"
+}
+
 export const fetchWatchlistRuns = async (
   params?: FetchRunsParams
 ): Promise<PaginatedResponse<WatchlistRun>> => {
@@ -339,7 +371,7 @@ export const triggerWatchlistRun = async (jobId: number): Promise<WatchlistRun> 
   })
 }
 
-export const exportRunsCsv = async (params?: FetchRunsParams): Promise<string> => {
+export const exportRunsCsv = async (params?: ExportRunsCsvParams): Promise<string> => {
   const qs = buildQuery(params || {})
   return bgRequest<string>({
     path: `/api/v1/watchlists/runs/export.csv${qs}` as any,
@@ -456,10 +488,21 @@ export const fetchWatchlistTemplates = async (): Promise<{ items: WatchlistTempl
 }
 
 export const getWatchlistTemplate = async (
-  templateName: string
+  templateName: string,
+  options?: { version?: number }
 ): Promise<WatchlistTemplate> => {
+  const qs = buildQuery(options || {})
   return bgRequest<WatchlistTemplate>({
-    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}` as any,
+    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}${qs}` as any,
+    method: "GET"
+  })
+}
+
+export const getWatchlistTemplateVersions = async (
+  templateName: string
+): Promise<{ items: WatchlistTemplateVersionSummary[] }> => {
+  return bgRequest<{ items: WatchlistTemplateVersionSummary[] }>({
+    path: `/api/v1/watchlists/templates/${encodeURIComponent(templateName)}/versions` as any,
     method: "GET"
   })
 }

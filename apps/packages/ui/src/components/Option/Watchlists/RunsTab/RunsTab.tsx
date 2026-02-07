@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next"
 import { useWatchlistsStore } from "@/store/watchlists"
 import {
   fetchJobRuns,
+  exportRunsCsv,
   fetchWatchlistJobs,
   fetchWatchlistRuns
 } from "@/services/watchlists"
@@ -21,8 +22,41 @@ import type { WatchlistJob, WatchlistRun } from "@/types/watchlists"
 import { formatRelativeTime } from "@/utils/dateFormatters"
 import { StatusTag } from "../shared"
 import { RunDetailDrawer } from "./RunDetailDrawer"
+import { Download } from "lucide-react"
 
 const POLL_INTERVAL_MS = 5000
+const DEFAULT_RUNS_CSV_SERVER_THRESHOLD = 2000
+const RUNS_API_PAGE_SIZE = 200
+const RUNS_CSV_SERVER_PAGE_SIZE = 1000
+type RunsCsvTalliesMode = "none" | "per_run" | "aggregate"
+
+const resolveRunsCsvServerThreshold = (): number => {
+  const raw = process.env.NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD
+  if (!raw || !raw.trim()) return DEFAULT_RUNS_CSV_SERVER_THRESHOLD
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_RUNS_CSV_SERVER_THRESHOLD
+  return Math.floor(parsed)
+}
+
+const escapeCsvCell = (value: unknown): string => {
+  const text = value == null ? "" : String(value)
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, "\"\"")}"`
+  }
+  return text
+}
+
+const downloadCsv = (content: string, filename: string): void => {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  URL.revokeObjectURL(url)
+}
 
 export const RunsTab: React.FC = () => {
   const { t } = useTranslation(["watchlists", "common"])
@@ -39,6 +73,8 @@ export const RunsTab: React.FC = () => {
   const runDetailOpen = useWatchlistsStore((s) => s.runDetailOpen)
   const selectedRunId = useWatchlistsStore((s) => s.selectedRunId)
   const [jobs, setJobs] = useState<WatchlistJob[]>([])
+  const [exportingRunsCsv, setExportingRunsCsv] = useState(false)
+  const [runsCsvTalliesMode, setRunsCsvTalliesMode] = useState<RunsCsvTalliesMode>("none")
 
   // Store actions
   const setRuns = useWatchlistsStore((s) => s.setRuns)
@@ -123,6 +159,12 @@ export const RunsTab: React.FC = () => {
     loadJobs()
   }, [loadRuns, loadJobs])
 
+  useEffect(() => {
+    if (runsJobFilter && runsCsvTalliesMode === "aggregate") {
+      setRunsCsvTalliesMode("per_run")
+    }
+  }, [runsJobFilter, runsCsvTalliesMode])
+
   // Polling for active runs
   useEffect(() => {
     if (pollingActive) {
@@ -162,6 +204,179 @@ export const RunsTab: React.FC = () => {
     if (durationMs < 3600000) return `${Math.round(durationMs / 60000)}m`
     return `${Math.round(durationMs / 3600000)}h`
   }
+
+  const fetchAllRunsForClientCsv = useCallback(async (): Promise<WatchlistRun[]> => {
+    const useClientFilter = Boolean(runsJobFilter && runsStatusFilter)
+    let page = 1
+    const collected: WatchlistRun[] = []
+    let hasMore = true
+    while (hasMore) {
+      const result = runsJobFilter
+        ? await fetchJobRuns(runsJobFilter, { page, size: RUNS_API_PAGE_SIZE })
+        : await fetchWatchlistRuns({
+            q: runsStatusFilter || undefined,
+            page,
+            size: RUNS_API_PAGE_SIZE
+          })
+      const items = Array.isArray(result.items) ? result.items : []
+      if (!items.length) break
+      collected.push(...items)
+      if (typeof result.has_more === "boolean") {
+        hasMore = result.has_more
+      } else {
+        hasMore = items.length >= RUNS_API_PAGE_SIZE
+      }
+      page += 1
+    }
+    if (useClientFilter && runsStatusFilter) {
+      return collected.filter((run) => run.status === runsStatusFilter)
+    }
+    return collected
+  }, [runsJobFilter, runsStatusFilter])
+
+  const toRunsCsv = useCallback((items: WatchlistRun[]): string => {
+    const rows = [
+      [
+        "id",
+        "job_id",
+        "status",
+        "started_at",
+        "finished_at",
+        "items_found",
+        "items_ingested",
+        "items_filtered",
+        "items_duplicates",
+        "items_errored",
+        "filters_include",
+        "filters_exclude",
+        "filters_flag"
+      ].join(",")
+    ]
+    items.forEach((run) => {
+      const stats = run.stats || {}
+      const filtersActionsRaw = (stats as Record<string, unknown>)?.filters_actions
+      const filtersActions =
+        filtersActionsRaw && typeof filtersActionsRaw === "object"
+          ? (filtersActionsRaw as Record<string, number>)
+          : {}
+      rows.push(
+        [
+          run.id,
+          run.job_id,
+          run.status,
+          run.started_at || "",
+          run.finished_at || "",
+          stats?.items_found ?? 0,
+          stats?.items_ingested ?? 0,
+          stats?.items_filtered ?? 0,
+          stats?.items_duplicates ?? stats?.items_duplicate ?? 0,
+          stats?.items_errored ?? 0,
+          filtersActions.include ?? 0,
+          filtersActions.exclude ?? 0,
+          filtersActions.flag ?? 0
+        ]
+          .map(escapeCsvCell)
+          .join(",")
+      )
+    })
+    return `${rows.join("\n")}\n`
+  }, [])
+
+  const fetchServerRunsCsvMerged = useCallback(async (): Promise<string> => {
+    const scope: "global" | "job" = runsJobFilter ? "job" : "global"
+    const q = !runsJobFilter && runsStatusFilter ? runsStatusFilter : undefined
+    const talliesMode: RunsCsvTalliesMode =
+      runsJobFilter && runsCsvTalliesMode === "aggregate"
+        ? "per_run"
+        : runsCsvTalliesMode
+    if (scope === "global" && talliesMode === "aggregate") {
+      return exportRunsCsv({
+        scope,
+        q,
+        include_tallies: true,
+        tallies_mode: "aggregate"
+      })
+    }
+    let page = 1
+    let header = ""
+    const dataRows: string[] = []
+    const includeTallies = talliesMode === "per_run"
+
+    // Merge paginated CSV chunks into a single downloadable CSV.
+    while (true) {
+      const csvChunk = await exportRunsCsv({
+        scope,
+        job_id: runsJobFilter || undefined,
+        q,
+        page,
+        size: RUNS_CSV_SERVER_PAGE_SIZE,
+        include_tallies: includeTallies,
+        tallies_mode: includeTallies ? "per_run" : undefined
+      })
+      const lines = csvChunk.split("\n")
+      if (!header) {
+        header = lines[0] || ""
+      }
+      const rows = lines.slice(1).filter((line) => line.trim().length > 0)
+      if (!rows.length) break
+      const filteredRows =
+        runsJobFilter && runsStatusFilter
+          ? rows.filter((line) => {
+              const cols = line.split(",")
+              return (cols[2] || "").trim().toLowerCase() === runsStatusFilter.toLowerCase()
+            })
+          : rows
+      dataRows.push(...filteredRows)
+      if (rows.length < RUNS_CSV_SERVER_PAGE_SIZE) break
+      page += 1
+      if (page > 200) break
+    }
+    if (!header) return ""
+    return `${[header, ...dataRows].join("\n")}\n`
+  }, [runsCsvTalliesMode, runsJobFilter, runsStatusFilter])
+
+  const handleExportRunsCsv = useCallback(async () => {
+    try {
+      setExportingRunsCsv(true)
+      const threshold = resolveRunsCsvServerThreshold()
+      const rowEstimate = Math.max(Number(runsTotal || 0), Array.isArray(runs) ? runs.length : 0)
+      const talliesMode: RunsCsvTalliesMode =
+        runsJobFilter && runsCsvTalliesMode === "aggregate"
+          ? "per_run"
+          : runsCsvTalliesMode
+      const preferServerCsv = talliesMode !== "none" || rowEstimate >= threshold
+      const csv = preferServerCsv
+        ? await fetchServerRunsCsvMerged()
+        : toRunsCsv(await fetchAllRunsForClientCsv())
+      if (!csv || !csv.trim()) {
+        message.warning(t("watchlists:runs.exportEmpty", "No runs available to export"))
+        return
+      }
+      const filenameSuffix = runsJobFilter ? `job_${runsJobFilter}` : "global"
+      const filename =
+        talliesMode === "aggregate"
+          ? `watchlists_runs_global_tallies_${Date.now()}.csv`
+          : talliesMode === "per_run"
+            ? `watchlists_runs_${filenameSuffix}_with_tallies_${Date.now()}.csv`
+            : `watchlists_runs_${filenameSuffix}_${Date.now()}.csv`
+      downloadCsv(csv, filename)
+      message.success(t("watchlists:runs.exported", "Runs CSV exported"))
+    } catch (err) {
+      console.error("Failed to export runs CSV:", err)
+      message.error(t("watchlists:runs.exportError", "Failed to export runs CSV"))
+    } finally {
+      setExportingRunsCsv(false)
+    }
+  }, [
+    fetchAllRunsForClientCsv,
+    fetchServerRunsCsvMerged,
+    runs,
+    runsCsvTalliesMode,
+    runsJobFilter,
+    runsTotal,
+    t,
+    toRunsCsv
+  ])
 
   // Table columns
   const columns: ColumnsType<WatchlistRun> = [
@@ -244,6 +459,28 @@ export const RunsTab: React.FC = () => {
       )
     },
     {
+      title: t("watchlists:runs.columns.itemsFiltered", "Filtered"),
+      key: "items_filtered",
+      width: 100,
+      align: "center",
+      render: (_, record) => (
+        <span className="text-sm">
+          {record.stats?.items_filtered ?? "-"}
+        </span>
+      )
+    },
+    {
+      title: t("watchlists:runs.columns.itemsErrored", "Errors"),
+      key: "items_errored",
+      width: 90,
+      align: "center",
+      render: (_, record) => (
+        <span className="text-sm">
+          {record.stats?.items_errored ?? "-"}
+        </span>
+      )
+    },
+    {
       title: t("watchlists:runs.columns.actions", "Actions"),
       key: "actions",
       width: 80,
@@ -311,6 +548,28 @@ export const RunsTab: React.FC = () => {
             loading={runsLoading}
           >
             {t("common:refresh", "Refresh")}
+          </Button>
+          <Select
+            value={runsCsvTalliesMode}
+            onChange={(value) => setRunsCsvTalliesMode(value as RunsCsvTalliesMode)}
+            className="w-56"
+            data-testid="runs-csv-tallies-mode"
+            options={[
+              { value: "none", label: t("watchlists:runs.exportMode.standard", "Standard CSV") },
+              { value: "per_run", label: t("watchlists:runs.exportMode.perRun", "Per-run tallies") },
+              {
+                value: "aggregate",
+                label: t("watchlists:runs.exportMode.aggregate", "Global tallies summary"),
+                disabled: Boolean(runsJobFilter)
+              }
+            ]}
+          />
+          <Button
+            icon={<Download className="h-4 w-4" />}
+            onClick={handleExportRunsCsv}
+            loading={exportingRunsCsv}
+          >
+            {t("watchlists:runs.exportCsv", "Export CSV")}
           </Button>
         </div>
       </div>

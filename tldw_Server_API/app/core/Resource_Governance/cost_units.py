@@ -18,7 +18,6 @@ budgets are only enforced by callers that explicitly consult these helpers.
 import math
 import os
 from datetime import datetime, timezone
-from typing import Optional
 
 from loguru import logger
 
@@ -82,8 +81,8 @@ async def record_cost_units_for_entity(
     tokens: int = 0,
     minutes: float = 0.0,
     requests: int = 0,
-    op_id: Optional[str] = None,
-    occurred_at: Optional[datetime] = None,
+    op_id: str | None = None,
+    occurred_at: datetime | None = None,
 ) -> int:
     """
     Record a cost-unit charge for the given entity into ResourceDailyLedger.
@@ -141,7 +140,7 @@ async def remaining_daily_cost_units(
     entity_scope: str,
     entity_value: str,
     daily_cap_units: int,
-    day_utc: Optional[str] = None,
+    day_utc: str | None = None,
 ) -> int:
     """
     Return remaining daily cost units for an entity given a daily cap.

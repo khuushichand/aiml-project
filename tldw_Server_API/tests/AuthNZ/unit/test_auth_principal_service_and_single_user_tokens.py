@@ -264,3 +264,21 @@ async def test_get_request_user_bypass_allows_strict_test_context(monkeypatch):
 
     assert getattr(user, "username", None) == "single_user"
     reset_settings()
+
+
+@pytest.mark.asyncio
+async def test_get_request_user_bypass_blocked_in_environment_production(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("TESTING", "true")
+    monkeypatch.setenv("TEST_MODE", "true")
+    monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "false")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("tldw_production", raising=False)
+    reset_settings()
+
+    request = _build_request({})
+    with pytest.raises(HTTPException) as exc:
+        await get_request_user(request, api_key=None, token=None)
+
+    assert exc.value.status_code == 401
+    reset_settings()

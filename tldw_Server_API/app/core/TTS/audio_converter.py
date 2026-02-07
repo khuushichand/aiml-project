@@ -3,18 +3,38 @@
 #
 # Imports
 import asyncio
+import contextlib
 import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Any, Optional
+
 #
 # Third-party Imports
-import numpy as np
 from loguru import logger
+
 #
 # Local Imports
 from .tts_exceptions import TTSError
+
+_AUDIO_CLEANUP_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+)
+
+_AUDIO_CONVERSION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    AttributeError,
+    KeyError,
+    ImportError,
+    subprocess.SubprocessError,
+)
+
 #
 #######################################################################################################################
 #
@@ -88,10 +108,8 @@ class AudioConverter:
             logger.info(f"Concatenated {len(input_paths)} files into {output_path.name}")
             return True
         finally:
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(list_path)
-            except Exception:
-                pass
 
     @staticmethod
     async def package_m4b_with_chapters(
@@ -99,7 +117,7 @@ class AudioConverter:
         output_path: Path,
         chapter_titles: list[str],
         *,
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[dict[str, str]] = None,
     ) -> bool:
         if not input_paths:
             logger.error("No input files provided for M4B packaging")
@@ -110,7 +128,7 @@ class AudioConverter:
         list_path = AudioConverter._write_concat_list(input_paths)
         meta_file = tempfile.NamedTemporaryFile(delete=False, suffix=".ffmeta")
         try:
-            durations_ms: List[int] = []
+            durations_ms: list[int] = []
             for path in input_paths:
                 duration = await AudioConverter.get_duration(path)
                 durations_ms.append(max(1, int(round(duration * 1000))))
@@ -140,20 +158,16 @@ class AudioConverter:
             logger.info(f"Packaged M4B with {len(input_paths)} chapters: {output_path.name}")
             return True
         finally:
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(list_path)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(_AUDIO_CLEANUP_EXCEPTIONS):
                 os.unlink(meta_file.name)
-            except Exception:
-                pass
 
     @staticmethod
     def _build_ffmetadata(
         chapter_titles: list[str],
         chapter_durations_ms: list[int],
-        metadata: Optional[Dict[str, str]] = None,
+        metadata: Optional[dict[str, str]] = None,
     ) -> str:
         lines = [";FFMETADATA1"]
         if metadata:
@@ -247,8 +261,8 @@ class AudioConverter:
 
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
-            raise AudioConversionError("FFmpeg is required for audio conversion")
-        except Exception as e:
+            raise AudioConversionError("FFmpeg is required for audio conversion") from None
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Audio conversion error: {e}")
             return False
 
@@ -312,7 +326,7 @@ class AudioConverter:
             logger.info(f"Converted {input_path.name} to {target_format}")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Format conversion error: {e}")
             return False
 
@@ -321,7 +335,7 @@ class AudioConverter:
         file_path: Path,
         min_seconds: float = 0,
         max_seconds: float = float('inf')
-    ) -> Tuple[bool, float]:
+    ) -> tuple[bool, float]:
         """
         Check if audio duration is within specified range.
 
@@ -346,7 +360,7 @@ class AudioConverter:
 
             return is_valid, duration
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Duration validation error: {e}")
             return False, 0.0
 
@@ -383,12 +397,12 @@ class AudioConverter:
                 logger.error(f"Could not get duration: {stderr.decode()}")
                 return 0.0
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Error getting duration: {e}")
             return 0.0
 
     @staticmethod
-    async def get_audio_info(file_path: Path) -> Dict[str, Any]:
+    async def get_audio_info(file_path: Path) -> dict[str, Any]:
         """
         Get detailed audio file information.
 
@@ -440,7 +454,7 @@ class AudioConverter:
 
             return info
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Error getting audio info: {e}")
             return info
 
@@ -489,7 +503,7 @@ class AudioConverter:
                 logger.error("Could not analyze audio loudness")
                 return False
 
-            loudness_info = json.loads(json_match.group())
+            json.loads(json_match.group())
 
             # Second pass: apply normalization
             cmd_normalize = [
@@ -513,7 +527,7 @@ class AudioConverter:
             logger.info(f"Normalized audio to {target_level} LUFS")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Audio normalization error: {e}")
             return False
 
@@ -521,7 +535,7 @@ class AudioConverter:
     def _build_atempo_filter(speed_ratio: float) -> str:
         if speed_ratio <= 0:
             raise ValueError("speed_ratio must be positive")
-        factors: List[float] = []
+        factors: list[float] = []
         remaining = speed_ratio
         while remaining > 2.0:
             factors.append(2.0)
@@ -557,7 +571,7 @@ class AudioConverter:
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 output_path.write_bytes(input_path.read_bytes())
                 return True
-            except Exception as exc:
+            except _AUDIO_CONVERSION_EXCEPTIONS as exc:
                 logger.error(f"Time-stretch noop copy failed: {exc}")
                 return False
         try:
@@ -579,7 +593,7 @@ class AudioConverter:
                 return False
             logger.info(f"Time-stretch applied (ratio: {speed_ratio})")
             return True
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Time-stretch error: {e}")
             return False
 
@@ -628,7 +642,7 @@ class AudioConverter:
             logger.info(f"Trimmed silence from audio (threshold: {threshold}dB)")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Silence trimming error: {e}")
             return False
 
@@ -678,7 +692,7 @@ class AudioConverter:
             logger.info(f"Extracted {duration}s segment starting at {start_time}s")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Segment extraction error: {e}")
             return False
 
@@ -724,7 +738,7 @@ class AudioConverter:
             logger.info(f"Resampled audio to {target_sample_rate}Hz")
             return True
 
-        except Exception as e:
+        except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Resampling error: {e}")
             return False
 
@@ -758,7 +772,7 @@ class AudioConverter:
 
 
 # Utility function for quick checks
-async def validate_audio_tools() -> Tuple[bool, str]:
+async def validate_audio_tools() -> tuple[bool, str]:
     """
     Validate that required audio processing tools are installed.
 

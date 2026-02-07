@@ -1,20 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from time import monotonic
-from typing import Callable, Optional
+from typing import Callable
 
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-from loguru import logger
-import hmac
-import hashlib
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext
 from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 class UsageLoggingMiddleware(BaseHTTPMiddleware):
@@ -49,7 +49,7 @@ class UsageLoggingMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         start = monotonic()
-        response: Optional[Response] = None
+        response: Response | None = None
         status_code = 0
         try:
             response = await call_next(request)

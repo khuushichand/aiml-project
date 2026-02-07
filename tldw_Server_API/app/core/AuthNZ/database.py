@@ -2,38 +2,53 @@
 # Description: Database connection pooling and transaction management for user registration system
 #
 # Imports
+import asyncio
 import os
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Optional, Any, Dict
-import asyncio
-from urllib.parse import urlparse, unquote
+from typing import Any, Optional
+from urllib.parse import unquote, urlparse
+
+import aiosqlite
+
 #
 # 3rd-party imports
 import asyncpg
-import aiosqlite
-from loguru import logger
 from fastapi import HTTPException
+from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    ConnectionPoolExhaustedError,
+    DatabaseError,
+    DatabaseLockError,
+    DuplicateOrganizationError,
+    DuplicatePermissionError,
+    DuplicateRoleError,
+    DuplicateTeamError,
+    DuplicateUserError,
+    InvalidRegistrationCodeError,
+    RegistrationError,
+    TransactionError,
+    WeakPasswordError,
+)
+from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    DatabaseError,
-    ConnectionPoolExhaustedError,
-    TransactionError,
-    DatabaseLockError,
-    DuplicateUserError,
-    WeakPasswordError,
-    InvalidRegistrationCodeError,
-    RegistrationError,
-    DuplicateOrganizationError,
-    DuplicateTeamError,
-    DuplicateRoleError,
-    DuplicatePermissionError,
-)
 
+_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncpg.PostgresError,
+)
 
 #######################################################################################################################
 #
@@ -139,23 +154,21 @@ def _apply_single_user_fallback(url: str, auth_mode: Optional[str] = None) -> st
         else:
             auth_mode_value = auth_mode
         mode = str(auth_mode_value).strip().lower()
-    except Exception:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
         mode = "single_user"
 
     try:
         parsed = urlparse(url)
         scheme = (parsed.scheme or "").lower()
-    except Exception:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
         scheme = ""
 
     if mode == "single_user" and scheme and not scheme.startswith("sqlite") and not scheme.startswith("file"):
-        try:
+        with suppress(_AUTHNZ_DB_NONCRITICAL_EXCEPTIONS):
             logger.warning(
                 "Single-user mode: ignoring non-sqlite DATABASE_URL '%s'; using sqlite:///./Databases/users.db",
                 url,
             )
-        except Exception:
-            pass
         return "sqlite:///./Databases/users.db"
 
     return url
@@ -241,9 +254,9 @@ class DatabasePool:
                 self._initialized = True
                 logger.info("Database pool initialized successfully")
 
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to initialize database pool: {e}")
-                raise DatabaseError(f"Database initialization failed: {e}")
+                raise DatabaseError(f"Database initialization failed: {e}") from e
 
     def _should_use_postgres(self) -> bool:
         """Return True if the configured DATABASE_URL resolves to PostgreSQL.
@@ -268,7 +281,7 @@ class DatabasePool:
         # so production single-user profiles continue to fall back to SQLite.
         try:
             test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
-        except Exception:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         # Also allow Postgres when running under pytest even if TEST_MODE is not set,
         # to keep Postgres-backed tests deterministic without requiring extra env wiring.
@@ -276,7 +289,7 @@ class DatabasePool:
             import sys as _sys  # local import to avoid module-level side effects
 
             pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
-        except Exception:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
             pytest_active = False
         return test_mode or pytest_active
 
@@ -321,9 +334,7 @@ class DatabasePool:
             filesystem_path = filesystem_path.lstrip("/")
 
         if parsed.query:
-            if filesystem_path.startswith("/"):
-                uri = f"file:{filesystem_path}?{parsed.query}"
-            elif filesystem_path:
+            if filesystem_path.startswith("/") or filesystem_path:
                 uri = f"file:{filesystem_path}?{parsed.query}"
             else:
                 uri = f"file:?{parsed.query}"
@@ -358,7 +369,7 @@ class DatabasePool:
                 else:
                     logger.debug("PostgreSQL schema already exists")
 
-        except Exception as e:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create PostgreSQL schema: {e}")
             # Don't raise - schema might already exist
 
@@ -396,10 +407,10 @@ class DatabasePool:
                 if self._sqlite_fs_path and self._sqlite_fs_path != ":memory:":
                     logger.info(f"SQLite schema harmonization: ensuring AuthNZ tables at {self._sqlite_fs_path}")
                     await asyncio.to_thread(ensure_authnz_tables, Path(self._sqlite_fs_path))
-            except Exception as migration_error:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as migration_error:
                 logger.debug(f"SQLite migration harmonization skipped: {migration_error}")
 
-        except Exception as e:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create SQLite schema: {e}")
             # Don't raise - schema might already exist
 
@@ -412,21 +423,20 @@ class DatabasePool:
         if self.pool:
             # PostgreSQL transaction
             try:
-                async with self.pool.acquire() as conn:
-                    async with conn.transaction():
-                        yield conn
+                async with self.pool.acquire() as conn, conn.transaction():
+                    yield conn
                 logger.debug("PostgreSQL transaction committed successfully")
             except asyncpg.exceptions.TooManyConnectionsError:
-                raise ConnectionPoolExhaustedError()
+                raise ConnectionPoolExhaustedError() from None
             except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
             except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError):
                 # Re-raise registration exceptions unchanged
                 raise
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"PostgreSQL transaction error: {e}")
-                raise TransactionError("PostgreSQL transaction", str(e))
+                raise TransactionError("PostgreSQL transaction", str(e)) from e
         else:
             # SQLite transaction
             conn = None
@@ -456,23 +466,23 @@ class DatabasePool:
 
                     yield _SQLiteConnShim(conn)
                     await conn.commit()
-                except Exception:
+                except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
                     await conn.rollback()
                     raise
 
             except aiosqlite.OperationalError as e:
                 if "database is locked" in str(e):
-                    raise DatabaseLockError()
-                raise TransactionError("SQLite transaction", str(e))
-            except HTTPException as e:
+                    raise DatabaseLockError() from e
+                raise TransactionError("SQLite transaction", str(e)) from e
+            except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
-            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError) as e:
+            except (DuplicateUserError, WeakPasswordError, InvalidRegistrationCodeError, RegistrationError, DuplicateOrganizationError, DuplicateTeamError, DuplicateRoleError, DuplicatePermissionError):
                 # Re-raise registration exceptions unchanged
                 raise
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"SQLite transaction error: {e}")
-                raise TransactionError("SQLite transaction", str(e))
+                raise TransactionError("SQLite transaction", str(e)) from e
             finally:
                 if conn:
                     await conn.close()
@@ -490,7 +500,7 @@ class DatabasePool:
                 conn = await self.pool.acquire()
                 yield conn
             except asyncpg.exceptions.TooManyConnectionsError:
-                raise ConnectionPoolExhaustedError()
+                raise ConnectionPoolExhaustedError() from None
             finally:
                 if conn:
                     await self.pool.release(conn)
@@ -539,7 +549,7 @@ class DatabasePool:
                 await conn.commit()
                 return cursor
 
-    async def fetchone(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchone(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Fetch a single row"""
         async with self.acquire() as conn:
             if self.pool:
@@ -555,12 +565,24 @@ class DatabasePool:
                 cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 if row:
-                    # Convert Row to dict
-                    return {key: row[key] for key in row.keys()}
+                    # Convert sqlite row objects defensively across row_factory variants.
+                    if isinstance(row, dict):
+                        return row
+                    with suppress(Exception):
+                        return {key: row[key] for key in row.keys()}  # type: ignore[call-arg]
+                    with suppress(Exception):
+                        return dict(row)
+                    values = tuple(row)
+                    with suppress(Exception):
+                        if values and all(
+                            isinstance(item, (tuple, list)) and len(item) == 2 for item in values
+                        ):
+                            return {str(item[0]): item[1] for item in values}
+                    return {str(index): value for index, value in enumerate(values)}
                 return None
 
     # Compatibility aliases for callers expecting asyncpg-like API
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Alias for fetchone to match asyncpg-style interfaces."""
         return await self.fetchone(query, *args)
 
@@ -613,7 +635,7 @@ class DatabasePool:
         if self.pool:
             try:
                 await self.pool.close()
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 # In test teardown, the loop bound to the pool may already be closed.
                 logger.debug(f"Ignoring pool.close() error during shutdown: {e}")
             finally:
@@ -622,13 +644,13 @@ class DatabasePool:
         self._initialized = False
         logger.info("Database pool closed")
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> dict[str, Any]:
         """Perform database health check"""
         try:
             if self.pool:
                 # PostgreSQL health check
                 async with self.pool.acquire() as conn:
-                    result = await conn.fetchval("SELECT 1")
+                    await conn.fetchval("SELECT 1")
                     pool_size = self.pool.get_size()
                     idle_size = self.pool.get_idle_size()
 
@@ -656,7 +678,7 @@ class DatabasePool:
                         "database_size_mb": round(db_size / (1024 * 1024), 2)
                     }
 
-        except Exception as e:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database health check failed: {e}")
             return {
                 "status": "unhealthy",
@@ -697,7 +719,7 @@ async def get_db_pool() -> DatabasePool:
             )
             try:
                 await _db_pool.close()
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring error while closing pool during config change: {e}")
             _db_pool = DatabasePool(current_settings)
             await _db_pool.initialize()
@@ -720,7 +742,7 @@ async def get_db_pool() -> DatabasePool:
             logger.info("Detected DB pool bound to a different event loop; recreating for current loop")
             try:
                 await _db_pool.close()
-            except Exception as e:
+            except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring error while closing incompatible pool: {e}")
             _db_pool = DatabasePool(current_settings)
             await _db_pool.initialize()
@@ -734,7 +756,7 @@ async def reset_db_pool():
     try:
         from tldw_Server_API.app.core.AuthNZ.settings import reset_settings as _reset_settings
         _reset_settings()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring settings reset error: {e}")
     # Also reset the AuthNZ UserDatabase / backend config so helpers that
     # use AuthDatabaseConfig (e.g. RBAC helpers via UserDatabase_v2) see
@@ -747,55 +769,57 @@ async def reset_db_pool():
             reset_lazy()
         else:
             cfg.reset()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring AuthDatabaseConfig reset error: {e}")
     if _db_pool:
         try:
             await _db_pool.close()
-        except Exception as e:
+        except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
             # The loop might already be closed by a TestClient; best-effort cleanup.
             logger.debug(f"reset_db_pool: ignoring close error: {e}")
     _db_pool = None
     try:
         from tldw_Server_API.app.core.MCP_unified.auth.authnz_rbac import reset_rbac_policy as _reset_rbac_policy
         _reset_rbac_policy()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring RBAC policy reset error: {e}")
     # Reset MCP cached configuration/filters so tests pick up new DB/config values
     try:
         from tldw_Server_API.app.core.MCP_unified.config import get_config as _get_mcp_config
         if hasattr(_get_mcp_config, "cache_clear"):
             _get_mcp_config.cache_clear()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring MCP config cache reset error: {e}")
     try:
-        from tldw_Server_API.app.core.MCP_unified.security.ip_filter import get_ip_access_controller as _get_ip_controller
+        from tldw_Server_API.app.core.MCP_unified.security.ip_filter import (
+            get_ip_access_controller as _get_ip_controller,
+        )
         if hasattr(_get_ip_controller, "cache_clear"):
             _get_ip_controller.cache_clear()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring MCP IP access controller reset error: {e}")
     try:
 
         from tldw_Server_API.app.core.MCP_unified.server import reset_mcp_server as _reset_mcp_server
         await _reset_mcp_server()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring MCP server reset error: {e}")
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager as _reset_api_manager
         await _reset_api_manager()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring API key manager reset error: {e}")
     try:
         from tldw_Server_API.app.core.DB_Management.Users_DB import reset_users_db as _reset_users_db
         await _reset_users_db()
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring UsersDB reset error: {e}")
     try:
         from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
             set_llm_provider_overrides_cache_for_tests as _reset_llm_overrides_cache,
         )
         _reset_llm_overrides_cache({})
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"reset_db_pool: ignoring LLM provider overrides cache reset error: {e}")
 
 async def get_db():
@@ -822,7 +846,7 @@ async def test_database_connection() -> bool:
         pool = await get_db_pool()
         health = await pool.health_check()
         return health.get("status") == "healthy"
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Database connection test failed: {e}")
         return False
 
@@ -834,7 +858,7 @@ async def execute_migration(migration_sql: str) -> bool:
         await pool.execute(migration_sql)
         logger.info("Migration executed successfully")
         return True
-    except Exception as e:
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Migration failed: {e}")
     return False
 
@@ -858,7 +882,7 @@ async def is_postgres_backend() -> bool:
     except DatabaseError as exc:
         logger.debug("AuthNZ backend detection falling back to SQLite due to pool error: {}", exc)
         return False
-    except Exception as exc:  # pragma: no cover - defensive
+    except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug("AuthNZ backend detection encountered unexpected error: {}", exc)
         return False
     return getattr(pool, "pool", None) is not None

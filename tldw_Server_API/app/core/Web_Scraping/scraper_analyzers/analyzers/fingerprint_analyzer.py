@@ -2,18 +2,18 @@ from __future__ import annotations
 
 import json
 import random
-from typing import Any, Dict, List
+from typing import Any
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - optional dependency guard
     PlaywrightTimeoutError = TimeoutError  # type: ignore[misc,assignment]
     sync_playwright = None
 
 from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
 
-
-KNOWN_BOT_DETECTION_SCRIPTS: Dict[str, List[str]] = {
+KNOWN_BOT_DETECTION_SCRIPTS: dict[str, list[str]] = {
     "PerimeterX (HUMAN)": [
         "client.perimeterx.net",
         "px-cdn.net",
@@ -57,7 +57,7 @@ KNOWN_BOT_DETECTION_SCRIPTS: Dict[str, List[str]] = {
     ],
 }
 
-KNOWN_BOT_GLOBAL_OBJECTS: Dict[str, List[str]] = {
+KNOWN_BOT_GLOBAL_OBJECTS: dict[str, list[str]] = {
     "PerimeterX (HUMAN)": ["_px", "PX", "px"],
     "DataDome": ["ddjskey", "datadome"],
     "Akamai Bot Manager": ["bmak"],
@@ -84,7 +84,7 @@ JS_PROBE_SCRIPT = """
 """
 
 
-def analyze_fingerprinting(url: str) -> Dict[str, Any]:
+def analyze_fingerprinting(url: str) -> dict[str, Any]:
     """
     Probe a page for advanced fingerprinting/bot detection signals.
     """
@@ -95,7 +95,7 @@ def analyze_fingerprinting(url: str) -> Dict[str, Any]:
             "error_code": "missing_dependency",
         }
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "status": "error",
         "message": "Analysis did not complete.",
         "detected_services": [],

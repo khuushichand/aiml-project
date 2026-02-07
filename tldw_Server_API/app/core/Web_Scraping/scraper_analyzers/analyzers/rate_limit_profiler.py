@@ -4,7 +4,7 @@ import asyncio
 import logging
 import random
 import warnings
-from typing import Any, Dict, Optional
+from typing import Any
 
 warnings.filterwarnings("ignore", message="Event loop is closed", category=RuntimeWarning)
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
@@ -14,9 +14,10 @@ try:
 except ImportError:  # pragma: no cover - optional dependency guard
     AsyncSession = None
 
+from tldw_Server_API.app.core.http_client import afetch
+
 from ..utils.browser_identities import MODERN_BROWSER_IDENTITIES
 from ..utils.impersonate_target import get_impersonate_target
-from tldw_Server_API.app.core.http_client import afetch
 
 GENTLE_PROBE_COUNT = 4
 BURST_COUNT = 8
@@ -64,9 +65,9 @@ async def _make_impersonated_request(session: AsyncSession, url: str) -> int:
 
 async def _run_rate_limit_profiler(
     url: str, baseline_delay: float, impersonate: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run a multi-phase rate limit profile using the provided baseline delay."""
-    results: Dict[str, Any] = {"requests_sent": 0, "blocking_code": None, "details": ""}
+    results: dict[str, Any] = {"requests_sent": 0, "blocking_code": None, "details": ""}
 
     if impersonate:
         if AsyncSession is None:
@@ -134,8 +135,8 @@ async def _run_rate_limit_profiler(
 
 
 async def profile_rate_limits(
-    url: str, crawl_delay: Optional[float], impersonate: bool = False
-) -> Dict[str, Any]:
+    url: str, crawl_delay: float | None, impersonate: bool = False
+) -> dict[str, Any]:
     """
     Main entry-point. Select the delay and run the async profile.
     """

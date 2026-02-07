@@ -8,11 +8,11 @@ Quota Manager for Chatbook Operations
 Manages user quotas for storage, export/import operations, and rate limits.
 """
 
-import sys
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -21,6 +21,21 @@ UNLIMITED_QUOTA = -1
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+_CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 def _env_flag(name: str) -> bool:
@@ -87,9 +102,9 @@ class QuotaManager:
         self._quotas_disabled = _env_flag("CHATBOOKS_DISABLE_QUOTAS") or _env_flag("TEST_MODE") or _env_flag("TESTING") or bool(os.getenv("PYTEST_CURRENT_TEST"))
 
         # Usage tracking (in production, use database)
-        self.usage_cache: Dict[str, Any] = {}
+        self.usage_cache: dict[str, Any] = {}
 
-    def _get_quotas_for_tier(self, tier: str) -> Dict[str, int]:
+    def _get_quotas_for_tier(self, tier: str) -> dict[str, int]:
         """Get quota limits based on user tier."""
         if tier == 'premium':
             return self.PREMIUM_QUOTAS.copy()
@@ -106,7 +121,7 @@ class QuotaManager:
         else:
             return self.DEFAULT_QUOTAS.copy()
 
-    async def check_storage_quota(self, additional_bytes: int = 0) -> Tuple[bool, str]:
+    async def check_storage_quota(self, additional_bytes: int = 0) -> tuple[bool, str]:
         """
         Check if user has enough storage quota.
 
@@ -129,7 +144,7 @@ class QuotaManager:
 
         return True, "Storage quota OK"
 
-    async def check_export_quota(self) -> Tuple[bool, str]:
+    async def check_export_quota(self) -> tuple[bool, str]:
         """
         Check if user can perform another export today.
 
@@ -149,7 +164,7 @@ class QuotaManager:
 
         return True, "Export quota OK"
 
-    async def check_import_quota(self) -> Tuple[bool, str]:
+    async def check_import_quota(self) -> tuple[bool, str]:
         """
         Check if user can perform another import today.
 
@@ -169,7 +184,7 @@ class QuotaManager:
 
         return True, "Import quota OK"
 
-    async def check_file_size(self, file_size_bytes: int) -> Tuple[bool, str]:
+    async def check_file_size(self, file_size_bytes: int) -> tuple[bool, str]:
         """
         Check if file size is within limits.
 
@@ -186,7 +201,7 @@ class QuotaManager:
 
         return True, "File size OK"
 
-    async def check_concurrent_jobs(self) -> Tuple[bool, str]:
+    async def check_concurrent_jobs(self) -> tuple[bool, str]:
         """
         Check if user can start another concurrent job.
 
@@ -213,7 +228,7 @@ class QuotaManager:
         # In production, this would update database
         logger.info(f"Recording {operation_type} operation for user {self.user_id} ({size_bytes} bytes)")
 
-    async def get_usage_summary(self) -> Dict[str, Any]:
+    async def get_usage_summary(self) -> dict[str, Any]:
         """
         Get current usage summary for the user.
 
@@ -240,7 +255,7 @@ class QuotaManager:
         # Format limits for display (handle unlimited sentinel)
         exports_limit = self.quotas['max_exports_per_day']
         imports_limit = self.quotas['max_imports_per_day']
-        chatbooks_limit = self.quotas.get('max_chatbooks', 50)
+        self.quotas.get('max_chatbooks', 50)
 
         return {
             'storage': {
@@ -280,7 +295,7 @@ class QuotaManager:
                         total_size += path.stat().st_size
                 return total_size
             return 0
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error calculating storage usage: {e}")
             return 0
 
@@ -324,13 +339,13 @@ class QuotaManager:
                     try:
                         # dict-like row
                         return int(row.get('c', 0))  # type: ignore[attr-defined]
-                    except Exception:
+                    except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                         try:
                             # sqlite3.Row or tuple
                             if hasattr(row, 'keys'):
                                 return int(row['c'])  # type: ignore[index]
                             return int(row[0])
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             return 0
                 elif isinstance(cursor, list) and cursor:
                     row = cursor[0]
@@ -339,19 +354,19 @@ class QuotaManager:
                     if hasattr(row, 'keys'):
                         try:
                             return int(row['c'])
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             return 0
                     if isinstance(row, (list, tuple)):
                         return int(row[0])
                 return 0
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"QuotaManager DB count fallback due to error: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "chatbooks_quota", "event": "db_count_fallback"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota db_count_fallback")
         # Fallback to cached value
         cache_key = f"{operation_type}_count_{datetime.now().date()}"
@@ -381,14 +396,14 @@ class QuotaManager:
                         return int(r.get('COUNT(1)', 0) if isinstance(r, dict) else r[0])
                     return 0
                 return _to_int(c1) + _to_int(c2)
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"QuotaManager DB active job count fallback: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "chatbooks_quota", "event": "db_active_count_fallback"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota db_active_count_fallback")
         return self.usage_cache.get('active_jobs', 0)
 
@@ -417,26 +432,26 @@ class QuotaManager:
                         file_path.unlink()
                         deleted_count += 1
                         logger.info(f"Deleted old export: {file_path}")
-                    except Exception as e:
+                    except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to delete {file_path}: {e}")
                         try:
                             get_metrics_registry().increment(
                                 "app_warning_events_total",
                                 labels={"component": "chatbooks_quota", "event": "export_delete_failed"},
                             )
-                        except Exception:
+                        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                             logger.debug("metrics increment failed for chatbooks_quota export_delete_failed")
 
             return deleted_count
 
-        except Exception as e:
+        except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cleaning up old files: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "chatbooks_quota", "event": "cleanup_error"},
                 )
-            except Exception:
+            except _CHATBOOKS_QUOTA_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for chatbooks_quota cleanup_error")
             return 0
 

@@ -1,18 +1,19 @@
 # auth_permissions.py
 # Authentication and permissions system for Prompt Studio (Deprecated)
 
-import json
 import hashlib
+import json
 import secrets
-from typing import Dict, Any, List, Optional, Set
+import warnings
 from datetime import datetime, timedelta
 from enum import Enum
-from loguru import logger
-import warnings
-from jose import jwt, JWTError
+from typing import Any, Optional
 
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from jose import JWTError, jwt
+from loguru import logger
+
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
 # Permission Types
@@ -116,7 +117,7 @@ ROLE_PERMISSIONS = {
     Role.ADMIN: ADMIN_PERMISSIONS,
     Role.OWNER: {
         # All permissions
-        *[p for p in Permission]
+        *list(Permission)
     }
 }
 
@@ -220,7 +221,7 @@ class AuthenticationManager:
     # User Management
 
     def create_user(self, username: str, email: str, password: str,
-                   role: Role = Role.EDITOR) -> Dict[str, Any]:
+                   role: Role = Role.EDITOR) -> dict[str, Any]:
         """
         Create a new user.
 
@@ -277,7 +278,7 @@ class AuthenticationManager:
             "api_key": api_key
         }
 
-    def authenticate_user(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+    def authenticate_user(self, username: str, password: str) -> Optional[dict[str, Any]]:
         """
         Authenticate a user with username and password.
 
@@ -325,7 +326,7 @@ class AuthenticationManager:
             "token": token
         }
 
-    def authenticate_api_key(self, api_key: str) -> Optional[Dict[str, Any]]:
+    def authenticate_api_key(self, api_key: str) -> Optional[dict[str, Any]]:
         """
         Authenticate using API key.
 
@@ -399,7 +400,7 @@ class AuthenticationManager:
 
         return token
 
-    def validate_session(self, token: str) -> Optional[Dict[str, Any]]:
+    def validate_session(self, token: str) -> Optional[dict[str, Any]]:
         """
         Validate a session token.
 
@@ -411,7 +412,7 @@ class AuthenticationManager:
         """
         try:
             # Decode token
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
 
             # Check if session exists and not expired
             with self.db.transaction() as conn:
@@ -599,7 +600,7 @@ class PermissionManager:
             details=f"Revoked access for user {user_id}"
         )
 
-    def get_user_projects(self, user_id: int) -> List[Dict[str, Any]]:
+    def get_user_projects(self, user_id: int) -> list[dict[str, Any]]:
         """Get projects user has access to."""
         with self.db.transaction() as conn:
             cursor = conn.cursor()
@@ -721,7 +722,7 @@ class ResourceAccessControl:
         self.perms = perm_manager
 
     def require_auth(self, token: Optional[str] = None,
-                     api_key: Optional[str] = None) -> Dict[str, Any]:
+                     api_key: Optional[str] = None) -> dict[str, Any]:
         """
         Require authentication.
 
@@ -747,7 +748,7 @@ class ResourceAccessControl:
 
         return user
 
-    def require_permission(self, user: Dict[str, Any], permission: Permission,
+    def require_permission(self, user: dict[str, Any], permission: Permission,
                          resource_type: Optional[str] = None,
                          resource_id: Optional[int] = None):
         """
@@ -767,9 +768,9 @@ class ResourceAccessControl:
         ):
             raise ValueError(f"Permission denied: {permission.value}")
 
-    def filter_by_access(self, user: Dict[str, Any],
-                        resources: List[Dict[str, Any]],
-                        resource_type: str) -> List[Dict[str, Any]]:
+    def filter_by_access(self, user: dict[str, Any],
+                        resources: list[dict[str, Any]],
+                        resource_type: str) -> list[dict[str, Any]]:
         """
         Filter resources by user access.
 

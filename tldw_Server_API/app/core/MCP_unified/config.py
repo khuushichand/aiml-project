@@ -5,18 +5,32 @@ All sensitive configuration is loaded from environment variables or secure confi
 No hardcoded secrets allowed.
 """
 
+import json
 import os
 import secrets
-import json
-from typing import Optional, Dict, Any, List
 from functools import lru_cache
+from ipaddress import ip_address, ip_network
+from typing import Any, Optional
+from urllib.parse import urlparse
+
 from pydantic import Field, SecretStr
+
 try:
     from pydantic import field_validator  # v2
-except Exception:  # v1 fallback
+except (ImportError, AttributeError):  # v1 fallback
     from pydantic import validator as field_validator  # type: ignore
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_MCP_CONFIG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _default_ws_allowed_origins() -> list[str]:
@@ -52,12 +66,87 @@ def _parse_env_list(value: Any) -> Any:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list):
                     return [str(item).strip() for item in parsed if str(item).strip()]
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 pass
         return [item.strip() for item in raw.split(",") if item.strip()]
     if isinstance(value, (list, tuple, set)):
         return [str(item).strip() for item in value if str(item).strip()]
     return value
+
+
+def _is_loopback_origin(origin: str) -> bool:
+    """Return True when origin points to a loopback host."""
+    if not origin:
+        return False
+
+    raw = origin.strip()
+    if not raw or raw == "*":
+        return False
+
+    candidate = raw if "://" in raw else f"http://{raw}"
+    try:
+        parsed = urlparse(candidate)
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+
+    try:
+        return ip_address(host).is_loopback
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _is_loopback_ip_entry(entry: str) -> bool:
+    """Return True when an IP/CIDR entry is loopback-only."""
+    if not entry:
+        return False
+
+    token = entry.strip()
+    if not token:
+        return False
+
+    network = token
+    if "/" not in token:
+        network = f"{token}/128" if ":" in token else f"{token}/32"
+    try:
+        return ip_network(network, strict=False).is_loopback
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
+        return False
+
+
+def _is_local_only_safe_profile(config: "MCPConfig") -> bool:
+    """
+    Check whether MCP is constrained to a local-only safe profile.
+
+    This profile is intended for first-run development:
+    - Loopback-only IP allowlist
+    - Localhost/loopback WS + CORS origins
+    - No trust of forwarded headers
+    """
+    allowed_ips = list(config.allowed_client_ips or [])
+    if not allowed_ips:
+        return False
+    if not all(_is_loopback_ip_entry(entry) for entry in allowed_ips):
+        return False
+
+    ws_origins = list(config.ws_allowed_origins or [])
+    if not ws_origins:
+        return False
+    if not all(_is_loopback_origin(origin) for origin in ws_origins):
+        return False
+
+    cors_origins = list(config.cors_origins or [])
+    if not cors_origins:
+        return False
+    if not all(_is_loopback_origin(origin) for origin in cors_origins):
+        return False
+
+    return not bool(config.trust_x_forwarded_for)
 
 
 class MCPConfig(BaseSettings):
@@ -120,7 +209,7 @@ class MCPConfig(BaseSettings):
     ws_close_timeout: int = Field(default=10, validation_alias="MCP_WS_CLOSE_TIMEOUT")
     ws_auth_required: bool = Field(default=True, validation_alias="MCP_WS_AUTH_REQUIRED")
     # WS security
-    ws_allowed_origins: List[str] = Field(default_factory=_default_ws_allowed_origins, validation_alias="MCP_WS_ALLOWED_ORIGINS")
+    ws_allowed_origins: list[str] = Field(default_factory=_default_ws_allowed_origins, validation_alias="MCP_WS_ALLOWED_ORIGINS")
     ws_allow_query_auth: bool = Field(default=False, validation_alias="MCP_WS_ALLOW_QUERY_AUTH")
     # WS session policies
     ws_idle_timeout_seconds: int = Field(default=300, validation_alias="MCP_WS_IDLE_TIMEOUT_SECONDS")
@@ -129,11 +218,11 @@ class MCPConfig(BaseSettings):
 
     # Network access controls
     # Default to loopback-only to avoid accidental exposure
-    allowed_client_ips: List[str] = Field(default_factory=_default_allowed_ips, validation_alias="MCP_ALLOWED_IPS")
-    blocked_client_ips: List[str] = Field(default_factory=list, validation_alias="MCP_BLOCKED_IPS")
+    allowed_client_ips: list[str] = Field(default_factory=_default_allowed_ips, validation_alias="MCP_ALLOWED_IPS")
+    blocked_client_ips: list[str] = Field(default_factory=list, validation_alias="MCP_BLOCKED_IPS")
     trust_x_forwarded_for: bool = Field(default=False, validation_alias="MCP_TRUST_X_FORWARDED")
     trusted_proxy_depth: int = Field(default=1, ge=0, validation_alias="MCP_TRUSTED_PROXY_DEPTH")
-    trusted_proxy_ips: List[str] = Field(default_factory=list, validation_alias="MCP_TRUSTED_PROXY_IPS")
+    trusted_proxy_ips: list[str] = Field(default_factory=list, validation_alias="MCP_TRUSTED_PROXY_IPS")
 
     # HTTP request limits
     http_max_body_bytes: int = Field(default=524288, validation_alias="MCP_HTTP_MAX_BODY_BYTES")  # 512 KiB default
@@ -146,16 +235,16 @@ class MCPConfig(BaseSettings):
 
     # CORS Configuration
     cors_enabled: bool = Field(default=True, validation_alias="MCP_CORS_ENABLED")
-    cors_origins: List[str] = Field(
+    cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8000"],
         validation_alias="MCP_CORS_ORIGINS"
     )
     cors_allow_credentials: bool = Field(default=True, validation_alias="MCP_CORS_CREDENTIALS")
-    cors_allow_methods: List[str] = Field(
+    cors_allow_methods: list[str] = Field(
         default=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         validation_alias="MCP_CORS_METHODS"
     )
-    cors_allow_headers: List[str] = Field(
+    cors_allow_headers: list[str] = Field(
         default=["*"],
         validation_alias="MCP_CORS_HEADERS"
     )
@@ -199,7 +288,7 @@ class MCPConfig(BaseSettings):
 
     # Rate limit categories (tool → category) mapping
     # Provide either JSON via MCP_TOOL_CATEGORY_MAP or file path via MCP_TOOL_CATEGORY_MAP_FILE
-    tool_category_map: Dict[str, str] = Field(default_factory=dict, validation_alias="MCP_TOOL_CATEGORY_MAP")
+    tool_category_map: dict[str, str] = Field(default_factory=dict, validation_alias="MCP_TOOL_CATEGORY_MAP")
     tool_category_map_file: Optional[str] = Field(default=None, validation_alias="MCP_TOOL_CATEGORY_MAP_FILE")
 
     model_config = SettingsConfigDict(
@@ -290,11 +379,11 @@ class MCPConfig(BaseSettings):
                 import json as _json
                 data = _json.loads(v)
                 return data if isinstance(data, dict) else {}
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 return {}
         return v
 
-    def get_redis_connection_params(self) -> Optional[Dict[str, Any]]:
+    def get_redis_connection_params(self) -> Optional[dict[str, Any]]:
         """Get Redis connection parameters if Redis is configured"""
         if not self.redis_url:
             return None
@@ -315,7 +404,7 @@ class MCPConfig(BaseSettings):
 
         return params
 
-    def get_database_connection_params(self) -> Dict[str, Any]:
+    def get_database_connection_params(self) -> dict[str, Any]:
         """Get database connection parameters"""
         return {
             "url": self.database_url,
@@ -337,7 +426,7 @@ class MCPConfig(BaseSettings):
             import os as _os
             if _os.getenv("MCP_INHERIT_GLOBAL_LOGGER", "").lower() in {"1","true","yes","on"}:
                 return
-        except Exception:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Placeholder-based format template (no color, safe for braces in messages)
@@ -349,7 +438,7 @@ class MCPConfig(BaseSettings):
 
         try:
             logger.remove()  # Reset to avoid duplicate/default handlers
-        except Exception:
+        except (RuntimeError, ValueError):
             pass
 
         # Console logging (safe format, no color)
@@ -384,7 +473,7 @@ class MCPConfig(BaseSettings):
             )
 
 
-@lru_cache()
+@lru_cache
 def get_config() -> MCPConfig:
     """Get cached configuration instance"""
     try:
@@ -393,16 +482,18 @@ def get_config() -> MCPConfig:
         # Load tool category map from YAML file if provided
         try:
             if config.tool_category_map_file:
-                import os as _os, yaml as _yaml  # type: ignore
+                import os as _os  # type: ignore
+
+                import yaml as _yaml
                 if _os.path.exists(config.tool_category_map_file):
-                    with open(config.tool_category_map_file, 'r') as f:
+                    with open(config.tool_category_map_file) as f:
                         data = _yaml.safe_load(f) or {}
                     if isinstance(data, dict):
                         # Expect top-level mapping { tool_name: category }
                         for k, v in data.items():
                             if isinstance(k, str) and isinstance(v, str):
                                 config.tool_category_map[k] = v
-        except Exception as _e:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"Failed to load tool category map file: {_e}")
         logger.info("MCP configuration loaded successfully")
         return config
@@ -421,13 +512,13 @@ def validate_config() -> bool:
                 os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
                 or bool(os.getenv("PYTEST_CURRENT_TEST"))
             )
-        except Exception:
+        except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
             test_mode = False
 
         def _field_was_set(cfg: MCPConfig, field_name: str) -> bool:
             try:
                 return field_name in cfg.model_fields_set  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, TypeError):
                 return field_name in getattr(cfg, "__fields_set__", set())
 
         # Check critical security settings
@@ -439,14 +530,24 @@ def validate_config() -> bool:
             logger.error("API key salt not configured!")
             return False
 
-        # Require explicit secrets in production (avoid auto-generated defaults)
+        # In non-debug/non-test contexts, allow generated secrets only when
+        # MCP is constrained to local-only safe defaults.
         if not config.debug_mode and not test_mode:
-            if not _field_was_set(config, "jwt_secret_key"):
-                logger.error("MCP_JWT_SECRET must be set explicitly in production")
-                return False
-            if not _field_was_set(config, "api_key_salt"):
-                logger.error("MCP_API_KEY_SALT must be set explicitly in production")
-                return False
+            jwt_secret_explicit = _field_was_set(config, "jwt_secret_key")
+            api_salt_explicit = _field_was_set(config, "api_key_salt")
+            if not (jwt_secret_explicit and api_salt_explicit):
+                if _is_local_only_safe_profile(config):
+                    logger.warning(
+                        "MCP_JWT_SECRET/MCP_API_KEY_SALT are not explicitly set; "
+                        "using process-local generated secrets under local-only safe profile. "
+                        "Set explicit secrets for shared or production deployments."
+                    )
+                else:
+                    if not jwt_secret_explicit:
+                        logger.error("MCP_JWT_SECRET must be set explicitly when MCP is not local-only")
+                    if not api_salt_explicit:
+                        logger.error("MCP_API_KEY_SALT must be set explicitly when MCP is not local-only")
+                    return False
 
         # Validate database connection
         if not config.database_url:
@@ -477,6 +578,6 @@ def validate_config() -> bool:
         logger.info("Configuration validation passed")
         return True
 
-    except Exception as e:
+    except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Configuration validation failed: {e}")
         return False

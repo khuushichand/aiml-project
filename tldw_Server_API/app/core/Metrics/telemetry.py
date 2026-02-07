@@ -8,12 +8,31 @@ This module provides centralized telemetry configuration supporting:
 - Multiple export backends (OTLP, Prometheus, Jaeger)
 """
 
+from __future__ import annotations
+
 import inspect
 import os
 import socket
-from typing import Dict, Any, Optional, List
-from contextlib import contextmanager
+import sys
+import threading
+from contextlib import contextmanager, suppress
+from typing import Any
+
 from loguru import logger
+
+# Narrowed exception tuple for optional telemetry components and runtime safety.
+_TELEMETRY_NONCRITICAL_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 # Fallback implementations used when telemetry init fails or OTel is missing.
 class DummySpan:
@@ -60,39 +79,68 @@ class DummyMeter:
         return DummyInstrument()
 
 
+class _SafeConsoleStream:
+    """Best-effort stream wrapper for console exporters during teardown."""
+
+    _IO_EXCEPTIONS = (AttributeError, OSError, RuntimeError, ValueError)
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+
+    def write(self, message: str):
+        try:
+            if self._stream is None:
+                return
+            self._stream.write(message)
+        except self._IO_EXCEPTIONS:
+            return
+
+    def flush(self):
+        try:
+            if self._stream is None:
+                return
+            self._stream.flush()
+        except self._IO_EXCEPTIONS:
+            return
+
+
 # Try to import core OpenTelemetry components
 try:
-    from opentelemetry import trace, metrics, baggage
-    from opentelemetry.trace import Status, StatusCode, Tracer
+    from opentelemetry import metrics, trace
     from opentelemetry.metrics import Meter
+    from opentelemetry.sdk.metrics import MeterProvider
 
     # SDK components
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.trace import Status, StatusCode, Tracer
     # Views for configuring histogram boundaries
     try:
         from opentelemetry.sdk.metrics.view import (
-            View,
             ExplicitBucketHistogramAggregation,
             InstrumentSelector,
+            View,
         )
-    except Exception:  # pragma: no cover - optional depending on OTel version
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - optional depending on OTel version
         View = None  # type: ignore
         ExplicitBucketHistogramAggregation = None  # type: ignore
         InstrumentSelector = None  # type: ignore
-    from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
+    from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
+    from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-    from opentelemetry.sdk.metrics.export import (
-        PeriodicExportingMetricReader,
-        ConsoleMetricExporter
-    )
 
     OTEL_AVAILABLE = True
-except ImportError as e:
+except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
     # Demote to debug/info to reduce noisy logs during tests; telemetry is optional
     logger.debug(f"OpenTelemetry not fully available: {e}")
     logger.debug("Install with: pip install opentelemetry-distro opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi")
     OTEL_AVAILABLE = False
+    metrics = None  # type: ignore[assignment]
+    trace = None  # type: ignore[assignment]
+    Meter = Any  # type: ignore[assignment,misc]
+    MeterProvider = Any  # type: ignore[assignment,misc]
+    TracerProvider = Any  # type: ignore[assignment,misc]
+    Tracer = Any  # type: ignore[assignment,misc]
+    Resource = Any  # type: ignore[assignment,misc]
     Status = None  # type: ignore
     StatusCode = None  # type: ignore
 
@@ -110,48 +158,48 @@ TraceContextTextMapPropagator = None
 if OTEL_AVAILABLE:
     try:
         from opentelemetry.exporter.prometheus import PrometheusMetricReader
-    except Exception as e:  # pragma: no cover - optional exporter
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional exporter
         logger.debug(f"Prometheus exporter not available: {e}")
 
     try:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-    except Exception as e:  # pragma: no cover - optional exporter
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional exporter
         logger.debug(f"OTLP trace exporter not available: {e}")
 
     try:
         from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-    except Exception as e:  # pragma: no cover - optional exporter
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional exporter
         logger.debug(f"OTLP metric exporter not available: {e}")
 
     try:
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-    except Exception as e:  # pragma: no cover - optional instrumentation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional instrumentation
         logger.debug(f"FastAPI instrumentation not available: {e}")
 
     try:
         from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    except Exception as e:  # pragma: no cover - optional instrumentation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional instrumentation
         logger.debug(f"HTTPX instrumentation not available: {e}")
 
     try:
         from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-    except Exception as e:  # pragma: no cover - optional instrumentation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional instrumentation
         logger.debug(f"SQLAlchemy instrumentation not available: {e}")
 
     try:
         from opentelemetry.instrumentation.psycopg2 import Psycopg2Instrumentor
-    except Exception as e:  # pragma: no cover - optional instrumentation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional instrumentation
         logger.debug(f"Psycopg2 instrumentation not available: {e}")
 
     try:
         from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
-    except Exception as e:  # pragma: no cover - optional instrumentation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional instrumentation
         logger.debug(f"aiohttp instrumentation not available: {e}")
 
     try:
         from opentelemetry.propagate import set_global_textmap
         from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-    except Exception as e:  # pragma: no cover - optional propagation
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - optional propagation
         logger.debug(f"Trace propagation not available: {e}")
 
 
@@ -160,6 +208,86 @@ class TelemetryConfig:
 
     def __init__(self):
         """Initialize telemetry configuration from environment variables."""
+        def _env_int(
+            key: str,
+            default: int,
+            *,
+            minimum: int | None = None,
+            maximum: int | None = None,
+        ) -> int:
+            raw = os.getenv(key)
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                value = int(str(raw).strip())
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid integer for {}='{}'; falling back to {}",
+                    key,
+                    raw,
+                    default,
+                )
+                return default
+            if minimum is not None and value < minimum:
+                logger.warning(
+                    "Out-of-range integer for {}={} (<{}); falling back to {}",
+                    key,
+                    value,
+                    minimum,
+                    default,
+                )
+                return default
+            if maximum is not None and value > maximum:
+                logger.warning(
+                    "Out-of-range integer for {}={} (>{}); falling back to {}",
+                    key,
+                    value,
+                    maximum,
+                    default,
+                )
+                return default
+            return value
+
+        def _env_float(
+            key: str,
+            default: float,
+            *,
+            minimum: float | None = None,
+            maximum: float | None = None,
+        ) -> float:
+            raw = os.getenv(key)
+            if raw is None or str(raw).strip() == "":
+                return default
+            try:
+                value = float(str(raw).strip())
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid float for {}='{}'; falling back to {}",
+                    key,
+                    raw,
+                    default,
+                )
+                return default
+            if minimum is not None and value < minimum:
+                logger.warning(
+                    "Out-of-range float for {}={} (<{}); falling back to {}",
+                    key,
+                    value,
+                    minimum,
+                    default,
+                )
+                return default
+            if maximum is not None and value > maximum:
+                logger.warning(
+                    "Out-of-range float for {}={} (>{}); falling back to {}",
+                    key,
+                    value,
+                    maximum,
+                    default,
+                )
+                return default
+            return value
+
         # Allow explicit disable in tests/CI without requiring SDK uninstall.
         self.sdk_disabled = os.getenv("OTEL_SDK_DISABLED", "false").lower() == "true"
         # Service identification
@@ -187,7 +315,7 @@ class TelemetryConfig:
         ]
 
         # Prometheus Configuration
-        self.prometheus_port = int(os.getenv("PROMETHEUS_PORT", "9090"))
+        self.prometheus_port = _env_int("PROMETHEUS_PORT", 9090, minimum=1, maximum=65535)
         self.prometheus_host = os.getenv("PROMETHEUS_HOST", "0.0.0.0")
 
         # Feature flags
@@ -200,10 +328,10 @@ class TelemetryConfig:
         self.enable_profiling = os.getenv("ENABLE_PROFILING", "false").lower() == "true"
 
         # Performance settings
-        self.metrics_export_interval = int(os.getenv("METRICS_EXPORT_INTERVAL_MS", "60000"))
-        self.traces_export_batch_size = int(os.getenv("TRACES_EXPORT_BATCH_SIZE", "512"))
-        self.traces_export_timeout = int(os.getenv("TRACES_EXPORT_TIMEOUT_MS", "30000"))
-        self.sample_rate = float(os.getenv("METRICS_SAMPLE_RATE", "1.0"))
+        self.metrics_export_interval = _env_int("METRICS_EXPORT_INTERVAL_MS", 60000, minimum=1)
+        self.traces_export_batch_size = _env_int("TRACES_EXPORT_BATCH_SIZE", 512, minimum=1)
+        self.traces_export_timeout = _env_int("TRACES_EXPORT_TIMEOUT_MS", 30000, minimum=1)
+        self.sample_rate = _env_float("METRICS_SAMPLE_RATE", 1.0, minimum=0.0, maximum=1.0)
 
         if self.enable_console_metrics_exporter and "console" not in self.metrics_exporters:
             self.metrics_exporters.append("console")
@@ -222,7 +350,7 @@ class TelemetryConfig:
         self.pod_name = os.getenv("POD_NAME", self.hostname)
         self.pod_namespace = os.getenv("POD_NAMESPACE", "default")
 
-    def get_resource_attributes(self) -> Dict[str, Any]:
+    def get_resource_attributes(self) -> dict[str, Any]:
         """Get resource attributes for telemetry."""
         return {
             SERVICE_NAME: self.service_name,
@@ -238,7 +366,7 @@ class TelemetryConfig:
 class TelemetryManager:
     """Manages OpenTelemetry initialization and provides access to telemetry components."""
 
-    def __init__(self, config: Optional[TelemetryConfig] = None):
+    def __init__(self, config: TelemetryConfig | None = None):
         """
         Initialize the telemetry manager.
 
@@ -246,10 +374,10 @@ class TelemetryManager:
             config: TelemetryConfig instance or None to use defaults
         """
         self.config = config or TelemetryConfig()
-        self.tracer_provider: Optional[TracerProvider] = None
-        self.meter_provider: Optional[MeterProvider] = None
-        self.tracer: Optional[Tracer] = None
-        self.meter: Optional[Meter] = None
+        self.tracer_provider: TracerProvider | None = None
+        self.meter_provider: MeterProvider | None = None
+        self.tracer: Tracer | None = None
+        self.meter: Meter | None = None
         self.initialized = False
         # Hold pending views if provider not yet available
         self._pending_views = []  # list[tuple[str, list[float]]]
@@ -295,7 +423,7 @@ class TelemetryManager:
             self.initialized = True
             logger.info(f"Telemetry initialized for service: {self.config.service_name}")
 
-        except Exception as e:
+        except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize telemetry: {e}")
             # Fall back to dummy implementations
             self.tracer = DummyTracer()
@@ -359,17 +487,15 @@ class TelemetryManager:
             try:
                 if hasattr(self.meter_provider, "register_view") and View and ExplicitBucketHistogramAggregation and InstrumentSelector:
                     for name, boundaries in list(self._pending_views):
-                        try:
+                        with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
                             self.meter_provider.register_view(
                                 View(
                                     instrument_selector=InstrumentSelector(name=name),
                                     aggregation=ExplicitBucketHistogramAggregation(boundaries=boundaries),
                                 )
                             )
-                        except Exception:
-                            pass
                     self._pending_views.clear()
-            except Exception:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _create_trace_exporter(self, exporter_name: str):
@@ -377,7 +503,8 @@ class TelemetryManager:
         exporter_name = exporter_name.strip().lower()
 
         if exporter_name == "console":
-            return ConsoleSpanExporter()
+            stream = _SafeConsoleStream(getattr(sys, "__stderr__", None) or sys.stderr)
+            return ConsoleSpanExporter(out=stream)
 
         elif exporter_name == "otlp":
             if not self.config.otlp_endpoint:
@@ -487,7 +614,7 @@ class TelemetryManager:
                     tracer_provider=self.tracer_provider,
                     meter_provider=self.meter_provider
                 )
-            except Exception as e:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument FastAPI: {e}")
 
         # HTTP client instrumentation
@@ -496,7 +623,7 @@ class TelemetryManager:
                 HTTPXClientInstrumentor().instrument(
                     tracer_provider=self.tracer_provider
                 )
-            except Exception as e:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument HTTPX: {e}")
 
         if AioHttpClientInstrumentor:
@@ -504,7 +631,7 @@ class TelemetryManager:
                 AioHttpClientInstrumentor().instrument(
                     tracer_provider=self.tracer_provider
                 )
-            except Exception as e:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument aiohttp: {e}")
 
         # Database instrumentation
@@ -513,7 +640,7 @@ class TelemetryManager:
                 SQLAlchemyInstrumentor().instrument(
                     tracer_provider=self.tracer_provider
                 )
-            except Exception as e:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument SQLAlchemy: {e}")
 
         if Psycopg2Instrumentor:
@@ -521,10 +648,10 @@ class TelemetryManager:
                 Psycopg2Instrumentor().instrument(
                     tracer_provider=self.tracer_provider
                 )
-            except Exception as e:
+            except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Could not instrument psycopg2: {e}")
 
-    def get_tracer(self, name: Optional[str] = None) -> Tracer:
+    def get_tracer(self, name: str | None = None) -> Tracer:
         """
         Get a tracer instance.
 
@@ -534,14 +661,17 @@ class TelemetryManager:
         Returns:
             Tracer instance
         """
+        if getattr(self.config, "sdk_disabled", False):
+            return self.tracer or DummyTracer()
+
         if not self.tracer:
             return DummyTracer()
 
-        if name:
+        if name and OTEL_AVAILABLE and trace is not None:
             return trace.get_tracer(name, self.config.service_version)
         return self.tracer
 
-    def get_meter(self, name: Optional[str] = None) -> Meter:
+    def get_meter(self, name: str | None = None) -> Meter:
         """
         Get a meter instance.
 
@@ -551,14 +681,17 @@ class TelemetryManager:
         Returns:
             Meter instance
         """
+        if getattr(self.config, "sdk_disabled", False):
+            return self.meter or DummyMeter()
+
         if not self.meter:
             return DummyMeter()
 
-        if name:
+        if name and OTEL_AVAILABLE and metrics is not None:
             return metrics.get_meter(name, self.config.service_version)
         return self.meter
 
-    def register_histogram_view(self, instrument_name: str, boundaries: List[float]) -> None:
+    def register_histogram_view(self, instrument_name: str, boundaries: list[float]) -> None:
         """Register a histogram view for custom bucket boundaries.
 
         If the provider supports dynamic view registration, apply immediately;
@@ -578,11 +711,11 @@ class TelemetryManager:
             else:
                 # Queue for later application
                 self._pending_views.append((instrument_name, list(boundaries)))
-        except Exception as e:
+        except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to register histogram view for {instrument_name}: {e}")
 
     @contextmanager
-    def trace_context(self, operation_name: str, attributes: Optional[Dict[str, Any]] = None):
+    def trace_context(self, operation_name: str, attributes: dict[str, Any] | None = None):
         """
         Context manager for creating a traced operation.
 
@@ -602,9 +735,13 @@ class TelemetryManager:
             try:
                 yield span
             except Exception as e:
-                span.record_exception(e)
+                # App exceptions should be reflected on the current span, but
+                # telemetry failures must never mask the original exception.
+                with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
+                    span.record_exception(e)
                 if OTEL_AVAILABLE and Status and StatusCode:
-                    span.set_status(Status(StatusCode.ERROR, str(e)))
+                    with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
+                        span.set_status(Status(StatusCode.ERROR, str(e)))
                 raise
 
     def shutdown(self):
@@ -620,12 +757,13 @@ class TelemetryManager:
                 self.meter_provider.shutdown()
 
             logger.info("Telemetry providers shut down successfully")
-        except Exception as e:
+        except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error shutting down telemetry: {e}")
 
 
 # Global telemetry manager instance
-_telemetry_manager: Optional[TelemetryManager] = None
+_telemetry_manager: TelemetryManager | None = None
+_telemetry_manager_lock = threading.Lock()
 
 
 def get_telemetry_manager() -> TelemetryManager:
@@ -637,11 +775,13 @@ def get_telemetry_manager() -> TelemetryManager:
     """
     global _telemetry_manager
     if _telemetry_manager is None:
-        _telemetry_manager = TelemetryManager()
+        with _telemetry_manager_lock:
+            if _telemetry_manager is None:
+                _telemetry_manager = TelemetryManager()
     return _telemetry_manager
 
 
-def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManager] = None) -> bool:
+def instrument_fastapi_app(app: Any, telemetry_manager: TelemetryManager | None = None) -> bool:
     """Instrument a FastAPI app with OpenTelemetry if available."""
     if not OTEL_AVAILABLE or not FastAPIInstrumentor or app is None:
         return False
@@ -662,12 +802,10 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
                 if cls.__name__ == "OpenTelemetryMiddleware" or cls.__module__.startswith(
                     "opentelemetry.instrumentation"
                 ):
-                    try:
-                        setattr(app, "_tldw_otel_fastapi_instrumented", True)
-                    except Exception:
-                        pass
+                    with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
+                        app._tldw_otel_fastapi_instrumented = True
                     return True
-        except Exception:
+        except _TELEMETRY_NONCRITICAL_EXCEPTIONS:
             pass
         tm = telemetry_manager or get_telemetry_manager()
         FastAPIInstrumentor.instrument_app(
@@ -675,17 +813,15 @@ def instrument_fastapi_app(app: Any, telemetry_manager: Optional[TelemetryManage
             tracer_provider=tm.tracer_provider,
             meter_provider=tm.meter_provider,
         )
-        try:
-            setattr(app, "_tldw_otel_fastapi_instrumented", True)
-        except Exception:
-            pass
+        with suppress(_TELEMETRY_NONCRITICAL_EXCEPTIONS):
+            app._tldw_otel_fastapi_instrumented = True
         return True
-    except Exception as e:
+    except _TELEMETRY_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Could not instrument FastAPI app: {e}")
         return False
 
 
-def initialize_telemetry(config: Optional[TelemetryConfig] = None) -> TelemetryManager:
+def initialize_telemetry(config: TelemetryConfig | None = None) -> TelemetryManager:
     """
     Initialize telemetry with optional configuration.
 

@@ -3,17 +3,15 @@
 Test suite for database migration functionality.
 """
 
+import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-import json
-import shutil
 
-from tldw_Server_API.app.core.DB_Management.db_migration import (
-    Migration, DatabaseMigrator, MigrationError
-)
+from tldw_Server_API.app.core.DB_Management.db_migration import DatabaseMigrator, Migration, MigrationError
 
 
 class TestMigrations(unittest.TestCase):
@@ -211,7 +209,7 @@ class TestMigrations(unittest.TestCase):
         self.assertTrue(os.path.exists(backup_path + ".json"))
 
         # Check backup metadata
-        with open(backup_path + ".json", 'r') as f:
+        with open(backup_path + ".json") as f:
             metadata = json.load(f)
 
         self.assertEqual(metadata["original_path"], self.db_path)

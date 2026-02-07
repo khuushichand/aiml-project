@@ -8,9 +8,9 @@
 # Local Imports
 #
 #######################################################################################################################
-from typing import Literal, Optional, Dict, Any, List
+from typing import Any, Literal, Optional, Union
 
-from pydantic import Field, BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class NormalizationOptions(BaseModel):
@@ -103,7 +103,7 @@ class OpenAISpeechRequest(BaseModel):
         le=60.0,
         description="Minimum duration in seconds for voice reference audio. If provided, will validate reference audio length.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific parameters passed through to adapters (e.g., stability, clarity, cfg_scale).",
     )
@@ -175,6 +175,81 @@ class AudioTokenizerDecodeRequest(BaseModel):
     response_format: Literal["wav", "pcm"] = Field(
         default="wav",
         description="Desired audio output format.",
+    )
+
+
+class StreamingStatusFeatures(BaseModel):
+    """Response schema for streaming transcription feature flags."""
+
+    partial_results: bool = Field(True, description="Whether partial results are supported.")
+    multiple_languages: bool = Field(True, description="Whether multiple languages are supported.")
+    concurrent_streams: bool = Field(True, description="Whether concurrent streams are supported.")
+    segment_metadata: bool = Field(True, description="Whether segment metadata is supported.")
+    live_insights: bool = Field(True, description="Whether live insights are supported.")
+    meeting_notes: bool = Field(True, description="Whether meeting notes are supported.")
+    speaker_diarization: bool = Field(True, description="Whether speaker diarization is supported.")
+    audio_persistence: bool = Field(True, description="Whether audio persistence is supported.")
+
+
+class StreamingStatusResponse(BaseModel):
+    """Response schema for streaming transcription availability."""
+
+    status: Literal["available", "unavailable", "error"] = Field(
+        ..., description="Availability status of streaming transcription."
+    )
+    available_models: list[str] = Field(
+        default_factory=list,
+        description="Detected streaming model variants.",
+    )
+    websocket_endpoint: str = Field(
+        ..., description="WebSocket endpoint for streaming transcription."
+    )
+    supported_features: StreamingStatusFeatures = Field(
+        ..., description="Feature flags for streaming transcription."
+    )
+
+
+class StreamingLimitsResponse(BaseModel):
+    """Response schema for streaming quota and usage."""
+
+    user_id: Union[int, str] = Field(..., description="User identifier.")
+    tier: str = Field(..., description="User tier name.")
+    limits: dict[str, Any] = Field(
+        ..., description="Resolved limit values for the user."
+    )
+    used_today_minutes: float = Field(
+        ..., description="Minutes already used today."
+    )
+    remaining_minutes: Optional[float] = Field(
+        default=None,
+        description="Minutes remaining today, or null if unknown/unbounded.",
+    )
+    active_streams: int = Field(
+        ..., description="Number of currently active streams."
+    )
+    can_start_stream: bool = Field(
+        ..., description="Whether another stream can be started."
+    )
+    legacy_can_start_stream: bool = Field(
+        ...,
+        alias="_can_start_stream",
+        description="Backwards-compatible alias for can_start_stream.",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class StreamingTestResponse(BaseModel):
+    """Response schema for streaming transcription test endpoint."""
+
+    status: Literal["success", "error"] = Field(
+        ..., description="Outcome of the streaming test."
+    )
+    test_passed: bool = Field(..., description="Whether the test passed.")
+    message: str = Field(..., description="Human-readable status message.")
+    test_result: Optional[Any] = Field(
+        default=None,
+        description="Transcriber response or 'Buffer accumulating' when buffering.",
     )
 
 
@@ -266,23 +341,23 @@ class TranscriptUtterance(BaseModel):
     start: Optional[float] = Field(None, description="Start time in seconds")
     end: Optional[float] = Field(None, description="End time in seconds")
     speaker: Optional[str] = Field(None, description="Speaker label")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Arbitrary extra metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Arbitrary extra metadata")
 
 
 class TranscriptSegmentInfo(BaseModel):
-    indices: List[int]
+    indices: list[int]
     start_index: int
     end_index: int
     start_time: Optional[float] = None
     end_time: Optional[float] = None
-    speakers: List[str] = []
+    speakers: list[str] = []
     text: str
 
 
 class TranscriptSegmentationRequest(BaseModel):
     """Request schema for transcript tree segmentation."""
 
-    entries: List[TranscriptUtterance] = Field(..., description="Transcript utterances")
+    entries: list[TranscriptUtterance] = Field(..., description="Transcript utterances")
     K: int = Field(6, ge=1, description="Maximum number of segments")
     min_segment_size: int = Field(5, ge=1, description="Minimum items per segment")
     lambda_balance: float = Field(0.01, ge=0.0, description="Balance penalty coefficient")
@@ -295,9 +370,9 @@ class TranscriptSegmentationRequest(BaseModel):
 class TranscriptSegmentationResponse(BaseModel):
     """Response schema with transitions vector and segment details."""
 
-    transitions: List[int]
-    transition_indices: List[int] = []
-    segments: List[TranscriptSegmentInfo]
+    transitions: list[int]
+    transition_indices: list[int] = []
+    segments: list[TranscriptSegmentInfo]
 
 
 #######################################################################################################################
@@ -321,7 +396,7 @@ class SpeechChatSTTConfig(BaseModel):
         default=None,
         description="Optional language code (ISO-639-1/2) to bias transcription.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific STT parameters passed through to underlying adapters.",
     )
@@ -349,7 +424,7 @@ class SpeechChatLLMConfig(BaseModel):
         ge=1,
         description="Maximum number of tokens to generate.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific LLM parameters passed through to the orchestrator.",
     )
@@ -380,7 +455,7 @@ class SpeechChatTTSConfig(BaseModel):
         le=4.0,
         description="Optional speed multiplier for synthesized audio.",
     )
-    extra_params: Optional[Dict[str, Any]] = Field(
+    extra_params: Optional[dict[str, Any]] = Field(
         default=None,
         description="Provider-specific TTS parameters passed through to adapters.",
     )
@@ -422,7 +497,7 @@ class SpeechChatRequest(BaseModel):
         default=False,
         description="Optional hint to store raw audio alongside transcripts when enabled server-side.",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Arbitrary client metadata (trace IDs, UI hints, etc.).",
     )
@@ -481,11 +556,75 @@ class SpeechChatResponse(BaseModel):
         default=None,
         description="Optional token usage summary from the LLM response.",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[dict[str, Any]] = Field(
         default=None,
         description="Optional metadata echo or server-side annotations.",
     )
-    action_result: Optional[Dict[str, Any]] = Field(
+    action_result: Optional[dict[str, Any]] = Field(
         default=None,
         description="Optional action/workflow execution result derived from the transcript.",
     )
+
+
+class TTSHistoryListItem(BaseModel):
+    """List item for TTS history."""
+
+    id: int
+    created_at: str
+    has_text: bool
+    text_preview: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    voice_info: Optional[dict[str, Any]] = None
+    duration_ms: Optional[int] = None
+    format: Optional[str] = None
+    status: Optional[str] = None
+    favorite: bool = False
+    job_id: Optional[int] = None
+    output_id: Optional[int] = None
+    artifact_deleted_at: Optional[str] = None
+
+
+class TTSHistoryListResponse(BaseModel):
+    """Response schema for listing TTS history."""
+
+    items: list[TTSHistoryListItem]
+    total: Optional[int] = None
+    limit: int
+    offset: int
+    next_cursor: Optional[str] = None
+
+
+class TTSHistoryDetailResponse(BaseModel):
+    """Detail schema for a single TTS history entry."""
+
+    id: int
+    created_at: str
+    has_text: bool
+    text: Optional[str] = None
+    text_length: Optional[int] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    voice_id: Optional[str] = None
+    voice_name: Optional[str] = None
+    voice_info: Optional[dict[str, Any]] = None
+    format: Optional[str] = None
+    duration_ms: Optional[int] = None
+    generation_time_ms: Optional[int] = None
+    params_json: Optional[dict[str, Any]] = None
+    status: Optional[str] = None
+    segments_json: Optional[dict[str, Any]] = None
+    favorite: bool = False
+    job_id: Optional[int] = None
+    output_id: Optional[int] = None
+    artifact_ids: Optional[list[Any]] = None
+    artifact_deleted_at: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class TTSHistoryFavoriteUpdate(BaseModel):
+    """Update favorite status for a history entry."""
+
+    favorite: bool = Field(..., description="Whether the entry is favorited.")

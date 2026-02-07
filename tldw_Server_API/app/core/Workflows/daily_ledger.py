@@ -11,8 +11,10 @@ All functions fail open when the ledger or AuthNZ DB is unavailable.
 """
 
 import asyncio
-from datetime import datetime, timezone, date, time as dtime
-from typing import Any, Optional
+from datetime import date, datetime, timezone
+from datetime import time as dtime
+from sqlite3 import Error as SQLiteError
+from typing import Any
 
 from loguru import logger
 
@@ -21,19 +23,28 @@ try:  # pragma: no cover - DAL optional during early startup/tests
         LedgerEntry,
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except ImportError:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
+
+_WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 _WORKFLOWS_CATEGORY = "workflows_runs"
 
-_workflows_daily_ledger: Optional["ResourceDailyLedger"] = None  # type: ignore[name-defined]
+_workflows_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[name-defined]
 _workflows_daily_ledger_lock = asyncio.Lock()
 _workflows_backfill_done: set[str] = set()
 
 
-async def get_workflows_daily_ledger() -> Optional["ResourceDailyLedger"]:
+async def get_workflows_daily_ledger() -> ResourceDailyLedger | None:
     """Lazily initialize the shared ResourceDailyLedger for workflows."""
     global _workflows_daily_ledger
     if ResourceDailyLedger is None:
@@ -48,7 +59,7 @@ async def get_workflows_daily_ledger() -> Optional["ResourceDailyLedger"]:
             await ledger.initialize()
             _workflows_daily_ledger = ledger
             return ledger
-        except Exception as exc:  # pragma: no cover - defensive
+        except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"Workflows: ResourceDailyLedger init failed: {exc}")
             _workflows_daily_ledger = None
             return None
@@ -61,13 +72,13 @@ def workflows_ledger_category() -> str:
 
 async def backfill_legacy_runs_to_ledger(
     *,
-    ledger: "ResourceDailyLedger",
+    ledger: ResourceDailyLedger,
     db: Any,
     tenant_id: str,
     user_id: str,
     entity_scope: str,
     entity_value: str,
-    day_utc: Optional[str] = None,
+    day_utc: str | None = None,
 ) -> None:
     """
     Best-effort migration helper: mirror today's legacy run totals into the ledger.
@@ -89,7 +100,7 @@ async def backfill_legacy_runs_to_ledger(
             dtime(0, 0, 0, tzinfo=timezone.utc),
         )
         midnight_iso = midnight_dt.isoformat()
-    except Exception:
+    except (TypeError, ValueError):
         midnight_iso = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0
         ).isoformat()
@@ -104,7 +115,7 @@ async def backfill_legacy_runs_to_ledger(
             )
             or 0
         )
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: legacy run-count backfill query failed: {exc}")
         _workflows_backfill_done.add(key)
         return
@@ -135,7 +146,7 @@ async def backfill_legacy_runs_to_ledger(
             occurred_at=ts,
         )
         await ledger.add(entry)
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: legacy backfill insert skipped: {exc}")
     finally:
         _workflows_backfill_done.add(key)
@@ -147,7 +158,7 @@ async def record_workflow_run(
     entity_value: str,
     run_id: str,
     units: int = 1,
-    occurred_at: Optional[datetime] = None,
+    occurred_at: datetime | None = None,
 ) -> bool:
     """
     Shadow-write a workflow run into the daily ledger.
@@ -171,6 +182,6 @@ async def record_workflow_run(
             occurred_at=ts,
         )
         return bool(await ledger.add(entry))
-    except Exception as exc:  # pragma: no cover - defensive
+    except _WORKFLOWS_LEDGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
         logger.debug(f"Workflows: ledger.add failed for run_id={run_id}: {exc}")
         return False

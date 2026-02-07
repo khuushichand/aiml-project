@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
 
-
-def split_sql_statements(sql: str) -> List[str]:
+def split_sql_statements(sql: str) -> list[str]:
     """Split SQL into executable statements, respecting quotes and dollar blocks.
 
     Handles:
@@ -14,13 +12,13 @@ def split_sql_statements(sql: str) -> List[str]:
     - Line comments (--) and block comments (/* */)
     - Dollar-quoted strings ($$...$$ or $tag$...$tag$)
     """
-    statements: List[str] = []
-    buf: List[str] = []
+    statements: list[str] = []
+    buf: list[str] = []
     in_single = False
     in_double = False
     in_line_comment = False
     in_block_comment = False
-    dollar_delim: Optional[str] = None
+    dollar_delim: str | None = None
 
     i = 0
     length = len(sql)

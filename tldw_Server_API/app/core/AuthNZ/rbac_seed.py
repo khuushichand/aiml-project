@@ -10,12 +10,13 @@ are intentionally idempotent and safe to call repeatedly.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from loguru import logger
 
-RoleDef = Tuple[str, str, bool]
-PermissionDef = Tuple[str, str, str]
+RoleDef = tuple[str, str, bool]
+PermissionDef = tuple[str, str, str]
 
 
 _BASELINE_ROLES: Sequence[RoleDef] = (
@@ -46,13 +47,13 @@ def _is_postgres_connection(conn: Any) -> bool:
     return callable(getattr(conn, "fetch", None))
 
 
-def _build_role_grants(permission_names: Iterable[str], *, include_mcp_permissions: bool) -> Dict[str, List[str]]:
+def _build_role_grants(permission_names: Iterable[str], *, include_mcp_permissions: bool) -> dict[str, list[str]]:
     base = set(permission_names)
-    grants: Dict[str, List[str]] = {
+    grants: dict[str, list[str]] = {
         "user": [p for p in ("media.read", "media.create") if p in base],
         "viewer": [p for p in ("media.read",) if p in base],
         "reviewer": [p for p in ("media.read", "claims.review") if p in base],
-        "admin": [p for p in sorted(base)],
+        "admin": sorted(base),
     }
 
     if include_mcp_permissions:
@@ -81,7 +82,7 @@ async def ensure_baseline_rbac_seed(
     """
     is_postgres = _is_postgres_connection(conn)
 
-    permissions: List[PermissionDef] = list(_BASELINE_PERMISSIONS)
+    permissions: list[PermissionDef] = list(_BASELINE_PERMISSIONS)
     if include_mcp_permissions:
         permissions.extend(_MCP_PERMISSIONS)
 

@@ -209,7 +209,13 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
   }, [kind])
   React.useEffect(() => {
     if (kind === "options") {
-      void ensureI18nNamespaces(["option", "dataTables", "evaluations", "audiobook"])
+      void ensureI18nNamespaces([
+        "option",
+        "settings",
+        "dataTables",
+        "evaluations",
+        "audiobook"
+      ])
       const path = location.pathname
       const needsReview =
         path === "/review" ||

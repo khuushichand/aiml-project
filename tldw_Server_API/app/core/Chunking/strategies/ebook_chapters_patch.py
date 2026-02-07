@@ -54,11 +54,8 @@ def has_nested_quantifiers(pattern: str) -> bool:
 
     # Check for sequential groups with quantifiers that could interact badly
     # e.g., (a+)(b+) where backtracking could occur
-    if re.search(r'\([^)]*[+*]\)[^(]*\([^)]*[+*]\)', pattern):
-        # Check if there's potential for backtracking between groups
-        return True
-
-    return False
+    # Check if there's potential for backtracking between groups
+    return bool(re.search(r'\([^)]*[+*]\)[^(]*\([^)]*[+*]\)', pattern))
 
 # Enhanced validation function
 def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout: float = 1.0) -> bool:
@@ -78,6 +75,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
     """
     import re
     import time
+
     from tldw_Server_API.app.core.Chunking.exceptions import InvalidInputError
 
     # Check pattern length
@@ -91,7 +89,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
     for dangerous in DANGEROUS_PATTERNS:
         if re.search(dangerous, pattern):
             raise InvalidInputError(
-                f"Regex pattern contains potentially dangerous construct"
+                "Regex pattern contains potentially dangerous construct"
             )
 
     # Check for nested quantifiers
@@ -104,7 +102,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
     try:
         compiled_pattern = re.compile(pattern)
     except re.error as e:
-        raise InvalidInputError(f"Invalid regex pattern: {e}")
+        raise InvalidInputError(f"Invalid regex pattern: {e}") from e
 
     # Test for exponential complexity with multiple test inputs
     test_inputs = [
@@ -118,7 +116,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
         start_time = time.time()
         try:
             # Use compiled pattern for better performance
-            result = compiled_pattern.search(test_input)
+            compiled_pattern.search(test_input)
             elapsed = time.time() - start_time
 
             if elapsed > timeout:
@@ -130,7 +128,7 @@ def validate_regex_pattern_enhanced(pattern: str, max_length: int = 500, timeout
             if "timeout" in str(e).lower():
                 raise InvalidInputError(
                     "Regex pattern appears to have exponential complexity"
-                )
+                ) from e
             # Re-raise other exceptions
             raise
 

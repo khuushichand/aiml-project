@@ -10,11 +10,10 @@ Implements Base/Create/Update/Response pattern for:
 Phase 1 scope - additional schemas for labels, checklists, comments
 will be added in Phase 2.
 """
-from typing import Optional, List, Any, Dict, Literal
 from datetime import datetime
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
-
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # =============================================================================
 # Common Schemas
@@ -57,7 +56,7 @@ class BoardCreate(BoardBase):
         le=365,
         description="Activity log retention period in days (7-365)"
     )
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Optional JSON metadata")
 
 
 class BoardUpdate(BaseModel):
@@ -70,7 +69,7 @@ class BoardUpdate(BaseModel):
         le=365,
         description="Activity log retention period in days (7-365)"
     )
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Optional JSON metadata")
 
 
 class BoardResponse(BoardBase):
@@ -90,7 +89,7 @@ class BoardResponse(BoardBase):
     deleted: bool = Field(..., description="Whether the board is soft-deleted")
     deleted_at: Optional[datetime] = Field(None, description="When the board was deleted")
     version: int = Field(..., description="Version number for optimistic locking")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="JSON metadata")
     list_count: Optional[int] = Field(None, description="Number of lists in the board")
     card_count: Optional[int] = Field(None, description="Number of cards in the board")
 
@@ -99,7 +98,7 @@ class BoardResponse(BoardBase):
 
 class BoardListResponse(BaseModel):
     """Schema for paginated list of boards."""
-    boards: List[BoardResponse] = Field(..., description="List of boards")
+    boards: list[BoardResponse] = Field(..., description="List of boards")
     pagination: PaginationInfo = Field(..., description="Pagination metadata")
 
 
@@ -153,12 +152,12 @@ class ListResponse(ListBase):
 
 class ListsListResponse(BaseModel):
     """Schema for list of lists (not paginated since typically small)."""
-    lists: List[ListResponse] = Field(..., description="List of lists")
+    lists: list[ListResponse] = Field(..., description="List of lists")
 
 
 class ReorderRequest(BaseModel):
     """Schema for reordering items."""
-    ids: List[int] = Field(
+    ids: list[int] = Field(
         ...,
         min_length=1,
         description="Item IDs in the desired order"
@@ -203,7 +202,7 @@ class CardCreate(CardBase):
         None,
         description="Card priority: low, medium, high, or urgent"
     )
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Optional JSON metadata")
 
 
 class CardUpdate(BaseModel):
@@ -217,7 +216,7 @@ class CardUpdate(BaseModel):
         None,
         description="New priority: low, medium, high, or urgent"
     )
-    metadata: Optional[Dict[str, Any]] = Field(None, description="New JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="New JSON metadata")
 
 
 class CardResponse(CardBase):
@@ -239,14 +238,14 @@ class CardResponse(CardBase):
     deleted: bool = Field(..., description="Whether the card is soft-deleted")
     deleted_at: Optional[datetime] = Field(None, description="When the card was deleted")
     version: int = Field(..., description="Version number for optimistic locking")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="JSON metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="JSON metadata")
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class CardsListResponse(BaseModel):
     """Schema for list of cards (not paginated since within a list)."""
-    cards: List[CardResponse] = Field(..., description="List of cards")
+    cards: list[CardResponse] = Field(..., description="List of cards")
 
 
 class CardMoveRequest(BaseModel):
@@ -295,7 +294,7 @@ class CardSearchRequest(BaseModel):
 
 class CardSearchResponse(BaseModel):
     """Schema for card search response."""
-    cards: List[CardResponse] = Field(..., description="Matching cards")
+    cards: list[CardResponse] = Field(..., description="Matching cards")
     pagination: PaginationInfo = Field(..., description="Pagination metadata")
 
 
@@ -314,7 +313,7 @@ class ActivityResponse(BaseModel):
     action_type: str = Field(..., description="Type of action (create, update, delete, etc.)")
     entity_type: str = Field(..., description="Type of entity (board, list, card, etc.)")
     entity_id: Optional[int] = Field(None, description="ID of the affected entity")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional details")
+    details: Optional[dict[str, Any]] = Field(None, description="Additional details")
     created_at: datetime = Field(..., description="When the activity occurred")
 
     model_config = ConfigDict(from_attributes=True)
@@ -322,7 +321,7 @@ class ActivityResponse(BaseModel):
 
 class ActivitiesListResponse(BaseModel):
     """Schema for paginated list of activities."""
-    activities: List[ActivityResponse] = Field(..., description="List of activities")
+    activities: list[ActivityResponse] = Field(..., description="List of activities")
     pagination: PaginationInfo = Field(..., description="Pagination metadata")
 
 
@@ -332,13 +331,13 @@ class ActivitiesListResponse(BaseModel):
 
 class BulkArchiveRequest(BaseModel):
     """Schema for bulk archive operations."""
-    ids: List[int] = Field(..., min_length=1, max_length=100, description="IDs to archive")
+    ids: list[int] = Field(..., min_length=1, max_length=100, description="IDs to archive")
     archive: bool = Field(True, description="True to archive, False to unarchive")
 
 
 class BulkDeleteRequest(BaseModel):
     """Schema for bulk delete operations."""
-    ids: List[int] = Field(..., min_length=1, max_length=100, description="IDs to delete")
+    ids: list[int] = Field(..., min_length=1, max_length=100, description="IDs to delete")
 
 
 class BulkOperationResult(BaseModel):
@@ -346,7 +345,7 @@ class BulkOperationResult(BaseModel):
     success: bool = Field(..., description="Whether the operation succeeded")
     processed: int = Field(..., description="Number of items processed")
     failed: int = Field(0, description="Number of items that failed")
-    errors: Optional[List[str]] = Field(None, description="Error messages if any")
+    errors: Optional[list[str]] = Field(None, description="Error messages if any")
 
 
 # =============================================================================
@@ -387,7 +386,7 @@ class LabelResponse(LabelBase):
 
 class LabelsListResponse(BaseModel):
     """Schema for list of labels."""
-    labels: List[LabelResponse] = Field(..., description="List of labels")
+    labels: list[LabelResponse] = Field(..., description="List of labels")
 
 
 # =============================================================================
@@ -396,7 +395,7 @@ class LabelsListResponse(BaseModel):
 
 class CardInListResponse(CardResponse):
     """Card response nested within a list."""
-    labels: List[LabelResponse] = Field(default_factory=list, description="Labels assigned to this card")
+    labels: list[LabelResponse] = Field(default_factory=list, description="Labels assigned to this card")
     checklist_count: int = Field(0, description="Number of checklists on the card")
     checklist_complete: int = Field(0, description="Number of completed checklist items")
     checklist_total: int = Field(0, description="Total checklist items")
@@ -405,13 +404,13 @@ class CardInListResponse(CardResponse):
 
 class ListWithCardsResponse(ListResponse):
     """List response with nested cards."""
-    cards: List[CardInListResponse] = Field(default_factory=list, description="Cards in this list")
+    cards: list[CardInListResponse] = Field(default_factory=list, description="Cards in this list")
 
 
 class BoardWithListsResponse(BoardResponse):
     """Board response with nested lists and cards."""
-    labels: List[LabelResponse] = Field(default_factory=list, description="Labels available on this board")
-    lists: List[ListWithCardsResponse] = Field(default_factory=list, description="Lists in this board")
+    labels: list[LabelResponse] = Field(default_factory=list, description="Labels available on this board")
+    lists: list[ListWithCardsResponse] = Field(default_factory=list, description="Lists in this board")
     total_cards: int = Field(0, description="Total number of cards across all lists")
 
 
@@ -448,12 +447,12 @@ class ChecklistResponse(ChecklistBase):
 
 class ChecklistsListResponse(BaseModel):
     """Schema for list of checklists."""
-    checklists: List[ChecklistResponse] = Field(..., description="List of checklists")
+    checklists: list[ChecklistResponse] = Field(..., description="List of checklists")
 
 
 class ChecklistReorderRequest(BaseModel):
     """Schema for reordering checklists."""
-    checklist_ids: List[int] = Field(
+    checklist_ids: list[int] = Field(
         ...,
         min_length=1,
         description="Checklist IDs in the desired order"
@@ -497,12 +496,12 @@ class ChecklistItemResponse(ChecklistItemBase):
 
 class ChecklistItemsListResponse(BaseModel):
     """Schema for list of checklist items."""
-    items: List[ChecklistItemResponse] = Field(..., description="List of items")
+    items: list[ChecklistItemResponse] = Field(..., description="List of items")
 
 
 class ChecklistItemReorderRequest(BaseModel):
     """Schema for reordering checklist items."""
-    item_ids: List[int] = Field(
+    item_ids: list[int] = Field(
         ...,
         min_length=1,
         description="Item IDs in the desired order"
@@ -511,7 +510,7 @@ class ChecklistItemReorderRequest(BaseModel):
 
 class ChecklistWithItemsResponse(ChecklistResponse):
     """Schema for checklist with items included."""
-    items: List[ChecklistItemResponse] = Field(default_factory=list, description="Checklist items")
+    items: list[ChecklistItemResponse] = Field(default_factory=list, description="Checklist items")
     total_items: int = Field(0, description="Total number of items")
     checked_items: int = Field(0, description="Number of checked items")
     progress_percent: int = Field(0, ge=0, le=100, description="Completion percentage")
@@ -551,7 +550,7 @@ class CommentResponse(CommentBase):
 
 class CommentsListResponse(BaseModel):
     """Schema for paginated list of comments."""
-    comments: List[CommentResponse] = Field(..., description="List of comments")
+    comments: list[CommentResponse] = Field(..., description="List of comments")
     pagination: PaginationInfo = Field(..., description="Pagination metadata")
 
 
@@ -561,8 +560,8 @@ class CommentsListResponse(BaseModel):
 
 class CardWithDetailsResponse(CardResponse):
     """Card response with labels, checklists, and comment count."""
-    labels: List[LabelResponse] = Field(default_factory=list, description="Labels assigned to this card")
-    checklists: List[ChecklistWithItemsResponse] = Field(default_factory=list, description="Checklists on this card")
+    labels: list[LabelResponse] = Field(default_factory=list, description="Labels assigned to this card")
+    checklists: list[ChecklistWithItemsResponse] = Field(default_factory=list, description="Checklists on this card")
     comment_count: int = Field(0, description="Number of comments on this card")
 
 
@@ -580,14 +579,14 @@ class BoardExportResponse(BaseModel):
     """Schema for exported board data (JSON format)."""
     format: str = Field(..., description="Export format identifier")
     exported_at: str = Field(..., description="ISO timestamp of export")
-    board: Dict[str, Any] = Field(..., description="Board data")
-    labels: List[Dict[str, Any]] = Field(..., description="Board labels")
-    lists: List[Dict[str, Any]] = Field(..., description="Lists with cards, checklists, comments")
+    board: dict[str, Any] = Field(..., description="Board data")
+    labels: list[dict[str, Any]] = Field(..., description="Board labels")
+    lists: list[dict[str, Any]] = Field(..., description="Lists with cards, checklists, comments")
 
 
 class BoardImportRequest(BaseModel):
     """Schema for board import request."""
-    data: Dict[str, Any] = Field(..., description="Board data to import (tldw_kanban_v1 or Trello format)")
+    data: dict[str, Any] = Field(..., description="Board data to import (tldw_kanban_v1 or Trello format)")
     board_name: Optional[str] = Field(None, description="Override name for imported board")
 
 
@@ -614,7 +613,7 @@ class BoardImportResponse(BaseModel):
 
 class BulkMoveCardsRequest(BaseModel):
     """Schema for bulk move cards request."""
-    card_ids: List[int] = Field(..., min_length=1, description="List of card IDs to move")
+    card_ids: list[int] = Field(..., min_length=1, description="List of card IDs to move")
     target_list_id: int = Field(..., description="Destination list ID")
     position: Optional[int] = Field(None, ge=0, description="Starting position in target list")
 
@@ -623,12 +622,12 @@ class BulkMoveCardsResponse(BaseModel):
     """Schema for bulk move cards response."""
     success: bool = Field(..., description="Whether the operation succeeded")
     moved_count: int = Field(..., description="Number of cards moved")
-    cards: List[CardResponse] = Field(..., description="Updated cards")
+    cards: list[CardResponse] = Field(..., description="Updated cards")
 
 
 class BulkArchiveCardsRequest(BaseModel):
     """Schema for bulk archive cards request."""
-    card_ids: List[int] = Field(..., min_length=1, description="List of card IDs to archive")
+    card_ids: list[int] = Field(..., min_length=1, description="List of card IDs to archive")
 
 
 class BulkArchiveCardsResponse(BaseModel):
@@ -645,7 +644,7 @@ class BulkUnarchiveCardsResponse(BaseModel):
 
 class BulkDeleteCardsRequest(BaseModel):
     """Schema for bulk delete cards request."""
-    card_ids: List[int] = Field(..., min_length=1, description="List of card IDs to delete")
+    card_ids: list[int] = Field(..., min_length=1, description="List of card IDs to delete")
 
 
 class BulkDeleteCardsResponse(BaseModel):
@@ -656,9 +655,9 @@ class BulkDeleteCardsResponse(BaseModel):
 
 class BulkLabelCardsRequest(BaseModel):
     """Schema for bulk label cards request."""
-    card_ids: List[int] = Field(..., min_length=1, description="List of card IDs to update")
-    add_label_ids: Optional[List[int]] = Field(None, description="Label IDs to add")
-    remove_label_ids: Optional[List[int]] = Field(None, description="Label IDs to remove")
+    card_ids: list[int] = Field(..., min_length=1, description="List of card IDs to update")
+    add_label_ids: Optional[list[int]] = Field(None, description="Label IDs to add")
+    remove_label_ids: Optional[list[int]] = Field(None, description="Label IDs to remove")
 
     @field_validator('add_label_ids', 'remove_label_ids')
     @classmethod
@@ -680,7 +679,7 @@ class BulkLabelCardsResponse(BaseModel):
 
 class FilteredCardsResponse(BaseModel):
     """Schema for filtered cards response."""
-    cards: List[CardResponse] = Field(..., description="Filtered cards")
+    cards: list[CardResponse] = Field(..., description="Filtered cards")
     pagination: PaginationInfo = Field(..., description="Pagination info")
 
 
@@ -723,7 +722,7 @@ class SearchRequest(BaseModel):
     """Schema for search request body (used for POST)."""
     query: str = Field(..., min_length=1, max_length=500, description="Search query")
     board_id: Optional[int] = Field(None, description="Filter by board ID")
-    label_ids: Optional[List[int]] = Field(None, description="Filter by label IDs (cards must have ALL)")
+    label_ids: Optional[list[int]] = Field(None, description="Filter by label IDs (cards must have ALL)")
     priority: Optional[str] = Field(None, description="Filter by priority")
     include_archived: bool = Field(False, description="Include archived cards")
     search_mode: SEARCH_MODES = Field("fts", description="Search mode: fts, vector, or hybrid")
@@ -743,7 +742,7 @@ class SearchResultCard(BaseModel):
     description: Optional[str] = Field(None, description="Card description")
     priority: Optional[str] = Field(None, description="Card priority")
     due_date: Optional[datetime] = Field(None, description="Due date")
-    labels: List[Dict[str, Any]] = Field(default_factory=list, description="Card labels")
+    labels: list[dict[str, Any]] = Field(default_factory=list, description="Card labels")
     created_at: datetime = Field(..., description="When the card was created")
     updated_at: datetime = Field(..., description="When the card was last updated")
     relevance_score: Optional[float] = Field(None, description="Search relevance score (for vector/hybrid)")
@@ -755,7 +754,7 @@ class SearchResponse(BaseModel):
     """Schema for search response."""
     query: str = Field(..., description="The search query")
     search_mode: str = Field(..., description="Search mode used")
-    results: List[SearchResultCard] = Field(..., description="Search results")
+    results: list[SearchResultCard] = Field(..., description="Search results")
     pagination: PaginationInfo = Field(..., description="Pagination info")
 
 
@@ -793,7 +792,7 @@ class CardLinkResponse(BaseModel):
 class CardLinksListResponse(BaseModel):
     """Schema for list of card links."""
 
-    links: List[CardLinkResponse] = Field(..., description="List of card links")
+    links: list[CardLinkResponse] = Field(..., description="List of card links")
 
 
 class CardLinkCountsResponse(BaseModel):
@@ -806,7 +805,7 @@ class CardLinkCountsResponse(BaseModel):
 class BulkCardLinksRequest(BaseModel):
     """Schema for bulk link operations."""
 
-    links: List[CardLinkCreate] = Field(
+    links: list[CardLinkCreate] = Field(
         ..., description="Links to add/remove", min_length=1, max_length=100
     )
 
@@ -816,7 +815,7 @@ class BulkCardLinksAddResponse(BaseModel):
 
     added_count: int = Field(..., description="Number of links added")
     skipped_count: int = Field(..., description="Number of duplicates skipped")
-    links: List[CardLinkResponse] = Field(..., description="Added links")
+    links: list[CardLinkResponse] = Field(..., description="Added links")
 
 
 class BulkCardLinksRemoveResponse(BaseModel):
@@ -849,4 +848,4 @@ class LinkedCardsListResponse(BaseModel):
 
     linked_type: str = Field(..., description="Type queried")
     linked_id: str = Field(..., description="Content ID queried")
-    cards: List[LinkedCardResponse] = Field(..., description="Cards linked to this content")
+    cards: list[LinkedCardResponse] = Field(..., description="Cards linked to this content")

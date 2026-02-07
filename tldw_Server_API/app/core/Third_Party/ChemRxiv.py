@@ -12,15 +12,35 @@ Endpoints used:
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any
 from urllib.parse import quote as urlquote
+
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+)
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
-
 BASE_URL = "https://chemrxiv.org/engage/chemrxiv/public-api/v1"
+_CHEMRXIV_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    EgressPolicyError,
+    JSONDecodeError,
+    LookupError,
+    NetworkError,
+    OSError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
-def _join_authors(authors: Any) -> Optional[str]:
+def _join_authors(authors: Any) -> str | None:
     try:
         names = []
         for a in authors or []:
@@ -30,11 +50,11 @@ def _join_authors(authors: Any) -> Optional[str]:
             if nm:
                 names.append(nm)
         return ", ".join(names) if names else None
-    except Exception:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS:
         return None
 
 
-def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     doi = item.get("doi")
     title = item.get("title") or ""
     url = None
@@ -59,20 +79,20 @@ def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_items(
-    term: Optional[str],
+    term: str | None,
     skip: int,
     limit: int,
-    sort: Optional[str] = None,
-    author: Optional[str] = None,
-    searchDateFrom: Optional[str] = None,
-    searchDateTo: Optional[str] = None,
-    searchLicense: Optional[str] = None,
-    categoryIds: Optional[List[str]] = None,
-    subjectIds: Optional[List[str]] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    sort: str | None = None,
+    author: str | None = None,
+    searchDateFrom: str | None = None,
+    searchDateTo: str | None = None,
+    searchLicense: str | None = None,
+    categoryIds: list[str] | None = None,
+    subjectIds: list[str] | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     try:
         url = f"{BASE_URL}/items"
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "skip": max(0, skip),
             "limit": min(max(1, limit), 50),
         }
@@ -110,11 +130,11 @@ def search_items(
                         items.append(_normalize_item(v))
                         break
         return items, total, None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, 0, f"ChemRxiv error: {str(e)}"
 
 
-def get_item_by_id(item_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_item_by_id(item_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         url = f"{BASE_URL}/items/{item_id}"
         r = fetch(method="GET", url=url, timeout=20)
@@ -124,11 +144,11 @@ def get_item_by_id(item_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str
             return None, f"ChemRxiv HTTP error: {r.status_code}"
         data = r.json() or {}
         return _normalize_item(data), None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
-def get_item_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_item_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         doi_enc = urlquote(doi.strip(), safe="/")
         url = f"{BASE_URL}/items/doi/{doi_enc}"
@@ -139,35 +159,35 @@ def get_item_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             return None, f"ChemRxiv HTTP error: {r.status_code}"
         data = r.json() or {}
         return _normalize_item(data), None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
-def get_categories() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_categories() -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/categories", timeout=20)
         return data, None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
-def get_licenses() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_licenses() -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/licenses", timeout=20)
         return data, None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
-def get_version() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_version() -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{BASE_URL}/version", timeout=20)
         return data, None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, f"ChemRxiv error: {str(e)}"
 
 
-def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def oai_raw(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | None]:
     """Raw OAI-PMH passthrough. Returns (content, media_type, error)."""
     r = None
     try:
@@ -177,11 +197,11 @@ def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Opt
             return None, None, f"ChemRxiv HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
-    except Exception as e:
+    except _CHEMRXIV_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"ChemRxiv error: {str(e)}"
     finally:
         try:
             if r is not None:
                 r.close()
-        except Exception:
+        except _CHEMRXIV_NONCRITICAL_EXCEPTIONS:
             pass

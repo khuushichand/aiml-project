@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -20,9 +20,9 @@ class ArxivSearchConfig(BaseAdapterConfig):
     sort_order: Literal["ascending", "descending"] = Field(
         "descending", description="Sort direction"
     )
-    categories: Optional[List[str]] = Field(None, description="arXiv categories to filter")
-    start_date: Optional[str] = Field(None, description="Start date filter (YYYY-MM-DD)")
-    end_date: Optional[str] = Field(None, description="End date filter (YYYY-MM-DD)")
+    categories: list[str] | None = Field(None, description="arXiv categories to filter")
+    start_date: str | None = Field(None, description="Start date filter (YYYY-MM-DD)")
+    end_date: str | None = Field(None, description="End date filter (YYYY-MM-DD)")
 
 
 class ArxivDownloadConfig(BaseAdapterConfig):
@@ -30,7 +30,7 @@ class ArxivDownloadConfig(BaseAdapterConfig):
 
     arxiv_id: str = Field(..., description="arXiv paper ID (e.g., '2301.00001')")
     format: Literal["pdf", "source"] = Field("pdf", description="Download format")
-    output_dir: Optional[str] = Field(None, description="Output directory override")
+    output_dir: str | None = Field(None, description="Output directory override")
 
 
 class PubmedSearchConfig(BaseAdapterConfig):
@@ -39,8 +39,8 @@ class PubmedSearchConfig(BaseAdapterConfig):
     query: str = Field(..., description="Search query (templated)")
     max_results: int = Field(10, ge=1, le=100, description="Maximum results to return")
     sort_by: Literal["relevance", "date"] = Field("relevance", description="Sort order")
-    date_range: Optional[str] = Field(None, description="Date range (e.g., '2020:2024')")
-    article_types: Optional[List[str]] = Field(None, description="Article types to filter")
+    date_range: str | None = Field(None, description="Date range (e.g., '2020:2024')")
+    article_types: list[str] | None = Field(None, description="Article types to filter")
 
 
 class SemanticScholarSearchConfig(BaseAdapterConfig):
@@ -48,12 +48,12 @@ class SemanticScholarSearchConfig(BaseAdapterConfig):
 
     query: str = Field(..., description="Search query (templated)")
     max_results: int = Field(10, ge=1, le=100, description="Maximum results to return")
-    fields: Optional[List[str]] = Field(
+    fields: list[str] | None = Field(
         None, description="Fields to return (title, abstract, authors, etc.)"
     )
-    year_range: Optional[str] = Field(None, description="Year range (e.g., '2020-2024')")
-    venue: Optional[str] = Field(None, description="Publication venue filter")
-    open_access: Optional[bool] = Field(None, description="Filter for open access papers")
+    year_range: str | None = Field(None, description="Year range (e.g., '2020-2024')")
+    venue: str | None = Field(None, description="Publication venue filter")
+    open_access: bool | None = Field(None, description="Filter for open access papers")
 
 
 class GoogleScholarSearchConfig(BaseAdapterConfig):
@@ -61,8 +61,8 @@ class GoogleScholarSearchConfig(BaseAdapterConfig):
 
     query: str = Field(..., description="Search query (templated)")
     max_results: int = Field(10, ge=1, le=50, description="Maximum results to return")
-    year_from: Optional[int] = Field(None, description="Publications from this year")
-    year_to: Optional[int] = Field(None, description="Publications until this year")
+    year_from: int | None = Field(None, description="Publications from this year")
+    year_to: int | None = Field(None, description="Publications until this year")
     sort_by_date: bool = Field(False, description="Sort by date instead of relevance")
 
 
@@ -71,11 +71,11 @@ class PatentSearchConfig(BaseAdapterConfig):
 
     query: str = Field(..., description="Search query (templated)")
     max_results: int = Field(10, ge=1, le=100, description="Maximum results to return")
-    patent_office: Optional[Literal["USPTO", "EPO", "WIPO", "all"]] = Field(
+    patent_office: Literal["USPTO", "EPO", "WIPO", "all"] | None = Field(
         "all", description="Patent office to search"
     )
-    date_range: Optional[str] = Field(None, description="Date range filter")
-    classification: Optional[str] = Field(None, description="Patent classification filter")
+    date_range: str | None = Field(None, description="Date range filter")
+    classification: str | None = Field(None, description="Patent classification filter")
 
 
 class DOIResolveConfig(BaseAdapterConfig):
@@ -100,27 +100,27 @@ class ReferenceParseConfig(BaseAdapterConfig):
 class BibtexGenerateConfig(BaseAdapterConfig):
     """Config for BibTeX generation adapter."""
 
-    source: Dict[str, Any] = Field(..., description="Source metadata for BibTeX entry")
-    entry_type: Optional[Literal["article", "book", "inproceedings", "misc", "phdthesis"]] = Field(
+    source: dict[str, Any] = Field(..., description="Source metadata for BibTeX entry")
+    entry_type: Literal["article", "book", "inproceedings", "misc", "phdthesis"] | None = Field(
         None, description="BibTeX entry type (auto-detected if not specified)"
     )
-    key: Optional[str] = Field(None, description="BibTeX citation key (auto-generated if not specified)")
+    key: str | None = Field(None, description="BibTeX citation key (auto-generated if not specified)")
 
 
 class LiteratureReviewConfig(BaseAdapterConfig):
     """Config for literature review generation adapter."""
 
     topic: str = Field(..., description="Research topic (templated)")
-    papers: Optional[List[Dict[str, Any]]] = Field(
+    papers: list[dict[str, Any]] | None = Field(
         None, description="Papers to include in review"
     )
-    search_query: Optional[str] = Field(None, description="Query to search for additional papers")
+    search_query: str | None = Field(None, description="Query to search for additional papers")
     max_papers: int = Field(20, ge=5, le=100, description="Maximum papers to include")
-    sections: Optional[List[str]] = Field(
+    sections: list[str] | None = Field(
         None, description="Sections to include (introduction, methods, findings, etc.)"
     )
     style: Literal["narrative", "systematic", "scoping"] = Field(
         "narrative", description="Review style"
     )
-    provider: Optional[str] = Field(None, description="LLM provider for generation")
-    model: Optional[str] = Field(None, description="Model for generation")
+    provider: str | None = Field(None, description="LLM provider for generation")
+    model: str | None = Field(None, description="Model for generation")

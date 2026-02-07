@@ -4,28 +4,43 @@
 # Imports
 import hashlib
 import hmac
-import secrets
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 from uuid import uuid4
+
 #
 # 3rd-party imports
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 from jose.exceptions import ExpiredSignatureError, JWTClaimsError
 from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
 )
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
+from tldw_Server_API.app.core.AuthNZ.exceptions import ConfigurationError, InvalidTokenError, TokenExpiredError
+
+_JWT_SERVICE_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    JWTError,
+    JWTClaimsError,
+    ExpiredSignatureError,
+    ConfigurationError,
     InvalidTokenError,
     TokenExpiredError,
-    ConfigurationError
 )
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 #######################################################################################################################
 #
@@ -46,10 +61,10 @@ class JWTService:
 
     @staticmethod
     def _filter_additional_claims(
-        additional_claims: Optional[Dict[str, Any]],
+        additional_claims: Optional[dict[str, Any]],
         *,
         reserved: set[str],
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """Strip reserved claim keys from additional_claims to prevent overrides."""
         if not additional_claims:
             return None
@@ -89,8 +104,8 @@ class JWTService:
                         self._encode_key = derived.hex()
                         self._decode_key = self._encode_key
                         logger.debug("JWTService: using derived single-user surrogate key for HS algorithms")
-                    except Exception:
-                        raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
+                    except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
+                        raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms") from None
                 else:
                     raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
         elif alg_upper.startswith("RS") or alg_upper.startswith("ES"):
@@ -122,7 +137,7 @@ class JWTService:
         user_id: int,
         username: str,
         role: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create an access token for a user
@@ -172,15 +187,15 @@ class JWTService:
                 logger.debug(f"Created access token for user {username} (ID: {user_id})")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create access token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_refresh_token(
         self,
         user_id: int,
         username: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create a refresh token for a user
@@ -227,9 +242,9 @@ class JWTService:
                 logger.debug(f"Created refresh token for user {username} (ID: {user_id})")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create refresh token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_magic_link_token(
         self,
@@ -237,7 +252,7 @@ class JWTService:
         email: str,
         user_id: Optional[int] = None,
         expires_in_minutes: Optional[int] = None,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Create a short-lived magic link token for passwordless login.
@@ -254,7 +269,7 @@ class JWTService:
         ttl_minutes = expires_in_minutes or int(getattr(self.settings, "MAGIC_LINK_EXPIRE_MINUTES", 15))
         expire = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "sub": str(user_id) if user_id is not None else str(email),
             "email": str(email).strip().lower(),
             "exp": expire,
@@ -283,11 +298,11 @@ class JWTService:
             else:
                 logger.debug(f"Created magic link token for {email}")
             return token
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create magic link token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
-    async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+    async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
         Verify and decode a JWT token with blacklist checking (async version)
 
@@ -356,21 +371,21 @@ class JWTService:
 
         except ExpiredSignatureError:
             logger.debug("Token has expired")
-            raise TokenExpiredError()
+            raise TokenExpiredError() from None
 
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
-            raise InvalidTokenError(f"Invalid token claims: {e}")
+            raise InvalidTokenError(f"Invalid token claims: {e}") from e
 
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
-            raise InvalidTokenError(f"Invalid token: {e}")
+            raise InvalidTokenError(f"Invalid token: {e}") from e
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
-            raise InvalidTokenError(f"Token verification failed: {e}")
+            raise InvalidTokenError(f"Token verification failed: {e}") from e
 
-    def verify_token(self, token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+    def verify_token(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
         Verify and decode a JWT token (sync, stateless; no blacklist checks).
 
@@ -439,21 +454,21 @@ class JWTService:
 
         except ExpiredSignatureError:
             logger.debug("Token has expired")
-            raise TokenExpiredError()
+            raise TokenExpiredError() from None
 
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
-            raise InvalidTokenError(f"Invalid token claims: {e}")
+            raise InvalidTokenError(f"Invalid token claims: {e}") from e
 
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
-            raise InvalidTokenError(f"Invalid token: {e}")
+            raise InvalidTokenError(f"Invalid token: {e}") from e
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
-            raise InvalidTokenError(f"Token verification failed: {e}")
+            raise InvalidTokenError(f"Token verification failed: {e}") from e
 
-    def decode_access_token(self, token: str) -> Dict[str, Any]:
+    def decode_access_token(self, token: str) -> dict[str, Any]:
         """
         Decode and verify an access token (SYNC, NO BLACKLIST CHECK).
 
@@ -473,7 +488,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="access")
 
-    def decode_refresh_token(self, token: str) -> Dict[str, Any]:
+    def decode_refresh_token(self, token: str) -> dict[str, Any]:
         """
         Decode and verify a refresh token (SYNC, NO BLACKLIST CHECK).
 
@@ -493,7 +508,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="refresh")
 
-    def verify_password_reset_token(self, token: str) -> Dict[str, Any]:
+    def verify_password_reset_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode a password reset token (SYNC).
 
@@ -513,7 +528,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="password_reset")
 
-    def verify_email_verification_token(self, token: str) -> Dict[str, Any]:
+    def verify_email_verification_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode an email verification token (SYNC).
 
@@ -533,7 +548,7 @@ class JWTService:
         """
         return self.verify_token(token, token_type="email_verification")
 
-    def verify_service_token(self, token: str) -> Dict[str, Any]:
+    def verify_service_token(self, token: str) -> dict[str, Any]:
         """
         Verify and decode a service account token (SYNC, NO BLACKLIST CHECK).
 
@@ -563,7 +578,7 @@ class JWTService:
         scope: str = "workflows",
         ttl_minutes: int = 60,
         schedule_id: Optional[str] = None,
-        additional_claims: Optional[Dict[str, Any]] = None,
+        additional_claims: Optional[dict[str, Any]] = None,
     ) -> str:
         """
         Create a short-lived, scoped access token ("virtual key").
@@ -585,7 +600,7 @@ class JWTService:
             Encoded JWT access token (scoped)
         """
         expire = datetime.now(timezone.utc) + timedelta(minutes=max(1, int(ttl_minutes)))
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "sub": str(user_id),
             "username": username,
             "role": role,
@@ -613,16 +628,16 @@ class JWTService:
                 f"Created virtual access token scope={payload.get('scope')} user={username} ttl={ttl_minutes}m"
             )
             return token
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create virtual access token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def hash_token_candidates(self, token: str) -> list[str]:
         """Return ordered HMAC-SHA256 hashes derived from current and legacy secrets."""
         hashes: list[str] = []
         try:
             key_candidates = derive_hmac_key_candidates(self.settings)
-        except Exception:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
             key_candidates = [derive_hmac_key(self.settings)]
         for key in key_candidates:
             digest = hmac.new(key, token.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -683,7 +698,7 @@ class JWTService:
         hashes: list[str] = []
         try:
             key_candidates = derive_hmac_key_candidates(self.settings)
-        except Exception:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
             key_candidates = [derive_hmac_key(self.settings)]
         for key in key_candidates:
             salt = hmac.new(key, b"password-reset-token-salt", hashlib.sha256).digest()
@@ -729,7 +744,7 @@ class JWTService:
                     "ensure token is verified separately for authorization"
                 )
             return jti
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"extract_jti failed to decode token: {e}")
             return None
 
@@ -774,9 +789,9 @@ class JWTService:
                 logger.info(f"Created password reset token for user {user_id}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create password reset token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_email_verification_token(
         self,
@@ -818,9 +833,9 @@ class JWTService:
                 logger.info(f"Created email verification token for user {user_id}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create email verification token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_service_account_token(
         self,
@@ -860,9 +875,9 @@ class JWTService:
             logger.info(f"Created service account token for {service_name}")
             return token
 
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create service account token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def refresh_access_token(self, refresh_token: str) -> tuple[str, str]:
         """
@@ -909,7 +924,7 @@ class JWTService:
                     raise InvalidTokenError("Token has been revoked")
         except InvalidTokenError:
             raise
-        except Exception as _guard_e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _guard_e:
             logger.debug(f"Refresh helper blacklist guard skipped: {_guard_e}")
 
         # Extract user information
@@ -924,13 +939,13 @@ class JWTService:
             roles = []
             try:
                 roles = user_db.get_user_roles(user_id)
-            except Exception:
+            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
                 # Fallback to full user fetch if roles accessor differs
                 user = user_db.get_user(user_id=user_id)
                 roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
             if roles:
                 role = "admin" if "admin" in roles else roles[0]
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"JWTService: failed to fetch user role on refresh; using fallback: {e}")
 
         # Create new access token
@@ -954,9 +969,11 @@ class JWTService:
                     old_jti = payload.get("jti")
                     old_exp = payload.get("exp")
                     if old_jti and isinstance(old_exp, (int, float)):
-                        from datetime import datetime as _dt, timezone as _tz
+                        from datetime import datetime as _dt
+                        from datetime import timezone as _tz
                         exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
                         import asyncio as _asyncio
+
                         from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                         try:
                             loop = _asyncio.get_running_loop()
@@ -968,7 +985,7 @@ class JWTService:
                                 bl = _get_bl()
                                 try:
                                     bl.hint_blacklisted(old_jti, exp_dt)
-                                except Exception as _hint_e:
+                                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                                     logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                                 loop.create_task(
                                     bl.revoke_token(
@@ -981,13 +998,13 @@ class JWTService:
                                         ip_address=None,
                                     )
                                 )
-                            except Exception as _sched_e:
+                            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _sched_e:
                                 logger.debug(f"Refresh rotation: failed to schedule blacklist task: {_sched_e}")
                         else:
                             bl = _get_bl()
                             try:
                                 bl.hint_blacklisted(old_jti, exp_dt)
-                            except Exception as _hint_e:
+                            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                                 logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                             # Run async revoke in a temporary loop
                             _asyncio.run(
@@ -1001,9 +1018,9 @@ class JWTService:
                                     ip_address=None,
                                 )
                             )
-                except Exception as _e:
+                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed: {_e}")
-        except Exception as _rot_err:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _rot_err:
             logger.debug(f"Refresh rotation not applied: {_rot_err}")
 
         if self.settings.PII_REDACT_LOGS:
@@ -1035,12 +1052,12 @@ class JWTService:
             roles = []
             try:
                 roles = user_db.get_user_roles(user_id)
-            except Exception:
+            except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
                 user = user_db.get_user(user_id=user_id)
                 roles = (user or {}).get("roles", []) if isinstance(user, dict) else []
             if roles:
                 role = "admin" if "admin" in roles else roles[0]
-        except Exception as e:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"JWTService: failed to fetch user role on refresh (async); using fallback: {e}")
 
         # Create new access token
@@ -1064,13 +1081,14 @@ class JWTService:
                     old_jti = payload.get("jti")
                     old_exp = payload.get("exp")
                     if old_jti and isinstance(old_exp, (int, float)):
-                        from datetime import datetime as _dt, timezone as _tz
+                        from datetime import datetime as _dt
+                        from datetime import timezone as _tz
                         exp_dt = _dt.fromtimestamp(old_exp, tz=_tz.utc)
                         from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist as _get_bl
                         bl = _get_bl()
                         try:
                             bl.hint_blacklisted(old_jti, exp_dt)
-                        except Exception as _hint_e:
+                        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _hint_e:
                             logger.debug(f"Refresh rotation: hint cache failed: {_hint_e}")
                         await bl.revoke_token(
                             jti=old_jti,
@@ -1081,9 +1099,9 @@ class JWTService:
                             revoked_by=None,
                             ip_address=None,
                         )
-                except Exception as _e:
+                except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"Refresh rotation: best-effort blacklist failed (async): {_e}")
-        except Exception as _rot_err:
+        except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as _rot_err:
             logger.debug(f"Refresh rotation not applied (async): {_rot_err}")
 
         if self.settings.PII_REDACT_LOGS:
@@ -1155,7 +1173,7 @@ def create_refresh_token(user_id: int, username: str) -> str:
     return get_jwt_service().create_refresh_token(user_id, username)
 
 
-def verify_token(token: str, token_type: Optional[str] = None) -> Dict[str, Any]:
+def verify_token(token: str, token_type: Optional[str] = None) -> dict[str, Any]:
     """
     Convenience function to verify a token (SYNC, NO BLACKLIST CHECK).
 

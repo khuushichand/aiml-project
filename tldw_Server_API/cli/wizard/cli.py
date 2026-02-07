@@ -10,7 +10,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlsplit
 
 import typer
@@ -22,11 +22,21 @@ from .utils import files as files_utils
 from .utils import format as format_utils
 from .utils import git as git_utils
 
-
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="tldw_server setup wizard CLI")
+_WIZARD_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+    subprocess.SubprocessError,
+)
 
 
-def _emit(result: Dict[str, Any], use_json: bool) -> None:
+def _emit(result: dict[str, Any], use_json: bool) -> None:
     if use_json:
         typer.echo(json.dumps(result, indent=2))
     else:
@@ -38,7 +48,7 @@ def _emit(result: Dict[str, Any], use_json: bool) -> None:
                 typer.echo(f"{k.capitalize()}: {result[k]}")
 
 
-def _resolve_database_url(env_path: Path) -> Optional[str]:
+def _resolve_database_url(env_path: Path) -> str | None:
     value = os.getenv("DATABASE_URL") or env_utils.load_env(env_path).get("DATABASE_URL")
     if value is None:
         return None
@@ -51,7 +61,7 @@ def _resolve_database_url(env_path: Path) -> Optional[str]:
 def _validate_database_url(db_url: str) -> tuple[bool, str]:
     try:
         parsed = urlsplit(db_url)
-    except Exception:
+    except ValueError:
         return False, "unable to parse DATABASE_URL"
     scheme = (parsed.scheme or "").split("+", 1)[0].lower()
     if scheme in {"postgres", "postgresql"}:
@@ -63,19 +73,16 @@ def _validate_database_url(db_url: str) -> tuple[bool, str]:
     return False, f"unsupported scheme '{scheme}'"
 
 
-def _resolve_sqlite_db_path(db_url: str) -> Optional[Path]:
+def _resolve_sqlite_db_path(db_url: str) -> Path | None:
     try:
         from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
-    except Exception:
+    except ImportError:
         return None
     _, _, fs_path = DatabasePool._resolve_sqlite_paths(db_url)
     if not fs_path or fs_path == ":memory:":
         return None
     path = Path(fs_path).expanduser()
-    if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
-    else:
-        path = path.resolve()
+    path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
     return path
 
 
@@ -84,12 +91,9 @@ def _resolve_user_db_base_dir_for_dry_run() -> Path:
     if raw:
         try:
             candidate = Path(raw).expanduser()
-        except Exception:
+        except (OSError, TypeError, ValueError):
             candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = (Path.cwd() / candidate).resolve()
-        else:
-            candidate = candidate.resolve()
+        candidate = (Path.cwd() / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
         return candidate
     return (Path.cwd() / "Databases" / "user_databases").resolve()
 
@@ -123,7 +127,7 @@ def _split_ini_inline_comment(value: str) -> tuple[str, str]:
     return value.rstrip(), ""
 
 
-def _update_ini_section(content: str, section: str, updates: Dict[str, str]) -> tuple[str, bool, list[str]]:
+def _update_ini_section(content: str, section: str, updates: dict[str, str]) -> tuple[str, bool, list[str]]:
     if not updates:
         return content, False, []
     lines = content.splitlines()
@@ -131,7 +135,7 @@ def _update_ini_section(content: str, section: str, updates: Dict[str, str]) -> 
     section_header = f"[{target}]"
     in_section = False
     section_found = False
-    last_index: Dict[str, int] = {}
+    last_index: dict[str, int] = {}
     for idx, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
@@ -149,7 +153,7 @@ def _update_ini_section(content: str, section: str, updates: Dict[str, str]) -> 
         if key in updates:
             last_index[key] = idx
 
-    missing = [key for key in updates.keys() if key not in last_index]
+    missing = [key for key in updates if key not in last_index]
     rendered: list[str] = []
     in_section = False
     for idx, line in enumerate(lines):
@@ -276,7 +280,7 @@ def _resolve_mcp_candidate_paths(client: str) -> list[Path]:
     return resolved
 
 
-def _load_json_file(path: Path) -> tuple[Dict[str, Any], str]:
+def _load_json_file(path: Path) -> tuple[dict[str, Any], str]:
     if not path.exists():
         return {}, ""
     raw = path.read_text(encoding="utf-8")
@@ -288,7 +292,7 @@ def _load_json_file(path: Path) -> tuple[Dict[str, Any], str]:
     return data, raw
 
 
-def _render_json(data: Dict[str, Any]) -> str:
+def _render_json(data: dict[str, Any]) -> str:
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
 
@@ -316,18 +320,18 @@ def _pick_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _probe_endpoint(base_url: str, path: str, *, timeout: float = 2.0) -> Dict[str, Any]:
+def _probe_endpoint(base_url: str, path: str, *, timeout: float = 2.0) -> dict[str, Any]:
     import httpx
 
     url = f"{base_url}{path}"
     try:
         resp = httpx.get(url, timeout=timeout)
         return {"url": url, "status_code": resp.status_code, "ok": resp.status_code < 400}
-    except Exception as exc:
+    except (httpx.HTTPError, OSError, TimeoutError, ValueError) as exc:
         return {"url": url, "ok": False, "error": str(exc)}
 
 
-def _check_endpoints(base_url: str) -> Dict[str, Dict[str, Any]]:
+def _check_endpoints(base_url: str) -> dict[str, dict[str, Any]]:
     return {
         "api_health": _probe_endpoint(base_url, "/api/v1/health"),
         "healthz": _probe_endpoint(base_url, "/api/v1/healthz"),
@@ -335,7 +339,7 @@ def _check_endpoints(base_url: str) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _start_ephemeral_server(port: int, env: Dict[str, str]) -> subprocess.Popen:
+def _start_ephemeral_server(port: int, env: dict[str, str]) -> subprocess.Popen:
     cmd = [
         sys.executable,
         "-m",
@@ -395,9 +399,9 @@ def init(
 
     existing_env = env_utils.load_env(env_path)
     auth_mode = os.getenv("AUTH_MODE") or existing_env.get("AUTH_MODE") or ("single_user" if default or yes else "")
-    updates: Dict[str, Optional[str]] = {}
-    initializer_action: Optional[Dict[str, Any]] = None
-    validation_action: Optional[Dict[str, Any]] = None
+    updates: dict[str, str | None] = {}
+    initializer_action: dict[str, Any] | None = None
+    validation_action: dict[str, Any] | None = None
     if auth_mode:
         updates["AUTH_MODE"] = auth_mode
     if auth_mode == "single_user":
@@ -492,7 +496,7 @@ def init(
             changed = git_utils.changed_or_untracked_files(base)
             if changed:
                 format_utils.maybe_format(changed)
-        except Exception as e:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"format step skipped: {e}")
 
     result = {
@@ -524,11 +528,11 @@ def auth(
         raise typer.Exit(2)
     env_path = Path.cwd() / ".env"
     existing_env = env_utils.load_env(env_path)
-    updates: Dict[str, Optional[str]] = {"AUTH_MODE": mode}
+    updates: dict[str, str | None] = {"AUTH_MODE": mode}
     notes = []
     actions = []
-    validation: Dict[str, Any] = {}
-    initializer_action: Optional[Dict[str, Any]] = None
+    validation: dict[str, Any] = {}
+    initializer_action: dict[str, Any] | None = None
     if mode == "single_user":
         existing_key = (
             os.getenv("SINGLE_USER_API_KEY")
@@ -627,12 +631,12 @@ def verify(
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without writing"),
 ):
     """Run verification checks (Stage 4)."""
-    facts: Dict[str, Any] = {
+    facts: dict[str, Any] = {
         "ffmpeg": detect_utils.has_ffmpeg(),
         "cuda": detect_utils.has_cuda(),
     }
     notes: list[str] = []
-    actions: list[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
 
     env_port = os.getenv("TLDW_SERVER_PORT")
     preferred_port = int(env_port) if env_port and env_port.isdigit() else 8000
@@ -665,7 +669,7 @@ def verify(
     server_running = "status_code" in probe
     server_mode = "existing" if server_running else "spawned"
     server_port = preferred_port
-    proc: Optional[subprocess.Popen] = None
+    proc: subprocess.Popen | None = None
 
     if not server_running:
         if env_port:
@@ -753,11 +757,11 @@ def providers(
     """Collect/store provider keys."""
     env_path = Path.cwd() / ".env"
     existing_env = env_utils.load_env(env_path)
-    actions: list[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     notes: list[str] = []
-    env_updates: Dict[str, str] = {}
-    config_updates: Dict[str, str] = {}
-    provider_status: list[Dict[str, Any]] = []
+    env_updates: dict[str, str] = {}
+    config_updates: dict[str, str] = {}
+    provider_status: list[dict[str, Any]] = []
 
     for provider in _PROVIDER_SOURCES:
         value = None
@@ -823,7 +827,7 @@ def providers(
 
         masked_updates = {key: env_utils.mask_value(value) for key, value in config_updates.items()}
         updated_content, changed, _missing = _update_ini_section(config_content, "API", config_updates)
-        config_action: Dict[str, Any] = {
+        config_action: dict[str, Any] = {
             "path": str(config_path),
             "created": created,
             "updated_keys": list(masked_updates.keys()),
@@ -875,7 +879,7 @@ def db(
 
     env_path = Path.cwd() / ".env"
     notes: list[str] = []
-    actions: list[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
 
     existing_env = env_utils.load_env(env_path)
     auth_mode = os.getenv("AUTH_MODE") or existing_env.get("AUTH_MODE") or "single_user"
@@ -957,7 +961,7 @@ def db(
             from tldw_Server_API.app.core.AuthNZ.database import test_database_connection
 
             ok = asyncio.run(test_database_connection())
-        except Exception as exc:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
             ok = False
             notes.append(f"Postgres validation failed: {exc}")
         actions.append({"postgres_check": {"status": "ok" if ok else "error"}})
@@ -981,7 +985,7 @@ def db(
                     "dry_run": dry_run,
                 }
                 _emit(result, json_out)
-                raise typer.Exit(2)
+                raise typer.Exit(2) from exc
 
     user_id = DatabasePaths.get_single_user_id()
     if not DatabasePaths.validate_database_structure(user_id):
@@ -994,7 +998,7 @@ def db(
         _emit(result, json_out)
         raise typer.Exit(2)
 
-    sqlite_files: list[Dict[str, Any]] = []
+    sqlite_files: list[dict[str, Any]] = []
     db_paths = {
         "media": DatabasePaths.get_media_db_path(user_id),
         "chacha": DatabasePaths.get_chacha_db_path(user_id),
@@ -1013,7 +1017,7 @@ def db(
                 "dry_run": dry_run,
             }
             _emit(result, json_out)
-            raise typer.Exit(2)
+            raise typer.Exit(2) from exc
 
     actions.append({"sqlite_files": sqlite_files})
     result = {"command": "db", "status": "ok", "actions": actions, "notes": notes, "dry_run": dry_run}
@@ -1024,8 +1028,8 @@ def db(
 def mcp(
     action: str = typer.Argument("add", metavar="[add|remove]", help="Add or remove MCP client configs"),
     clients: list[str] = typer.Option(None, "--client", "-c", help="Client(s) to configure"),
-    config_path: Optional[Path] = typer.Option(None, "--config-path", help="Override config path (single client)"),
-    server_url: Optional[str] = typer.Option(None, "--server-url", help="MCP server URL"),
+    config_path: Path | None = typer.Option(None, "--config-path", help="Override config path (single client)"),
+    server_url: str | None = typer.Option(None, "--server-url", help="MCP server URL"),
     json_out: bool = typer.Option(False, "--json", help="Emit machine-readable JSON output"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview actions without writing"),
     yes: bool = typer.Option(False, "--yes", "--no-input", help="Assume 'yes' for prompts (non-interactive)"),
@@ -1091,7 +1095,7 @@ def mcp(
             _emit(result, json_out)
             return
 
-    actions: list[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     for client in normalized:
         label = _MCP_CLIENTS[client]["label"]
         if config_path:
@@ -1130,7 +1134,7 @@ def mcp(
 
         try:
             data, raw = _load_json_file(candidate_path)
-        except Exception as exc:
+        except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
             actions.append(
                 {
                     "mcp_client": {
@@ -1182,7 +1186,7 @@ def mcp(
                 status = "updated"
 
         new_content = _render_json(data)
-        client_action: Dict[str, Any] = {
+        client_action: dict[str, Any] = {
             "client": client,
             "label": label,
             "path": str(candidate_path),
@@ -1212,7 +1216,7 @@ def format(
 ):
     """Format changed files with Black/Ruff when available (scaffold)."""
     base = Path.cwd()
-    actions: Dict[str, Any] = {"formatted": []}
+    actions: dict[str, Any] = {"formatted": []}
     if git_utils.is_git_repo(base):
         changed = git_utils.changed_or_untracked_files(base)
         if changed:
@@ -1222,7 +1226,7 @@ def format(
                 else:
                     format_utils.maybe_format(changed)
                     actions["formatted"] = changed
-            except Exception as e:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as e:
                 actions["error"] = str(e)
     result = {"command": "format", "status": "ok", "actions": actions, "dry_run": dry_run}
     _emit(result, json_out)
@@ -1239,7 +1243,7 @@ def doctor(
         "ffmpeg": detect_utils.has_ffmpeg(),
         "git": git_utils.is_git_repo(Path.cwd()),
     }
-    actions: list[Dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
     notes: list[str] = []
     had_error = False
 
@@ -1256,8 +1260,8 @@ def doctor(
     env_path = Path.cwd() / ".env"
     existing_env = env_utils.load_env(env_path)
     env_exists = env_path.exists()
-    updates: Dict[str, str] = {}
-    env_action: Dict[str, Any] = {"path": str(env_path), "status": "ok"}
+    updates: dict[str, str] = {}
+    env_action: dict[str, Any] = {"path": str(env_path), "status": "ok"}
     missing_keys: list[str] = []
 
     auth_mode = os.getenv("AUTH_MODE") or existing_env.get("AUTH_MODE")
@@ -1315,7 +1319,7 @@ def doctor(
                 actions.append({"set_env": masked})
                 if env_result.backup_path:
                     actions.append({"backup": str(env_result.backup_path)})
-            except Exception as exc:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
                 env_action["status"] = "error"
                 env_action["error"] = str(exc)
                 had_error = True
@@ -1337,7 +1341,7 @@ def doctor(
             try:
                 files_utils.ensure_gitignore(gitignore_path, entries=desired_entries)
                 git_action["status"] = "updated"
-            except Exception as exc:
+            except _WIZARD_NONCRITICAL_EXCEPTIONS as exc:
                 git_action["status"] = "error"
                 git_action["error"] = str(exc)
                 had_error = True

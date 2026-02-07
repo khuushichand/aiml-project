@@ -11,17 +11,17 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import _extract_openai_content
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.research._config import (
-    DOIResolveConfig,
-    ReferenceParseConfig,
     BibtexGenerateConfig,
+    DOIResolveConfig,
     LiteratureReviewConfig,
+    ReferenceParseConfig,
 )
 
 
@@ -33,7 +33,7 @@ from tldw_Server_API.app.core.Workflows.adapters.research._config import (
     tags=["research", "citations"],
     config_model=DOIResolveConfig,
 )
-async def run_doi_resolve_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_doi_resolve_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Resolve DOI to metadata.
 
     Config:
@@ -42,8 +42,9 @@ async def run_doi_resolve_adapter(config: Dict[str, Any], context: Dict[str, Any
       - metadata: dict - Paper metadata
       - resolved: bool
     """
-    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     import httpx
+
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -129,7 +130,7 @@ async def run_doi_resolve_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["research", "citations"],
     config_model=ReferenceParseConfig,
 )
-async def run_reference_parse_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_reference_parse_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Parse citation string to structured data.
 
     Config:
@@ -204,7 +205,7 @@ Return JSON only."""
     tags=["research", "citations"],
     config_model=BibtexGenerateConfig,
 )
-async def run_bibtex_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_bibtex_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate BibTeX entry from metadata.
 
     Config:
@@ -276,7 +277,7 @@ async def run_bibtex_generate_adapter(config: Dict[str, Any], context: Dict[str,
     tags=["research", "academic"],
     config_model=LiteratureReviewConfig,
 )
-async def run_literature_review_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_literature_review_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate literature review summary from search results.
 
     Config:

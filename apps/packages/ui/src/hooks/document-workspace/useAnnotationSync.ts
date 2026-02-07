@@ -241,13 +241,16 @@ export function useAnnotationSync(
 
 /**
  * Hook that syncs annotations when the document is closed or changed.
- * Call this from the document workspace page component.
+ * Call this from the document workspace page component and pass the
+ * forceSync function returned by useAnnotationSync.
  *
  * Uses navigator.sendBeacon for page unload events to guarantee delivery,
  * since regular async requests may not complete before the page closes.
  */
-export function useAnnotationSyncOnClose(mediaId: number | null) {
-  const { forceSync } = useAnnotationSync(mediaId, 0)
+export function useAnnotationSyncOnClose(
+  mediaId: number | null,
+  forceSync: () => void
+) {
   const annotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.annotationSyncStatus
   )
@@ -256,29 +259,54 @@ export function useAnnotationSyncOnClose(mediaId: number | null) {
   )
   const serverUrl = useConnectionStore((s) => s.state.serverUrl)
   const previousMediaIdRef = useRef<number | null>(mediaId)
+  const forceSyncRef = useRef(forceSync)
+  const statusRef = useRef(annotationSyncStatus)
+  const pendingRef = useRef(pendingAnnotations)
+  const serverUrlRef = useRef(serverUrl)
+  const mediaIdRef = useRef(mediaId)
+
+  useEffect(() => {
+    forceSyncRef.current = forceSync
+  }, [forceSync])
+
+  useEffect(() => {
+    statusRef.current = annotationSyncStatus
+  }, [annotationSyncStatus])
+
+  useEffect(() => {
+    pendingRef.current = pendingAnnotations
+  }, [pendingAnnotations])
+
+  useEffect(() => {
+    serverUrlRef.current = serverUrl
+  }, [serverUrl])
+
+  useEffect(() => {
+    mediaIdRef.current = mediaId
+  }, [mediaId])
 
   // Sync when document changes (normal async sync is fine here)
   useEffect(() => {
-    if (previousMediaIdRef.current !== mediaId && annotationSyncStatus === "pending") {
-      forceSync()
+    if (previousMediaIdRef.current !== mediaId && statusRef.current === "pending") {
+      forceSyncRef.current()
     }
     previousMediaIdRef.current = mediaId
-  }, [mediaId, annotationSyncStatus, forceSync])
+  }, [mediaId])
 
   // Sync on unmount / page close
   // Use sendBeacon for beforeunload to guarantee delivery
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (annotationSyncStatus === "pending" && mediaId !== null) {
+      if (statusRef.current === "pending" && mediaIdRef.current !== null) {
         // Try sendBeacon first (guaranteed delivery on page close)
         const beaconSent = syncAnnotationsWithBeacon(
-          serverUrl,
-          mediaId,
-          pendingAnnotations
+          serverUrlRef.current,
+          mediaIdRef.current,
+          pendingRef.current
         )
         // Fall back to regular sync if beacon fails (might not complete)
         if (!beaconSent) {
-          forceSync()
+          forceSyncRef.current()
         }
       }
     }
@@ -287,9 +315,9 @@ export function useAnnotationSyncOnClose(mediaId: number | null) {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload)
       // On unmount (not page close), regular async sync is fine
-      if (annotationSyncStatus === "pending") {
-        forceSync()
+      if (statusRef.current === "pending") {
+        forceSyncRef.current()
       }
     }
-  }, [annotationSyncStatus, forceSync, mediaId, pendingAnnotations, serverUrl])
+  }, [])
 }

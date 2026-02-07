@@ -328,3 +328,168 @@ async def test_check_rate_limit_falls_back_to_ip_for_non_int_user_id(monkeypatch
     await auth_deps.check_rate_limit(request=request, rate_limiter=_StubLimiter())
     assert calls["user"] == 0
     assert calls["ip"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_uses_fallback_limiter_when_rg_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/auth/forgot-password"
+
+    calls: dict[str, Any] = {}
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_rate_limit_fallback(self, **kwargs):
+            calls.update(kwargs)
+            return True, {"rate_limit_source": "authnz_fallback_db"}
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError(
+                "check_auth_rate_limit should use check_rate_limit_fallback when RG ingress is inactive"
+            )
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert calls["identifier"] == "ip:127.0.0.1"
+    assert calls["endpoint"] == "auth:/api/v1/auth/forgot-password"
+    assert calls["window_minutes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/auth/forgot-password"
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_rate_limit_fallback(self, **kwargs):
+            _ = kwargs
+            return True, {"rate_limit_source": "authnz_fallback_db", "error": "fallback_limiter_unavailable"}
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy no-op path should not be called")
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_legacy_limiter_path_when_fallback_method_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/auth/forgot-password"
+
+    calls: dict[str, Any] = {}
+
+    class _LegacyOnlyLimiter:
+        enabled = True
+
+        async def check_rate_limit(self, **kwargs):
+            calls.update(kwargs)
+            return True, {"rate_limit_source": "legacy"}
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_LegacyOnlyLimiter())
+    assert calls["identifier"] == "ip:127.0.0.1"
+
+
+@pytest.mark.asyncio
+async def test_get_session_manager_dep_requires_explicit_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.delenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", raising=False)
+
+    sentinel = object()
+
+    async def _fake_get_session_manager() -> object:
+        return sentinel
+
+    monkeypatch.setattr(auth_deps, "get_session_manager", _fake_get_session_manager)
+
+    resolved = await auth_deps.get_session_manager_dep()
+    assert resolved is sentinel
+
+
+@pytest.mark.asyncio
+async def test_get_session_manager_dep_does_not_use_stub_without_explicit_pytest_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", raising=False)
+
+    sentinel = object()
+
+    async def _fake_get_session_manager() -> object:
+        return sentinel
+
+    monkeypatch.setattr(auth_deps, "get_session_manager", _fake_get_session_manager)
+
+    resolved = await auth_deps.get_session_manager_dep()
+    assert resolved is sentinel
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+
+    sentinel = object()
+
+    class _TxnCM:
+        async def __aenter__(self) -> object:
+            return sentinel
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Pool:
+        def transaction(self) -> _TxnCM:
+            return _TxnCM()
+
+        def acquire(self) -> object:
+            raise AssertionError("adapter path should not be used when TEST_MODE=0")
+
+    async def _fake_get_db_pool() -> _Pool:
+        return _Pool()
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+
+    agen = auth_deps.get_db_transaction()
+    try:
+        conn = await agen.__anext__()
+        assert conn is sentinel
+    finally:
+        await agen.aclose()

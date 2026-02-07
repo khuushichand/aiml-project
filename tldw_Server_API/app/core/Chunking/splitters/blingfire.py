@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Tuple, Optional
-
 from . import SentenceSplitter
 
 
@@ -20,13 +18,13 @@ class BlingFireSentenceSplitter(SentenceSplitter):
             raise RuntimeError("BlingFire not available") from e
         self._b2s = text_to_sentences  # type: ignore
 
-    def split_to_spans(self, text: str, language: Optional[str] = None) -> List[Tuple[int, int]]:
+    def split_to_spans(self, text: str, language: str | None = None) -> list[tuple[int, int]]:
         if not text:
             return []
         sents_str = self._b2s(text)
         # BlingFire returns a string with sentences separated by newlines
         sentences = [s for s in sents_str.splitlines() if s]
-        spans: List[Tuple[int, int]] = []
+        spans: list[tuple[int, int]] = []
         cursor = 0
         for s in sentences:
             idx = text.find(s, cursor)

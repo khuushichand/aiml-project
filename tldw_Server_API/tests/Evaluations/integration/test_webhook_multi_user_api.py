@@ -6,8 +6,8 @@ import pytest
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
-from tldw_Server_API.app.api.v1.endpoints import evaluations_webhooks as webhooks
+from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_webhooks as webhooks, \
+    evaluations_auth as eval_auth
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths

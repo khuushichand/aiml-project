@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 
 from loguru import logger
 
@@ -22,13 +22,13 @@ class AuthnzSessionsRepo:
     db_pool: DatabasePool
 
     @staticmethod
-    def _normalize_datetime_for_postgres(dt: Optional[datetime]) -> Optional[datetime]:
+    def _normalize_datetime_for_postgres(dt: datetime | None) -> datetime | None:
         """Strip timezone info for PostgreSQL TIMESTAMP columns (not TIMESTAMPTZ)."""
         if dt is None:
             return None
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
-    def _normalize_session_details(self, details: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_session_details(self, details: dict[str, Any]) -> dict[str, Any]:
         """
         Normalize datetime fields across backends so callers always
         see ``expires_at`` and ``refresh_expires_at`` as datetime objects
@@ -55,12 +55,12 @@ class AuthnzSessionsRepo:
         encrypted_token: str,
         encrypted_refresh: str,
         expires_at: datetime,
-        refresh_expires_at: Optional[datetime],
+        refresh_expires_at: datetime | None,
         ip_address: str,
         user_agent: str,
         device_id: str,
-        access_jti: Optional[str],
-        refresh_jti: Optional[str],
+        access_jti: str | None,
+        refresh_jti: str | None,
     ) -> int:
         """
         Insert a new session row and return its ``id``.
@@ -139,15 +139,15 @@ class AuthnzSessionsRepo:
         self,
         *,
         session_id: int,
-        revoked_by: Optional[int],
-        reason: Optional[str],
-    ) -> Optional[Dict[str, Any]]:
+        revoked_by: int | None,
+        reason: str | None,
+    ) -> dict[str, Any] | None:
         """
         Mark a single session as revoked and return its details for blacklist use.
         """
         try:
             async with self.db_pool.transaction() as conn:
-                session_details: Optional[Dict[str, Any]] = None
+                session_details: dict[str, Any] | None = None
 
                 if hasattr(conn, "fetchrow"):
                     session_row = await conn.fetchrow(
@@ -218,7 +218,7 @@ class AuthnzSessionsRepo:
         self,
         *,
         user_id: int,
-        except_session_id: Optional[int] = None,
+        except_session_id: int | None = None,
     ) -> int:
         """
         Mark all sessions for a user as revoked (optionally excluding one).
@@ -291,7 +291,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_token_metadata_for_user(
         self,
         user_id: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Fetch session token metadata for a user.
 
@@ -324,7 +324,7 @@ class AuthnzSessionsRepo:
                     (user_id,),
                 )
                 sqlite_rows = await cursor.fetchall()
-                sessions: List[Dict[str, Any]] = []
+                sessions: list[dict[str, Any]] = []
                 for row in sqlite_rows:
                     sessions.append(
                         self._normalize_session_details(
@@ -346,7 +346,7 @@ class AuthnzSessionsRepo:
 
     async def has_revoked_session_for_token_hash_candidates(
         self,
-        token_hash_candidates: List[str],
+        token_hash_candidates: list[str],
     ) -> bool:
         """
         Return True if any revoked session exists for the provided token hashes.
@@ -434,8 +434,8 @@ class AuthnzSessionsRepo:
         self,
         *,
         user_id: int,
-        revoked_by: Optional[int],
-        reason: Optional[str],
+        revoked_by: int | None,
+        reason: str | None,
     ) -> int:
         """
         Mark all sessions for a user as revoked with audit metadata.
@@ -488,7 +488,7 @@ class AuthnzSessionsRepo:
             )
             raise
 
-    async def get_active_sessions_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_active_sessions_for_user(self, user_id: int) -> list[dict[str, Any]]:
         """
         Return active sessions for a user, ordered by last activity.
         """
@@ -537,7 +537,7 @@ class AuthnzSessionsRepo:
                         raise
 
                 rows = await cursor.fetchall()
-                sessions: List[Dict[str, Any]] = []
+                sessions: list[dict[str, Any]] = []
                 for row in rows:
                     sessions.append(
                         {
@@ -640,7 +640,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_for_validation_by_id(
         self,
         session_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Fetch an active, non-expired session joined with user state by session id.
 
@@ -713,7 +713,7 @@ class AuthnzSessionsRepo:
     async def fetch_session_for_validation_by_token_hash(
         self,
         token_hash: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Fetch an active, non-expired session joined with user state by token hash.
 
@@ -820,13 +820,13 @@ class AuthnzSessionsRepo:
         session_id: int,
         access_token_hash: str,
         refresh_token_hash: str,
-        access_jti: Optional[str],
-        refresh_jti: Optional[str],
-        access_expires_at: Optional[datetime],
-        refresh_expires_at: Optional[datetime],
+        access_jti: str | None,
+        refresh_jti: str | None,
+        access_expires_at: datetime | None,
+        refresh_expires_at: datetime | None,
         encrypted_access_token: str,
         encrypted_refresh_token: str,
-    ) -> Optional[int]:
+    ) -> int | None:
         """
         Update a newly created session with finalized token hashes and encrypted tokens.
 
@@ -836,7 +836,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                session_row: Optional[Any] = None
+                session_row: Any | None = None
 
                 if hasattr(conn, "fetchrow"):
                     # Normalize datetimes for PostgreSQL TIMESTAMP columns
@@ -921,13 +921,14 @@ class AuthnzSessionsRepo:
 
     async def find_active_session_by_refresh_hash_candidates(
         self,
-        refresh_hash_candidates: List[str],
-    ) -> Optional[Dict[str, Any]]:
+        refresh_hash_candidates: list[str],
+    ) -> dict[str, Any] | None:
         """
-        Locate an active session by trying multiple refresh_token_hash candidates.
+        Locate an active, unexpired session by trying multiple refresh-token-hash candidates.
 
         Used by SessionManager.refresh_session() to support legacy hash formats.
-        Returns a minimal mapping containing ``id`` and ``user_id`` or ``None``.
+        Returns a mapping containing ``id``, ``user_id``, ``token_hash``, and
+        ``refresh_token_hash`` or ``None``.
         """
         try:
             async with self.db_pool.acquire() as conn:
@@ -935,10 +936,12 @@ class AuthnzSessionsRepo:
                     for candidate in refresh_hash_candidates:
                         row = await conn.fetchrow(
                             """
-                            SELECT id, user_id
+                            SELECT id, user_id, token_hash, refresh_token_hash
                             FROM sessions
                             WHERE refresh_token_hash = $1
                               AND is_active = TRUE
+                              AND refresh_expires_at IS NOT NULL
+                              AND refresh_expires_at > CURRENT_TIMESTAMP
                             """,
                             candidate,
                         )
@@ -947,6 +950,8 @@ class AuthnzSessionsRepo:
                             return {
                                 "id": data["id"],
                                 "user_id": data["user_id"],
+                                "token_hash": data.get("token_hash"),
+                                "refresh_token_hash": data.get("refresh_token_hash"),
                             }
                     else:
                         return None
@@ -954,10 +959,12 @@ class AuthnzSessionsRepo:
                     for candidate in refresh_hash_candidates:
                         cursor = await conn.execute(
                             """
-                            SELECT id, user_id
+                            SELECT id, user_id, token_hash, refresh_token_hash
                             FROM sessions
                             WHERE refresh_token_hash = ?
                               AND is_active = 1
+                              AND refresh_expires_at IS NOT NULL
+                              AND datetime(refresh_expires_at) > datetime('now')
                             """,
                             (candidate,),
                         )
@@ -966,6 +973,8 @@ class AuthnzSessionsRepo:
                             return {
                                 "id": row[0],
                                 "user_id": row[1],
+                                "token_hash": row[2],
+                                "refresh_token_hash": row[3],
                             }
                     else:
                         return None
@@ -979,20 +988,25 @@ class AuthnzSessionsRepo:
         self,
         *,
         session_id: int,
+        expected_access_hash: str,
+        expected_refresh_hash: str,
         new_access_hash: str,
-        access_jti: Optional[str],
+        access_jti: str | None,
         expires_at: datetime,
         encrypted_access_token: str,
         refresh_hash_update: str,
-        refresh_jti: Optional[str],
-        refresh_expires_at: Optional[datetime],
+        refresh_jti: str | None,
+        refresh_expires_at: datetime | None,
         encrypted_refresh_token: str,
-    ) -> None:
+    ) -> bool:
         """
         Update a session row with refreshed access/refresh token material.
 
-        Mirrors the previous SessionManager.refresh_session UPDATE semantics,
-        including the SQLite fallback when the last_activity column is absent.
+        Uses compare-and-swap semantics to prevent concurrent refresh requests
+        from both succeeding: the row is only updated if both expected token
+        hashes still match the current session row at write time.
+
+        Returns True when exactly one row was updated, False otherwise.
         """
         try:
             async with self.db_pool.transaction() as conn:
@@ -1003,7 +1017,7 @@ class AuthnzSessionsRepo:
                         if refresh_expires_at is not None and getattr(refresh_expires_at, "tzinfo", None)
                         else refresh_expires_at
                     )
-                    await conn.execute(
+                    row = await conn.fetchrow(
                         """
                         UPDATE sessions
                         SET token_hash = $2,
@@ -1016,6 +1030,12 @@ class AuthnzSessionsRepo:
                             encrypted_refresh = COALESCE($9, encrypted_refresh),
                             last_activity = CURRENT_TIMESTAMP
                         WHERE id = $1
+                          AND token_hash = $10
+                          AND refresh_token_hash = $11
+                          AND is_active = TRUE
+                          AND refresh_expires_at IS NOT NULL
+                          AND refresh_expires_at > CURRENT_TIMESTAMP
+                        RETURNING id
                         """,
                         session_id,
                         new_access_hash,
@@ -1026,10 +1046,14 @@ class AuthnzSessionsRepo:
                         refresh_jti,
                         ref,
                         encrypted_refresh_token,
+                        expected_access_hash,
+                        expected_refresh_hash,
                     )
+                    return row is not None
                 else:
+                    cursor = None
                     try:
-                        await conn.execute(
+                        cursor = await conn.execute(
                             """
                             UPDATE sessions
                             SET token_hash = ?,
@@ -1042,6 +1066,11 @@ class AuthnzSessionsRepo:
                                 encrypted_refresh = COALESCE(?, encrypted_refresh),
                                 last_activity = datetime('now')
                             WHERE id = ?
+                              AND token_hash = ?
+                              AND refresh_token_hash = ?
+                              AND is_active = 1
+                              AND refresh_expires_at IS NOT NULL
+                              AND datetime(refresh_expires_at) > datetime('now')
                             """,
                             (
                                 new_access_hash,
@@ -1055,12 +1084,14 @@ class AuthnzSessionsRepo:
                                 else None,
                                 encrypted_refresh_token,
                                 session_id,
+                                expected_access_hash,
+                                expected_refresh_hash,
                             ),
                         )
                     except Exception as exc:
                         msg = str(exc).lower()
                         if "no such column" in msg and "last_activity" in msg:
-                            await conn.execute(
+                            cursor = await conn.execute(
                                 """
                                 UPDATE sessions
                                 SET token_hash = ?,
@@ -1072,6 +1103,11 @@ class AuthnzSessionsRepo:
                                     refresh_expires_at = COALESCE(?, refresh_expires_at),
                                     encrypted_refresh = COALESCE(?, encrypted_refresh)
                                 WHERE id = ?
+                                  AND token_hash = ?
+                                  AND refresh_token_hash = ?
+                                  AND is_active = 1
+                                  AND refresh_expires_at IS NOT NULL
+                                  AND datetime(refresh_expires_at) > datetime('now')
                                 """,
                                 (
                                     new_access_hash,
@@ -1085,10 +1121,22 @@ class AuthnzSessionsRepo:
                                     else None,
                                     encrypted_refresh_token,
                                     session_id,
+                                    expected_access_hash,
+                                    expected_refresh_hash,
                                 ),
                             )
                         else:
                             raise
+                    if cursor is None:
+                        return False
+                    rowcount = getattr(cursor, "rowcount", -1)
+                    if isinstance(rowcount, int) and rowcount >= 0:
+                        return rowcount > 0
+                    changes_cursor = await conn.execute("SELECT changes()")
+                    changes_row = await changes_cursor.fetchone()
+                    if not changes_row:
+                        return False
+                    return int(changes_row[0]) > 0
         except Exception as exc:  # pragma: no cover - surfaced via callers
             logger.error(
                 f"AuthnzSessionsRepo.update_session_tokens_for_refresh failed: {exc}"

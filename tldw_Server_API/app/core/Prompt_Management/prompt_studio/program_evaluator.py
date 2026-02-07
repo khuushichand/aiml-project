@@ -10,16 +10,15 @@ Notes:
 - Per-project feature toggle is supported via project metadata or env var.
 """
 
+import json
 import os
 import re
-import sys
-import json
-import tempfile
 import subprocess
+import sys
+import tempfile
 import textwrap
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, List
-
+from typing import Any, Optional
 
 _FORBIDDEN_IMPORTS = {
     "socket", "requests", "urllib", "http", "ftplib", "subprocess", "multiprocessing", "asyncio",
@@ -34,7 +33,7 @@ _FORBIDDEN_PATTERNS = [
 class EvalResult:
     success: bool
     reward: float
-    metrics: Dict[str, Any]
+    metrics: dict[str, Any]
     error: Optional[str] = None
 
 
@@ -102,7 +101,7 @@ class ProgramEvaluator:
             reward -= 2.0
         return float(max(-1.0, min(10.0, reward)))
 
-    def evaluate(self, *, project_id: Optional[int], db, llm_output: str, spec: Optional[Dict[str, Any]] = None) -> EvalResult:
+    def evaluate(self, *, project_id: Optional[int], db, llm_output: str, spec: Optional[dict[str, Any]] = None) -> EvalResult:
         """End-to-end evaluation: extract code, run sandbox, score.
 
         spec may include:
@@ -144,7 +143,7 @@ class ProgramEvaluator:
             return textwrap.dedent(block).strip()
         # Heuristic: find regions with many code-like lines
         lines = text.splitlines()
-        buf: List[str] = []
+        buf: list[str] = []
         for ln in lines:
             if any(tok in ln for tok in ("def ", "import ", "class ", "return ", "for ", "while ")):
                 buf.append(ln)
@@ -155,19 +154,16 @@ class ProgramEvaluator:
         for name in _FORBIDDEN_IMPORTS:
             if re.search(rf"\bimport\s+{re.escape(name)}\b", code):
                 return True
-        for pat in _FORBIDDEN_PATTERNS:
-            if re.search(pat, code):
-                return True
-        return False
+        return any(re.search(pat, code) for pat in _FORBIDDEN_PATTERNS)
 
-    def _execute_in_sandbox(self, code: str) -> Tuple[bool, str, str, Dict[str, Any]]:
+    def _execute_in_sandbox(self, code: str) -> tuple[bool, str, str, dict[str, Any]]:
         """Execute code in a restricted subprocess using isolated mode.
 
         Returns (success, stdout, stderr, globals_dump)
         """
         cpu_lim = int(self.CPU_TIME_SEC)
         mem_lim = int(self.MEMORY_MB) * 1024 * 1024
-        forbidden_json = json.dumps(sorted(list(_FORBIDDEN_IMPORTS)))
+        forbidden_json = json.dumps(sorted(_FORBIDDEN_IMPORTS))
         code_json = json.dumps(code)
         wrapper_lines = [
             "import sys, json, builtins",
@@ -247,8 +243,7 @@ class ProgramEvaluator:
                     [sys.executable, "-I", "-B", script_path],
                     cwd=td,
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                     timeout=self.WALL_TIME_SEC,
                 )
@@ -267,9 +262,9 @@ class ProgramEvaluator:
                     gjson = {}
             return True, out, err, gjson
 
-    def _score_from_outputs(self, stdout: str, globals_dump: Dict[str, Any], spec: Dict[str, Any]) -> Tuple[float, Dict[str, Any]]:
+    def _score_from_outputs(self, stdout: str, globals_dump: dict[str, Any], spec: dict[str, Any]) -> tuple[float, dict[str, Any]]:
         """Map execution results to reward in [-1..10]."""
-        metrics: Dict[str, Any] = {"mode": "sandbox", "constraints_ok": None}
+        metrics: dict[str, Any] = {"mode": "sandbox", "constraints_ok": None}
 
         # If spec provides metric_var and objective, use it
         metric_var = (spec or {}).get("metric_var")
@@ -323,7 +318,7 @@ class ProgramEvaluator:
 
     # --------------------------------------------------------------------------------------------
     # Safe constraint evaluation via AST
-    def _safe_eval_constraint(self, expr: str, names: Dict[str, Any]) -> bool:
+    def _safe_eval_constraint(self, expr: str, names: dict[str, Any]) -> bool:
         import ast
         try:
             tree = ast.parse(str(expr), mode="eval")
@@ -343,7 +338,7 @@ class ProgramEvaluator:
             if not isinstance(node, allowed_nodes):
                 return False
         try:
-            env = {k: names.get(k) for k in names.keys()}
+            env = {k: names.get(k) for k in names}
             return bool(eval(compile(tree, "<constraint>", "eval"), {"__builtins__": {}}, env))
         except Exception:
             return False

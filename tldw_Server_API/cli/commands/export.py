@@ -2,19 +2,27 @@
 Export and import commands for tldw Evaluations CLI.
 """
 
-import json
+import asyncio
 import csv
+import json
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_success
+
+_EXPORT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    csv.Error,
+    json.JSONDecodeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
 )
-import asyncio
 
 
 @click.group()
@@ -51,7 +59,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                 try:
                     # Support datetime object or numeric timestamp
                     return val.timestamp() if hasattr(val, 'timestamp') else float(val)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return 0.0
             evaluations = [e for e in evaluations if _to_ts(e.get('created_at', 0)) > cutoff_dt]
 
@@ -61,7 +69,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
                 if key in e and hasattr(e[key], 'isoformat'):
                     try:
                         e[key] = e[key].isoformat()
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         e[key] = str(e[key])
 
         # Ensure output directory exists
@@ -84,7 +92,7 @@ def export_evaluations(ctx, output_file, output_format, limit, days):
 
         print_success(f"Exported {len(evaluations)} evaluations to {output_file}")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Evaluation export failed")
         print_error(f"Evaluation export failed: {e}")
         sys.exit(1)
@@ -109,7 +117,7 @@ def export_config(ctx, output_file):
 
         print_success(f"Configuration exported to {output_file}")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Configuration export failed")
         print_error(f"Configuration export failed: {e}")
         sys.exit(1)
@@ -144,7 +152,7 @@ def export_metrics(ctx, output_file):
             print_error("Metrics collection is not enabled")
             sys.exit(1)
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Metrics export failed")
         print_error(f"Metrics export failed: {e}")
         sys.exit(1)
@@ -163,7 +171,7 @@ def import_data(ctx, input_file, import_type, dry_run):
         cli_context.load_config()
 
         # Load data from file
-        with open(input_file, 'r', encoding='utf-8') as f:
+        with open(input_file, encoding='utf-8') as f:
             data = json.load(f)
 
         if dry_run:
@@ -172,16 +180,16 @@ def import_data(ctx, input_file, import_type, dry_run):
 
         if import_type == 'evaluations':
             from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-            eval_manager = EvaluationManager()
+            EvaluationManager()
 
             # Import evaluations
             imported_count = 0
-            for eval_data in data if isinstance(data, list) else [data]:
+            for _eval_data in data if isinstance(data, list) else [data]:
                 try:
                     # This would need proper implementation
                     # eval_manager.import_evaluation(eval_data)
                     imported_count += 1
-                except Exception as e:
+                except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to import evaluation: {e}")
 
             print_success(f"Imported {imported_count} evaluations")
@@ -195,7 +203,7 @@ def import_data(ctx, input_file, import_type, dry_run):
 
             print_success("Configuration imported and saved")
 
-    except Exception as e:
+    except _EXPORT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Data import failed")
         print_error(f"Data import failed: {e}")
         sys.exit(1)

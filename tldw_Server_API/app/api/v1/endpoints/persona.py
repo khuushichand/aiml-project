@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import uuid
-from typing import List, Optional
 
-from fastapi import APIRouter, Body, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import APIRouter, Body, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.persona import (
@@ -15,19 +15,18 @@ from tldw_Server_API.app.api.v1.schemas.persona import (
     PersonaSessionRequest,
     PersonaSessionResponse,
 )
-from tldw_Server_API.app.core.feature_flags import is_persona_enabled
-from tldw_Server_API.app.core.MCP_unified import get_mcp_server, MCPRequest
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+from tldw_Server_API.app.core.feature_flags import is_persona_enabled
+from tldw_Server_API.app.core.MCP_unified import MCPRequest, get_mcp_server
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-
 
 router = APIRouter()
 
 
-@router.get("/catalog", response_model=List[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
-async def persona_catalog() -> List[PersonaInfo]:
+@router.get("/catalog", response_model=list[PersonaInfo], tags=["persona"], status_code=status.HTTP_200_OK)
+async def persona_catalog() -> list[PersonaInfo]:
     """Return a placeholder persona catalog (scaffold)."""
     if not is_persona_enabled():
         return []
@@ -60,8 +59,8 @@ async def persona_session(req: PersonaSessionRequest = Body(...)) -> PersonaSess
 @router.websocket("/stream")
 async def persona_stream(
     ws: WebSocket,
-    token: Optional[str] = Query(default=None),
-    api_key: Optional[str] = Query(default=None),
+    token: str | None = Query(default=None),
+    api_key: str | None = Query(default=None),
 ):
     """
     Bi-directional placeholder stream.
@@ -100,7 +99,7 @@ async def persona_stream(
         # currently designed as an optional personalization layer for single-user
         # style deployments, so invalid/missing API keys are treated as anonymous
         # sessions rather than hard auth failures.
-        user_id: Optional[str] = None
+        user_id: str | None = None
         if api_key:
             try:
                 api_mgr = await get_api_key_manager()
@@ -121,9 +120,7 @@ async def persona_stream(
             n = (name or "").lower()
             if "delete" in n and not allow_delete:
                 return False
-            if "export" in n and not allow_export:
-                return False
-            return True
+            return not ("export" in n and not allow_export)
 
         async def _call_tool(name: str, arguments: dict) -> dict:
             if not _tool_allowed(name):
@@ -180,7 +177,5 @@ async def persona_stream(
         logger.info("Persona stream disconnected")
     except Exception as e:
         logger.warning(f"Persona stream error: {e}")
-        try:
+        with contextlib.suppress(Exception):
             await stream.error("internal_error", "Internal error")
-        except Exception:
-            pass

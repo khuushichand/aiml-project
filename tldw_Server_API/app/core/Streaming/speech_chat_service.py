@@ -14,14 +14,14 @@ tool calling) to keep the v1 speech chat path simple and testable.
 """
 from __future__ import annotations
 
-import base64
-import json
-import io
-import time
 import asyncio
+import base64
+import io
+import json
 import os
+import time
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -29,34 +29,34 @@ from fastapi import HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
+    OpenAISpeechRequest,
     SpeechChatRequest,
     SpeechChatResponse,
     SpeechChatTiming,
     SpeechChatTokenUsage,
-    OpenAISpeechRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import (
-    get_api_keys,
     DEFAULT_LLM_PROVIDER,
+    get_api_keys,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    transcribe_audio,
-    is_transcription_error_message,
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    extract_response_content,
+    get_or_create_character_context,
+    get_or_create_conversation,
+    load_conversation_history,
 )
 from tldw_Server_API.app.core.Chat.chat_service import (
     perform_chat_api_call_async as chat_api_call_async,
 )
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    get_or_create_character_context,
-    get_or_create_conversation,
-    load_conversation_history,
-    extract_response_content,
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    is_transcription_error_message,
+    transcribe_audio,
 )
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
@@ -67,19 +67,19 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     split_system_message,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
-from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
+from tldw_Server_API.app.core.MCP_unified.protocol import RequestContext
+from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.TTS.tts_exceptions import (
+    TTSAuthenticationError,
     TTSError,
-    TTSValidationError,
     TTSInvalidVoiceReferenceError,
     TTSProviderNotConfiguredError,
-    TTSAuthenticationError,
-    TTSRateLimitError,
     TTSQuotaExceededError,
+    TTSRateLimitError,
+    TTSValidationError,
 )
+from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
 
 _ALLOWED_AUDIO_FORMATS = {"wav", "mp3", "ogg", "opus", "aac", "flac", "webm", "m4a"}
 
@@ -110,7 +110,7 @@ def _decode_base64_audio(data: str) -> bytes:
         ) from e
 
 
-def _load_audio_to_mono_np(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
+def _load_audio_to_mono_np(audio_bytes: bytes) -> tuple[np.ndarray, int]:
     """
     Load audio bytes into a mono float32 numpy array and return (audio, sample_rate).
 
@@ -201,7 +201,7 @@ def _actions_enabled() -> bool:
     return str(flag).lower() in ("1", "true", "yes", "on")
 
 
-async def _execute_action(action_name: str, transcript: str, current_user: User) -> Dict[str, Any]:
+async def _execute_action(action_name: str, transcript: str, current_user: User) -> dict[str, Any]:
     """
     Execute a tool/workflow via MCP modules when available; fail soft with status.
     """
@@ -271,7 +271,7 @@ async def _maybe_execute_action(
     transcript: str,
     request_data: SpeechChatRequest,
     current_user: User,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Execute an action/workflow when enabled and requested.
 
@@ -373,7 +373,7 @@ def _map_tts_exception(exc: Exception) -> HTTPException:
 async def run_speech_chat_turn(
     *,
     request_data: SpeechChatRequest,
-    request: Optional[Any] = None,
+    request: Any | None = None,
     current_user: User,
     chat_db: CharactersRAGDB,
     tts_service: TTSServiceV2,
@@ -515,7 +515,7 @@ async def run_speech_chat_turn(
     messages_payload = list(history_messages)
     messages_payload.append({"role": "user", "content": transcript})
 
-    def _fallback_resolver(name: str) -> Optional[str]:
+    def _fallback_resolver(name: str) -> str | None:
         try:
             return get_api_keys().get(name)
         except Exception:
@@ -617,7 +617,7 @@ async def run_speech_chat_turn(
         )
 
     # Extract token usage if available
-    token_usage: Optional[SpeechChatTokenUsage] = None
+    token_usage: SpeechChatTokenUsage | None = None
     if isinstance(llm_response, dict):
         usage = llm_response.get("usage") or {}
         if isinstance(usage, dict):
@@ -628,7 +628,7 @@ async def run_speech_chat_turn(
             )
 
     # --- Optional action/workflow execution ---
-    action_result: Optional[Dict[str, Any]] = await _maybe_execute_action(
+    action_result: dict[str, Any] | None = await _maybe_execute_action(
         transcript=transcript,
         request_data=request_data,
         current_user=current_user,
@@ -696,7 +696,7 @@ async def run_speech_chat_turn(
                 audio_chunks.append(chunk)
         audio_bytes = b"".join(audio_chunks)
     except Exception as e:  # noqa: BLE001
-        raise _map_tts_exception(e)
+        raise _map_tts_exception(e) from e
 
     if not audio_bytes:
         raise HTTPException(
@@ -707,7 +707,7 @@ async def run_speech_chat_turn(
     tts_ms = (time.time() - tts_start) * 1000.0
 
     # --- Build response ---
-    mime_map: Dict[str, str] = {
+    mime_map: dict[str, str] = {
         "mp3": "audio/mpeg",
         "opus": "audio/opus",
         "aac": "audio/aac",

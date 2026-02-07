@@ -6,15 +6,39 @@ OAI-PMH raw passthrough for XML.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.exceptions import (
+    DownloadError,
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+    StreamingProtocolError,
+)
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 RECORDS_URL = "https://zenodo.org/api/records"
 OAI_BASE = "https://zenodo.org/oai2d"
 
+_ZENODO_PARSE_EXCEPTIONS = (AttributeError, KeyError, TypeError, ValueError)
+_ZENODO_REQUEST_EXCEPTIONS = (
+    ConnectionError,
+    DownloadError,
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    OSError,
+    RetryExhaustedError,
+    RuntimeError,
+    StreamingProtocolError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
-def _join_authors(meta: Dict[str, Any]) -> Optional[str]:
+
+def _join_authors(meta: dict[str, Any]) -> str | None:
     try:
         creators = meta.get("creators") or []
         names = []
@@ -23,11 +47,11 @@ def _join_authors(meta: Dict[str, Any]) -> Optional[str]:
             if nm:
                 names.append(nm)
         return ", ".join(names) if names else None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None
 
 
-def _pick_pdf_url(rec: Dict[str, Any]) -> Optional[str]:
+def _pick_pdf_url(rec: dict[str, Any]) -> str | None:
     try:
         files = rec.get("files") or []
         # New API variants may nest under rec["files"][i]["links"]["self"]
@@ -39,11 +63,11 @@ def _pick_pdf_url(rec: Dict[str, Any]) -> Optional[str]:
             if (key and key.lower().endswith(".pdf")) or (mimetype and "pdf" in mimetype.lower()):
                 return href or None
         return None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None
 
 
-def _normalize_record(rec: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_record(rec: dict[str, Any]) -> dict[str, Any]:
     meta = rec.get("metadata") or {}
     doi = meta.get("doi") or None
     title = meta.get("title") or rec.get("title") or ""
@@ -64,15 +88,15 @@ def _normalize_record(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_records(
-    q: Optional[str],
+    q: str | None,
     page: int,
     size: int,
-    type_: Optional[str] = None,
-    subtype: Optional[str] = None,
-    communities: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    type_: str | None = None,
+    subtype: str | None = None,
+    communities: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     try:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "page": max(1, page),
             "size": max(1, min(size, 100)),
         }
@@ -99,19 +123,19 @@ def search_records(
             total = len(hits)
         items = [_normalize_record(h) for h in hits if isinstance(h, dict)]
         return items, total, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, 0, f"Zenodo error: {str(e)}"
 
 
-def get_record_by_id(record_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_record_by_id(record_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = fetch_json(method="GET", url=f"{RECORDS_URL}/{record_id}", timeout=20)
         return _normalize_record(data), None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
-def get_record_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_record_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         # Search by DOI string
         params = {"q": doi, "size": 1}
@@ -125,31 +149,31 @@ def get_record_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
         if items:
             return _normalize_record(items[0]), None
         return None, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
-def oai_raw(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def oai_raw(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | None]:
     try:
         r = fetch(method="GET", url=OAI_BASE, params=params, headers={"Accept": "application/xml"}, timeout=20)
         if r.status_code >= 400:
             return None, None, f"Zenodo OAI-PMH HTTP error: {r.status_code}"
         ct = r.headers.get("content-type") or "application/xml"
         return r.content, ct.split(";")[0], None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, None, f"Zenodo OAI-PMH error: {str(e)}"
 
 
-def get_record_raw(record_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_record_raw(record_id: str) -> tuple[dict[str, Any] | None, str | None]:
     """Return the raw Zenodo record JSON for advanced inspection (e.g., files)."""
     try:
         data = fetch_json(method="GET", url=f"{RECORDS_URL}/{record_id}", timeout=20)
         return data or {}, None
-    except Exception as e:
+    except _ZENODO_REQUEST_EXCEPTIONS as e:
         return None, f"Zenodo error: {str(e)}"
 
 
-def extract_pdf_from_raw(rec: Dict[str, Any]) -> Optional[str]:
+def extract_pdf_from_raw(rec: dict[str, Any]) -> str | None:
     """Find a PDF download link from raw record JSON if present."""
     try:
         files = rec.get("files") or []
@@ -161,5 +185,5 @@ def extract_pdf_from_raw(rec: Dict[str, Any]) -> Optional[str]:
             if ((key and key.lower().endswith('.pdf')) or (mimetype and 'pdf' in mimetype.lower())) and href:
                 return href
         return None
-    except Exception:
+    except _ZENODO_PARSE_EXCEPTIONS:
         return None

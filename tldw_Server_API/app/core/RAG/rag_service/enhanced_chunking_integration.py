@@ -6,12 +6,13 @@ This module provides functions to integrate the enhanced chunking capabilities
 into the functional pipeline, making them composable with other pipeline functions.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import Optional
+
 from loguru import logger
 
-from .types import Document, DataSource
 # Import from the new modular chunking system
-from ...Chunking import Chunker, EnhancedChunk, ChunkType, ChunkerConfig
+from ...Chunking import Chunker, ChunkerConfig, ChunkingMethod, ChunkType, EnhancedChunk
+from .types import Document
 
 
 def _normalize_chunk_type(value: Optional[str]) -> str:
@@ -28,13 +29,13 @@ def _normalize_chunk_type(value: Optional[str]) -> str:
 
 async def enhanced_chunk_documents(
     context,  # RAGPipelineContext
-    enable_pdf_cleaning: bool = None,
-    preserve_code_blocks: bool = None,
-    preserve_tables: bool = None,
-    structure_aware: bool = None,
-    track_positions: bool = None,
-    chunk_size: int = None,
-    overlap: int = None
+    enable_pdf_cleaning: Optional[bool] = None,
+    preserve_code_blocks: Optional[bool] = None,
+    preserve_tables: Optional[bool] = None,
+    structure_aware: Optional[bool] = None,
+    track_positions: Optional[bool] = None,
+    chunk_size: Optional[int] = None,
+    overlap: Optional[int] = None
 ):
     """
     Apply enhanced chunking to documents in the pipeline context.
@@ -63,32 +64,33 @@ async def enhanced_chunk_documents(
         return context
 
     # Get configuration
-    config = context.config or {}
+    context_config = context.config or {}
 
     # Build enhanced chunking options
     chunking_options = {
         "clean_pdf_artifacts": enable_pdf_cleaning if enable_pdf_cleaning is not None
-                               else config.get("clean_pdf_artifacts", True),
+                               else context_config.get("clean_pdf_artifacts", True),
         "preserve_code_blocks": preserve_code_blocks if preserve_code_blocks is not None
-                               else config.get("preserve_code_blocks", True),
+                               else context_config.get("preserve_code_blocks", True),
         "preserve_tables": preserve_tables if preserve_tables is not None
-                          else config.get("preserve_tables", True),
+                          else context_config.get("preserve_tables", True),
         "structure_aware": structure_aware if structure_aware is not None
-                          else config.get("structure_aware", True),
+                          else context_config.get("structure_aware", True),
         "track_positions": track_positions if track_positions is not None
-                          else config.get("track_positions", True),
-        "table_serialize_method": config.get("table_serialize_method", "hybrid")
+                          else context_config.get("track_positions", True),
+        "table_serialize_method": context_config.get("table_serialize_method", "hybrid")
     }
 
-    chunk_size = chunk_size or config.get("chunk_size", 512)
-    overlap = overlap or config.get("chunk_overlap", 128)
+    chunk_size = chunk_size or context_config.get("chunk_size", 512)
+    overlap = overlap or context_config.get("chunk_overlap", 128)
 
     # Initialize chunker with new API
     # Map old options to new configuration
-    method = 'structure_aware' if structure_aware else 'sentences'
+    method_enum = ChunkingMethod.STRUCTURE_AWARE if structure_aware else ChunkingMethod.SENTENCES
+    method = method_enum.value
 
     config = ChunkerConfig(
-        default_method=method,
+        default_method=method_enum,
         default_max_size=chunk_size,
         default_overlap=overlap,
         enable_cache=True
@@ -98,7 +100,7 @@ async def enhanced_chunk_documents(
     # Process each document
     chunked_documents = []
     total_chunks = 0
-    chunk_type_stats = {}
+    chunk_type_stats: dict[str, int] = {}
 
     for doc in context.documents:
         try:
@@ -146,7 +148,14 @@ async def enhanced_chunk_documents(
             # Convert enhanced chunks to documents
             for chunk in enhanced_chunks:
                 # Build chunk metadata
-                normalized_chunk_type = _normalize_chunk_type(getattr(chunk.chunk_type, "value", chunk.chunk_type))
+                chunk_type_raw = getattr(chunk.chunk_type, "value", chunk.chunk_type)
+                if chunk_type_raw is None:
+                    chunk_type_str: Optional[str] = None
+                elif isinstance(chunk_type_raw, str):
+                    chunk_type_str = chunk_type_raw
+                else:
+                    chunk_type_str = str(chunk_type_raw)
+                normalized_chunk_type = _normalize_chunk_type(chunk_type_str)
                 chunk_metadata = {
                     **doc.metadata,  # Inherit document metadata
                     **chunk.metadata,  # Add chunk-specific metadata
@@ -197,8 +206,8 @@ async def enhanced_chunk_documents(
 
 async def filter_chunks_by_type(
     context,  # RAGPipelineContext
-    include_types: Optional[List[str]] = None,
-    exclude_types: Optional[List[str]] = None
+    include_types: Optional[list[str]] = None,
+    exclude_types: Optional[list[str]] = None
 ):
     """
     Filter chunks by their type.
@@ -254,8 +263,8 @@ async def filter_chunks_by_type(
 
 async def expand_with_parent_context(
     context,  # RAGPipelineContext
-    expansion_size: int = None,
-    include_siblings: bool = None
+    expansion_size: Optional[int] = None,
+    include_siblings: Optional[bool] = None
 ):
     """
     Expand chunks with parent document context.
@@ -280,7 +289,7 @@ async def expand_with_parent_context(
     include_siblings = include_siblings if include_siblings is not None else config.get("include_siblings", True)
 
     # Group chunks by parent document
-    parent_groups = {}
+    parent_groups: dict[str, list[Document]] = {}
     for doc in context.documents:
         parent_id = doc.metadata.get("parent_id") or doc.metadata.get("original_doc_id")
         if parent_id:
@@ -290,7 +299,7 @@ async def expand_with_parent_context(
 
     expanded_docs = []
 
-    for parent_id, chunks in parent_groups.items():
+    for _parent_id, chunks in parent_groups.items():
         # Sort chunks by index
         chunks.sort(key=lambda d: d.metadata.get("chunk_index", 0))
 
@@ -336,7 +345,7 @@ async def expand_with_parent_context(
 
 async def prioritize_by_chunk_type(
     context,  # RAGPipelineContext
-    type_priorities: Optional[Dict[str, float]] = None
+    type_priorities: Optional[dict[str, float]] = None
 ):
     """
     Adjust document scores based on chunk type.
@@ -367,7 +376,7 @@ async def prioritize_by_chunk_type(
     }
 
     raw_priorities = type_priorities or context.config.get("chunk_type_priorities", default_priorities)
-    priorities: Dict[str, float] = {}
+    priorities: dict[str, float] = {}
     for key, value in (raw_priorities or {}).items():
         priorities[_normalize_chunk_type(key)] = float(value)
 

@@ -152,7 +152,7 @@ def pytest_configure(config):
 # =====================================================================
 
 @pytest.fixture(autouse=True)
-def _reset_chat_rate_limiter_between_tests(monkeypatch, reset_app_overrides):
+def _reset_chat_rate_limiter_between_tests(monkeypatch):
     """Reset chat rate limiter state before each test to avoid cross-test 429s.
 
     Ensures deterministic behavior for tests that expect 200 responses by
@@ -186,10 +186,19 @@ def _reset_chat_rate_limiter_between_tests(monkeypatch, reset_app_overrides):
 # Environment Configuration
 # =====================================================================
 
-@pytest.fixture
-def test_env_vars():
-    """Placeholder for test environment variables - already set at module level."""
-    yield
+@pytest.fixture(scope="session")
+def test_env_vars(tmp_path_factory):
+    """Set deterministic env vars for Chat_NEW tests and isolate per-session user DBs."""
+    original_user_db_base = os.environ.get("USER_DB_BASE_DIR")
+    isolated_user_db_base = tmp_path_factory.mktemp("chat_new_user_databases")
+    os.environ["USER_DB_BASE_DIR"] = str(isolated_user_db_base)
+    try:
+        yield
+    finally:
+        if original_user_db_base is None:
+            os.environ.pop("USER_DB_BASE_DIR", None)
+        else:
+            os.environ["USER_DB_BASE_DIR"] = original_user_db_base
 
 # =====================================================================
 # Database Fixtures

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, Literal, Optional, TypedDict
+from typing import Any, Literal, TypedDict
 
 from .analyzers.behavioral_detector import detect_honeypots
 from .analyzers.captcha_detector import detect_captcha
@@ -19,9 +19,9 @@ ScanDepth = Literal["default", "thorough", "deep"]
 
 
 class AnalysisOutput(TypedDict):
-    results: Dict[str, Any]
-    score: Dict[str, Any]
-    recommendations: Dict[str, Any]
+    results: dict[str, Any]
+    score: dict[str, Any]
+    recommendations: dict[str, Any]
 
 
 async def gather_analysis(
@@ -29,7 +29,7 @@ async def gather_analysis(
     *,
     find_all: bool = False,
     impersonate: bool = False,
-    scan_depth: Optional[ScanDepth] = None,
+    scan_depth: ScanDepth | None = None,
 ) -> AnalysisOutput:
     """
     Run the full suite of analyzers against ``url`` and return aggregated results.
@@ -49,7 +49,7 @@ async def gather_analysis(
     rate_limit_result = await profile_rate_limits(url, crawl_delay, impersonate=impersonate)
     waf_result = detect_waf(url, find_all=find_all)
 
-    results: Dict[str, Any] = {
+    results: dict[str, Any] = {
         "robots": robots_result,
         "tls": tls_result,
         "js": js_result,
@@ -72,7 +72,7 @@ def run_analysis(
     *,
     find_all: bool = False,
     impersonate: bool = False,
-    scan_depth: Optional[ScanDepth] = None,
+    scan_depth: ScanDepth | None = None,
 ) -> AnalysisOutput:
     """
     Synchronous convenience wrapper around :func:`gather_analysis`.
@@ -80,7 +80,7 @@ def run_analysis(
     This helper should only be used when no event loop is currently running.
     """
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(
             gather_analysis(url, find_all=find_all, impersonate=impersonate, scan_depth=scan_depth)

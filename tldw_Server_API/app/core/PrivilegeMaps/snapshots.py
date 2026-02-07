@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any
 
 from loguru import logger
 
@@ -12,12 +14,33 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import TransactionError
 
 MAX_SNAPSHOT_DETAIL_ROWS = 50_000
 DETAIL_INSERT_BATCH_SIZE = 500
+_SNAPSHOT_JSON_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+    UnicodeDecodeError,
+)
+_SNAPSHOT_NUMERIC_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    OverflowError,
+    TypeError,
+    ValueError,
+)
+_SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TransactionError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 class PrivilegeSnapshotStore:
     """Database-backed snapshot store for privilege maps."""
 
-    def __init__(self, pool: Optional[DatabasePool] = None) -> None:
+    def __init__(self, pool: DatabasePool | None = None) -> None:
         self._pool = pool
         self._initialized = False
 
@@ -26,20 +49,20 @@ class PrivilegeSnapshotStore:
         *,
         page: int,
         page_size: int,
-        date_from: Optional[datetime],
-        date_to: Optional[datetime],
-        generated_by: Optional[str],
-        org_id: Optional[str],
-        team_id: Optional[str],
-        catalog_version: Optional[str],
-        scope: Optional[str],
+        date_from: datetime | None,
+        date_to: datetime | None,
+        generated_by: str | None,
+        org_id: str | None,
+        team_id: str | None,
+        catalog_version: str | None,
+        scope: str | None,
         include_counts: bool,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         pool = await self._get_pool()
         await self._ensure_schema(pool)
 
-        filters: List[str] = []
-        params: List[Any] = []
+        filters: list[str] = []
+        params: list[Any] = []
 
         if org_id:
             filters.append("org_id = ?")
@@ -94,7 +117,7 @@ class PrivilegeSnapshotStore:
             tuple(data_params),
         )
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for row in rows:
             record = self._row_to_dict(row)
             if not record:
@@ -103,7 +126,7 @@ class PrivilegeSnapshotStore:
             if include_counts and record.get("summary_json"):
                 try:
                     summary_obj = json.loads(record["summary_json"])
-                except Exception as exc:
+                except _SNAPSHOT_JSON_EXCEPTIONS as exc:
                     logger.warning("Failed to parse snapshot summary JSON: %s", exc)
                     summary_obj = None
 
@@ -141,8 +164,8 @@ class PrivilegeSnapshotStore:
 
     async def add_snapshot(
         self,
-        snapshot: Dict[str, Any],
-        detail_items: Optional[Sequence[Dict[str, Any]]] = None,
+        snapshot: dict[str, Any],
+        detail_items: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         snapshot_id = snapshot.get("snapshot_id")
         if not snapshot_id:
@@ -163,7 +186,7 @@ class PrivilegeSnapshotStore:
         scope_index = self._build_scope_index(summary)
         now_iso = self._to_iso(datetime.now(timezone.utc))
 
-        detail_payload: List[Dict[str, Any]] = []
+        detail_payload: list[dict[str, Any]] = []
         if detail_items is not None:
             # Clamp to prevent runaway storage; log if truncated.
             detail_payload = list(detail_items)[:MAX_SNAPSHOT_DETAIL_ROWS]
@@ -240,7 +263,7 @@ class PrivilegeSnapshotStore:
         self,
         conn: Any,
         snapshot_id: str,
-        detail_rows: Sequence[Dict[str, Any]],
+        detail_rows: Sequence[dict[str, Any]],
         created_at_iso: str,
     ) -> None:
         row_index = 0
@@ -272,7 +295,7 @@ class PrivilegeSnapshotStore:
         snapshot_id: str,
         page: int,
         page_size: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         pool = await self._get_pool()
         await self._ensure_schema(pool)
         row = await pool.fetchone(
@@ -298,7 +321,7 @@ class PrivilegeSnapshotStore:
         if record.get("summary_json"):
             try:
                 summary_obj = json.loads(record["summary_json"])
-            except Exception as exc:
+            except _SNAPSHOT_JSON_EXCEPTIONS as exc:
                 logger.warning("Failed to parse snapshot summary JSON: %s", exc)
                 summary_obj = None
         page = max(page, 1)
@@ -310,9 +333,9 @@ class PrivilegeSnapshotStore:
         )
         try:
             total_items = int(total_items_raw or 0)
-        except Exception:
+        except _SNAPSHOT_NUMERIC_EXCEPTIONS:
             total_items = 0
-        detail_items: List[Dict[str, Any]] = []
+        detail_items: list[dict[str, Any]] = []
         if total_items and offset < total_items:
             rows = await pool.fetchall(
                 """
@@ -352,7 +375,7 @@ class PrivilegeSnapshotStore:
         self,
         *,
         snapshot_id: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         pool = await self._get_pool()
         await self._ensure_schema(pool)
 
@@ -379,7 +402,7 @@ class PrivilegeSnapshotStore:
         if record.get("summary_json"):
             try:
                 summary_obj = json.loads(record["summary_json"])
-            except Exception as exc:
+            except _SNAPSHOT_JSON_EXCEPTIONS as exc:
                 logger.warning("Failed to parse snapshot summary JSON during export: %s", exc)
                 summary_obj = None
 
@@ -393,7 +416,7 @@ class PrivilegeSnapshotStore:
             (snapshot_id,),
         )
 
-        detail_items: List[Dict[str, Any]] = []
+        detail_items: list[dict[str, Any]] = []
         for row in rows:
             payload = self._decode_detail_json(self._row_to_dict(row).get("row_json"))
             if payload is not None:
@@ -462,7 +485,7 @@ class PrivilegeSnapshotStore:
                 await conn.execute(
                     "ALTER TABLE privilege_snapshots ADD COLUMN scope_index TEXT"
                 )
-        except Exception:
+        except _SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
         try:
@@ -470,7 +493,7 @@ class PrivilegeSnapshotStore:
                 await conn.execute(
                     "ALTER TABLE privilege_snapshots ADD COLUMN target_scope TEXT"
                 )
-        except Exception:
+        except _SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS:
             pass
 
         try:
@@ -484,13 +507,13 @@ class PrivilegeSnapshotStore:
                 await conn.execute(
                     "CREATE INDEX IF NOT EXISTS idx_priv_snapshots_team ON privilege_snapshots(team_id)"
                 )
-        except Exception as exc:
+        except _SNAPSHOT_DB_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege snapshot index creation skipped: %s", exc)
 
         self._initialized = True
 
     @staticmethod
-    def _encode_detail_item(item: Dict[str, Any]) -> str:
+    def _encode_detail_item(item: dict[str, Any]) -> str:
         def _default(obj: Any) -> Any:
             if isinstance(obj, datetime):
                 return obj.isoformat()
@@ -500,42 +523,42 @@ class PrivilegeSnapshotStore:
 
         try:
             return json.dumps(item, default=_default)
-        except Exception:
+        except (TypeError, ValueError):
             sanitized = {str(k): str(v) for k, v in item.items()}
             return json.dumps(sanitized)
 
     @staticmethod
-    def _decode_detail_json(value: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _decode_detail_json(value: str | None) -> dict[str, Any] | None:
         if not value:
             return None
         try:
             payload = json.loads(value)
             return payload if isinstance(payload, dict) else None
-        except Exception as exc:
+        except _SNAPSHOT_JSON_EXCEPTIONS as exc:
             logger.warning("Failed to decode snapshot detail payload: %s", exc)
             return None
 
     @staticmethod
-    def _row_to_dict(row: Any) -> Optional[Dict[str, Any]]:
+    def _row_to_dict(row: Any) -> dict[str, Any] | None:
         if row is None:
             return None
         if isinstance(row, dict):
             return row
         if hasattr(row, "keys"):
-            return {key: row[key] for key in row.keys()}
+            return {key: row[key] for key in row}
         if hasattr(row, "_mapping"):
             return dict(row._mapping)  # type: ignore[attr-defined]
         return None
 
     @staticmethod
-    def _parse_datetime(value: Any) -> Optional[datetime]:
+    def _parse_datetime(value: Any) -> datetime | None:
         if value is None:
             return None
         if isinstance(value, datetime):
             return value
         try:
             return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        except Exception:
+        except (TypeError, ValueError):
             return None
 
     @staticmethod
@@ -549,7 +572,7 @@ class PrivilegeSnapshotStore:
         return datetime.now(timezone.utc).isoformat()
 
     @staticmethod
-    def _build_scope_index(summary: Optional[Dict[str, Any]]) -> Optional[str]:
+    def _build_scope_index(summary: dict[str, Any] | None) -> str | None:
         if not summary:
             return None
         scope_ids = summary.get("scope_ids")

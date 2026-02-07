@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
+from fastapi import HTTPException
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
+    OrgBudgetItem,
+    OrgBudgetListResponse,
+    OrgBudgetUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits
+
+
+async def _emit_budget_audit_event(*args, **kwargs):
+    """Dispatch audit events through the admin module to preserve test monkeypatch hooks."""
+    try:
+        from tldw_Server_API.app.api.v1.endpoints import admin as admin_mod
+
+        emit_fn = getattr(admin_mod, "emit_budget_audit_event", None)
+        if callable(emit_fn):
+            return await emit_fn(*args, **kwargs)
+    except Exception:
+        pass
+
+    from tldw_Server_API.app.services.budget_audit_service import emit_budget_audit_event
+
+    return await emit_budget_audit_event(*args, **kwargs)
 
 
 _BUDGET_KEYS = {
@@ -18,7 +41,7 @@ _BUDGET_KEYS = {
 }
 
 
-def _parse_json_payload(raw: Any) -> Dict[str, Any]:
+def _parse_json_payload(raw: Any) -> dict[str, Any]:
     if raw is None:
         return {}
     if isinstance(raw, dict):
@@ -33,12 +56,12 @@ def _parse_json_payload(raw: Any) -> Dict[str, Any]:
     return {}
 
 
-def _normalize_threshold_list(values: Any) -> List[int]:
+def _normalize_threshold_list(values: Any) -> list[int]:
     if not isinstance(values, list):
         raise ValueError("Alert thresholds must be a list")
     if not values:
         raise ValueError("Alert thresholds must not be empty")
-    cleaned: List[int] = []
+    cleaned: list[int] = []
     for val in values:
         try:
             num = int(val)
@@ -50,13 +73,13 @@ def _normalize_threshold_list(values: Any) -> List[int]:
     return sorted(set(cleaned))
 
 
-def _coerce_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_alert_thresholds(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, list):
         return {"global": value}
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if "global" in value:
             out["global"] = value.get("global")
         if "per_metric" in value:
@@ -65,13 +88,13 @@ def _coerce_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _coerce_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+def _coerce_enforcement_mode(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
     if isinstance(value, str):
         return {"global": value}
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if "global" in value:
             out["global"] = value.get("global")
         if "per_metric" in value:
@@ -80,11 +103,11 @@ def _coerce_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_alert_thresholds_update(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_alert_thresholds_update(value: Any) -> dict[str, Any] | None:
     payload = _coerce_alert_thresholds(value)
     if payload is None:
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if "global" in payload:
         global_value = payload.get("global")
         if global_value is None:
@@ -98,7 +121,7 @@ def _normalize_alert_thresholds_update(value: Any) -> Optional[Dict[str, Any]]:
         elif not isinstance(per_metric, dict):
             raise ValueError("Per-metric thresholds must be a mapping")
         else:
-            cleaned: Dict[str, Any] = {}
+            cleaned: dict[str, Any] = {}
             for key, values in per_metric.items():
                 if key not in _BUDGET_KEYS:
                     raise ValueError("Unknown per-metric budget key")
@@ -110,11 +133,11 @@ def _normalize_alert_thresholds_update(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_enforcement_mode_update(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_enforcement_mode_update(value: Any) -> dict[str, Any] | None:
     payload = _coerce_enforcement_mode(value)
     if payload is None:
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if "global" in payload:
         global_value = payload.get("global")
         if global_value is None:
@@ -130,7 +153,7 @@ def _normalize_enforcement_mode_update(value: Any) -> Optional[Dict[str, Any]]:
         elif not isinstance(per_metric, dict):
             raise ValueError("Per-metric enforcement must be a mapping")
         else:
-            cleaned: Dict[str, Any] = {}
+            cleaned: dict[str, Any] = {}
             for key, value in per_metric.items():
                 if key not in _BUDGET_KEYS:
                     raise ValueError("Unknown per-metric budget key")
@@ -144,14 +167,14 @@ def _normalize_enforcement_mode_update(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_alert_thresholds_payload(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_alert_thresholds_payload(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if "global" in value and value.get("global") is not None:
         out["global"] = _normalize_threshold_list(value.get("global"))
     if "per_metric" in value and isinstance(value.get("per_metric"), dict):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, values in value.get("per_metric", {}).items():
             if key not in _BUDGET_KEYS:
                 raise ValueError("Unknown per-metric budget key")
@@ -163,10 +186,10 @@ def _normalize_alert_thresholds_payload(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_enforcement_mode_payload(value: Any) -> Optional[Dict[str, Any]]:
+def _normalize_enforcement_mode_payload(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     global_value = value.get("global")
     if global_value is not None:
         if global_value not in {"none", "soft", "hard"}:
@@ -174,7 +197,7 @@ def _normalize_enforcement_mode_payload(value: Any) -> Optional[Dict[str, Any]]:
         out["global"] = global_value
     per_metric = value.get("per_metric")
     if isinstance(per_metric, dict):
-        cleaned: Dict[str, Any] = {}
+        cleaned: dict[str, Any] = {}
         for key, per_value in per_metric.items():
             if key not in _BUDGET_KEYS:
                 raise ValueError("Unknown per-metric budget key")
@@ -188,12 +211,12 @@ def _normalize_enforcement_mode_payload(value: Any) -> Optional[Dict[str, Any]]:
     return out or None
 
 
-def _normalize_budget_payload(raw: Any) -> Dict[str, Any]:
+def _normalize_budget_payload(raw: Any) -> dict[str, Any]:
     data = _parse_json_payload(raw)
     if not data:
         return {}
 
-    budgets: Dict[str, Any] = {}
+    budgets: dict[str, Any] = {}
     if isinstance(data.get("budgets"), dict):
         budgets.update(data.get("budgets") or {})
     for key in _BUDGET_KEYS:
@@ -209,10 +232,10 @@ def _normalize_budget_payload(raw: Any) -> Dict[str, Any]:
     return payload
 
 
-def _flatten_budget_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _flatten_budget_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict) or not payload:
         return {}
-    flat: Dict[str, Any] = {}
+    flat: dict[str, Any] = {}
     if isinstance(payload.get("budgets"), dict):
         flat.update(payload.get("budgets") or {})
     else:
@@ -226,10 +249,10 @@ def _flatten_budget_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return flat
 
 
-def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
+def _inflate_budget_payload(flat: dict[str, Any]) -> dict[str, Any]:
     if not flat:
         return {}
-    payload: Dict[str, Any] = {}
+    payload: dict[str, Any] = {}
     for key in _BUDGET_KEYS:
         if key in flat:
             payload[key] = flat[key]
@@ -240,7 +263,7 @@ def _inflate_budget_payload(flat: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
-def _apply_budget_response_defaults(budgets: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_budget_response_defaults(budgets: dict[str, Any]) -> dict[str, Any]:
     """Add explicit response defaults for optional budget sub-fields."""
     if not budgets:
         return {}
@@ -248,16 +271,13 @@ def _apply_budget_response_defaults(budgets: Dict[str, Any]) -> Dict[str, Any]:
 
     thresholds = normalized.get("alert_thresholds")
     if thresholds is not None:
-        if not isinstance(thresholds, dict):
-            thresholds = {}
-        else:
-            thresholds = dict(thresholds)
+        thresholds = {} if not isinstance(thresholds, dict) else dict(thresholds)
         if thresholds.get("per_metric") is None:
             thresholds["per_metric"] = {}
         normalized["alert_thresholds"] = thresholds
 
     enforcement = normalized.get("enforcement_mode")
-    enforcement_payload: Dict[str, Any] = {}
+    enforcement_payload: dict[str, Any] = {}
     if isinstance(enforcement, dict):
         enforcement_payload.update(enforcement)
     if enforcement_payload.get("global") is None:
@@ -268,7 +288,7 @@ def _apply_budget_response_defaults(budgets: Dict[str, Any]) -> Dict[str, Any]:
     return normalized
 
 
-def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
+def _build_budget_item(row: dict[str, Any]) -> dict[str, Any]:
     plan_name = row.get("plan_name") or "free"
     plan_display_name = row.get("plan_display_name") or plan_name.title()
     plan_limits = _parse_json_payload(row.get("plan_limits_json"))
@@ -304,12 +324,98 @@ def _build_budget_item(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def list_budgets(
+    *,
+    principal: AuthPrincipal,
+    org_id: int | None,
+    page: int,
+    limit: int,
+    db,
+) -> OrgBudgetListResponse:
+    """List organization budgets and plan context."""
+    try:
+        del principal  # admin role already enforced by router dependency
+        org_ids = [org_id] if org_id is not None else None
+        items, total = await list_org_budgets(
+            db,
+            org_ids=org_ids,
+            page=page,
+            limit=limit,
+        )
+        return OrgBudgetListResponse(
+            items=[OrgBudgetItem(**item) for item in items],
+            total=total,
+            page=page,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.error(f"Failed to list org budgets: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to list org budgets") from exc
+
+
+async def upsert_budget(
+    *,
+    payload: OrgBudgetUpdateRequest,
+    request,
+    principal: AuthPrincipal,
+    db,
+) -> OrgBudgetItem:
+    """Upsert budget settings for an organization with audit logging."""
+    budget_updates = None
+    if payload.budgets is not None:
+        budget_updates = payload.budgets.model_dump(exclude_unset=True, by_alias=True)
+    try:
+        item, audit_changes = await upsert_org_budget(
+            db,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            clear_budgets=payload.clear_budgets,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "org_not_found":
+            raise HTTPException(status_code=404, detail="org_not_found") from exc
+        if detail == "plan_not_found":
+            raise HTTPException(status_code=500, detail="plan_not_found") from exc
+        if detail == "subscription_not_found":
+            raise HTTPException(status_code=500, detail="subscription_not_found") from exc
+        raise HTTPException(status_code=400, detail="invalid_budget_update") from exc
+    except Exception as exc:
+        logger.error(f"Failed to upsert org budget: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to upsert org budget") from exc
+
+    actor_role = None
+    try:
+        if principal.is_admin:
+            actor_role = "admin"
+        elif principal.roles:
+            actor_role = principal.roles[0]
+    except Exception:
+        actor_role = None
+
+    try:
+        await _emit_budget_audit_event(
+            request,
+            principal,
+            org_id=payload.org_id,
+            budget_updates=budget_updates,
+            audit_changes=audit_changes,
+            clear_budgets=payload.clear_budgets,
+            actor_role=actor_role,
+        )
+    except Exception as exc:
+        logger.error(f"Budget audit failed: {exc}")
+        raise HTTPException(status_code=500, detail="audit_failed") from exc
+
+    return OrgBudgetItem(**item)
+
+
 def merge_budget_settings(
-    existing: Dict[str, Any],
-    updates: Optional[Dict[str, Any]],
+    existing: dict[str, Any],
+    updates: dict[str, Any] | None,
     *,
     clear: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Merge budget updates into existing budget settings."""
     if clear:
         return {}
@@ -341,11 +447,11 @@ def merge_budget_settings(
     return merged
 
 
-def _merge_alert_thresholds(existing: Any, updates: Any) -> Optional[Dict[str, Any]]:
+def _merge_alert_thresholds(existing: Any, updates: Any) -> dict[str, Any] | None:
     if updates is None:
         return None
     existing_payload = existing if isinstance(existing, dict) else {}
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     if "global" in existing_payload:
         merged["global"] = existing_payload.get("global")
     if isinstance(existing_payload.get("per_metric"), dict):
@@ -379,11 +485,11 @@ def _merge_alert_thresholds(existing: Any, updates: Any) -> Optional[Dict[str, A
     return _normalize_alert_thresholds_payload(merged)
 
 
-def _merge_enforcement_mode(existing: Any, updates: Any) -> Optional[Dict[str, Any]]:
+def _merge_enforcement_mode(existing: Any, updates: Any) -> dict[str, Any] | None:
     if updates is None:
         return None
     existing_payload = existing if isinstance(existing, dict) else {}
-    merged: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
     if "global" in existing_payload:
         merged["global"] = existing_payload.get("global")
     if isinstance(existing_payload.get("per_metric"), dict):
@@ -436,12 +542,12 @@ def _infer_change_data_type(value: Any) -> str:
 
 
 def build_budget_change_log(
-    existing_budgets: Dict[str, Any],
-    merged_budgets: Dict[str, Any],
-    budget_updates: Optional[Dict[str, Any]],
+    existing_budgets: dict[str, Any],
+    merged_budgets: dict[str, Any],
+    budget_updates: dict[str, Any] | None,
     *,
     clear_budgets: bool,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Create audit-friendly change entries for budget updates."""
     if clear_budgets:
         return [
@@ -457,7 +563,7 @@ def build_budget_change_log(
     if not budget_updates:
         return []
 
-    changes: List[Dict[str, Any]] = []
+    changes: list[dict[str, Any]] = []
     for key, _ in budget_updates.items():
         if key in _BUDGET_KEYS:
             old_value = existing_budgets.get(key)
@@ -502,7 +608,7 @@ def _build_nested_changes(
     existing_value: Any,
     merged_value: Any,
     update_value: Any,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     if update_value is None:
         if existing_value is None:
             return []
@@ -527,7 +633,7 @@ def _build_nested_changes(
 
     existing_payload = existing_value if isinstance(existing_value, dict) else {}
     merged_payload = merged_value if isinstance(merged_value, dict) else {}
-    changes: List[Dict[str, Any]] = []
+    changes: list[dict[str, Any]] = []
 
     if "global" in update_payload:
         old_value = existing_payload.get("global")
@@ -559,7 +665,7 @@ def _build_nested_changes(
         elif isinstance(per_metric_update, dict):
             old_map = existing_payload.get("per_metric") if isinstance(existing_payload.get("per_metric"), dict) else {}
             new_map = merged_payload.get("per_metric") if isinstance(merged_payload.get("per_metric"), dict) else {}
-            for metric_key in per_metric_update.keys():
+            for metric_key in per_metric_update:
                 old_value = old_map.get(metric_key)
                 new_value = new_map.get(metric_key)
                 if old_value == new_value:
@@ -576,7 +682,7 @@ def _build_nested_changes(
     return changes
 
 
-async def _fetchval(db, query: str, params: List[Any]) -> Any:
+async def _fetchval(db, query: str, params: list[Any]) -> Any:
     if hasattr(db, "fetchval"):
         return await db.fetchval(query, *params)
     cur = await db.execute(query, params)
@@ -584,7 +690,7 @@ async def _fetchval(db, query: str, params: List[Any]) -> Any:
     return row[0] if row else None
 
 
-async def _fetchrow(db, query: str, params: List[Any]) -> Optional[Dict[str, Any]]:
+async def _fetchrow(db, query: str, params: list[Any]) -> dict[str, Any] | None:
     if hasattr(db, "fetchrow"):
         row = await db.fetchrow(query, *params)
         return dict(row) if row and not isinstance(row, dict) else row
@@ -593,11 +699,11 @@ async def _fetchrow(db, query: str, params: List[Any]) -> Optional[Dict[str, Any
     if not row:
         return None
     if hasattr(row, "keys"):
-        return {key: row[key] for key in row.keys()}
+        return {key: row[key] for key in row}
     return dict(row) if not isinstance(row, dict) else row
 
 
-async def _fetchrows(db, query: str, params: List[Any]) -> List[Any]:
+async def _fetchrows(db, query: str, params: list[Any]) -> list[Any]:
     if hasattr(db, "fetch"):
         return await db.fetch(query, *params)
     cur = await db.execute(query, params)
@@ -607,10 +713,10 @@ async def _fetchrows(db, query: str, params: List[Any]) -> List[Any]:
 async def list_org_budgets(
     db,
     *,
-    org_ids: Optional[List[int]],
+    org_ids: list[int] | None,
     page: int,
     limit: int,
-) -> Tuple[List[Dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], int]:
     offset = (page - 1) * limit
     pg = await is_postgres_backend()
     if pg:
@@ -623,8 +729,8 @@ async def list_org_budgets(
     if org_ids is not None and len(org_ids) == 0:
         return [], 0
 
-    conditions: List[str] = []
-    params: List[Any] = []
+    conditions: list[str] = []
+    params: list[Any] = []
     if org_ids is not None:
         if pg:
             conditions.append(f"o.id = ANY(${len(params) + 1})")
@@ -671,9 +777,9 @@ async def upsert_org_budget(
     db,
     *,
     org_id: int,
-    budget_updates: Optional[Dict[str, Any]],
+    budget_updates: dict[str, Any] | None,
     clear_budgets: bool,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     pg = await is_postgres_backend()
     if pg:
         try:

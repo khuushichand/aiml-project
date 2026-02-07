@@ -2,11 +2,11 @@
 Webhook schemas for the Evaluations API.
 """
 
-from pydantic import BaseModel, Field, HttpUrl
-from pydantic import ConfigDict
-from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class WebhookEventType(str, Enum):
@@ -24,7 +24,7 @@ class WebhookEventType(str, Enum):
 class WebhookRegistrationRequest(BaseModel):
     """Request to register a webhook."""
     url: HttpUrl = Field(..., description="Webhook endpoint URL")
-    events: List[WebhookEventType] = Field(
+    events: list[WebhookEventType] = Field(
         ...,
         description="List of events to subscribe to",
         min_length=1
@@ -62,7 +62,7 @@ class WebhookRegistrationResponse(BaseModel):
     """Response for webhook registration."""
     webhook_id: int = Field(..., description="Unique webhook identifier")
     url: str = Field(..., description="Webhook endpoint URL")
-    events: List[str] = Field(..., description="Subscribed events")
+    events: list[str] = Field(..., description="Subscribed events")
     secret: str = Field(..., description="Webhook secret (shown once)")
     active: bool = Field(..., description="Whether webhook is active")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
@@ -85,7 +85,7 @@ class WebhookRegistrationResponse(BaseModel):
 
 class WebhookUpdateRequest(BaseModel):
     """Request to update a webhook."""
-    events: Optional[List[WebhookEventType]] = Field(
+    events: Optional[list[WebhookEventType]] = Field(
         None,
         description="Updated list of events to subscribe to"
     )
@@ -99,11 +99,11 @@ class WebhookStatusResponse(BaseModel):
     """Webhook status information."""
     webhook_id: int = Field(..., description="Webhook identifier")
     url: str = Field(..., description="Webhook URL")
-    events: List[str] = Field(..., description="Subscribed events")
+    events: list[str] = Field(..., description="Subscribed events")
     active: bool = Field(..., description="Whether webhook is active")
     retry_count: Optional[int] = Field(None, description="Configured retry attempts")
     timeout_seconds: Optional[int] = Field(None, description="Delivery timeout in seconds")
-    statistics: Dict[str, Any] = Field(
+    statistics: dict[str, Any] = Field(
         ...,
         description="Delivery statistics"
     )
@@ -167,7 +167,7 @@ class WebhookPayloadSchema(BaseModel):
     event: str = Field(..., description="Event type")
     evaluation_id: str = Field(..., description="Evaluation identifier")
     timestamp: str = Field(..., description="ISO timestamp")
-    data: Dict[str, Any] = Field(..., description="Event data")
+    data: dict[str, Any] = Field(..., description="Event data")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {
@@ -188,9 +188,9 @@ class RateLimitStatusResponse(BaseModel):
     """Rate limit status for a user."""
     user_id: str = Field(..., description="User identifier")
     tier: str = Field(..., description="User tier")
-    limits: Dict[str, Any] = Field(..., description="Current limits")
-    usage: Dict[str, Any] = Field(..., description="Current usage")
-    remaining: Dict[str, Any] = Field(..., description="Remaining allowance")
+    limits: dict[str, Any] = Field(..., description="Current limits")
+    usage: dict[str, Any] = Field(..., description="Current usage")
+    remaining: dict[str, Any] = Field(..., description="Remaining allowance")
 
     model_config = ConfigDict(json_schema_extra={
         "example": {

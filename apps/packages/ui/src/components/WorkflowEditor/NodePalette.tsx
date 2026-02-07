@@ -6,38 +6,15 @@
  */
 
 import { useState, useMemo } from "react"
-import { Input, Collapse, Tooltip } from "antd"
-import {
-  Search,
-  MessageSquare,
-  Video,
-  GitBranch,
-  Layers,
-  UserCheck,
-  Globe,
-  Volume2,
-  Mic,
-  Clock,
-  Terminal,
-  GripVertical
-} from "lucide-react"
+import { Input, Collapse, Tooltip, Spin } from "antd"
+import { Search, GripVertical } from "lucide-react"
 import type { WorkflowStepType } from "@/types/workflow-editor"
+import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { getCategorizedSteps, type StepTypeMetadata } from "./step-registry"
+import { STEP_ICON_COMPONENTS, DEFAULT_STEP_ICON } from "./step-icons"
 
 // Icon mapping for the palette
-const STEP_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  MessageSquare,
-  Search,
-  Video,
-  GitBranch,
-  Layers,
-  UserCheck,
-  Globe,
-  Volume2,
-  Mic,
-  Clock,
-  Terminal
-}
+const STEP_ICONS = STEP_ICON_COMPONENTS
 
 // Category colors
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -75,7 +52,7 @@ interface PaletteItemProps {
 }
 
 const PaletteItem = ({ step, categoryColor, onDragStart }: PaletteItemProps) => {
-  const Icon = STEP_ICONS[step.icon] || MessageSquare
+  const Icon = STEP_ICONS[step.icon] || DEFAULT_STEP_ICON
   const colors = CATEGORY_COLORS[categoryColor] || CATEGORY_COLORS.gray
 
   return (
@@ -118,7 +95,14 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   const [searchQuery, setSearchQuery] = useState("")
   const [activeKeys, setActiveKeys] = useState<string[]>(["ai", "data", "control"])
 
-  const categories = useMemo(() => getCategorizedSteps(), [])
+  const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
+  const stepTypesStatus = useWorkflowEditorStore((s) => s.stepTypesStatus)
+  const stepTypesError = useWorkflowEditorStore((s) => s.stepTypesError)
+
+  const categories = useMemo(
+    () => getCategorizedSteps(stepRegistry),
+    [stepRegistry]
+  )
 
   // Filter steps by search query
   const filteredCategories = useMemo(() => {
@@ -188,10 +172,17 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
 
       {/* Node Categories */}
       <div className="flex-1 overflow-y-auto p-2">
-        {filteredCategories.length === 0 ? (
+        {stepTypesStatus === "loading" ? (
+          <div className="flex items-center justify-center py-10 text-gray-400">
+            <Spin size="small" />
+            <span className="ml-2 text-sm">Loading steps…</span>
+          </div>
+        ) : filteredCategories.length === 0 ? (
           <div className="text-center text-gray-400 py-8">
             <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No nodes found</p>
+            <p className="text-sm">
+              {stepTypesError ? "Unable to load step types" : "No nodes found"}
+            </p>
           </div>
         ) : (
           <Collapse

@@ -2,41 +2,41 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
 
 
 @dataclass(frozen=True)
 class ScopeContext:
     """Represents the active authorization scope for content operations."""
 
-    user_id: Optional[int]
-    org_ids: List[int]
-    team_ids: List[int]
-    active_org_id: Optional[int]
-    active_team_id: Optional[int]
+    user_id: int | None
+    org_ids: list[int]
+    team_ids: list[int]
+    active_org_id: int | None
+    active_team_id: int | None
     is_admin: bool = False
-    session_role: Optional[str] = None
+    session_role: str | None = None
 
     @property
-    def effective_org_id(self) -> Optional[int]:
+    def effective_org_id(self) -> int | None:
         if self.active_org_id is not None:
             return self.active_org_id
         return self.org_ids[0] if self.org_ids else None
 
     @property
-    def effective_team_id(self) -> Optional[int]:
+    def effective_team_id(self) -> int | None:
         if self.active_team_id is not None:
             return self.active_team_id
         return self.team_ids[0] if self.team_ids else None
 
 
-def _ordered_unique_ints(values: Iterable[int]) -> List[int]:
+def _ordered_unique_ints(values: Iterable[int]) -> list[int]:
     """Return integers in first-seen order without duplicates."""
     seen: set[int] = set()
-    ordered: List[int] = []
+    ordered: list[int] = []
     for value in values:
         if value is None:
             continue
@@ -51,18 +51,18 @@ def _ordered_unique_ints(values: Iterable[int]) -> List[int]:
     return ordered
 
 
-_SCOPE_CTX: ContextVar[Optional[ScopeContext]] = ContextVar("content_scope_ctx", default=None)
+_SCOPE_CTX: ContextVar[ScopeContext | None] = ContextVar("content_scope_ctx", default=None)
 
 
 def set_scope(
     *,
-    user_id: Optional[int],
+    user_id: int | None,
     org_ids: Iterable[int] = (),
     team_ids: Iterable[int] = (),
-    active_org_id: Optional[int] = None,
-    active_team_id: Optional[int] = None,
+    active_org_id: int | None = None,
+    active_team_id: int | None = None,
     is_admin: bool = False,
-    session_role: Optional[str] = None,
+    session_role: str | None = None,
 ) -> Token:
     """Set the current scope context and return a token for later reset."""
     org_list = _ordered_unique_ints(org_ids)
@@ -85,7 +85,7 @@ def reset_scope(token: Token) -> None:
     _SCOPE_CTX.reset(token)
 
 
-def get_scope() -> Optional[ScopeContext]:
+def get_scope() -> ScopeContext | None:
     """Return the currently active scope (if any)."""
     return _SCOPE_CTX.get()
 

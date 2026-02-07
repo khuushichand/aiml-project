@@ -4,14 +4,17 @@
 # Imports
 import re
 import unicodedata
-from typing import Optional, List, Tuple
-from email_validator import validate_email as _validate_email, EmailNotValidError
+from typing import Optional
+
+from email_validator import EmailNotValidError
+from email_validator import validate_email as _validate_email
+
 #
 # 3rd-party imports
 from loguru import logger
+
 #
 # Local imports
-from tldw_Server_API.app.core.AuthNZ.exceptions import RegistrationError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 #######################################################################################################################
@@ -61,7 +64,7 @@ class InputValidator:
 
         logger.debug("InputValidator initialized with security rules")
 
-    def validate_username(self, username: str) -> Tuple[bool, Optional[str]]:
+    def validate_username(self, username: str) -> tuple[bool, Optional[str]]:
         """
         Validate username against security rules
 
@@ -117,7 +120,7 @@ class InputValidator:
 
         return True, None
 
-    def validate_email(self, email: str) -> Tuple[bool, Optional[str]]:
+    def validate_email(self, email: str) -> tuple[bool, Optional[str]]:
         """
         Validate email address with security focus
 
@@ -211,7 +214,7 @@ class InputValidator:
 
         return ''.join(sanitized)
 
-    def validate_password_reset_token(self, token: str) -> Tuple[bool, Optional[str]]:
+    def validate_password_reset_token(self, token: str) -> tuple[bool, Optional[str]]:
         """
         Validate password reset token format
 
@@ -262,13 +265,9 @@ class InputValidator:
         username_chars = set(username)
 
         # Check for high-risk pairs - if both characters from a pair are present
-        for char1, char2 in high_risk_pairs:
-            if char1 in username_chars and char2 in username_chars:
-                return True
+        return any(char1 in username_chars and char2 in username_chars for char1, char2 in high_risk_pairs)
 
-        return False
-
-    def validate_registration_code(self, code: str) -> Tuple[bool, Optional[str]]:
+    def validate_registration_code(self, code: str) -> tuple[bool, Optional[str]]:
         """
         Validate registration code format
 
@@ -305,12 +304,12 @@ def get_input_validator() -> InputValidator:
     return _input_validator
 
 
-def validate_username(username: str) -> Tuple[bool, Optional[str]]:
+def validate_username(username: str) -> tuple[bool, Optional[str]]:
     """Convenience function to validate username"""
     return get_input_validator().validate_username(username)
 
 
-def validate_email(email: str) -> Tuple[bool, Optional[str]]:
+def validate_email(email: str) -> tuple[bool, Optional[str]]:
     """Convenience function to validate email"""
     return get_input_validator().validate_email(email)
 

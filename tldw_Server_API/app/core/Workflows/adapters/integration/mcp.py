@@ -8,20 +8,30 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
-from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_artifacts_dir,
-    normalize_str_list,
-    extract_mcp_policy,
-    tool_matches_allowlist,
-    extract_tool_scopes,
-)
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import MCPToolConfig
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.Workflows.adapters._common import (
+    extract_mcp_policy,
+    extract_tool_scopes,
+    normalize_str_list,
+    resolve_artifacts_dir,
+    tool_matches_allowlist,
+)
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import MCPToolConfig
+
+_MCP_ADAPTER_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 @registry.register(
@@ -32,7 +42,7 @@ from tldw_Server_API.app.core.exceptions import AdapterError
     tags=["integration", "mcp"],
     config_model=MCPToolConfig,
 )
-async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_mcp_tool_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute an MCP tool via the unified server registry.
 
     Config:
@@ -72,9 +82,9 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
                         module = mod
                         module_id = mid
                         break
-                except Exception:
+                except _MCP_ADAPTER_NONCRITICAL_EXCEPTIONS:
                     continue
-        except Exception:
+        except _MCP_ADAPTER_NONCRITICAL_EXCEPTIONS:
             pass
 
     tool_def = None
@@ -85,7 +95,7 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
                 if tool.get("name") == tool_name:
                     tool_def = tool
                     break
-        except Exception as exc:
+        except _MCP_ADAPTER_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"MCP tool adapter: failed to get tool definitions for {tool_name}: {exc}")
 
     required_scopes = extract_tool_scopes(tool_def)
@@ -116,11 +126,11 @@ async def run_mcp_tool_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
             context["add_artifact"](
                 type="mcp_result",
                 uri=f"file://{fpath}",
-                size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                size_bytes=len(fpath.read_bytes() if fpath.exists() else b""),
                 mime_type="application/json",
                 metadata={"tool_name": tool_name, "module": module_id},
             )
-    except Exception:
+    except _MCP_ADAPTER_NONCRITICAL_EXCEPTIONS:
         pass
 
     return {"result": result, "module": module_id}

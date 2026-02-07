@@ -9,10 +9,10 @@ import base64
 import binascii
 import io
 import json
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
-from PIL import Image
 from loguru import logger
+from PIL import Image
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -28,9 +28,9 @@ from .character_utils import (
 
 
 def _prepare_character_data_for_db_storage(
-    input_data: Dict[str, Any],
+    input_data: dict[str, Any],
     is_update: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Prepares character data (from a dictionary, often derived from a Pydantic model)
     for DB insertion/update. Handles 'image_base64' to bytes conversion and ensures
@@ -79,47 +79,54 @@ def _prepare_character_data_for_db_storage(
             else:
                 try:
                     image_bytes = base64.b64decode(base64_str_clean, validate=True)
+                    try:
+                        # Verify decoded bytes are a real image before accepting them.
+                        with Image.open(io.BytesIO(image_bytes)) as verify_img:
+                            verify_img.verify()
+                    except Exception as img_err:
+                        logger.error("Invalid image_base64 data for character: {}", img_err)
+                        raise InputError("Invalid image_base64 data: decoded payload is not a valid image") from img_err
 
                     try:
-                        img = Image.open(io.BytesIO(image_bytes))
-                        has_alpha = "A" in img.getbands()
-                        if has_alpha and img.mode != "RGBA":
-                            img = img.convert("RGBA")
-                        elif not has_alpha and img.mode not in ["RGB", "L"]:
-                            img = img.convert("RGB")
+                        with Image.open(io.BytesIO(image_bytes)) as img:
+                            has_alpha = "A" in img.getbands()
+                            if has_alpha and img.mode != "RGBA":
+                                img = img.convert("RGBA")
+                            elif not has_alpha and img.mode not in ["RGB", "L"]:
+                                img = img.convert("RGB")
 
-                        max_size = (512, 768)
-                        if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
-                            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                            max_size = (512, 768)
+                            if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                                logger.info(
+                                    "Resized character image from %s to fit within %s",
+                                    img.size,
+                                    max_size,
+                                )
+
+                            output = io.BytesIO()
+                            if has_alpha:
+                                # Use lossless compression for images with alpha to preserve transparency
+                                img.save(
+                                    output,
+                                    format="WEBP",
+                                    lossless=True,
+                                    method=6,
+                                )
+                            else:
+                                img.save(
+                                    output,
+                                    format="WEBP",
+                                    quality=85,
+                                    method=6,
+                                    optimize=True,
+                                )
+                            db_data["image"] = output.getvalue()
                             logger.info(
-                                "Resized character image from %s to fit within %s",
-                                img.size,
-                                max_size,
+                                "Optimized character image: %s -> %s bytes",
+                                len(image_bytes),
+                                len(db_data["image"]),
                             )
-
-                        output = io.BytesIO()
-                        if has_alpha:
-                            # Use lossless compression for images with alpha to preserve transparency
-                            img.save(
-                                output,
-                                format="WEBP",
-                                lossless=True,
-                                method=6,
-                            )
-                        else:
-                            img.save(
-                                output,
-                                format="WEBP",
-                                quality=85,
-                                method=6,
-                                optimize=True,
-                            )
-                        db_data["image"] = output.getvalue()
-                        logger.info(
-                            "Optimized character image: %s -> %s bytes",
-                            len(image_bytes),
-                            len(db_data["image"]),
-                        )
                     except Exception as img_err:
                         logger.warning("Could not optimise image, using original bytes: {}", img_err)
                         db_data["image"] = image_bytes
@@ -131,7 +138,7 @@ def _prepare_character_data_for_db_storage(
                         )
                     else:
                         logger.error("Invalid image_base64 data for character: {}", exc)
-                        raise InputError(f"Invalid image_base64 data: {exc}")
+                        raise InputError(f"Invalid image_base64 data: {exc}") from exc
         else:
             db_data["image"] = None
     elif not is_update and "image" not in db_data:
@@ -173,7 +180,7 @@ def _prepare_character_data_for_db_storage(
     return db_data
 
 
-def create_new_character_from_data(db: CharactersRAGDB, character_payload: Dict[str, Any]) -> Optional[int]:
+def create_new_character_from_data(db: CharactersRAGDB, character_payload: dict[str, Any]) -> Optional[int]:
     """Create a new character in the database from a dictionary payload."""
 
     try:
@@ -202,7 +209,7 @@ def create_new_character_from_data(db: CharactersRAGDB, character_payload: Dict[
         raise CharactersRAGDBError(f"Unexpected error creating character: {exc}") from exc
 
 
-def get_character_details(db: CharactersRAGDB, character_id: int) -> Optional[Dict[str, Any]]:
+def get_character_details(db: CharactersRAGDB, character_id: int) -> Optional[dict[str, Any]]:
     """Retrieve full character details by ID."""
 
     try:
@@ -218,7 +225,7 @@ def get_character_details(db: CharactersRAGDB, character_id: int) -> Optional[Di
 def update_existing_character_details(
     db: CharactersRAGDB,
     character_id: int,
-    update_payload: Dict[str, Any],
+    update_payload: dict[str, Any],
     expected_version: int,
 ) -> bool:
     """
@@ -295,7 +302,7 @@ def search_characters_by_query_text(
     db: CharactersRAGDB,
     search_term: str,
     limit: int = 10,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Search character cards using FTS based on the search term."""
 
     try:
@@ -312,7 +319,7 @@ def load_character_and_image(
     db: CharactersRAGDB,
     character_id: int,
     user_name: Optional[str],
-) -> Tuple[Optional[Dict[str, Any]], List[Tuple[Optional[str], Optional[str]]], Optional[Image.Image]]:
+) -> tuple[Optional[dict[str, Any]], list[tuple[Optional[str], Optional[str]]], Optional[Image.Image]]:
     """
     Load character data, first message chat history, and optional image.
     Placeholders are processed using the supplied user name.
@@ -358,7 +365,7 @@ def load_character_and_image(
                 user_name,
             )
 
-        chat_history: List[Tuple[Optional[str], Optional[str]]] = [(None, first_mes_content)]
+        chat_history: list[tuple[Optional[str], Optional[str]]] = [(None, first_mes_content)]
 
         img: Optional[Image.Image] = None
         image_field = char_data.get("image")
@@ -406,7 +413,7 @@ def load_character_wrapper(
     db: CharactersRAGDB,
     character_id_or_ui_choice: Union[int, str],
     user_name: Optional[str],
-) -> Tuple[Optional[Dict[str, Any]], List[Tuple[Optional[str], Optional[str]]], Optional[Image.Image]]:
+) -> tuple[Optional[dict[str, Any]], list[tuple[Optional[str], Optional[str]]], Optional[Image.Image]]:
     """Wrapper around load_character_and_image accepting either an ID or UI string."""
 
     try:

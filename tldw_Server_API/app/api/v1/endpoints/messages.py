@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
-from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, status
 from loguru import logger
 from starlette.responses import JSONResponse, StreamingResponse
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.api.v1.schemas.anthropic_messages import (
+    AnthropicCountTokensRequest,
+    AnthropicMessagesRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.core.AuthNZ.byok_config import merge_app_config_overrides
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
@@ -19,8 +26,14 @@ from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
     get_override_credentials,
     validate_provider_override,
 )
-from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_and_model
-from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call_async,
+    resolve_provider_and_model,
+    resolve_provider_api_key,
+)
+from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.http_client import create_async_client as async_http_client_factory
 from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     anthropic_messages_to_openai,
     anthropic_tool_choice_to_openai,
@@ -29,17 +42,6 @@ from tldw_Server_API.app.core.LLM_Calls.anthropic_messages import (
     openai_stream_to_anthropic,
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-from tldw_Server_API.app.core.http_client import create_client as http_client_factory
-from tldw_Server_API.app.core.http_client import create_async_client as async_http_client_factory
-from tldw_Server_API.app.core.config import loaded_config_data
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
-from tldw_Server_API.app.api.v1.schemas.anthropic_messages import (
-    AnthropicCountTokensRequest,
-    AnthropicMessagesRequest,
-)
-from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
-
 
 router = APIRouter()
 public_router = APIRouter()
@@ -56,10 +58,10 @@ logger.debug(
 )
 
 
-def _config_default_llm_provider() -> Optional[str]:
+def _config_default_llm_provider() -> str | None:
     """Return the default LLM provider from loaded config sections."""
     cfg = loaded_config_data
-    def _extract(section: str) -> Optional[str]:
+    def _extract(section: str) -> str | None:
         """Extract default_api from a config section if present."""
         try:
             data = cfg.get(section)
@@ -88,7 +90,7 @@ def _get_default_provider() -> str:
     return DEFAULT_LLM_PROVIDER
 
 
-def _resolve_messages_base_url(provider: str, app_config: Optional[Dict[str, Any]]) -> str:
+def _resolve_messages_base_url(provider: str, app_config: dict[str, Any] | None) -> str:
     """Resolve the base URL for a messages-native provider."""
     cfg = app_config or loaded_config_data
     if provider == "anthropic":
@@ -144,7 +146,7 @@ def _normalize_llamacpp_base_url(base_url: str) -> str:
     return normalized
 
 
-def _resolve_provider_and_model_for_request(request_data: Any) -> Tuple[str, str]:
+def _resolve_provider_and_model_for_request(request_data: Any) -> tuple[str, str]:
     """Resolve provider/model pair from the request payload."""
     _, metrics_model, selected_provider, selected_model, _debug = resolve_provider_and_model(
         request_data=request_data,
@@ -156,7 +158,7 @@ def _resolve_provider_and_model_for_request(request_data: Any) -> Tuple[str, str
     return provider, model
 
 
-def _fallback_resolver(name: str) -> Optional[str]:
+def _fallback_resolver(name: str) -> str | None:
     """Fallback API key resolver for BYOK lookups."""
     key_val, _ = resolve_provider_api_key(name, prefer_module_keys_in_tests=True)
     return key_val
@@ -164,10 +166,10 @@ def _fallback_resolver(name: str) -> Optional[str]:
 
 def _apply_override_credentials(
     provider: str,
-    app_config_override: Optional[Dict[str, Any]],
+    app_config_override: dict[str, Any] | None,
     *,
     uses_byok: bool,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """Apply provider override credentials to a config payload."""
     override_creds = get_override_credentials(provider)
     if not override_creds or not override_creds.get("credential_fields") or uses_byok:
@@ -201,9 +203,9 @@ def _apply_override_credentials(
     )
 
 
-def _resolve_llamacpp_api_key(app_config: Optional[Dict[str, Any]]) -> Optional[str]:
+def _resolve_llamacpp_api_key(app_config: dict[str, Any] | None) -> str | None:
     """Resolve the llama.cpp API key from app config fallbacks."""
-    def _from_cfg(cfg: Any) -> Optional[str]:
+    def _from_cfg(cfg: Any) -> str | None:
         """Extract the llama.cpp API key from a config mapping."""
         try:
             llama = cfg.get("llama_api")
@@ -223,7 +225,7 @@ def _resolve_llamacpp_api_key(app_config: Optional[Dict[str, Any]]) -> Optional[
     return None
 
 
-def _resolve_native_timeout(provider: str, app_config: Optional[Dict[str, Any]]) -> Optional[float]:
+def _resolve_native_timeout(provider: str, app_config: dict[str, Any] | None) -> float | None:
     """Resolve timeout values for native Messages providers."""
     cfg = app_config or loaded_config_data
     section = "anthropic_api" if provider == "anthropic" else "llama_api"
@@ -243,11 +245,11 @@ def _resolve_native_timeout(provider: str, app_config: Optional[Dict[str, Any]])
 
 def _build_native_headers(
     provider: str,
-    api_key: Optional[str],
+    api_key: str | None,
     *,
-    anthropic_version: Optional[str],
-    anthropic_beta: Optional[str],
-) -> Dict[str, str]:
+    anthropic_version: str | None,
+    anthropic_beta: str | None,
+) -> dict[str, str]:
     """Build headers for native Messages provider calls."""
     headers = {"Content-Type": "application/json"}
     if provider == "anthropic":
@@ -284,9 +286,9 @@ def _build_openai_call_params(
     request_data: AnthropicMessagesRequest,
     provider: str,
     model: str,
-    app_config: Optional[Dict[str, Any]],
-    api_key: Optional[str],
-) -> Dict[str, Any]:
+    app_config: dict[str, Any] | None,
+    api_key: str | None,
+) -> dict[str, Any]:
     """Build OpenAI-compatible call parameters from Messages input."""
     messages_payload, system_message = anthropic_messages_to_openai(
         [m.model_dump(exclude_none=True) for m in request_data.messages],
@@ -297,7 +299,7 @@ def _build_openai_call_params(
     ) if request_data.tools else None
     tool_choice = anthropic_tool_choice_to_openai(request_data.tool_choice)
 
-    call_params: Dict[str, Any] = {
+    call_params: dict[str, Any] = {
         "api_provider": provider,
         "model": model,
         "messages": messages_payload,
@@ -316,7 +318,7 @@ def _build_openai_call_params(
     return call_params
 
 
-def _prepare_native_payload(request_data: Any, *, model: str) -> Dict[str, Any]:
+def _prepare_native_payload(request_data: Any, *, model: str) -> dict[str, Any]:
     """Prepare payload for native Messages providers."""
     payload = request_data.model_dump(exclude_none=True)
     payload.pop("api_provider", None)
@@ -324,20 +326,103 @@ def _prepare_native_payload(request_data: Any, *, model: str) -> Dict[str, Any]:
     return payload
 
 
-async def _proxy_native_stream(
-    url: str,
-    headers: Dict[str, str],
-    payload: Dict[str, Any],
+def _map_native_upstream_exception(
+    exc: Exception,
     *,
-    timeout: Optional[float] = None,
-) -> AsyncIterator[bytes]:
-    """Proxy streaming responses from native Messages providers."""
-    async with async_http_client_factory(timeout=timeout) as client:
-        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+    provider: str,
+    operation: str,
+) -> HTTPException:
+    """Translate upstream HTTP/network errors into stable API errors."""
+
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if not isinstance(status_code, int) or not (400 <= status_code <= 599):
+        status_code = status.HTTP_502_BAD_GATEWAY
+
+    detail: dict[str, Any] = {
+        "error_code": "upstream_provider_error",
+        "provider": provider,
+        "operation": operation,
+        "message": f"Upstream provider '{provider}' request failed.",
+    }
+
+    upstream_error: Any | None = None
+    if response is not None:
+        with contextlib.suppress(Exception):
+            data = response.json()
+            if isinstance(data, (dict, list)):
+                upstream_error = data
+        if upstream_error is None:
+            with contextlib.suppress(Exception):
+                text = response.text
+                if isinstance(text, str) and text.strip():
+                    upstream_error = text[:2000]
+    if upstream_error is not None:
+        detail["upstream_error"] = upstream_error
+
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+async def _native_post_json(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    timeout: float | None,
+    provider: str,
+    operation: str,
+) -> Any:
+    """Execute a native provider POST and map upstream failures consistently."""
+    try:
+        async with async_http_client_factory(timeout=timeout) as client:
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
-            async for chunk in resp.aiter_raw():
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_native_upstream_exception(exc, provider=provider, operation=operation) from exc
+
+
+async def _prepare_native_stream_iterator(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    timeout: float | None,
+    provider: str,
+    operation: str,
+) -> AsyncIterator[bytes]:
+    """Open a native provider stream and preflight status before returning an iterator."""
+    client_cm = async_http_client_factory(timeout=timeout)
+    client = await client_cm.__aenter__()
+    stream_cm = None
+    response = None
+    try:
+        stream_cm = client.stream("POST", url, headers=headers, json=payload)
+        response = await stream_cm.__aenter__()
+        response.raise_for_status()
+    except Exception as exc:
+        if stream_cm is not None:
+            with contextlib.suppress(Exception):
+                await stream_cm.__aexit__(type(exc), exc, exc.__traceback__)
+        with contextlib.suppress(Exception):
+            await client_cm.__aexit__(type(exc), exc, exc.__traceback__)
+        raise _map_native_upstream_exception(exc, provider=provider, operation=operation) from exc
+
+    async def _iter() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in response.aiter_raw():  # type: ignore[union-attr]
                 if chunk:
                     yield chunk
+        finally:
+            if stream_cm is not None:
+                with contextlib.suppress(Exception):
+                    await stream_cm.__aexit__(None, None, None)
+            with contextlib.suppress(Exception):
+                await client_cm.__aexit__(None, None, None)
+
+    return _iter()
 
 
 async def _resolve_credentials_for_request(
@@ -346,7 +431,7 @@ async def _resolve_credentials_for_request(
     request: Request,
     *,
     operation: str,
-) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+) -> tuple[str | None, dict[str, Any] | None]:
     """Resolve API key and config overrides for a Messages request."""
     user_id_int = getattr(current_user, "id_int", None)
     if user_id_int is None:
@@ -388,8 +473,8 @@ async def _handle_messages(
     *,
     current_user: User,
     request: Request,
-    anthropic_version: Optional[str],
-    anthropic_beta: Optional[str],
+    anthropic_version: str | None,
+    anthropic_beta: str | None,
 ) -> JSONResponse | StreamingResponse:
     """Handle an Anthropic-compatible Messages request."""
     provider, model = _resolve_provider_and_model_for_request(request_data)
@@ -417,14 +502,26 @@ async def _handle_messages(
         )
         stream = _extract_stream_flag(request_data.stream)
         if stream:
+            stream_iter = await _prepare_native_stream_iterator(
+                url,
+                headers,
+                payload,
+                timeout=timeout,
+                provider=provider,
+                operation="messages.stream",
+            )
             return StreamingResponse(
-                _proxy_native_stream(url, headers, payload, timeout=timeout),
+                stream_iter,
                 media_type="text/event-stream",
             )
-        async with async_http_client_factory(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await _native_post_json(
+            url,
+            headers,
+            payload,
+            timeout=timeout,
+            provider=provider,
+            operation="messages",
+        )
         return JSONResponse(data)
 
     # Non-native providers: convert to OpenAI-compatible request
@@ -455,8 +552,8 @@ async def _handle_count_tokens(
     *,
     current_user: User,
     request: Request,
-    anthropic_version: Optional[str],
-    anthropic_beta: Optional[str],
+    anthropic_version: str | None,
+    anthropic_beta: str | None,
 ) -> JSONResponse:
     """Handle an Anthropic-compatible count_tokens request."""
     provider, model = _resolve_provider_and_model_for_request(request_data)
@@ -487,10 +584,14 @@ async def _handle_count_tokens(
         anthropic_version=anthropic_version,
         anthropic_beta=anthropic_beta,
     )
-    async with async_http_client_factory(timeout=timeout) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _native_post_json(
+        url,
+        headers,
+        payload,
+        timeout=timeout,
+        provider=provider,
+        operation="messages.count_tokens",
+    )
     return JSONResponse(data)
 
 
@@ -503,8 +604,8 @@ async def create_messages(
     request: Request,
     request_data: AnthropicMessagesRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
+    anthropic_version: str | None = Header(None, alias="anthropic-version"),
+    anthropic_beta: str | None = Header(None, alias="anthropic-beta"),
 ):
     """Create an Anthropic-compatible Messages response."""
     return await _handle_messages(
@@ -525,8 +626,8 @@ async def create_messages_public(
     request: Request,
     request_data: AnthropicMessagesRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
+    anthropic_version: str | None = Header(None, alias="anthropic-version"),
+    anthropic_beta: str | None = Header(None, alias="anthropic-beta"),
 ):
     """Public endpoint for Anthropic-compatible Messages."""
     return await _handle_messages(
@@ -547,8 +648,8 @@ async def count_tokens(
     request: Request,
     request_data: AnthropicCountTokensRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
+    anthropic_version: str | None = Header(None, alias="anthropic-version"),
+    anthropic_beta: str | None = Header(None, alias="anthropic-beta"),
 ):
     """Return token counts for Messages inputs."""
     return await _handle_count_tokens(
@@ -569,8 +670,8 @@ async def count_tokens_public(
     request: Request,
     request_data: AnthropicCountTokensRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    anthropic_beta: Optional[str] = Header(None, alias="anthropic-beta"),
+    anthropic_version: str | None = Header(None, alias="anthropic-version"),
+    anthropic_beta: str | None = Header(None, alias="anthropic-beta"),
 ):
     """Public endpoint for Anthropic-compatible count_tokens."""
     return await _handle_count_tokens(

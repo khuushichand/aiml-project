@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
-from typing import Dict, List, Optional
-from urllib.parse import urlparse
 from datetime import datetime
+from functools import lru_cache
+from urllib.parse import urlparse
 
 
 class URLScorer:
@@ -43,7 +42,7 @@ class PathDepthScorer(URLScorer):
 
 @dataclass
 class KeywordRelevanceScorer(URLScorer):
-    keywords: List[str]
+    keywords: list[str]
     weight: float = 1.0
 
     def __post_init__(self) -> None:
@@ -100,7 +99,7 @@ class ContentTypeScorer(URLScorer):
 @dataclass
 class FreshnessScorer(URLScorer):
     weight: float = 1.0
-    current_year: Optional[int] = None
+    current_year: int | None = None
 
     def __post_init__(self) -> None:
         if self.current_year is None:
@@ -108,7 +107,7 @@ class FreshnessScorer(URLScorer):
 
     @staticmethod
     @lru_cache(maxsize=10000)
-    def _extract_year_cached(url: str, current_year: int) -> Optional[int]:
+    def _extract_year_cached(url: str, current_year: int) -> int | None:
         """Extract the most recent <= current_year 4-digit year from URL path."""
         try:
             path = (urlparse(url).path or "").lower()
@@ -143,7 +142,7 @@ class FreshnessScorer(URLScorer):
 
 @dataclass
 class DomainAuthorityScorer(URLScorer):
-    domain_weights: Dict[str, float]
+    domain_weights: dict[str, float]
     default_weight: float = 0.5
     weight: float = 1.0
 
@@ -165,10 +164,10 @@ class DomainAuthorityScorer(URLScorer):
 
 
 class CompositeScorer(URLScorer):
-    def __init__(self, scorers: List[URLScorer], normalize: bool = True) -> None:
+    def __init__(self, scorers: list[URLScorer], normalize: bool = True) -> None:
         self.scorers = scorers or []
         self.normalize = normalize
-        self._cache: Dict[str, float] = {}
+        self._cache: dict[str, float] = {}
 
     def score(self, url: str) -> float:
         if url in self._cache:

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 # Import centralized test configuration
 import sys
-import json
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from test_config import test_config
 
@@ -13,7 +13,7 @@ test_config.setup_test_environment()
 test_config.reset_settings()
 
 from fastapi import FastAPI
-from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as eval_router
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as eval_router
 
 # Build a minimal app that mounts only the evaluations router to avoid importing unrelated modules
 app = FastAPI()

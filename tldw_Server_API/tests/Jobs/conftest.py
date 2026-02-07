@@ -164,7 +164,7 @@ def jobs_pg_dsn(pg_temp_db, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pg_jobs_db_url(request, pg_temp_db, monkeypatch):
+def _pg_jobs_db_url(request, monkeypatch):
     """Provide JOBS_DB_URL for pg_jobs tests that don't request jobs_pg_dsn."""
     try:
         if "pg_jobs" not in request.keywords:
@@ -174,6 +174,7 @@ def _pg_jobs_db_url(request, pg_temp_db, monkeypatch):
     # Default to the per-test temp DB for pg_jobs, unless explicitly overridden.
     if _truthy(os.getenv("JOBS_PG_USE_ENV_DB")) and os.getenv("JOBS_DB_URL", "").startswith("postgres"):
         return
+    pg_temp_db = request.getfixturevalue("pg_temp_db")
     dsn = str(pg_temp_db["dsn"])  # type: ignore[index]
     monkeypatch.setenv("JOBS_DB_URL", dsn)
     from tldw_Server_API.app.core.Jobs.pg_migrations import ensure_jobs_tables_pg, ensure_job_counters_pg

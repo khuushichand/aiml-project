@@ -5,8 +5,9 @@ Return signature follows project convention. Requires `SPRINGER_NATURE_API_KEY`.
 from __future__ import annotations
 
 import os
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
+
+from tldw_Server_API.app.core.http_client import fetch_json
 
 
 def _missing_key_error() -> str:
@@ -16,7 +17,7 @@ def _missing_key_error() -> str:
 BASE_URL = "https://api.springernature.com/metadata/json"
 
 
-def _join_authors(creators: Any) -> Optional[str]:
+def _join_authors(creators: Any) -> str | None:
     try:
         names = []
         for c in creators or []:
@@ -28,15 +29,14 @@ def _join_authors(creators: Any) -> Optional[str]:
         return None
 
 
-def _pdf_url(urls: Any) -> Optional[str]:
+def _pdf_url(urls: Any) -> str | None:
     for u in urls or []:
-        if (u.get("format") or "").lower() == "pdf":
-            if u.get("value"):
-                return u.get("value")
+        if (u.get("format") or "").lower() == "pdf" and u.get("value"):
+            return u.get("value")
     return None
 
 
-def _normalize_record(rec: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_record(rec: dict[str, Any]) -> dict[str, Any]:
     doi = rec.get("doi")
     return {
         "id": doi or rec.get("identifier"),
@@ -53,19 +53,19 @@ def _normalize_record(rec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_springer(
-    q: Optional[str],
+    q: str | None,
     offset: int,
     limit: int,
-    journal: Optional[str] = None,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
-) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
+    journal: str | None = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
+) -> tuple[list[dict] | None, int, str | None]:
     api_key = os.getenv("SPRINGER_NATURE_API_KEY")
     if not api_key:
         return None, 0, _missing_key_error()
     try:
         # Springer uses 'q' with fielded query; 'p' page size, 's' start index
-        q_parts: List[str] = []
+        q_parts: list[str] = []
         if q:
             q_parts.append(q)
         if journal:
@@ -81,7 +81,7 @@ def search_springer(
             elif lo:
                 q_parts.append(f"year:{lo}")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "api_key": api_key,
             "p": limit,
             "s": offset,
@@ -103,7 +103,7 @@ def search_springer(
         return None, 0, f"Springer error: {str(e)}"
 
 
-def get_springer_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_springer_by_doi(doi: str) -> tuple[dict | None, str | None]:
     api_key = os.getenv("SPRINGER_NATURE_API_KEY")
     if not api_key:
         return None, _missing_key_error()

@@ -1,5 +1,6 @@
+import json
 from math import ceil
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from fastapi import (
     APIRouter,
@@ -14,6 +15,7 @@ from fastapi import (
 )
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import (
     get_media_db_for_user,
     try_get_media_db_for_user,
@@ -24,7 +26,6 @@ from tldw_Server_API.app.api.v1.schemas.media_response_models import (
     MediaListResponse,
 )
 from tldw_Server_API.app.api.v1.utils.cache import generate_etag, is_not_modified
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_DELETE
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
@@ -40,8 +41,29 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 )
 from tldw_Server_API.app.core.Utils.metadata_utils import normalize_safe_metadata
 
-
 router = APIRouter(tags=["Media Management"])
+
+_MEDIA_LISTING_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_MEDIA_LISTING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 try:
@@ -55,7 +77,7 @@ def _is_test_mode() -> bool:
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode_impl
 
         return bool(_is_test_mode_impl())
-    except Exception:
+    except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -78,7 +100,7 @@ async def list_media_endpoint(
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Return paginated list of active media items (basic fields only).
 
@@ -99,7 +121,7 @@ async def list_media_endpoint(
                     bool(headers.get("X-API-KEY")),
                     bool(headers.get("authorization")),
                 )
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_files(
@@ -123,14 +145,14 @@ async def list_media_endpoint(
                     try:
                         response.headers["X-TLDW-DB-Path"] = str(db_path)
                         response.headers["X-TLDW-List-Total"] = str(int(total_items))
-                    except Exception:
+                    except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                         pass
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Build base items and collect IDs for keyword lookup
-        base_items: List[Dict[str, Any]] = []
-        media_ids: List[int] = []
+        base_items: list[dict[str, Any]] = []
+        media_ids: list[int] = []
         skipped_count = 0
         for r in rows or []:
             rid_raw = r["id"] if isinstance(r, dict) else r[0]
@@ -157,7 +179,7 @@ async def list_media_endpoint(
         #   None  -> keywords not requested (omitted from response)
         #   True  -> keywords successfully retrieved or no items to fetch
         #   False -> keyword retrieval failed (graceful degradation)
-        keywords_map: Dict[int, List[str]] = {}
+        keywords_map: dict[int, list[str]] = {}
         keywords_available: Optional[bool] = None
         if include_keywords and media_ids:
             try:
@@ -197,10 +219,10 @@ async def list_media_endpoint(
             keywords_available = True
 
         # Build response items, including keywords only when requested
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for item in base_items:
             mid = item["id"]
-            base_payload: Dict[str, Any] = {
+            base_payload: dict[str, Any] = {
                 "id": mid,
                 "title": item["title"],
                 "type": item["type"],
@@ -210,7 +232,7 @@ async def list_media_endpoint(
                 base_payload["keywords"] = keywords_map.get(mid, [])
             items.append(base_payload)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "items": items,
             "pagination": {
                 "page": int(current_page),
@@ -259,7 +281,7 @@ async def list_media_trash_endpoint(
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Return paginated list of trashed media items (basic fields only).
     """
@@ -276,7 +298,7 @@ async def list_media_trash_endpoint(
                     bool(headers.get("X-API-KEY")),
                     bool(headers.get("authorization")),
                 )
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         rows, total_pages, current_page, total_items = get_paginated_trash_files(
@@ -299,13 +321,13 @@ async def list_media_trash_endpoint(
                     try:
                         response.headers["X-TLDW-DB-Path"] = str(db_path)
                         response.headers["X-TLDW-List-Total"] = str(int(total_items))
-                    except Exception:
+                    except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                         pass
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
-        base_items: List[Dict[str, Any]] = []
-        media_ids: List[int] = []
+        base_items: list[dict[str, Any]] = []
+        media_ids: list[int] = []
         skipped_count = 0
         for r in rows or []:
             rid_raw = r["id"] if isinstance(r, dict) else r[0]
@@ -326,7 +348,7 @@ async def list_media_trash_endpoint(
                 }
             )
 
-        keywords_map: Dict[int, List[str]] = {}
+        keywords_map: dict[int, list[str]] = {}
         keywords_available: Optional[bool] = None
         if include_keywords and media_ids:
             try:
@@ -345,7 +367,7 @@ async def list_media_trash_endpoint(
                 )
                 keywords_map = {}
                 keywords_available = False
-            except Exception as exc:  # pragma: no cover
+            except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
                 logger.error(
                     "Unexpected error fetching keywords for media trash list page={} rpp={}: {}",
                     page,
@@ -358,10 +380,10 @@ async def list_media_trash_endpoint(
         elif include_keywords:
             keywords_available = True
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for item in base_items:
             mid = item["id"]
-            base_payload: Dict[str, Any] = {
+            base_payload: dict[str, Any] = {
                 "id": mid,
                 "title": item["title"],
                 "type": item["type"],
@@ -371,7 +393,7 @@ async def list_media_trash_endpoint(
                 base_payload["keywords"] = keywords_map.get(mid, [])
             items.append(base_payload)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "items": items,
             "pagination": {
                 "page": int(current_page),
@@ -416,7 +438,7 @@ async def empty_media_trash_endpoint(
     response: Response,
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Permanently delete all items currently in trash.
     """
@@ -428,7 +450,7 @@ async def empty_media_trash_endpoint(
         media_ids = [row["id"] for row in rows] if rows else []
 
         deleted_count = 0
-        failed_ids: List[int] = []
+        failed_ids: list[int] = []
         for media_id in media_ids:
             try:
                 deleted = permanently_delete_item(db, int(media_id))
@@ -436,7 +458,7 @@ async def empty_media_trash_endpoint(
                     deleted_count += 1
                 else:
                     failed_ids.append(int(media_id))
-            except Exception as exc:
+            except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(
                     "Error permanently deleting trashed media {}: {}",
                     media_id,
@@ -452,7 +474,7 @@ async def empty_media_trash_endpoint(
             )
             count_row = count_cursor.fetchone()
             remaining_count = count_row["total_items"] if count_row else 0
-        except Exception:
+        except _MEDIA_LISTING_NONCRITICAL_EXCEPTIONS:
             pass
 
         logger.warning(
@@ -506,14 +528,14 @@ async def search_by_metadata(
     per_page: int = Query(20, ge=1, le=100),
     db: MediaDatabase = Depends(get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Search media items based on version safe_metadata fields and identifier indices.
 
     Mirrors the legacy implementation while adding basic ETag support.
     """
     try:
-        flt_list: List[Dict[str, Any]] = []
+        flt_list: list[dict[str, Any]] = []
         import json as _json
 
         if filters:
@@ -556,7 +578,7 @@ async def search_by_metadata(
             "ArXiv",
         }
         canonical_order = ("doi", "pmid", "pmcid", "arxiv_id", "s2_paper_id")
-        normalized_filters: List[Dict[str, Any]] = []
+        normalized_filters: list[dict[str, Any]] = []
         for f in flt_list or []:
             try:
                 fld = f.get("field")
@@ -595,10 +617,10 @@ async def search_by_metadata(
             if isinstance(sm, str):
                 try:
                     r["safe_metadata"] = _json.loads(sm)
-                except Exception:
+                except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                     r["safe_metadata"] = None
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "results": rows,
             "pagination": {
                 "page": page,
@@ -637,7 +659,7 @@ async def _validate_identifier_query(
 
     Uses normalize_safe_metadata which raises ValueError for invalid DOI/PMID/PMCID.
     """
-    raw: Dict[str, Any] = {}
+    raw: dict[str, Any] = {}
     if doi is not None:
         raw["doi"] = doi
     if pmid is not None:
@@ -681,13 +703,13 @@ async def get_by_identifier(
     group_by_media: bool = Query(True),
     db: Optional[MediaDatabase] = Depends(try_get_media_db_for_user),
     if_none_match: Optional[str] = Header(None),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Quick lookup by canonical identifiers. Returns latest matching version per media by default.
     """
     try:
-        flt_list: List[Dict[str, Any]] = []
-        raw_filters: List[Dict[str, Any]] = []
+        flt_list: list[dict[str, Any]] = []
+        raw_filters: list[dict[str, Any]] = []
         if doi:
             raw_filters.append({"field": "doi", "op": "eq", "value": doi})
         if pmid:
@@ -746,10 +768,10 @@ async def get_by_identifier(
             if isinstance(sm, str):
                 try:
                     r["safe_metadata"] = _json.loads(sm)
-                except Exception:
+                except _MEDIA_LISTING_COERCE_EXCEPTIONS:
                     r["safe_metadata"] = None
 
-        payload: Dict[str, Any] = {"results": rows, "total": total}
+        payload: dict[str, Any] = {"results": rows, "total": total}
         etag = generate_etag(payload)
         response.headers["ETag"] = etag
         if is_not_modified(etag, if_none_match):

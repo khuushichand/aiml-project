@@ -7,30 +7,29 @@ DEPRECATION NOTICE:
 - Please switch to: `tldw-evals` (recommended) or `python -m tldw_Server_API.cli.evals_cli`.
 """
 
-import sys
+import contextlib
 import json
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+import sys
+import warnings
 from collections import defaultdict
+from typing import Any, Optional
 
 import click
 from loguru import logger
-import warnings
 from tabulate import tabulate
 
-from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
-from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
-from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
-    get_available_apis,
-    validate_api_config,
-    get_api_model,
-    get_configured_apis,
-    get_default_api,
-    format_api_info
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
+from tldw_Server_API.app.core.Evaluations.cli.api_utils import (
+    format_api_info,
+    get_api_model,
+    get_available_apis,
+    get_default_api,
+    validate_api_config,
+)
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -40,21 +39,31 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     split_system_message,
 )
 
-
 DEPRECATION_MSG = (
     "DEPRECATION: This CLI is deprecated. Use 'tldw-evals' or 'python -m tldw_Server_API.cli.evals_cli' instead.\n"
+)
+
+_EVALS_CLI_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ChatConfigurationError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
 )
 
 
 def _call_adapter_text(
     *,
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     temperature: Optional[float] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     timeout: Optional[float] = None,
     **extra_kwargs: Any,
 ) -> str:
@@ -66,7 +75,7 @@ def _call_adapter_text(
     if not resolved_model:
         raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
     system_message, cleaned_messages = split_system_message(messages_payload or [])
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_message,
         "model": resolved_model,
@@ -88,14 +97,12 @@ def _call_adapter_text(
 def cli(ctx, config, log_level):
     """tldw Evaluations CLI (deprecated) - Run evaluation benchmarks."""
     # Emit deprecation warning
-    try:
+    with contextlib.suppress(RuntimeError, ValueError, Warning):
         warnings.warn(
             "This CLI module is deprecated; use tldw_Server_API.cli.evals_cli instead.",
             DeprecationWarning,
             stacklevel=2,
         )
-    except Exception:
-        pass
     click.secho(DEPRECATION_MSG, fg='yellow', err=True)
     # Configure logging
     logger.remove()
@@ -189,7 +196,7 @@ def list_benchmarks(detailed):
 def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_run):
     """Run a benchmark evaluation using specified API."""
     registry = ctx.obj['registry']
-    manager = ctx.obj['manager']
+    ctx.obj['manager']
 
     # Check if benchmark exists
     config = registry.get(benchmark)
@@ -236,7 +243,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
     try:
         dataset = load_benchmark_dataset(benchmark, limit=limit)
         click.echo(f"Loaded {len(dataset)} samples")
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error loading dataset: {e}", err=True)
         sys.exit(1)
 
@@ -306,7 +313,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                     score_match = re.search(r'([0-9]*\.?[0-9]+)', response_text)
                     score = float(score_match.group(1)) if score_match else 0.5
                     score = max(0.0, min(1.0, score))  # Clamp to [0, 1]
-                except Exception as e:
+                except (AttributeError, TypeError, ValueError) as e:
                     logger.debug(f"Failed to parse score from LLM response; defaulting to 0.5. error={e}")
                     score = 0.5  # Default score if parsing fails
 
@@ -322,7 +329,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
                 }
                 results.append(result)
 
-            except Exception as e:
+            except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error evaluating sample {i}: {e}")
                 results.append({
                     "sample_id": sample.get("id", i),
@@ -346,7 +353,7 @@ def run(ctx, benchmark, limit, api, model, system_prompt, output, parallel, dry_
     else:
         avg_score = min_score = max_score = 0.0
 
-    click.echo(f"\nResults:")
+    click.echo("\nResults:")
     click.echo(f"  Total samples: {len(results)}")
     click.echo(f"  Successful: {len(scores)}")
     click.echo(f"  Errors: {errors_count}")
@@ -397,7 +404,7 @@ def register(name, config_file):
         registry.register(config)
         click.echo(f"Registered benchmark: {name}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error registering benchmark: {e}", err=True)
         sys.exit(1)
 
@@ -443,14 +450,14 @@ def validate(benchmark, samples):
             # Try formatting a sample
             if dataset:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     click.echo("Sample formatted successfully for evaluation")
-                except Exception as e:
+                except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                     click.echo(f"Warning: Could not format sample: {e}", err=True)
         else:
             click.echo("Warning: Evaluator not available for this type", err=True)
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
@@ -510,10 +517,10 @@ def test_api(api_name, test_prompt, model, system_prompt):
         else:
             response_text = str(response)
 
-        click.echo(f"✓ API responded successfully")
+        click.echo("✓ API responded successfully")
         click.echo(f"Response: {response_text[:500]}..." if len(response_text) > 500 else f"Response: {response_text}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"✗ API test failed: {e}", err=True)
         sys.exit(1)
 
@@ -552,7 +559,7 @@ def health():
 
         click.echo("\nSystem health: OK")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

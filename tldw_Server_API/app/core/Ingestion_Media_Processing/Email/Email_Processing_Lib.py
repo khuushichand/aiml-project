@@ -9,28 +9,48 @@ Stage 1 scope:
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional, Tuple
-
+import contextlib
+import io
+import mailbox
 import os
 import re
-import io
-import zipfile
 import tempfile
-import mailbox
+import zipfile
 from email import policy
-from email.message import Message, EmailMessage
-from email.parser import BytesParser
 from email.header import decode_header, make_header
+from email.message import EmailMessage, Message
+from email.parser import BytesParser
 from email.utils import getaddresses
+from typing import Any
 
-from tldw_Server_API.app.core.Utils.Utils import logging
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import DEFAULT_MEDIA_TYPE_CONFIG
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Utils.Utils import logging
+
+_EMAIL_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    mailbox.Error,
+    zipfile.BadZipFile,
+)
 
 try:
     import html2text as _html2text
-except Exception:
+except ImportError:
     _html2text = None  # Optional dependency; fallback stripping will apply
 
 # Compatibility shim for Python 3.13 EmailMessage/contentmanager API changes
@@ -56,8 +76,8 @@ try:  # pragma: no cover - defensive guard
     # Additionally patch the active policy content manager mapping so any
     # pre-bound handler for Message objects also ignores 'maintype'.
     try:
-        from email.message import Message as _EMessage  # local alias
         from email import policy as _epolicy
+        from email.message import Message as _EMessage  # local alias
         _cm_inst = getattr(_epolicy.default, 'content_manager', None)
         if _cm_inst and hasattr(_cm_inst, 'set_handlers'):
             _orig_handler = _cm_inst.set_handlers.get(_EMessage)
@@ -68,10 +88,10 @@ try:  # pragma: no cover - defensive guard
                     return _orig_handler(msg, obj, *args, **kwargs)
 
                 _cm_inst.set_handlers[_EMessage] = _compat_handler  # type: ignore[index]
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         # best-effort; if anything fails, fall back to add_attachment shim below
         pass
-except Exception:
+except _EMAIL_NONCRITICAL_EXCEPTIONS:
     pass
 
 # Also guard add_attachment path for message/rfc822 to drop 'maintype' kwarg
@@ -86,16 +106,16 @@ try:  # pragma: no cover
             return _orig_add_attachment(self, content, *args, **kwargs)
 
         _OrigEmailMessage.add_attachment = _compat_add_attachment  # type: ignore[assignment]
-except Exception:
+except _EMAIL_NONCRITICAL_EXCEPTIONS:
     pass
 
 
-def _decode_mime_header(value: Optional[str]) -> str:
+def _decode_mime_header(value: str | None) -> str:
     if not value:
         return ""
     try:
         return str(make_header(decode_header(value))).strip()
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         return value.strip()
 
 
@@ -104,20 +124,18 @@ def _addresses_from_header(msg: Message, header_name: str) -> str:
         raw_values = msg.get_all(header_name, [])
         pairs = getaddresses(raw_values)
         # Keep only email part for storage/search; join with comma+space
-        emails: List[str] = []
-        for name, email_addr in pairs:
+        emails: list[str] = []
+        for _name, email_addr in pairs:
             if email_addr and "@" in email_addr:
                 emails.append(email_addr)
         return ", ".join(emails)
-    except Exception as e:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.debug(f"Failed to parse addresses from {header_name}: {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_warning_events_total",
                 labels={"component": "email_ingest", "event": "addresses_parse_failed"},
             )
-        except Exception:
-            pass
         return ""
 
 
@@ -129,12 +147,12 @@ def _part_payload_to_text(part: Message) -> str:
     for enc in [charset, "utf-8", "latin-1"]:
         try:
             return payload.decode(enc, errors="ignore")
-        except Exception:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             continue
     # Fallback
     try:
         return payload.decode("utf-8", errors="ignore")
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         return ""
 
 
@@ -150,7 +168,7 @@ def _html_to_text(html: str) -> str:
             return conv.handle(html)
         # Very light fallback: strip tags
         return re.sub(r"<[^>]+>", " ", html)
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         return html
 
 
@@ -159,7 +177,7 @@ def parse_eml_bytes(
     filename: str = "email.eml",
     *,
     return_children: bool = False,
-) -> Tuple[str, Dict[str, Any], List[Tuple[bytes, str]]]:
+) -> tuple[str, dict[str, Any], list[tuple[bytes, str]]]:
     """
     Parse EML bytes and return (content_text, metadata_dict).
     metadata_dict contains email-specific fields in metadata['email'].
@@ -177,18 +195,18 @@ def parse_eml_bytes(
     fmt = (msg.get_content_type() or "message/rfc822").strip()
 
     # Flatten headers map with unfolded values
-    headers_map: Dict[str, Any] = {}
+    headers_map: dict[str, Any] = {}
     try:
         for k, v in msg.items():
             headers_map[k] = _decode_mime_header(v)
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Bodies and attachments
-    text_parts: List[str] = []
-    html_first: Optional[str] = None
-    attachments_meta: List[Dict[str, Any]] = []
-    child_emls: List[Tuple[bytes, str]] = []  # (bytes, filename)
+    text_parts: list[str] = []
+    html_first: str | None = None
+    attachments_meta: list[dict[str, Any]] = []
+    child_emls: list[tuple[bytes, str]] = []  # (bytes, filename)
 
     if msg.is_multipart():
         for part in msg.walk():
@@ -199,7 +217,7 @@ def parse_eml_bytes(
             if cdisp == "attachment" or filename_part:
                 try:
                     raw = part.get_payload(decode=True) or b""
-                except Exception:
+                except _EMAIL_NONCRITICAL_EXCEPTIONS:
                     raw = b""
                 attachments_meta.append({
                     "name": _decode_mime_header(filename_part) if filename_part else (part.get("Content-ID") or "unknown_file_name"),
@@ -223,15 +241,13 @@ def parse_eml_bytes(
                         if child_bytes:
                             child_name = _decode_mime_header(filename_part) if filename_part else "attached.eml"
                             child_emls.append((child_bytes, child_name))
-                    except Exception as ce:
+                    except _EMAIL_NONCRITICAL_EXCEPTIONS as ce:
                         logging.debug(f"Failed to capture nested EML bytes: {ce}")
-                        try:
+                        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                             get_metrics_registry().increment(
                                 "app_warning_events_total",
                                 labels={"component": "email_ingest", "event": "nested_eml_capture_failed"},
                             )
-                        except Exception:
-                            pass
                 continue
 
             if ctype == "text/plain":
@@ -250,7 +266,7 @@ def parse_eml_bytes(
     if not text_content and html_first:
         text_content = _html_to_text(html_first)
 
-    metadata: Dict[str, Any] = {
+    metadata: dict[str, Any] = {
         "title": subject or (filename.rsplit(".", 1)[0] if filename else "Untitled Email"),
         "author": from_addr or "Unknown",
         "parser_used": "builtin-email",
@@ -276,24 +292,24 @@ def process_email_task(
     *,
     file_bytes: bytes,
     filename: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Process EML bytes and produce a normalized dict (no DB interaction).
     """
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": filename,
         "media_type": "email",
@@ -334,15 +350,13 @@ def process_email_task(
                     chunks = [{"text": content_text, "metadata": {"chunk_num": 0}}]
                     result["warnings"].append("Chunking yielded no results; using full text.")
                 result["chunks"] = chunks
-            except Exception as e:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                 logging.error(f"Email chunking failed for {filename}: {e}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_exception_events_total",
                         labels={"component": "email_ingest", "event": "chunking_failed"},
                     )
-                except Exception:
-                    pass
                 result["warnings"].append(f"Chunking failed: {e}")
                 result["chunks"] = [{"text": content_text, "metadata": {"chunk_num": 0, "error": str(e)}}]
         elif content_text:
@@ -363,20 +377,18 @@ def process_email_task(
                 )
                 if analysis_text and isinstance(analysis_text, str):
                     result["analysis"] = analysis_text
-            except Exception as e:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                 logging.warning(f"Email analysis failed for {filename}: {e}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "email_ingest", "event": "analysis_failed"},
                     )
-                except Exception:
-                    pass
                 result["warnings"].append(f"Analysis failed: {e}")
 
         # Optionally parse nested email attachments recursively (children are returned in 'children' key)
         if ingest_attachments and max_depth > 1 and child_emls:
-            children_results: List[Dict[str, Any]] = []
+            children_results: list[dict[str, Any]] = []
             for child_bytes, child_name in child_emls:
                 try:
                     child_res = process_email_task(
@@ -397,21 +409,19 @@ def process_email_task(
                         max_depth=max_depth - 1,
                     )
                     children_results.append(child_res)
-                except Exception as ce:
+                except _EMAIL_NONCRITICAL_EXCEPTIONS as ce:
                     logging.debug(f"Failed to process child EML '{child_name}': {ce}")
-                    try:
+                    with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "email_ingest", "event": "child_process_failed"},
                         )
-                    except Exception:
-                        pass
             if children_results:
                 result["children"] = children_results
 
         result["status"] = "Success"
         return result
-    except Exception as e:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Failed processing email '{filename}': {e}", exc_info=True)
         result["status"] = "Error"
         result["error"] = str(e)
@@ -422,28 +432,28 @@ def process_eml_archive_bytes(
     *,
     file_bytes: bytes,
     archive_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Process a ZIP archive of EML files and return a list of per-email result dicts.
     Applies basic guardrails on member count and uncompressed size using archive config limits.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     try:
         zf = zipfile.ZipFile(io.BytesIO(file_bytes), 'r')
-    except Exception as e:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Invalid or unreadable archive '{archive_name}': {e}")
         return [{
             "status": "Error",
@@ -483,7 +493,7 @@ def process_eml_archive_bytes(
         try:
             if group_tag not in base_keywords:
                 base_keywords.append(group_tag)
-        except Exception:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             pass
 
     for member in members:
@@ -495,7 +505,7 @@ def process_eml_archive_bytes(
             continue
         try:
             eml_bytes = zf.read(member)
-        except Exception as e:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
             results.append({
                 "status": "Error",
                 "input_ref": f"{archive_name}::{member.filename}",
@@ -533,8 +543,8 @@ def process_eml_archive_bytes(
             kws = set(one.get("keywords") or [])
             if group_tag:
                 kws.add(group_tag)
-            one["keywords"] = sorted(list(kws))
-        except Exception:
+            one["keywords"] = sorted(kws)
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             pass
         results.append(one)
 
@@ -545,26 +555,26 @@ def process_mbox_bytes(
     *,
     file_bytes: bytes,
     mbox_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Process an MBOX file (bytes) and return a list of per-email result dicts.
     Uses Python's mailbox.mbox by writing bytes to a temporary file. Applies guardrails
     using the same DEFAULT_MEDIA_TYPE_CONFIG['archive'] limits used for ZIP archives.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Guardrails based on archive limits
     cfg = DEFAULT_MEDIA_TYPE_CONFIG.get('archive', {}) if isinstance(DEFAULT_MEDIA_TYPE_CONFIG, dict) else {}
@@ -581,7 +591,7 @@ def process_mbox_bytes(
                 "processing_source": f"mbox:{mbox_name}",
                 "error": f"MBOX declared size exceeds limit ({len(file_bytes)} > {max_uncompressed_size} bytes)",
             }]
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         pass
 
     group_tag = f"email_mbox:{mbox_name.rsplit('.', 1)[0]}" if mbox_name else None
@@ -590,7 +600,7 @@ def process_mbox_bytes(
         try:
             if group_tag not in base_keywords:
                 base_keywords.append(group_tag)
-        except Exception:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             pass
 
     tmp_path = None
@@ -605,7 +615,7 @@ def process_mbox_bytes(
         # Iterate messages with cap; stage successes, and if cap exceeded, emit a single guardrail error only
         count = 0
         limit_exceeded = False
-        staged: List[Dict[str, Any]] = []
+        staged: list[dict[str, Any]] = []
         for msg in mbox:
             count += 1
             if count > max_internal_files:
@@ -615,10 +625,10 @@ def process_mbox_bytes(
             try:
                 try:
                     child_bytes = msg.as_bytes(policy=policy.default)  # type: ignore[attr-defined]
-                except Exception:
+                except _EMAIL_NONCRITICAL_EXCEPTIONS:
                     # Fallback: use legacy as_bytes without policy
                     child_bytes = msg.as_bytes()  # type: ignore[attr-defined]
-            except Exception as e:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                 staged.append({
                     "status": "Error",
                     "input_ref": f"{mbox_name}::message_{count}",
@@ -654,8 +664,8 @@ def process_mbox_bytes(
                 kws = set(one.get("keywords") or [])
                 if group_tag:
                     kws.add(group_tag)
-                one["keywords"] = sorted(list(kws))
-            except Exception:
+                one["keywords"] = sorted(kws)
+            except _EMAIL_NONCRITICAL_EXCEPTIONS:
                 pass
             staged.append(one)
 
@@ -670,15 +680,13 @@ def process_mbox_bytes(
             }]
         # Otherwise, return the staged results
         results.extend(staged)
-    except Exception as e:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Invalid or unreadable MBOX '{mbox_name}': {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_exception_events_total",
                 labels={"component": "email_ingest", "event": "mbox_read_failed"},
             )
-        except Exception:
-            pass
         return [{
             "status": "Error",
             "input_ref": mbox_name,
@@ -691,27 +699,23 @@ def process_mbox_bytes(
         try:
             if mbox is not None:
                 mbox.close()
-        except Exception:
-            try:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "mbox_close_failed"},
                 )
-            except Exception:
-                pass
         # Cleanup temp file
         try:
             if tmp_path:
                 import os
                 os.unlink(tmp_path)
-        except Exception:
-            try:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "mbox_tmp_cleanup_failed"},
                 )
-            except Exception:
-                pass
 
     return results
 
@@ -720,20 +724,20 @@ def process_pst_bytes(
     *,
     file_bytes: bytes,
     pst_name: str,
-    title_override: Optional[str] = None,
-    author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    title_override: str | None = None,
+    author_override: str | None = None,
+    keywords: list[str] | None = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: dict[str, Any] | None = None,
     perform_analysis: bool = False,
-    api_name: Optional[str] = None,
-    api_key: Optional[str] = None,
-    custom_prompt: Optional[str] = None,
-    system_prompt: Optional[str] = None,
+    api_name: str | None = None,
+    api_key: str | None = None,
+    custom_prompt: str | None = None,
+    system_prompt: str | None = None,
     summarize_recursively: bool = False,
     ingest_attachments: bool = False,
     max_depth: int = 1,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     PST/OST container handler with optional pypff integration.
     - If pypff is unavailable, returns a clear informative error (feature-flag behavior).
@@ -747,7 +751,7 @@ def process_pst_bytes(
         try:
             if group_tag not in base_keywords:
                 base_keywords.append(group_tag)
-        except Exception:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Guardrails from archive config
@@ -766,13 +770,13 @@ def process_pst_bytes(
                 "keywords": base_keywords,
                 "error": f"PST/OST file exceeds size limit ({len(file_bytes)} > {max_uncompressed_size} bytes)",
             }]
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Try to import pypff
     try:
         import pypff  # type: ignore
-    except Exception:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS:
         return [{
             "status": "Error",
             "input_ref": pst_name,
@@ -782,7 +786,7 @@ def process_pst_bytes(
             "error": "PST/OST support not enabled. Install and configure 'pypff' (libpff) or integrate 'readpst' for parsing.",
         }]
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     # Write bytes to a temp file for pypff
     tmp_path = None
@@ -798,11 +802,11 @@ def process_pst_bytes(
         # Access root folder
         try:
             root = pst.get_root_folder()
-        except Exception:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS:
             root = getattr(pst, 'root_folder', None)
 
         # Traverse folders and messages up to max_internal_files
-        stack: List[Any] = []
+        stack: list[Any] = []
         if root is not None:
             stack.append(root)
 
@@ -829,12 +833,12 @@ def process_pst_bytes(
                             if callable(getter):
                                 try:
                                     sub = getter(i)
-                                except Exception:
+                                except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                     sub = None
                                 break
                         if sub is not None:
                             stack.append(sub)
-            except Exception:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Iterate messages
@@ -875,13 +879,13 @@ def process_pst_bytes(
                             continue
 
                         # Extract basic fields with broad compatibility
-                        def _get(obj, names: List[str]) -> Optional[str]:
+                        def _get(obj, names: list[str]) -> str | None:
                             for n in names:
                                 v = getattr(obj, n, None)
                                 if callable(v):
                                     try:
                                         v = v()
-                                    except Exception:
+                                    except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                         v = None
                                 if isinstance(v, (str, bytes)):
                                     return v.decode("utf-8", errors="ignore") if isinstance(v, (bytes, bytearray)) else v
@@ -893,9 +897,9 @@ def process_pst_bytes(
                         plain_body = _get(msg, ["get_plain_text_body", "plain_text_body", "body"])
                         html_body = _get(msg, ["get_html_body", "html_body"]) if not plain_body else None
                         # Recipients
-                        recipients_to: List[str] = []
-                        recipients_cc: List[str] = []
-                        recipients_bcc: List[str] = []
+                        recipients_to: list[str] = []
+                        recipients_cc: list[str] = []
+                        recipients_bcc: list[str] = []
                         try:
                             # Common pypff APIs
                             num_rcpts = 0
@@ -914,7 +918,7 @@ def process_pst_bytes(
                                     if callable(getter):
                                         try:
                                             rcpt = getter(ri)
-                                        except Exception:
+                                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                             rcpt = None
                                         break
                                 if rcpt is None:
@@ -928,7 +932,7 @@ def process_pst_bytes(
                                     if callable(tv):
                                         try:
                                             rcpt_type = int(tv())
-                                        except Exception:
+                                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                             rcpt_type = None
                                     elif isinstance(tv, int):
                                         rcpt_type = int(tv)
@@ -938,7 +942,7 @@ def process_pst_bytes(
                                     recipients_cc.append(rcpt_email)
                                 elif rcpt_type == 4 and rcpt_email:
                                     recipients_bcc.append(rcpt_email)
-                        except Exception:
+                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Date
                         msg_date = _get(msg, ["get_delivery_time", "delivery_time", "get_client_submit_time", "client_submit_time"]) or None
@@ -951,13 +955,14 @@ def process_pst_bytes(
                         if subject:
                             em["Subject"] = subject
                         # Normalize and set recipients once
-                        def _norm_list(vals: List[str]) -> List[str]:
+                        def _norm_list(vals: list[str]) -> list[str]:
                             uniq = []
                             seen = set()
                             for v in vals or []:
                                 s = (v or "").strip().lower()
                                 if s and s not in seen:
-                                    seen.add(s); uniq.append(s)
+                                    seen.add(s)
+                                    uniq.append(s)
                             return uniq
                         recipients_to = _norm_list(recipients_to)
                         recipients_cc = _norm_list(recipients_cc)
@@ -975,7 +980,7 @@ def process_pst_bytes(
                             try:
                                 # Normalize to RFC2822
                                 from datetime import timezone
-                                from email.utils import parsedate_to_datetime, format_datetime
+                                from email.utils import format_datetime, parsedate_to_datetime
                                 dt = None
                                 if hasattr(msg_date, 'isoformat'):
                                     dt = msg_date  # datetime-like
@@ -992,23 +997,23 @@ def process_pst_bytes(
                                 else:
                                     date_header_value = str(msg_date)
                                     em["Date"] = date_header_value
-                            except Exception:
+                            except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                 try:
                                     date_header_value = str(msg_date)
                                     em["Date"] = date_header_value
-                                except Exception:
+                                except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                     pass
                         if plain_body:
                             em.set_content(plain_body)
                         elif html_body:
                             try:
                                 em.add_alternative(html_body, subtype="html")
-                            except Exception:
+                            except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                 em.set_content(html_body)
                         else:
                             em.set_content("")
                         # Collect attachment metadata (no bytes loaded)
-                        attachments_meta: List[Dict[str, Any]] = []
+                        attachments_meta: list[dict[str, Any]] = []
                         try:
                             num_att = 0
                             for an in ("get_number_of_attachments", "number_of_attachments"):
@@ -1026,7 +1031,7 @@ def process_pst_bytes(
                                     if callable(gv):
                                         try:
                                             att = gv(ai)
-                                        except Exception:
+                                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                             att = None
                                         break
                                 if att is None:
@@ -1038,7 +1043,7 @@ def process_pst_bytes(
                                     if callable(sv):
                                         try:
                                             size = int(sv())
-                                        except Exception:
+                                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                                             size = None
                                         break
                                     if isinstance(sv, int):
@@ -1050,11 +1055,11 @@ def process_pst_bytes(
                                     "content_type": content_type,
                                     "size": size,
                                 })
-                        except Exception:
+                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             attachments_meta = []
                         try:
                             child_bytes = em.as_bytes(policy=policy.default)
-                        except Exception:
+                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             child_bytes = em.as_bytes()
 
                         count += 1
@@ -1083,8 +1088,8 @@ def process_pst_bytes(
                             kws = set(one.get("keywords") or [])
                             if group_tag:
                                 kws.add(group_tag)
-                            one["keywords"] = sorted(list(kws))
-                        except Exception:
+                            one["keywords"] = sorted(kws)
+                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Augment metadata with PST-derived recipients/date/attachments for robustness
                         try:
@@ -1108,10 +1113,10 @@ def process_pst_bytes(
                                     emd["date"] = date_header_value
                                 md["email"] = emd
                                 one["metadata"] = md
-                        except Exception:
+                        except _EMAIL_NONCRITICAL_EXCEPTIONS:
                             pass
                         results.append(one)
-                    except Exception as e:
+                    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
                         results.append({
                             "status": "Error",
                             "input_ref": f"{pst_name}::message_{count+1}",
@@ -1120,7 +1125,7 @@ def process_pst_bytes(
                             "keywords": base_keywords,
                             "error": f"Failed to extract PST message: {e}",
                         })
-            except Exception:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS:
                 continue
 
         return results or [{
@@ -1131,15 +1136,13 @@ def process_pst_bytes(
             "keywords": base_keywords,
             "error": "No messages found in PST/OST.",
         }]
-    except Exception as e:
+    except _EMAIL_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Invalid or unreadable PST/OST '{pst_name}': {e}")
-        try:
+        with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "app_exception_events_total",
                 labels={"component": "email_ingest", "event": "pst_read_failed"},
             )
-        except Exception:
-            pass
         return [{
             "status": "Error",
             "input_ref": pst_name,
@@ -1152,24 +1155,20 @@ def process_pst_bytes(
         if pst is not None:
             try:
                 pst.close()
-            except Exception as close_err:
+            except _EMAIL_NONCRITICAL_EXCEPTIONS as close_err:
                 logging.warning(f"Failed to close PST/OST reader for '{pst_name}': {close_err}")
-                try:
+                with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "email_ingest", "event": "pst_close_failed"},
                     )
-                except Exception:
-                    pass
         try:
             if tmp_path:
                 os.unlink(tmp_path)
-        except Exception as cleanup_err:
+        except _EMAIL_NONCRITICAL_EXCEPTIONS as cleanup_err:
             logging.warning(f"Failed to remove temporary PST/OST file '{tmp_path}': {cleanup_err}")
-            try:
+            with contextlib.suppress(_EMAIL_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "app_warning_events_total",
                     labels={"component": "email_ingest", "event": "pst_tmp_cleanup_failed"},
                 )
-            except Exception:
-                pass

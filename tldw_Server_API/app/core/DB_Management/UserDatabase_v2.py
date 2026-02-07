@@ -7,27 +7,37 @@
 #
 ########################################################################################################################
 
-import hashlib
+import contextlib
 import json
 import secrets
-from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional, Union
+from typing import Any, Optional
 from uuid import uuid4
+
 from loguru import logger
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.backends.base import (
+    BackendType,
     DatabaseBackend,
     DatabaseConfig,
-    BackendType,
     DatabaseError,
-    QueryResult
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
 
+_USERDB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    DatabaseError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 ########################################################################################################################
 # Custom Exceptions
@@ -121,12 +131,12 @@ class UserDatabase:
             logger.warning(f"No schema path defined for backend type: {self.backend.backend_type}")
             return
 
-        schema_statements: Optional[List[str]] = None
+        schema_statements: Optional[list[str]] = None
         loaded_from_file = False
 
         if schema_path.exists():
             try:
-                with open(schema_path, 'r', encoding='utf-8') as f:
+                with open(schema_path, encoding='utf-8') as f:
                     schema_sql = f.read()
                 schema_statements = self._split_sql_statements(schema_sql)
                 logger.info(f"Database schema loaded from {schema_path}")
@@ -199,10 +209,10 @@ class UserDatabase:
                 )
 
                 if existing.rows:
-                    raise DuplicateUserError(f"Username or email already exists")
+                    raise DuplicateUserError("Username or email already exists")
 
                 # Insert user
-                result = self.backend.execute(
+                self.backend.execute(
                     """
                     INSERT INTO users (uuid, username, email, password_hash, metadata)
                     VALUES (?, ?, ?, ?, ?)
@@ -253,11 +263,11 @@ class UserDatabase:
                 raise
             emsg = str(e).lower()
             if ("duplicate" in emsg) or ("unique" in emsg) or ("already exists" in emsg):
-                raise DuplicateUserError("Username or email already exists")
-            raise UserDatabaseError(f"Failed to create user: {e}")
+                raise DuplicateUserError("Username or email already exists") from e
+            raise UserDatabaseError(f"Failed to create user: {e}") from e
 
     def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None,
-                 email: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                 email: Optional[str] = None) -> Optional[dict[str, Any]]:
         """
         Get user by ID, username, or email.
 
@@ -293,14 +303,14 @@ class UserDatabase:
                     user_dict['metadata'] = json.loads(meta)
                 elif meta is None:
                     user_dict['metadata'] = {}
-            except Exception:
+            except _USERDB_NONCRITICAL_EXCEPTIONS:
                 user_dict['metadata'] = {}
             # Normalize boolean-ish flags for cross-backend consistency
             for _flag in ("is_active", "is_verified", "is_superuser"):
                 try:
                     if _flag in user_dict:
                         user_dict[_flag] = bool(user_dict[_flag])
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     pass
             # Add roles
             user_dict['roles'] = self.get_user_roles(user_dict['id'])
@@ -346,7 +356,7 @@ class UserDatabase:
                     )
                     changes = change_result.rows[0].get("changes", 0) if change_result.rows else 0
                     success = bool(changes)
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     success = False
             else:
                 success = result.rowcount > 0
@@ -371,7 +381,7 @@ class UserDatabase:
     # Role and Permission Management
     ########################################################################################################################
 
-    def get_user_roles(self, user_id: int) -> List[str]:
+    def get_user_roles(self, user_id: int) -> list[str]:
         """
         Get all roles assigned to a user.
 
@@ -446,7 +456,7 @@ class UserDatabase:
                               connection=conn)
                 return True
 
-            except Exception as e:
+            except _USERDB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to assign role: {e}")
                 return False
 
@@ -485,7 +495,7 @@ class UserDatabase:
                 return True
             return False
 
-    def get_user_permissions(self, user_id: int) -> List[str]:
+    def get_user_permissions(self, user_id: int) -> list[str]:
         """
         Get all permissions for a user (from roles and direct assignments).
 
@@ -507,7 +517,7 @@ class UserDatabase:
             (user_id,)
         )
 
-        permissions = set(row['name'] for row in role_perms.rows)
+        permissions = {row['name'] for row in role_perms.rows}
 
         # Get direct permissions (add granted, remove revoked)
         direct_perms = self.backend.execute(
@@ -585,7 +595,7 @@ class UserDatabase:
             logger.info(f"Created registration code {code[:8]}... with {max_uses} uses")
             return code
 
-    def validate_registration_code(self, code: str) -> Optional[Dict[str, Any]]:
+    def validate_registration_code(self, code: str) -> Optional[dict[str, Any]]:
         """
         Validate a registration code.
 
@@ -819,7 +829,7 @@ class UserDatabase:
         event_type: str,
         user_id: Optional[int],
         target_user_id: Optional[int],
-        details: Optional[Dict[str, Any]] = None,
+        details: Optional[dict[str, Any]] = None,
         connection: Optional[Any] = None,
     ):
         """Create an audit log entry."""
@@ -833,7 +843,7 @@ class UserDatabase:
                  json.dumps(details) if details else None),
                 connection=connection,
             )
-        except Exception as e:
+        except _USERDB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create audit log: {e}")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -841,10 +851,10 @@ class UserDatabase:
     # ------------------------------------------------------------------------------------------------------------------
 
     @staticmethod
-    def _split_sql_statements(sql: str) -> List[str]:
+    def _split_sql_statements(sql: str) -> list[str]:
         return split_sql_statements(sql)
 
-    def _apply_schema_statements(self, statements: List[str]) -> None:
+    def _apply_schema_statements(self, statements: list[str]) -> None:
         if not statements:
             return
 
@@ -860,13 +870,13 @@ class UserDatabase:
                 finally:
                     cursor.close()
 
-    def _default_schema_statements(self) -> List[str]:
+    def _default_schema_statements(self) -> list[str]:
         if self.backend.backend_type == BackendType.POSTGRESQL:
             return self._default_schema_statements_postgres()
         return self._default_schema_statements_sqlite()
 
     @staticmethod
-    def _default_schema_statements_sqlite() -> List[str]:
+    def _default_schema_statements_sqlite() -> list[str]:
         return [
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -980,7 +990,7 @@ class UserDatabase:
         ]
 
     @staticmethod
-    def _default_schema_statements_postgres() -> List[str]:
+    def _default_schema_statements_postgres() -> list[str]:
         return [
             "CREATE EXTENSION IF NOT EXISTS pgcrypto;",
             """
@@ -1117,7 +1127,7 @@ class UserDatabase:
             try:
                 self.backend.execute(role_sql, (name, description, is_system))
             except Exception as exc:  # noqa: BLE001
-                logger.debug(f"Skipping role seed for %s: %s", name, exc)
+                logger.debug("Skipping role seed for %s: %s", name, exc)
 
         # Seed baseline permissions
         default_perms = [
@@ -1150,27 +1160,21 @@ class UserDatabase:
             rid = user_id
             pid = _pid(pname)
             if rid and pid:
-                try:
+                with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                     self.backend.execute(rp_sql, (rid, pid))
-                except Exception:
-                    pass
         # viewer role
         rid = viewer_id
         pid = _pid("media.read")
         if rid and pid:
-            try:
+            with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                 self.backend.execute(rp_sql, (rid, pid))
-            except Exception:
-                pass
         # admin all
         if admin_id:
             for pname in ("media.read", "media.create", "media.delete", "system.configure", "users.manage_roles"):
                 pid = _pid(pname)
                 if pid:
-                    try:
+                    with contextlib.suppress(_USERDB_NONCRITICAL_EXCEPTIONS):
                         self.backend.execute(rp_sql, (admin_id, pid))
-                    except Exception:
-                        pass
 
 
 #
@@ -1218,12 +1222,12 @@ class UserDatabase:
                 self.backend.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superuser BOOLEAN DEFAULT FALSE")
                 try:
                     self.backend.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute("UPDATE users SET uuid = gen_random_uuid()::text WHERE uuid IS NULL")
                 self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
                 try:
                     self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
-                except Exception:
+                except _USERDB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT (gen_random_uuid()::text)")
                 self.backend.execute(
                     "UPDATE users SET failed_login_attempts = 0 WHERE failed_login_attempts IS NULL"

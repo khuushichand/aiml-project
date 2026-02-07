@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
 import json
 import os
 import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 from cachetools import LRUCache
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Request, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from loguru import logger
+from pydantic import BaseModel, Field
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
@@ -25,8 +25,8 @@ from tldw_Server_API.app.api.v1.API_Deps.media_add_deps import get_add_media_for
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
 from tldw_Server_API.app.api.v1.schemas.media_request_models import AddMediaForm
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
@@ -36,7 +36,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
-
 
 router = APIRouter()
 
@@ -55,10 +54,7 @@ def get_job_manager() -> JobManager:
             return cached
 
         if not db_url:
-            if db_path:
-                job_manager = JobManager(db_path=Path(db_path))
-            else:
-                job_manager = JobManager()
+            job_manager = JobManager(db_path=Path(db_path)) if db_path else JobManager()
         else:
             backend = "postgres" if db_url.startswith("postgres") else None
             job_manager = JobManager(backend=backend, db_url=db_url)
@@ -69,7 +65,7 @@ def get_job_manager() -> JobManager:
 
 class MediaIngestJobItem(BaseModel):
     id: int
-    uuid: Optional[str]
+    uuid: str | None
     source: str
     source_kind: str
     status: str
@@ -77,41 +73,41 @@ class MediaIngestJobItem(BaseModel):
 
 class SubmitMediaIngestJobsResponse(BaseModel):
     batch_id: str
-    jobs: List[MediaIngestJobItem]
-    errors: List[str] = Field(default_factory=list)
+    jobs: list[MediaIngestJobItem]
+    errors: list[str] = Field(default_factory=list)
 
 
 class MediaIngestJobStatus(BaseModel):
     id: int
-    uuid: Optional[str]
+    uuid: str | None
     status: str
     job_type: str
-    owner_user_id: Optional[str]
-    created_at: Optional[str]
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    cancelled_at: Optional[str]
-    cancellation_reason: Optional[str]
-    progress_percent: Optional[float]
-    progress_message: Optional[str]
-    result: Optional[Dict[str, Any]]
-    error_message: Optional[str]
-    media_type: Optional[str] = None
-    source: Optional[str] = None
-    source_kind: Optional[str] = None
-    batch_id: Optional[str] = None
+    owner_user_id: str | None
+    created_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    cancelled_at: str | None
+    cancellation_reason: str | None
+    progress_percent: float | None
+    progress_message: str | None
+    result: dict[str, Any] | None
+    error_message: str | None
+    media_type: str | None = None
+    source: str | None = None
+    source_kind: str | None = None
+    batch_id: str | None = None
 
 
 class CancelMediaIngestJobResponse(BaseModel):
     success: bool
     job_id: int
     status: str
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class MediaIngestJobListResponse(BaseModel):
     batch_id: str
-    jobs: List[MediaIngestJobStatus]
+    jobs: list[MediaIngestJobStatus]
 
 
 def _cleanup_dir(path_str: str) -> None:
@@ -121,7 +117,7 @@ def _cleanup_dir(path_str: str) -> None:
         logger.debug("Failed to cleanup temp dir {}: {}", path_str, exc)
 
 
-def _normalize_payload(payload: Any) -> Dict[str, Any]:
+def _normalize_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return dict(payload)
     if isinstance(payload, str):
@@ -138,7 +134,7 @@ def _normalize_payload(payload: Any) -> Dict[str, Any]:
     return {}
 
 
-def _parse_job_created_at(value: Any) -> Optional[datetime]:
+def _parse_job_created_at(value: Any) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -154,7 +150,7 @@ def _parse_job_created_at(value: Any) -> Optional[datetime]:
     return None
 
 
-def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
+def _job_to_status(job: dict[str, Any]) -> MediaIngestJobStatus:
     payload = _normalize_payload(job.get("payload"))
     id_value = job.get("id")
     if id_value is None:
@@ -198,7 +194,7 @@ def _job_to_status(job: Dict[str, Any]) -> MediaIngestJobStatus:
 async def submit_media_ingest_jobs(
     request: Request,
     form_data: AddMediaForm = Depends(get_add_media_form),
-    files: Optional[List[UploadFile]] = File(None, description="Optional media uploads"),
+    files: list[UploadFile] | None = File(None, description="Optional media uploads"),
     current_user: User = Depends(get_request_user),
     jm: JobManager = Depends(get_job_manager),
 ) -> SubmitMediaIngestJobsResponse:
@@ -216,8 +212,8 @@ async def submit_media_ingest_jobs(
     options.pop("keywords", None)
 
     batch_id = str(uuid4())
-    jobs: List[MediaIngestJobItem] = []
-    errors: List[str] = []
+    jobs: list[MediaIngestJobItem] = []
+    errors: list[str] = []
 
     url_list = form_data.urls or []
     for url in url_list:
@@ -385,10 +381,10 @@ async def list_media_ingest_jobs(
     # Fetch in larger batches internally (100-500) to reduce DB round-trips
     # while still respecting the user limit for the final result set.
     page_limit = min(500, max(limit, 100))
-    matched: List[MediaIngestJobStatus] = []
-    cursor_created_at: Optional[datetime] = None
-    cursor_id: Optional[int] = None
-    last_cursor: Optional[tuple[datetime, int]] = None
+    matched: list[MediaIngestJobStatus] = []
+    cursor_created_at: datetime | None = None
+    cursor_id: int | None = None
+    last_cursor: tuple[datetime, int] | None = None
     while len(matched) < limit:
         jobs = jm.list_jobs(
             domain="media_ingest",
@@ -435,7 +431,7 @@ async def cancel_media_ingest_job(
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     jm: JobManager = Depends(get_job_manager),
-    reason: Optional[str] = Query(None, description="Reason for cancellation"),
+    reason: str | None = Query(None, description="Reason for cancellation"),
 ) -> CancelMediaIngestJobResponse:
     job = jm.get_job(int(job_id))
     if not job or str(job.get("domain") or "") != "media_ingest":

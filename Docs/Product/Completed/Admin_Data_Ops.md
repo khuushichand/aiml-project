@@ -174,7 +174,7 @@ Resetting overrides:
 Roadmap: Stage 5.3 retention persistence is implemented; follow-up work includes adding a UI "reset to defaults" action.
 
 ## Implementation Status
-- API endpoints implemented in `tldw_Server_API/app/api/v1/endpoints/admin.py` (Data Ops section).
+- API endpoints implemented in `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` (Data Ops section).
 - Service logic implemented in `tldw_Server_API/app/services/admin_data_ops_service.py`.
 - Retention policy overrides persist in AuthNZ DB via `retention_policy_overrides` (see `tldw_Server_API/app/core/AuthNZ/retention_policies.py`).
 - Admin UI is planned (admin-ui); no current UI surface.

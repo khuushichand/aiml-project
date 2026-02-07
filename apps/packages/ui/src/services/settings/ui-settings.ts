@@ -64,6 +64,95 @@ export const CONTEXT_FILE_SIZE_MB_SETTING = defineSetting(
   }
 )
 
+const coerceOptionalNumber = (
+  value: unknown,
+  fallback: number | null
+): number | null => {
+  if (value === null || value === undefined || value === "") return fallback
+  if (typeof value === "number" && Number.isFinite(value)) return value
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return fallback
+    const parsed = Number(trimmed)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return fallback
+}
+
+const coerceStringArray = (
+  value: unknown,
+  fallback: string[]
+): string[] => {
+  const normalize = (items: unknown[]): string[] => {
+    const seen = new Set<string>()
+    const result: string[] = []
+    for (const item of items) {
+      if (typeof item !== "string") continue
+      const trimmed = item.trim()
+      if (!trimmed || seen.has(trimmed)) continue
+      seen.add(trimmed)
+      result.push(trimmed)
+    }
+    return result
+  }
+
+  if (Array.isArray(value)) {
+    return normalize(value)
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return fallback
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) {
+          return normalize(parsed)
+        }
+      } catch {
+        // ignore JSON parse errors
+      }
+    }
+    return normalize(trimmed.split(","))
+  }
+  return fallback
+}
+
+export const MCP_TOOL_CATALOG_SETTING = defineSetting(
+  "tldw:mcp:catalog",
+  "",
+  (value) => coerceString(value, ""),
+  {
+    area: "local"
+  }
+)
+
+export const MCP_TOOL_CATALOG_ID_SETTING = defineSetting(
+  "tldw:mcp:catalogId",
+  null as number | null,
+  (value) => coerceOptionalNumber(value, null),
+  {
+    area: "local"
+  }
+)
+
+export const MCP_TOOL_MODULE_SETTING = defineSetting(
+  "tldw:mcp:module",
+  [] as string[],
+  (value) => coerceStringArray(value, []),
+  {
+    area: "local"
+  }
+)
+
+export const MCP_TOOL_CATALOG_STRICT_SETTING = defineSetting(
+  "tldw:mcp:catalogStrict",
+  false,
+  (value) => coerceBoolean(value, false),
+  {
+    area: "local"
+  }
+)
+
 const UI_MODE_VALUES = ["sidePanel", "webui"] as const
 export type UiModeValue = (typeof UI_MODE_VALUES)[number]
 
@@ -230,25 +319,6 @@ export const SIDEBAR_SHORTCUT_SELECTION_SETTING = defineSetting(
 
 const VOICE_CHAT_TTS_MODE_VALUES = ["stream", "full"] as const
 export type VoiceChatTtsMode = (typeof VOICE_CHAT_TTS_MODE_VALUES)[number]
-
-const coerceStringArray = (
-  value: unknown,
-  fallback: string[] = []
-): string[] => {
-  if (Array.isArray(value)) {
-    return value
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-  }
-  return fallback
-}
 
 const coerceVoiceChatTtsMode = (
   value: unknown,

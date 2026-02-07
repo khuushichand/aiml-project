@@ -9,7 +9,8 @@ import type {
   WorkflowStepType,
   StepCategory,
   ConfigFieldSchema,
-  PortDefinition
+  PortDefinition,
+  WorkflowStepTypeInfo
 } from "@/types/workflow-editor"
 
 // Re-export for consumers
@@ -67,7 +68,9 @@ export const STEP_CATEGORIES: Record<
 // Step Type Registry
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const STEP_REGISTRY: Record<WorkflowStepType, StepTypeMetadata> = {
+export type StepRegistry = Record<string, StepTypeMetadata>
+
+export const BASE_STEP_REGISTRY: StepRegistry = {
   // ─── AI Steps ────────────────────────────────────────────────────────────
 
   prompt: {
@@ -623,24 +626,321 @@ export const STEP_REGISTRY: Record<WorkflowStepType, StepTypeMetadata> = {
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
+const DEFAULT_INPUT: PortDefinition = {
+  id: "input",
+  label: "Input",
+  dataType: "any",
+  required: false
+}
+
+const DEFAULT_OUTPUT: PortDefinition = {
+  id: "output",
+  label: "Output",
+  dataType: "any"
+}
+
+const PORT_OVERRIDES: Record<
+  string,
+  { inputs: PortDefinition[]; outputs: PortDefinition[] }
+> = {
+  start: {
+    inputs: [],
+    outputs: [{ id: "output", label: "Output", dataType: "any" }]
+  },
+  end: {
+    inputs: [{ id: "input", label: "Input", dataType: "any", required: true }],
+    outputs: []
+  },
+  branch: {
+    inputs: [{ id: "input", label: "Input", dataType: "any", required: true }],
+    outputs: [
+      { id: "true", label: "True", dataType: "control" },
+      { id: "false", label: "False", dataType: "control" },
+      { id: "default", label: "Default", dataType: "control" }
+    ]
+  },
+  map: {
+    inputs: [{ id: "array", label: "Array", dataType: "array", required: true }],
+    outputs: [
+      { id: "item", label: "Item", dataType: "any" },
+      { id: "results", label: "Results", dataType: "array" }
+    ]
+  },
+  wait_for_human: {
+    inputs: [{ id: "data", label: "Data", dataType: "any", required: true }],
+    outputs: [
+      { id: "approved", label: "Approved", dataType: "any" },
+      { id: "rejected", label: "Rejected", dataType: "any" }
+    ]
+  },
+  wait_for_approval: {
+    inputs: [{ id: "data", label: "Data", dataType: "any", required: true }],
+    outputs: [
+      { id: "approved", label: "Approved", dataType: "any" },
+      { id: "rejected", label: "Rejected", dataType: "any" }
+    ]
+  },
+  tts: {
+    inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  stt_transcribe: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "text", label: "Text", dataType: "string" }]
+  }
+}
+
+const CATEGORY_COLOR_CLASSES: Record<StepCategory, string> = {
+  ai: "bg-purple-500",
+  data: "bg-blue-500",
+  control: "bg-orange-500",
+  io: "bg-green-500",
+  utility: "bg-gray-500"
+}
+
+const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
+  prompt: "ai",
+  llm: "ai",
+  llm_with_tools: "ai",
+  llm_compare: "ai",
+  llm_critique: "ai",
+  summarize: "ai",
+  image_gen: "ai",
+  image_describe: "ai",
+  translate: "ai",
+  voice_intent: "ai",
+  flashcard_generate: "ai",
+  quiz_generate: "ai",
+  quiz_evaluate: "ai",
+  outline_generate: "ai",
+  glossary_extract: "ai",
+  mindmap_generate: "ai",
+  report_generate: "ai",
+  newsletter_generate: "ai",
+  slides_generate: "ai",
+  diagram_generate: "ai",
+  literature_review: "ai",
+  branch: "control",
+  map: "control",
+  batch: "control",
+  parallel: "control",
+  retry: "control",
+  cache_result: "control",
+  checkpoint: "control",
+  workflow_call: "control",
+  wait_for_human: "control",
+  wait_for_approval: "control",
+  delay: "utility",
+  log: "utility",
+  token_count: "utility",
+  context_window_check: "utility",
+  policy_check: "utility",
+  diff_change_detector: "utility",
+  sandbox_exec: "utility",
+  timing_start: "utility",
+  timing_stop: "utility",
+  webhook: "io",
+  notify: "io",
+  tts: "io",
+  stt_transcribe: "io",
+  kanban: "io",
+  s3_upload: "io",
+  s3_download: "io",
+  github_create_issue: "io",
+  email_send: "io",
+  screenshot_capture: "io",
+  audio_normalize: "io",
+  audio_concat: "io",
+  audio_trim: "io",
+  audio_convert: "io",
+  audio_extract: "io",
+  audio_mix: "io",
+  video_thumbnail: "io",
+  video_trim: "io",
+  video_concat: "io",
+  video_convert: "io",
+  video_extract_frames: "io",
+  subtitle_generate: "io",
+  subtitle_translate: "io",
+  subtitle_burn: "io"
+}
+
+const ICON_OVERRIDES: Record<string, string> = {
+  prompt: "MessageSquare",
+  llm: "MessageSquare",
+  llm_with_tools: "Wrench",
+  llm_compare: "Layers",
+  llm_critique: "ShieldCheck",
+  summarize: "FileText",
+  rag_search: "Search",
+  query_expand: "Search",
+  query_rewrite: "Search",
+  web_search: "Search",
+  search_aggregate: "Layers",
+  media_ingest: "Video",
+  kanban: "LayoutList",
+  process_media: "FileText",
+  branch: "GitBranch",
+  map: "Layers",
+  batch: "Layers",
+  parallel: "Layers",
+  wait_for_human: "UserCheck",
+  wait_for_approval: "UserCheck",
+  webhook: "Globe",
+  mcp_tool: "Cpu",
+  tts: "Volume2",
+  stt_transcribe: "Mic",
+  delay: "Clock",
+  log: "Terminal",
+  policy_check: "ShieldAlert",
+  diff_change_detector: "ShieldCheck",
+  notify: "Bell",
+  embed: "Database",
+  translate: "Languages",
+  claims_extract: "ScanSearch",
+  character_chat: "Bot",
+  image_gen: "Image",
+  image_describe: "Image",
+  ocr: "ScanSearch",
+  pdf_extract: "FileText",
+  document_table_extract: "Table2",
+  audio_diarize: "Mic",
+  flashcard_generate: "Layers",
+  quiz_generate: "CheckCircle2",
+  quiz_evaluate: "CheckCircle2",
+  outline_generate: "FileText",
+  glossary_extract: "BookOpen",
+  mindmap_generate: "GitBranch",
+  eval_readability: "Hash",
+  json_transform: "FileText",
+  json_validate: "ShieldCheck",
+  csv_to_json: "Table2",
+  json_to_csv: "Table2",
+  regex_extract: "Search",
+  text_clean: "FileText",
+  xml_transform: "FileText",
+  template_render: "Code2",
+  workflow_call: "GitBranch",
+  cache_result: "Database",
+  retry: "RotateCcw",
+  checkpoint: "Save",
+  s3_upload: "CloudUpload",
+  s3_download: "CloudDownload",
+  github_create_issue: "Github",
+  email_send: "Mail",
+  screenshot_capture: "Camera",
+  schedule_workflow: "Calendar",
+  timing_start: "Timer",
+  timing_stop: "TimerOff",
+  video_thumbnail: "Image",
+  video_extract_frames: "Film",
+  arxiv_search: "Search",
+  pubmed_search: "Search",
+  semantic_scholar_search: "Search",
+  google_scholar_search: "Search",
+  patent_search: "Search",
+  doi_resolve: "Link",
+  bibtex_generate: "BookMarked",
+  bibliography_generate: "BookMarked",
+  literature_review: "BookOpen"
+}
+
+export const humanizeStepType = (value: string): string => {
+  if (!value) return "Workflow Step"
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+export const resolveStepCategory = (stepType: string): StepCategory => {
+  if (CATEGORY_OVERRIDES[stepType]) return CATEGORY_OVERRIDES[stepType]
+  if (stepType.includes("wait_for_")) return "control"
+  if (stepType.includes("webhook") || stepType.includes("notify")) return "io"
+  if (stepType.includes("llm") || stepType.includes("summarize")) return "ai"
+  return "data"
+}
+
+export const resolveStepIcon = (stepType: string): string =>
+  ICON_OVERRIDES[stepType] || "MessageSquare"
+
+export const resolveStepPorts = (stepType: string): {
+  inputs: PortDefinition[]
+  outputs: PortDefinition[]
+} => {
+  const override = PORT_OVERRIDES[stepType]
+  if (override) return override
+  return {
+    inputs: [DEFAULT_INPUT],
+    outputs: [DEFAULT_OUTPUT]
+  }
+}
+
+export const createFallbackMetadata = (
+  type: string,
+  description?: string
+): StepTypeMetadata => {
+  const ports = resolveStepPorts(type)
+  const category = resolveStepCategory(type)
+  return {
+    type,
+    label: humanizeStepType(type),
+    description: description || "Server-provided workflow step",
+    category,
+    icon: resolveStepIcon(type),
+    color: CATEGORY_COLOR_CLASSES[category] || "bg-gray-500",
+    inputs: ports.inputs,
+    outputs: ports.outputs,
+    configSchema: []
+  }
+}
+
+export const buildStepRegistry = (
+  serverSteps: WorkflowStepTypeInfo[] = []
+): StepRegistry => {
+  const registry: StepRegistry = { ...BASE_STEP_REGISTRY }
+  for (const step of serverSteps) {
+    const name = step.name
+    if (!name) continue
+    const existing = registry[name]
+    if (existing) {
+      registry[name] = {
+        ...existing,
+        description: step.description || existing.description,
+        label: existing.label || humanizeStepType(name)
+      }
+      continue
+    }
+    registry[name] = createFallbackMetadata(name, step.description)
+  }
+  return registry
+}
+
 export const getStepMetadata = (
-  type: WorkflowStepType
-): StepTypeMetadata | undefined => STEP_REGISTRY[type]
+  type: WorkflowStepType,
+  registry: StepRegistry = BASE_STEP_REGISTRY
+): StepTypeMetadata | undefined =>
+  registry[type] || createFallbackMetadata(type)
 
 export const getStepsByCategory = (
-  category: StepCategory
+  category: StepCategory,
+  registry: StepRegistry = BASE_STEP_REGISTRY
 ): StepTypeMetadata[] =>
-  Object.values(STEP_REGISTRY).filter((step) => step.category === category)
+  Object.values(registry).filter((step) => step.category === category)
 
-export const getAllSteps = (): StepTypeMetadata[] =>
-  Object.values(STEP_REGISTRY)
+export const getAllSteps = (
+  registry: StepRegistry = BASE_STEP_REGISTRY
+): StepTypeMetadata[] => Object.values(registry)
 
-export const getAddableSteps = (): StepTypeMetadata[] =>
-  Object.values(STEP_REGISTRY).filter(
+export const getAddableSteps = (
+  registry: StepRegistry = BASE_STEP_REGISTRY
+): StepTypeMetadata[] =>
+  Object.values(registry).filter(
     (step) => step.type !== "start" && step.type !== "end"
   )
 
-export const getCategorizedSteps = (): Array<{
+export const getCategorizedSteps = (
+  registry: StepRegistry = BASE_STEP_REGISTRY
+): Array<{
   category: StepCategory
   label: string
   color: string
@@ -652,7 +952,7 @@ export const getCategorizedSteps = (): Array<{
       category: key as StepCategory,
       label: meta.label,
       color: meta.color,
-      steps: getStepsByCategory(key as StepCategory).filter(
+      steps: getStepsByCategory(key as StepCategory, registry).filter(
         (s) => s.type !== "start" && s.type !== "end"
       )
     }))

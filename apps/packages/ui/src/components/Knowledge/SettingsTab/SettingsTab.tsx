@@ -5,11 +5,13 @@ import { useTranslation } from "react-i18next"
 import type { RagPresetName, RagSettings } from "@/services/rag/unified-rag"
 import {
   AdvancedSection,
+  AllOptionsSection,
   CitationsSection,
   GenerationSection,
   QualitySection,
   SafetySection,
   getAdvancedSectionVisible,
+  getAllOptionsSectionVisible,
   getCitationsSectionVisible,
   getGenerationSectionVisible,
   getQualitySectionVisible,
@@ -105,6 +107,17 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       sectionVisible: getAdvancedSectionVisible(effectiveFilter, t),
       element: (
         <AdvancedSection
+          settings={settings}
+          onUpdate={onUpdate}
+          searchFilter={effectiveFilter}
+        />
+      )
+    },
+    {
+      key: "all-options",
+      sectionVisible: getAllOptionsSectionVisible(effectiveFilter, t),
+      element: (
+        <AllOptionsSection
           settings={settings}
           onUpdate={onUpdate}
           searchFilter={effectiveFilter}

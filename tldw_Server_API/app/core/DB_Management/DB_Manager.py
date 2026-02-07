@@ -5,60 +5,101 @@
 #
 # Imports
 import configparser
+import contextlib
 import os
 from pathlib import Path
-from typing import List, Tuple, Union, Dict, Optional
+from typing import Optional, Union
+
+from loguru import logger
+
 #
 # 3rd-Party Libraries
 #from elasticsearch import Elasticsearch
 #
 # Local Imports
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
+
+# ChaChaNotes database
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
 #from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
-    #list_prompts as sqlite_list_prompts,
-    #fetch_prompt_details as sqlite_fetch_prompt_details,
-    #add_prompt as sqlite_add_prompt,
-    #search_prompts as sqlite_search_prompts,
-    #add_or_update_prompt as sqlite_add_or_update_prompt,
-    #load_prompt_details as sqlite_load_prompt_details,
-    # insert_prompt_to_db as sqlite_insert_prompt_to_db,
-    #delete_prompt as sqlite_delete_prompt
+#list_prompts as sqlite_list_prompts,
+#fetch_prompt_details as sqlite_fetch_prompt_details,
+#add_prompt as sqlite_add_prompt,
+#search_prompts as sqlite_search_prompts,
+#add_or_update_prompt as sqlite_add_or_update_prompt,
+#load_prompt_details as sqlite_load_prompt_details,
+# insert_prompt_to_db as sqlite_insert_prompt_to_db,
+#delete_prompt as sqlite_delete_prompt
 #)
 from tldw_Server_API.app.core.DB_Management.content_backend import (
     ContentDatabaseSettings,
-    load_content_db_settings,
     get_content_backend,
+    load_content_db_settings,
 )
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
-    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
-    empty_trash as sqlite_empty_trash,
-    create_automated_backup as sqlite_create_automated_backup,
-    check_media_and_whisper_model as sqlite_check_media_and_whisper_model, \
-    get_document_version as sqlite_get_document_version,
-    get_media_transcripts as sqlite_get_media_transcripts,
-    get_specific_transcript as sqlite_get_specific_transcript, \
-    get_specific_analysis as sqlite_get_specific_analysis, \
-    get_media_prompts as sqlite_get_media_prompts,
-    get_specific_prompt as sqlite_get_specific_prompt, \
-    fetch_keywords_for_media as sqlite_fetch_keywords_for_media, \
-    check_media_exists as sqlite_check_media_exists, \
-    get_all_content_from_database as sqlite_get_all_content_from_database, \
-    get_latest_transcription as sqlite_get_latest_transcription, \
-    mark_media_as_processed as sqlite_mark_media_as_processed,
-    get_full_media_details as sqlite_get_full_media_details, \
-    get_full_media_details_rich as sqlite_get_full_media_details_rich, \
-    ingest_article_to_db_new as sqlite_ingest_article_to_db, \
-    get_unprocessed_media as sqlite_get_unprocessed_media,\
 )
-# ChaChaNotes database
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    check_media_and_whisper_model as sqlite_check_media_and_whisper_model,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    check_media_exists as sqlite_check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    create_automated_backup as sqlite_create_automated_backup,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    empty_trash as sqlite_empty_trash,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    fetch_keywords_for_media as sqlite_fetch_keywords_for_media,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_all_content_from_database as sqlite_get_all_content_from_database,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_document_version as sqlite_get_document_version,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_full_media_details as sqlite_get_full_media_details,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_full_media_details_rich as sqlite_get_full_media_details_rich,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_latest_transcription as sqlite_get_latest_transcription,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_media_prompts as sqlite_get_media_prompts,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_media_transcripts as sqlite_get_media_transcripts,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_specific_prompt as sqlite_get_specific_prompt,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_specific_transcript as sqlite_get_specific_transcript,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    get_unprocessed_media as sqlite_get_unprocessed_media,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    import_obsidian_note_to_db as sqlite_import_obsidian_note_to_db,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    ingest_article_to_db_new as sqlite_ingest_article_to_db,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    mark_media_as_processed as sqlite_mark_media_as_processed,
+)
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
-from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from loguru import logger
+
 #
 # End of imports
 ############################################################################################################
@@ -71,7 +112,8 @@ single_user_config = load_comprehensive_config()
 content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
 
 # Resolve shared backend instance for content databases (Media/ChaCha).
-_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = get_content_backend(single_user_config)
+# Keep backend initialization lazy to avoid heavy import-time side effects.
+_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = None
 _POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
 
 # Default Media DB is per-user. For single-user mode, resolve the fixed user's path.
@@ -104,12 +146,35 @@ single_user_workflows_path: str = single_user_config.get(
     fallback=str(DatabasePaths.get_workflows_db_path(DatabasePaths.get_single_user_id()))
 )
 
+DB_MANAGER_RUNTIME_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    KeyError,
+    configparser.Error,
+)
+
+
+def _ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
+    """Lazily resolve the shared content backend when PostgreSQL mode is active."""
+    global _CONTENT_DB_BACKEND
+    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
+        try:
+            _CONTENT_DB_BACKEND = get_content_backend(single_user_config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Unable to initialize PostgreSQL content backend lazily: {exc}")
+            _CONTENT_DB_BACKEND = None
+    return _CONTENT_DB_BACKEND
+
 
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
-    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
+    backend = _ensure_content_backend_loaded()
+    if _POSTGRES_CONTENT_MODE and backend is None:
         raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
-    return _CONTENT_DB_BACKEND
+    return backend
 
 
 def shutdown_content_backend() -> None:
@@ -122,7 +187,7 @@ def shutdown_content_backend() -> None:
     """
     try:
         backend = get_content_backend_instance()
-    except Exception:
+    except RuntimeError:
         backend = None
     if backend is None:
         return
@@ -130,7 +195,7 @@ def shutdown_content_backend() -> None:
         pool = backend.get_pool()
         pool.close_all()
         logger.info("Content backend connection pool closed")
-    except Exception as exc:  # pragma: no cover - defensive shutdown
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as exc:  # pragma: no cover - defensive shutdown
         logger.warning(f"Failed to close content backend pool: {exc}")
 
 
@@ -164,9 +229,9 @@ def reset_content_backend(
             else:
                 cb._cached_backend = None  # type: ignore[attr-defined]
                 cb._cached_backend_signature = None  # type: ignore[attr-defined]
-        except Exception as e:
+        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
             logger.debug(f"reset_content_backend: failed to clear backend cache: {e}")
-    except Exception as e:
+    except ImportError as e:
         logger.debug(f"reset_content_backend: unable to import content_backend: {e}")
 
     # Clear shared instance
@@ -214,13 +279,13 @@ def reset_content_backend(
                 f"Unknown Database.type '{raw_backend_local}', defaulting to sqlite content backend"
             )
             db_type = 'sqlite'
-    except Exception as e:
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.debug(f"reset_content_backend: failed to recompute content settings: {e}")
 
     if reload:
         try:
             _CONTENT_DB_BACKEND = get_content_backend(cfg)
-        except Exception as e:
+        except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
             logger.debug(f"reset_content_backend: unable to rebuild content backend: {e}")
     return _CONTENT_DB_BACKEND
 
@@ -235,7 +300,7 @@ def create_media_database(
     """Factory for MediaDatabase instances using the shared backend wiring."""
 
     target_path = Path(db_path) if db_path else Path(single_user_db_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     if _POSTGRES_CONTENT_MODE:
@@ -346,10 +411,8 @@ def validate_postgres_content_backend() -> None:
                             "python -m tldw_Server_API.app.core.DB_Management.migration_tools --apply-rls"
                         )
     finally:
-        try:
+        with contextlib.suppress(DB_MANAGER_RUNTIME_EXCEPTIONS):
             validator.close_connection()
-        except Exception:
-            pass
 
 
 def create_chacha_database(
@@ -362,7 +425,7 @@ def create_chacha_database(
     """Factory for ChaChaNotes database instances with backend support."""
 
     target_path = Path(db_path) if db_path else Path(single_user_chacha_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     return CharactersRAGDB(
@@ -383,7 +446,7 @@ def create_prompt_studio_database(
     """Factory for Prompt Studio databases with backend-aware wiring."""
 
     target_path = Path(db_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     return PromptStudioDatabase(
@@ -402,7 +465,7 @@ def create_workflows_database(
     """Factory for Workflow database instances with backend-aware wiring."""
 
     target_path = Path(db_path) if db_path else Path(single_user_workflows_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
 
     # Only pass backend through when it is a PostgreSQL adapter; SQLite continues to
     # rely on the local file connection for compatibility with existing tests.
@@ -426,7 +489,7 @@ def create_evaluations_database(
     EvaluationsDatabase instance bound to that backend; otherwise it
     falls back to the SQLite file at `db_path`.
     """
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     return EvaluationsDatabase(str(Path(db_path)), backend=backend_to_use)
 
 
@@ -451,7 +514,7 @@ def get_db_config():
     except FileNotFoundError:
         logger.warning("Config file not found. Using default database configuration.")
         return default_db_config()
-    except Exception as e:
+    except DB_MANAGER_RUNTIME_EXCEPTIONS as e:
         logger.error(f"Error reading config: {str(e)}. Using default database configuration.")
         return default_db_config()
 
@@ -850,7 +913,7 @@ def fetch_paginated_data(*args, **kwargs):
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_media_transcripts(*args, **kwargs) -> List[Dict]:
+def get_media_transcripts(*args, **kwargs) -> list[dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_transcripts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -858,7 +921,7 @@ def get_media_transcripts(*args, **kwargs) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_transcript(*args, **kwargs) -> Dict:
+def get_specific_transcript(*args, **kwargs) -> dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_transcript(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -903,7 +966,7 @@ def get_all_document_versions(db_instance: MediaDatabase, media_id: int, **kwarg
 #
 # Prompt Functions:
 
-def get_media_prompts(*args, **kwargs) -> List[Dict]:
+def get_media_prompts(*args, **kwargs) -> list[dict]:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_media_prompts(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -911,7 +974,7 @@ def get_media_prompts(*args, **kwargs) -> List[Dict]:
     else:
         raise ValueError(f"Unsupported database type: {db_type}")
 
-def get_specific_prompt(*args, **kwargs) -> Dict:
+def get_specific_prompt(*args, **kwargs) -> dict:
     if db_type in SQL_CONTENT_BACKENDS:
         return sqlite_get_specific_prompt(*args, **kwargs)
     elif db_type == 'elasticsearch':
@@ -1276,7 +1339,7 @@ def empty_trash(*args, **kwargs):
         raise ValueError(f"Unsupported database type: {db_type}")
 
 
-def fetch_item_details(*args, **kwargs) -> Tuple[str, str, str]:
+def fetch_item_details(*args, **kwargs) -> tuple[str, str, str]:
     """
     Fetch basic details of a media item including content, prompt, and summary.
 

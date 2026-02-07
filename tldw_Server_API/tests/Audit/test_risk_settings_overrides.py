@@ -55,3 +55,20 @@ async def test_suspicious_thresholds_override(monkeypatch):
     score2 = scorer.calculate_risk_score(event2)
     # 30 (type) + 20 (failure) + 20 (consecutive_failures) = 70
     assert score2 >= 70
+
+
+@pytest.mark.asyncio
+async def test_after_hours_string_false_disables_risk(monkeypatch):
+    from datetime import datetime, timezone
+    from tldw_Server_API.app.core.config import settings
+    from tldw_Server_API.app.core.Audit.unified_audit_service import RiskScorer, AuditEvent, AuditEventType
+
+    settings["AUDIT_SUSPICIOUS_THRESHOLDS"] = {"after_hours": "false"}
+
+    ts = datetime(2024, 1, 1, 2, 0, 0, tzinfo=timezone.utc)  # Monday, off-hours
+    event = AuditEvent(
+        event_type=AuditEventType.DATA_READ,
+        timestamp=ts,
+    )
+    score = RiskScorer().calculate_risk_score(event)
+    assert score == 0

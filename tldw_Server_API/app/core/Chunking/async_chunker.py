@@ -6,18 +6,23 @@ Provides async/await interfaces for chunking operations.
 
 import asyncio
 import copy
-from typing import List, Dict, Any, Optional, AsyncGenerator, Union
+from collections import OrderedDict
+from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any, Optional, Union
+
 import aiofiles
 from loguru import logger
-from concurrent.futures import ThreadPoolExecutor
+
+from tldw_Server_API.app.core.exceptions import ValidationError
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 from .base import ChunkerConfig, ChunkResult
-from .exceptions import InvalidInputError
 from .chunker import Chunker
+from .exceptions import InvalidInputError
 from .templates import TemplateManager
-from .utils.metrics import get_metrics, MetricsContext
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from .utils.metrics import get_metrics
 
 
 async def _close_response(resp: Any) -> None:
@@ -42,7 +47,7 @@ class AsyncChunker:
         self,
         config: Optional[ChunkerConfig] = None,
         llm_call_func: Optional[Any] = None,
-        llm_config: Optional[Dict[str, Any]] = None,
+        llm_config: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize async chunker.
@@ -83,7 +88,7 @@ class AsyncChunker:
         self,
         *,
         llm_call_func: Optional[Any] = None,
-        llm_config: Optional[Dict[str, Any]] = None,
+        llm_config: Optional[dict[str, Any]] = None,
     ) -> Chunker:
         """Return a fresh Chunker instance per call to avoid shared mutable state."""
         cfg_copy = copy.deepcopy(self.config)
@@ -97,8 +102,8 @@ class AsyncChunker:
                         max_size: Optional[int] = None,
                         overlap: Optional[int] = None,
                         llm_call_func: Optional[Any] = None,
-                        llm_config: Optional[Dict[str, Any]] = None,
-                        **options) -> List[str]:
+                        llm_config: Optional[dict[str, Any]] = None,
+                        **options) -> list[str]:
         """
         Asynchronously chunk text.
 
@@ -135,7 +140,7 @@ class AsyncChunker:
                         max_size: Optional[int] = None,
                         overlap: Optional[int] = None,
                         encoding: str = 'utf-8',
-                        **options) -> List[str]:
+                        **options) -> list[str]:
         """
         Asynchronously read and chunk a file.
 
@@ -153,19 +158,19 @@ class AsyncChunker:
         file_path = Path(file_path)
 
         # Read file asynchronously
-        async with aiofiles.open(file_path, 'r', encoding=encoding) as f:
+        async with aiofiles.open(file_path, encoding=encoding) as f:
             text = await f.read()
 
         # Chunk the text
         return await self.chunk_text(text, method, max_size, overlap, **options)
 
     async def chunk_files(self,
-                         file_paths: List[Union[str, Path]],
+                         file_paths: list[Union[str, Path]],
                          method: Optional[str] = None,
                          max_size: Optional[int] = None,
                          overlap: Optional[int] = None,
                          encoding: str = 'utf-8',
-                         **options) -> Dict[str, List[str]]:
+                         **options) -> dict[str, list[str]]:
         """
         Asynchronously chunk multiple files.
 
@@ -203,7 +208,7 @@ class AsyncChunker:
                           overlap: Optional[int] = None,
                           buffer_size: int = 10000,
                           llm_call_func: Optional[Any] = None,
-                          llm_config: Optional[Dict[str, Any]] = None,
+                          llm_config: Optional[dict[str, Any]] = None,
                           **options) -> AsyncGenerator[str, None]:
         """
         Stream chunks from an async text generator.
@@ -230,6 +235,13 @@ class AsyncChunker:
         """
         buffer = ""
         overlap_buffer = ""
+        max_size_raw = max_size if max_size is not None else self.config.default_max_size
+        try:
+            max_size_value = int(max_size_raw)
+        except Exception as exc:
+            raise InvalidInputError(f"Invalid max_size value: {max_size_raw}") from exc
+        if max_size_value <= 0:
+            raise InvalidInputError(f"max_size must be positive, got {max_size_value}")
         overlap_default = getattr(self.config, 'default_overlap', 0)
         overlap_raw = overlap if overlap is not None else overlap_default
         try:
@@ -238,6 +250,8 @@ class AsyncChunker:
             raise InvalidInputError(f"Invalid overlap value: {overlap_raw}") from exc
         if overlap_size < 0:
             overlap_size = 0
+        if overlap_size >= max_size_value:
+            overlap_size = max_size_value - 1
         overlap = overlap_size
         base_method = method if method is not None else self.config.default_method.value
         normalized_method = Chunker._normalize_method_argument(base_method)
@@ -295,7 +309,7 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap,
+                method, max_size_value, overlap,
                 llm_call_func=llm_call_func,
                 llm_config=llm_config,
                 **options
@@ -339,7 +353,7 @@ class AsyncChunker:
             combined = overlap_text + sep + buffer
             chunks = await self.chunk_text(
                 combined,
-                method, max_size, overlap,
+                method, max_size_value, overlap,
                 llm_call_func=llm_call_func,
                 llm_config=llm_config,
                 **options
@@ -353,8 +367,8 @@ class AsyncChunker:
                                  max_size: Optional[int] = None,
                                  overlap: Optional[int] = None,
                                  llm_call_func: Optional[Any] = None,
-                                 llm_config: Optional[Dict[str, Any]] = None,
-                                 **options) -> List[ChunkResult]:
+                                 llm_config: Optional[dict[str, Any]] = None,
+                                 **options) -> list[ChunkResult]:
         """
         Asynchronously chunk text and return with metadata.
 
@@ -391,7 +405,7 @@ class AsyncChunker:
                        max_size: Optional[int] = None,
                        overlap: Optional[int] = None,
                        timeout: float = 30.0,
-                       **options) -> List[str]:
+                       **options) -> list[str]:
         """
         Asynchronously fetch and chunk content from URL.
 
@@ -424,7 +438,7 @@ class AsyncChunker:
     async def process_with_template(self,
                                    text: str,
                                    template_name: str,
-                                   **options) -> List[Dict[str, Any]]:
+                                   **options) -> list[dict[str, Any]]:
         """
         Process text using a template asynchronously.
 
@@ -484,19 +498,31 @@ class AsyncBatchProcessor:
 
     def __init__(self,
                 batch_size: int = 10,
-                max_concurrent: int = 5):
+                max_concurrent: int = 5,
+                max_results: Optional[int] = 1000):
         """
         Initialize batch processor.
 
         Args:
             batch_size: Number of items to process per batch
             max_concurrent: Maximum concurrent batches
+            max_results: Maximum results to retain (oldest evicted). None for unlimited.
         """
         self.batch_size = batch_size
         self.max_concurrent = max_concurrent
         self._chunker = AsyncChunker()
         self._queue: asyncio.Queue = asyncio.Queue()
-        self._results: Dict[str, Dict[str, Any]] = {}
+        self._results: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        if max_results is not None:
+            try:
+                max_results = int(max_results)
+            except Exception as exc:
+                raise ValidationError(
+                    f"max_results must be an int or None, got {max_results}"
+                ) from exc
+            if max_results <= 0:
+                raise ValidationError(f"max_results must be positive or None, got {max_results}")
+        self._max_results = max_results
         self._processing = False
         self._closed = False
 
@@ -528,15 +554,27 @@ class AsyncBatchProcessor:
             'options': options
         })
 
-    async def process_batch(self):
+    def _store_result(self, request_id: str, payload: dict[str, Any]) -> None:
+        """Store a result with eviction of oldest entries when capped."""
+        if request_id in self._results:
+            self._results.pop(request_id, None)
+        self._results[request_id] = payload
+        if self._max_results is not None:
+            while len(self._results) > self._max_results:
+                self._results.popitem(last=False)
+
+    async def process_batch(self, initial_request: Optional[dict[str, Any]] = None):
         """Process a batch of requests."""
-        batch = []
+        batch: list[dict[str, Any]] = []
+        if initial_request is not None:
+            batch.append(initial_request)
 
         # Collect batch
-        for _ in range(self.batch_size):
-            if self._queue.empty():
+        while len(batch) < self.batch_size:
+            try:
+                request = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
                 break
-            request = await self._queue.get()
             batch.append(request)
 
         if not batch:
@@ -552,30 +590,42 @@ class AsyncBatchProcessor:
             )
             tasks.append(task)
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Store results
-        for request, result in zip(batch, results):
-            if isinstance(result, Exception):
-                logger.error(f"Error processing request {request['id']}: {result}")
-                self._results[request['id']] = {'error': str(result)}
-            else:
-                self._results[request['id']] = {'chunks': result}
+            # Store results
+            for request, result in zip(batch, results, strict=True):
+                if isinstance(result, Exception):
+                    logger.error(f"Error processing request {request['id']}: {result}")
+                    self._store_result(request['id'], {'error': str(result)})
+                else:
+                    self._store_result(request['id'], {'chunks': result})
+        finally:
+            for _ in batch:
+                try:
+                    self._queue.task_done()
+                except ValueError:
+                    # task_done called too many times; ignore to avoid raising in cleanup
+                    pass
 
     async def start_processing(self):
         """Start processing requests from the queue."""
         self._processing = True
 
         while self._processing:
-            if self._queue.empty():
-                await asyncio.sleep(0.1)
+            try:
+                first = await asyncio.wait_for(self._queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
                 continue
 
             # Process multiple batches concurrently
-            batch_tasks = []
-            for _ in range(self.max_concurrent):
-                if not self._queue.empty():
-                    batch_tasks.append(self.process_batch())
+            batch_tasks = [self.process_batch(first)]
+            for _ in range(self.max_concurrent - 1):
+                try:
+                    req = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                batch_tasks.append(self.process_batch(req))
 
             if batch_tasks:
                 await asyncio.gather(*batch_tasks)
@@ -587,8 +637,12 @@ class AsyncBatchProcessor:
         self._processing = False
 
         # Process remaining requests
-        while not self._queue.empty():
-            await self.process_batch()
+        while True:
+            try:
+                req = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            await self.process_batch(req)
 
         try:
             await self._chunker.close()
@@ -596,7 +650,7 @@ class AsyncBatchProcessor:
             logger.warning(f"AsyncBatchProcessor.stop_processing: error closing chunker: {e}")
         self._closed = True
 
-    def get_result(self, request_id: str) -> Optional[Dict[str, Any]]:
+    def get_result(self, request_id: str) -> Optional[dict[str, Any]]:
         """
         Get result for a request.
 
@@ -610,7 +664,7 @@ class AsyncBatchProcessor:
 
     async def wait_for_result(self,
                              request_id: str,
-                             timeout: float = 30.0) -> Optional[Dict[str, Any]]:
+                             timeout: float = 30.0) -> Optional[dict[str, Any]]:
         """
         Wait for a result to be ready.
 
@@ -632,12 +686,12 @@ class AsyncBatchProcessor:
         return None
 
 
-async def chunk_parallel(texts: List[str],
+async def chunk_parallel(texts: list[str],
                         method: str = 'words',
                         max_size: int = 400,
                         overlap: int = 50,
                         max_concurrent: int = 10,
-                        **options) -> List[List[str]]:
+                        **options) -> list[list[str]]:
     """
     Chunk multiple texts in parallel.
 
@@ -687,7 +741,7 @@ async def stream_chunks_from_file(file_path: Union[str, Path],
         Text chunks
     """
     async def file_reader():
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(file_path, encoding='utf-8') as f:
             while True:
                 chunk = await f.read(chunk_size)
                 if not chunk:

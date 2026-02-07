@@ -1,0 +1,151 @@
+import pytest
+from fastapi import Request
+from fastapi.testclient import TestClient
+
+from tldw_Server_API.app.main import app as fastapi_app
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit, get_auth_principal
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+
+
+pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _test_mode(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "1")
+
+
+@pytest.fixture()
+def client_with_overrides(monkeypatch, auth_headers):
+    async def override_user():
+        return User(id=1, username="tester", email=None, is_active=True)
+
+    async def _noop():
+        return None
+
+    async def _fake_principal(request: Request) -> AuthPrincipal:  # noqa: ARG001
+        return AuthPrincipal(
+            kind="service",
+            user_id=None,
+            api_key_id=None,
+            subject="service:rag-batch-checkpoint-test",
+            token_type="access",
+            jti=None,
+            roles=["admin"],
+            permissions=["system.logs", "media.read"],
+            is_admin=True,
+            org_ids=[],
+            team_ids=[],
+        )
+
+    # Disable RBAC enforcement to avoid DB access
+    import tldw_Server_API.app.api.v1.API_Deps.auth_deps as auth_deps
+    async def _no_rbac(*args, **kwargs):  # noqa: ARG001
+        return None
+    monkeypatch.setattr(auth_deps, "enforce_rbac_rate_limit", _no_rbac)
+
+    fastapi_app.dependency_overrides[get_request_user] = override_user
+    fastapi_app.dependency_overrides[get_auth_principal] = _fake_principal
+    fastapi_app.dependency_overrides[check_rate_limit] = _noop
+    # Avoid DB initialization by overriding DB deps to return None
+    try:
+        from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user as _get_media_db
+        from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as _get_chacha_db
+        async def _none_media_db():
+            return None
+        async def _none_chacha_db():
+            return None
+        fastapi_app.dependency_overrides[_get_media_db] = _none_media_db
+        fastapi_app.dependency_overrides[_get_chacha_db] = _none_chacha_db
+    except Exception:
+        pass
+
+    try:
+        # Prefer disabling lifespan to avoid DB/services startup in CI; skip if not supported
+        import inspect as _inspect
+        if 'lifespan' in _inspect.signature(TestClient.__init__).parameters:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False, lifespan='off') as client:
+                yield client
+        else:
+            with TestClient(fastapi_app, headers=auth_headers, raise_server_exceptions=False) as client:
+                yield client
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+
+def _set_checkpoint_dir(monkeypatch, tmp_path):
+    import tldw_Server_API.app.core.RAG.rag_service.checkpoint as cp_mod
+    monkeypatch.setattr(
+        cp_mod.CheckpointManager,
+        "DEFAULT_CHECKPOINT_DIR",
+        str(tmp_path / "checkpoints"),
+    )
+    return cp_mod
+
+
+def test_rag_batch_creates_checkpoint(client_with_overrides, monkeypatch, tmp_path):
+    cp_mod = _set_checkpoint_dir(monkeypatch, tmp_path)
+    manager = cp_mod.CheckpointManager()
+
+    import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+
+    async def fake_pipeline(query: str, **kwargs):  # noqa: ARG001
+        return up.UnifiedSearchResult(documents=[], query=query, errors=[])
+
+    monkeypatch.setattr(up, "unified_rag_pipeline", fake_pipeline)
+
+    payload = {"queries": ["alpha", "beta"], "max_concurrent": 2, "enable_checkpoint": True}
+    resp = client_with_overrides.post("/api/v1/rag/batch", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    checkpoint_id = data.get("checkpoint_id")
+    assert checkpoint_id
+
+    loaded = manager.load_by_id(checkpoint_id)
+    assert loaded.total_items == 2
+    assert loaded.completed_items == 2
+
+    indices = [entry.get("query_index") for entry in loaded.results]
+    assert sorted(indices) == [0, 1]
+    status_map = {entry.get("query_index"): entry.get("status") for entry in loaded.results}
+    assert status_map.get(0) == "ok"
+    assert status_map.get(1) == "ok"
+
+
+def test_rag_batch_checkpoint_records_errors(client_with_overrides, monkeypatch, tmp_path):
+    cp_mod = _set_checkpoint_dir(monkeypatch, tmp_path)
+    manager = cp_mod.CheckpointManager()
+
+    import tldw_Server_API.app.core.RAG.rag_service.unified_pipeline as up
+
+    async def fake_pipeline(query: str, **kwargs):  # noqa: ARG001
+        if query == "bad":
+            raise RuntimeError("boom")
+        return up.UnifiedSearchResult(documents=[], query=query, errors=[])
+
+    monkeypatch.setattr(up, "unified_rag_pipeline", fake_pipeline)
+
+    payload = {"queries": ["good", "bad"], "max_concurrent": 2, "enable_checkpoint": True}
+    resp = client_with_overrides.post("/api/v1/rag/batch", json=payload)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+
+    assert data.get("total_queries") == 2
+    assert data.get("successful") == 1
+    assert data.get("failed") == 1
+
+    checkpoint_id = data.get("checkpoint_id")
+    assert checkpoint_id
+
+    loaded = manager.load_by_id(checkpoint_id)
+    assert loaded.total_items == 2
+    assert loaded.completed_items == 2
+
+    status_map = {entry.get("query_index"): entry for entry in loaded.results}
+    assert status_map.get(0, {}).get("status") == "ok"
+    bad_entry = status_map.get(1)
+    assert bad_entry is not None
+    assert bad_entry.get("status") == "error"
+    assert any("boom" in str(err) for err in bad_entry.get("errors", []))

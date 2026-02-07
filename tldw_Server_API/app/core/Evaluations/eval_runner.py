@@ -11,24 +11,37 @@ Handles:
 
 import asyncio
 import os
-import time
 import statistics
+import time
 from contextlib import suppress
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
-from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
+from typing import Any, Callable, Optional
+
 from loguru import logger
+
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
+try:
+    import aiohttp
+except ImportError:
+    aiohttp = None
+
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    create_evaluations_database as _create_evals_db,
+)
 
 # Import existing evaluation modules
 from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
-from tldw_Server_API.app.core.Chunking.utils.proposition_eval import evaluate_propositions as eval_propositions
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_evaluations_database as _create_evals_db,
-)
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -37,13 +50,32 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_custom_metrics import get_custom_metrics
+from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.RAG.rag_service.vector_stores import (
-    VectorStoreFactory,
     create_from_settings_for_user,
 )
-from tldw_Server_API.app.core.Chunking import chunk_for_embedding
+
+_HTTPX_ERROR = getattr(httpx, "HTTPError", None) if httpx is not None else None
+_AIOHTTP_ERROR = getattr(aiohttp, "ClientError", None) if aiohttp is not None else None
+_OPTIONAL_HTTP_EXCEPTIONS = tuple(
+    exc for exc in (_HTTPX_ERROR, _AIOHTTP_ERROR) if exc is not None
+)
+
+_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    ChatConfigurationError,
+) + _OPTIONAL_HTTP_EXCEPTIONS
+
+_EVAL_EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
+
 # Safe import of embeddings backend to avoid heavy deps at app import time
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
@@ -51,7 +83,7 @@ try:
         get_embedding_config,
     )
     _EVAL_EMBEDDINGS_AVAILABLE = True
-except Exception:
+except _EVAL_EMBEDDINGS_IMPORT_EXCEPTIONS:
     _EVAL_EMBEDDINGS_AVAILABLE = False
     def get_embedding_config():  # type: ignore[misc]
         return {"embedding_config": {"default_model_id": ""}}
@@ -62,15 +94,15 @@ except Exception:
 def _call_adapter_text(
     *,
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     temperature: Optional[float] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     system_message: Optional[str] = None,
-    response_format: Optional[Dict[str, Any]] = None,
+    response_format: Optional[dict[str, Any]] = None,
     max_tokens: Optional[int] = None,
     user: Optional[str] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     timeout: Optional[float] = None,
     **extra_kwargs: Any,
 ) -> str:
@@ -85,7 +117,7 @@ def _call_adapter_text(
     cleaned_messages = messages_payload or []
     if not system_msg:
         system_msg, cleaned_messages = split_system_message(cleaned_messages)
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_msg,
         "model": resolved_model,
@@ -127,8 +159,8 @@ class EvaluationRunner:
 
     def _resolve_eval_provider_model_api_key(
         self,
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any],
     ) -> tuple[str, Optional[str], Optional[str]]:
         """Resolve provider, model override, and api_key for evaluator calls."""
         run_config = eval_config.get("config") if isinstance(eval_config, dict) else None
@@ -176,6 +208,25 @@ class EvaluationRunner:
 
         return api_name, model_override, api_key
 
+    @staticmethod
+    def _normalize_metrics(metrics: Any, default: Optional[list[str]] = None) -> list[str]:
+        """Normalize metric configuration to a clean list of metric names."""
+        if metrics is None:
+            return list(default or [])
+        if isinstance(metrics, str):
+            metric_name = metrics.strip()
+            return [metric_name] if metric_name else []
+        if isinstance(metrics, (list, tuple, set)):
+            normalized_metrics: list[str] = []
+            for metric in metrics:
+                if metric is None:
+                    continue
+                metric_name = str(metric).strip()
+                if metric_name:
+                    normalized_metrics.append(metric_name)
+            return normalized_metrics
+        return list(default or [])
+
     @property
     def rag_evaluator(self) -> RAGEvaluator:
         """Get or create RAG evaluator instance (lazy initialization)."""
@@ -194,7 +245,7 @@ class EvaluationRunner:
         self,
         run_id: str,
         eval_id: str,
-        eval_config: Dict[str, Any],
+        eval_config: dict[str, Any],
         background: bool = True
     ):
         """
@@ -219,7 +270,7 @@ class EvaluationRunner:
         self,
         run_id: str,
         eval_id: str,
-        eval_config: Dict[str, Any]
+        eval_config: dict[str, Any]
     ):
         """Execute the evaluation"""
         try:
@@ -252,7 +303,7 @@ class EvaluationRunner:
             sub_type = None
             try:
                 sub_type = eval_spec.get("sub_type")
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 sub_type = None
 
             if eval_type == "model_graded" and sub_type == "rag_pipeline":
@@ -269,7 +320,8 @@ class EvaluationRunner:
                     run_id=run_id,
                     samples=samples,
                     eval_spec=eval_spec,
-                    eval_config=eval_config
+                    eval_config=eval_config,
+                    run_user_id=evaluation.get("created_by"),
                 )
 
                 # Store results and webhook
@@ -342,9 +394,10 @@ class EvaluationRunner:
                 self.db.update_run_progress(run_id, progress)
 
             # Calculate aggregate results (include failed samples)
+            eval_metrics = self._normalize_metrics(eval_spec.get("metrics"), default=[])
             aggregate = self._calculate_aggregate_results(
                 sample_results,
-                eval_spec.get("metrics", []),
+                eval_metrics,
                 eval_spec.get("threshold", 0.7)
             )
 
@@ -355,7 +408,7 @@ class EvaluationRunner:
             duration = time.time() - start_time
             results = {
                 "aggregate": aggregate,
-                "by_metric": self._calculate_metric_stats(sample_results, eval_spec.get("metrics", [])),
+                "by_metric": self._calculate_metric_stats(sample_results, eval_metrics),
                 "sample_results": sample_results,
                 "failed_samples": [r for r in sample_results if r.get("error")]
             }
@@ -371,7 +424,7 @@ class EvaluationRunner:
             logger.info(f"Evaluation run {run_id} completed in {duration:.2f}s")
             return results
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Evaluation run {run_id} failed: {e}")
             self.db.update_run_status(run_id, "failed", error_message=str(e))
 
@@ -396,7 +449,7 @@ class EvaluationRunner:
             return value
         return [value]
 
-    def _cartesian_product(self, dicts_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _cartesian_product(self, dicts_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Cartesian product of parameter dictionaries.
 
         Each dict may contain fields that are single values or lists.
@@ -406,7 +459,7 @@ class EvaluationRunner:
             return [{}]
         from itertools import product
         # Merge multiple dicts into a single dict of key->list-of-values
-        merged: Dict[str, List[Any]] = {}
+        merged: dict[str, list[Any]] = {}
         for d in dicts_list:
             for k, v in (d or {}).items():
                 vals = self._expand_values(v)
@@ -428,10 +481,10 @@ class EvaluationRunner:
         values_lists = [merged[k] for k in keys]
         combos = []
         for combo in product(*values_lists):
-            combos.append({k: v for k, v in zip(keys, combo)})
+            combos.append(dict(zip(keys, combo)))
         return combos
 
-    def _build_config_grid(self, eval_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _build_config_grid(self, eval_spec: dict[str, Any]) -> list[dict[str, Any]]:
         """Build configuration combinations from rag_pipeline spec."""
         rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
         chunking = rp.get("chunking") or {}
@@ -482,16 +535,17 @@ class EvaluationRunner:
     async def _execute_rag_pipeline_run(
         self,
         run_id: str,
-        samples: List[Dict[str, Any]],
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any]
-    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        samples: list[dict[str, Any]],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any],
+        run_user_id: Optional[str] = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Run rag_pipeline across a config grid and dataset, aggregating a leaderboard.
 
         Returns (results_dict, usage_dict)
         """
         rp = (eval_spec or {}).get("rag_pipeline", {}) or {}
-        metrics_sel = rp.get("metrics") or {}
+        rp.get("metrics") or {}
         config_grid = self._build_config_grid(eval_spec)
         eval_provider, eval_model, _ = self._resolve_eval_provider_model_api_key(eval_spec, eval_config)
 
@@ -503,20 +557,20 @@ class EvaluationRunner:
         per_config_results = []
         best = None
         leaderboard = []
-        built_collections: List[str] = []
+        built_collections: list[str] = []
 
         # Metrics helpers (lazy-load only if enabled)
         enable_custom_metrics = True
         try:
             enable_custom_metrics = bool(rp.get("custom_metrics", True))
-        except Exception:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             enable_custom_metrics = True
 
         custom_metrics = None
         if enable_custom_metrics:
             try:
                 custom_metrics = get_custom_metrics()
-            except Exception as e:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Custom metrics initialization skipped: {e}")
                 custom_metrics = None
 
@@ -529,14 +583,17 @@ class EvaluationRunner:
                 env_val = os.getenv("TLDW_CUSTOM_METRICS_TIMEOUT_SECONDS")
                 if env_val:
                     metrics_timeout = float(env_val)
-        except Exception:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             metrics_timeout = 2.0
+
+        # Resolve the user scope used by vector-store operations.
+        resolved_user_id = self._resolve_rag_pipeline_user_id(run_user_id, eval_config)
 
         # Optional ephemeral indexing base namespace
         base_namespace = rp.get("index_namespace")
 
         # Initialize progress for total work units
-        try:
+        with suppress(_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS):
             self.db.update_run_progress(
                 run_id,
                 {
@@ -545,8 +602,6 @@ class EvaluationRunner:
                     "failed_samples": 0,
                 },
             )
-        except Exception:
-            pass
 
         # Iterate configs
         for idx, cfg in enumerate(config_grid):
@@ -555,7 +610,6 @@ class EvaluationRunner:
             # Aggregate accumulators
             agg_scores = []
             agg_latency = []
-            agg_cost = []
 
             # Unpack blocks
             ck = cfg.get("chunking", {}) or {}
@@ -580,6 +634,7 @@ class EvaluationRunner:
                 "generation_model": (rg.get("model") or [None])[0] if isinstance(rg.get("model"), list) else rg.get("model"),
                 "generation_prompt": (rg.get("prompt_template") or [None])[0] if isinstance(rg.get("prompt_template"), list) else rg.get("prompt_template"),
                 "max_generation_tokens": (rg.get("max_tokens") or [None])[0] if isinstance(rg.get("max_tokens"), list) else (rg.get("max_tokens") or 500),
+                "user_id": resolved_user_id,
             }
 
             # Additional retrieval knobs (safe pass-through)
@@ -637,7 +692,8 @@ class EvaluationRunner:
                     chunk_index_stats = await self._build_ephemeral_index(
                         collection_name=collection_name,
                         samples=samples,
-                        chunking_cfg=ck
+                        chunking_cfg=ck,
+                        user_id=resolved_user_id,
                     )
                     upr_args_common["index_namespace"] = collection_name
                     built_collections.append(collection_name)
@@ -645,9 +701,9 @@ class EvaluationRunner:
                     try:
                         ttl = int(rp.get("ephemeral_ttl_seconds") or 86400)
                         self.db.register_ephemeral_collection(collection_name, ttl_seconds=ttl, run_id=run_id, namespace=base_namespace)
-                    except Exception as re:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as re:
                         logger.warning(f"Failed to register ephemeral collection {collection_name}: {re}")
-            except Exception as e:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Ephemeral indexing skipped for {cfg_id}: {e}")
 
             # Evaluate each sample
@@ -664,7 +720,7 @@ class EvaluationRunner:
                         query=query,
                         **upr_args_common
                     )
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"unified_rag_pipeline failed for {cfg_id} sample {s_idx}: {e}")
                     per_sample.append({"sample_index": s_idx, "error": str(e)})
                     completed += 1
@@ -693,11 +749,11 @@ class EvaluationRunner:
                         documents = getattr(upr_result, "documents", [])
                         generated_answer = getattr(upr_result, "generated_answer", None)
                         timings = getattr(upr_result, "timings", {}) or {}
-                except Exception:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Convert documents to string contexts
-                ctx_texts: List[str] = []
+                ctx_texts: list[str] = []
                 try:
                     for d in (documents or [])[: upr_args_common.get("top_k", 10)]:
                         # Document may be dataclass with .content or dict
@@ -706,7 +762,7 @@ class EvaluationRunner:
                             content = d.get("content")
                         if isinstance(content, str):
                             ctx_texts.append(content)
-                except Exception:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Fallback: ensure we have a response
@@ -719,7 +775,10 @@ class EvaluationRunner:
                         contexts=ctx_texts,
                         response=response,
                         ground_truth=ground_truth,
-                        metrics=eval_spec.get("metrics", ["relevance", "faithfulness", "answer_similarity"]),
+                        metrics=self._normalize_metrics(
+                            eval_spec.get("metrics"),
+                            default=["relevance", "faithfulness", "answer_similarity"],
+                        ),
                         api_name=eval_provider,
                         model=eval_model,
                     )
@@ -743,7 +802,7 @@ class EvaluationRunner:
                         if score_val is not None:
                             scores[mname] = score_val
                     overall = float(rag_metrics.get("overall_score", 0.0))
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"RAG metrics failed for {cfg_id} sample {s_idx}: {e}")
                     scores = {}
                     overall = 0.0
@@ -755,7 +814,7 @@ class EvaluationRunner:
                             custom_metrics.evaluate_retrieval_coverage(query, ctx_texts),
                             timeout=metrics_timeout,
                         )
-                    except Exception as e:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                         cov = None
                         logger.debug(f"Coverage metric skipped: {e}")
                     try:
@@ -763,7 +822,7 @@ class EvaluationRunner:
                             custom_metrics.evaluate_retrieval_diversity(ctx_texts),
                             timeout=metrics_timeout,
                         )
-                    except Exception as e:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                         div = None
                         logger.debug(f"Diversity metric skipped: {e}")
 
@@ -776,7 +835,7 @@ class EvaluationRunner:
                             div_score = _extract_score(div)
                             if div_score is not None:
                                 scores["retrieval_diversity"] = div_score
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         pass
 
                 # Optional: retrieval nDCG/MRR when relevant IDs provided
@@ -793,15 +852,13 @@ class EvaluationRunner:
                         mrr, ndcg = self._compute_mrr_ndcg(retrieved_ids, [str(x) for x in expected_rel])
                         scores["mrr"] = mrr
                         scores["ndcg"] = ndcg
-                except Exception as e:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"MRR/nDCG computation skipped: {e}")
 
                 # Aggregate per-sample record
                 latency = 0.0
-                try:
+                with suppress(_EVAL_RUNNER_NONCRITICAL_EXCEPTIONS):
                     latency = float(timings.get("total", 0.0)) * 1000.0
-                except Exception:
-                    pass
                 rec = {
                     "sample_index": s_idx,
                     "scores": scores,
@@ -828,15 +885,12 @@ class EvaluationRunner:
                 )
 
             # Aggregate per-config
-            if agg_scores:
-                mean_overall = statistics.mean(agg_scores)
-            else:
-                mean_overall = 0.0
+            mean_overall = statistics.mean(agg_scores) if agg_scores else 0.0
             mean_latency = statistics.mean(agg_latency) if agg_latency else 0.0
             # Compute aggregated retrieval stats across samples if present
-            def _mean_score(key: str) -> float:
+            def _mean_score(key: str, _per_sample=per_sample) -> float:
                 vals = []
-                for r in per_sample:
+                for r in _per_sample:
                     v = r.get("scores", {}).get(key)
                     if isinstance(v, (int, float)):
                         vals.append(float(v))
@@ -927,19 +981,19 @@ class EvaluationRunner:
         try:
             if rp.get("cleanup_collections") and built_collections:
                 from tldw_Server_API.app.core.config import settings as app_settings
-                adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+                adapter = create_from_settings_for_user(app_settings, resolved_user_id)
                 await adapter.initialize()
                 for cname in built_collections:
                     try:
                         await adapter.delete_collection(cname)
-                    except Exception as ce:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                         logger.warning(f"Failed to delete collection {cname}: {ce}")
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Ephemeral collection cleanup skipped: {e}")
 
         return results, usage
 
-    def _compute_mrr_ndcg(self, retrieved_ids: List[str], relevant_ids: List[str]) -> tuple[float, float]:
+    def _compute_mrr_ndcg(self, retrieved_ids: list[str], relevant_ids: list[str]) -> tuple[float, float]:
         """Compute MRR and nDCG@K for binary relevance.
 
         Args:
@@ -971,22 +1025,23 @@ class EvaluationRunner:
     async def _build_ephemeral_index(
         self,
         collection_name: str,
-        samples: List[Dict[str, Any]],
-        chunking_cfg: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        samples: list[dict[str, Any]],
+        chunking_cfg: dict[str, Any],
+        user_id: str,
+    ) -> dict[str, Any]:
         """Build an ephemeral index (collection) for a run-config if dataset provides a corpus.
 
         Supports dataset samples with input.corpus or input.documents as a list of strings or
         list of objects {id, text}.
         """
         # Gather corpus texts
-        corpus: List[Dict[str, str]] = []
+        corpus: list[dict[str, str]] = []
         for s in samples:
             inp = s.get("input") or {}
             docs = inp.get("corpus") or inp.get("documents") or []
             if not isinstance(docs, list):
                 continue
-            for i, d in enumerate(docs):
+            for _i, d in enumerate(docs):
                 if isinstance(d, str):
                     corpus.append({"id": f"doc_{len(corpus)+1}", "text": d})
                 elif isinstance(d, dict):
@@ -1000,7 +1055,7 @@ class EvaluationRunner:
 
         # Create adapter
         from tldw_Server_API.app.core.config import settings as app_settings
-        adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        adapter = create_from_settings_for_user(app_settings, user_id)
         await adapter.initialize()
         await adapter.create_collection(collection_name)
 
@@ -1068,7 +1123,7 @@ class EvaluationRunner:
                     for i in range(len(vecs) - 2):
                         s = cosine_similarity([vecs[i]], [vecs[i+2]])[0][0]
                         sep_sims.append(float(s))
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Token entropy per chunk
@@ -1121,11 +1176,41 @@ class EvaluationRunner:
         }
         return chunk_stats
 
+    @staticmethod
+    def _resolve_rag_pipeline_user_id(
+        run_user_id: Optional[str],
+        eval_config: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Resolve a stable user identifier for rag-pipeline vector-store calls."""
+        candidates: list[Optional[str]] = [run_user_id]
+
+        if isinstance(eval_config, dict):
+            candidates.append(eval_config.get("created_by"))
+            candidates.append(eval_config.get("user_id"))
+            run_cfg = eval_config.get("config")
+            if isinstance(run_cfg, dict):
+                candidates.append(run_cfg.get("user_id"))
+
+        for value in candidates:
+            if value is None:
+                continue
+            normalized = str(value).strip()
+            if normalized:
+                return normalized
+
+        try:
+            from tldw_Server_API.app.core.config import settings as app_settings
+
+            fallback = app_settings.get("SINGLE_USER_FIXED_ID", "1")
+            return str(fallback)
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
+            return "1"
+
     async def _get_samples(
         self,
-        evaluation: Dict[str, Any],
-        eval_config: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        evaluation: dict[str, Any],
+        eval_config: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Get samples for evaluation"""
         # Check for dataset override
         override = eval_config.get("dataset_override")
@@ -1135,7 +1220,7 @@ class EvaluationRunner:
                     override = override.model_dump()
                 elif hasattr(override, "dict"):
                     override = override.dict()
-            except Exception:
+            except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                 pass
             if isinstance(override, dict) and "samples" in override:
                 return override["samples"]
@@ -1160,7 +1245,7 @@ class EvaluationRunner:
     def _get_evaluation_function(
         self,
         eval_type: str,
-        eval_spec: Dict[str, Any]
+        eval_spec: dict[str, Any]
     ) -> Callable:
         """Get the appropriate evaluation function"""
         if eval_type == "model_graded":
@@ -1201,14 +1286,14 @@ class EvaluationRunner:
 
     async def _process_batch(
         self,
-        batch: List[Dict[str, Any]],
+        batch: list[dict[str, Any]],
         eval_fn: Callable,
-        eval_spec: Dict[str, Any],
-        eval_config: Dict[str, Any],
+        eval_spec: dict[str, Any],
+        eval_config: dict[str, Any],
         max_workers: int,
         start_index: int = 0,
         timeout_seconds: Optional[float] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Process a batch of samples with proper concurrency control"""
         run_timeout = timeout_seconds if timeout_seconds is not None else self.eval_timeout
         try:
@@ -1229,30 +1314,29 @@ class EvaluationRunner:
 
         async def eval_with_timeout_and_semaphore(sample, sample_id):
             """Evaluate a single sample with timeout and semaphore control"""
-            async with self.semaphore:
-                async with run_semaphore:
-                    try:
-                        # Apply timeout to individual evaluation
-                        result = await asyncio.wait_for(
-                            eval_fn(
-                                sample=sample,
-                                eval_spec=eval_spec,
-                                config=eval_config,
-                                sample_id=sample_id
-                            ),
-                            timeout=run_timeout
-                        )
-                        return result
-                    except asyncio.TimeoutError:
-                        logger.error(f"Evaluation timeout for {sample_id}")
-                        return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
-                    except Exception as e:
-                        logger.error(f"Evaluation failed for {sample_id}: {e}")
-                        return {"sample_id": sample_id, "error": str(e)}
+            async with self.semaphore, run_semaphore:
+                try:
+                    # Apply timeout to individual evaluation
+                    result = await asyncio.wait_for(
+                        eval_fn(
+                            sample=sample,
+                            eval_spec=eval_spec,
+                            config=eval_config,
+                            sample_id=sample_id
+                        ),
+                        timeout=run_timeout
+                    )
+                    return result
+                except asyncio.TimeoutError:
+                    logger.error(f"Evaluation timeout for {sample_id}")
+                    return {"sample_id": sample_id, "error": f"Timeout after {run_timeout}s"}
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
+                    logger.error(f"Evaluation failed for {sample_id}: {e}")
+                    return {"sample_id": sample_id, "error": str(e)}
 
         # Create tasks with proper error handling
         tasks = []
-        sample_ids: List[str] = []
+        sample_ids: list[str] = []
         for i, sample in enumerate(batch):
             global_index = start_index + i
             dataset_sample_id = sample.get("id") or sample.get("sample_id")
@@ -1288,11 +1372,11 @@ class EvaluationRunner:
 
     async def _eval_summarization(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate summarization using G-Eval"""
         try:
             # Extract required fields
@@ -1317,8 +1401,11 @@ class EvaluationRunner:
             result = await loop.run_in_executor(None, call_geval)
 
             # Parse results
-            scores: Dict[str, float] = {}
-            metrics_list = eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"])
+            scores: dict[str, float] = {}
+            metrics_list = self._normalize_metrics(
+                eval_spec.get("metrics"),
+                default=["fluency", "consistency", "relevance", "coherence"],
+            )
 
             if isinstance(result, dict):
                 metric_blob = result.get("metrics") or result.get("scores") or {}
@@ -1346,7 +1433,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1355,17 +1442,17 @@ class EvaluationRunner:
                 "avg_score": avg_score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Summarization eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_rag(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate RAG system"""
         try:
             # Extract fields
@@ -1387,7 +1474,10 @@ class EvaluationRunner:
                 contexts=contexts,
                 response=response,
                 ground_truth=ground_truth,
-                metrics=eval_spec.get("metrics", ["relevance", "faithfulness"]),
+                metrics=self._normalize_metrics(
+                    eval_spec.get("metrics"),
+                    default=["relevance", "faithfulness"],
+                ),
                 api_name=api_name,
                 model=model_override,
             )
@@ -1407,7 +1497,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = statistics.mean(scores.values()) if scores else 0
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1416,17 +1506,17 @@ class EvaluationRunner:
                 "avg_score": avg_score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"RAG eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_response_quality(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate response quality"""
         try:
             # Extract fields
@@ -1463,7 +1553,7 @@ class EvaluationRunner:
 
             # Calculate pass/fail
             avg_score = scores.get("overall_quality", 0)
-            passed = avg_score >= eval_spec.get("threshold", 0.7)
+            passed = self._evaluate_passed(scores, avg_score, eval_spec, default_threshold=0.7)
 
             return {
                 "sample_id": sample_id,
@@ -1473,17 +1563,17 @@ class EvaluationRunner:
                 "format_compliance": result.get("format_compliance", True)
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Quality eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_exact_match(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate exact match"""
         try:
             output = sample["input"].get("output", "")
@@ -1512,17 +1602,17 @@ class EvaluationRunner:
                 "avg_score": score
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Exact match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_includes(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate if output includes expected content"""
         try:
             output = str(sample["input"].get("output", ""))
@@ -1534,9 +1624,7 @@ class EvaluationRunner:
             else:
                 expected_items = expected_field or []
 
-            if isinstance(expected_items, str):
-                expected_items = [expected_items]
-            elif not isinstance(expected_items, list):
+            if isinstance(expected_items, str) or not isinstance(expected_items, list):
                 expected_items = [expected_items]
 
             # Check each expected item
@@ -1546,7 +1634,8 @@ class EvaluationRunner:
                     found_count += 1
 
             score = found_count / len(expected_items) if expected_items else 0
-            passed = score >= eval_spec.get("threshold", 0.7)
+            threshold = self._resolve_metric_threshold(eval_spec, "includes", default=0.7)
+            passed = score >= threshold
 
             return {
                 "sample_id": sample_id,
@@ -1557,17 +1646,17 @@ class EvaluationRunner:
                 "total": len(expected_items)
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Includes eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_fuzzy_match(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate fuzzy string matching"""
         try:
             from difflib import SequenceMatcher
@@ -1586,7 +1675,8 @@ class EvaluationRunner:
 
             # Calculate similarity
             similarity = SequenceMatcher(None, output, expected).ratio()
-            passed = similarity >= eval_spec.get("threshold", 0.7)
+            threshold = self._resolve_metric_threshold(eval_spec, "fuzzy_match", default=0.7)
+            passed = similarity >= threshold
 
             return {
                 "sample_id": sample_id,
@@ -1595,17 +1685,17 @@ class EvaluationRunner:
                 "avg_score": similarity
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Fuzzy match eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_propositions(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate proposition extraction using precision/recall/F1 per sample."""
         try:
             extracted = sample.get("input", {}).get("extracted", []) or []
@@ -1639,17 +1729,17 @@ class EvaluationRunner:
                     "total_reference": result.total_reference,
                 }
             }
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Proposition eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_label_choice(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate single-label classification over a fixed set of allowed labels.
 
         Expected sample structure:
@@ -1754,7 +1844,7 @@ class EvaluationRunner:
                         api_key=api_key,
                         model=model_override,
                     )
-                except Exception as ce:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                     logger.error(f"Chat call failed for label_choice {sample_id}: {ce}")
                     resp = ""
 
@@ -1776,7 +1866,7 @@ class EvaluationRunner:
                                 return content if isinstance(content, str) else str(content)
                             if "text" in r:
                                 return str(r["text"])  # some providers
-                        except Exception:
+                        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                             pass
                     return str(r)
 
@@ -1795,7 +1885,7 @@ class EvaluationRunner:
                         obj = _json.loads(txt)
                         if isinstance(obj, dict) and "label" in obj:
                             parsed = obj["label"]
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         parsed = None
                 if parsed is None:
                     up = txt.upper()
@@ -1835,17 +1925,17 @@ class EvaluationRunner:
                 }
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"label_choice eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     async def _eval_nli_factcheck(
         self,
-        sample: Dict[str, Any],
-        eval_spec: Dict[str, Any],
-        config: Dict[str, Any],
+        sample: dict[str, Any],
+        eval_spec: dict[str, Any],
+        config: dict[str, Any],
         sample_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate factual claims by NLI-style labeling (SUPPORTED/REFUTED/NEI or ENTAILMENT/CONTRADICTION/NEUTRAL).
 
         Expected sample structure:
@@ -1871,10 +1961,7 @@ class EvaluationRunner:
 
             claim = inp.get("claim") or inp.get("hypothesis") or ""
             ev = inp.get("evidence") or inp.get("premise") or inp.get("context") or ""
-            if isinstance(ev, list):
-                evidence = "\n".join([str(x) for x in ev])
-            else:
-                evidence = str(ev)
+            evidence = "\n".join([str(x) for x in ev]) if isinstance(ev, list) else str(ev)
 
             # Default allowed labels if not provided
             default_allowed = ["SUPPORTED", "REFUTED", "NEI"]
@@ -1951,7 +2038,7 @@ class EvaluationRunner:
                         api_key=api_key,
                         model=model_override,
                     )
-                except Exception as ce:
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as ce:
                     logger.error(f"Chat call failed for nli_factcheck {sample_id}: {ce}")
                     resp = ""
 
@@ -1972,7 +2059,7 @@ class EvaluationRunner:
                                 return content if isinstance(content, str) else str(content)
                             if "text" in r:
                                 return str(r["text"])  # other providers
-                        except Exception:
+                        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                             pass
                     return str(r)
 
@@ -1991,7 +2078,7 @@ class EvaluationRunner:
                         obj = _json.loads(txt)
                         if isinstance(obj, dict) and "label" in obj:
                             parsed = obj["label"]
-                    except Exception:
+                    except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
                         parsed = None
                 if parsed is None:
                     up = txt.upper()
@@ -2030,19 +2117,105 @@ class EvaluationRunner:
                 }
             }
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"nli_factcheck eval failed for {sample_id}: {e}")
             return {"sample_id": sample_id, "error": str(e)}
 
     # ============= Helper Methods =============
 
+    @staticmethod
+    def _coerce_threshold_value(raw: Any) -> Optional[float]:
+        """Convert threshold values to float when possible."""
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_threshold_config(
+        self,
+        eval_spec: dict[str, Any]
+    ) -> tuple[Optional[float], dict[str, float]]:
+        """Extract global and per-metric thresholds from eval_spec.
+
+        Supports legacy `threshold` and new `thresholds` mappings.
+        """
+        global_threshold = self._coerce_threshold_value(eval_spec.get("threshold"))
+        per_metric: dict[str, float] = {}
+
+        thresholds = eval_spec.get("thresholds")
+        if isinstance(thresholds, dict):
+            if global_threshold is None:
+                for key in ("pass", "overall", "default", "threshold"):
+                    if key in thresholds:
+                        global_threshold = self._coerce_threshold_value(thresholds.get(key))
+                        if global_threshold is not None:
+                            break
+            for key, value in thresholds.items():
+                if key in {"pass", "overall", "default", "threshold", "excellent"}:
+                    continue
+                metric_threshold = self._coerce_threshold_value(value)
+                if metric_threshold is not None:
+                    per_metric[key] = metric_threshold
+
+        return global_threshold, per_metric
+
+    def _resolve_metric_threshold(
+        self,
+        eval_spec: dict[str, Any],
+        metric_name: Optional[str],
+        *,
+        default: float = 0.7
+    ) -> float:
+        """Resolve a threshold for a single metric."""
+        global_threshold, per_metric = self._extract_threshold_config(eval_spec)
+        if metric_name and metric_name in per_metric:
+            return per_metric[metric_name]
+        if global_threshold is not None:
+            return global_threshold
+        return default
+
+    def _evaluate_passed(
+        self,
+        scores: dict[str, float],
+        avg_score: float,
+        eval_spec: dict[str, Any],
+        *,
+        default_threshold: float = 0.7
+    ) -> bool:
+        """Determine pass/fail from scores and eval_spec thresholds.
+
+        If per-metric thresholds reference metrics missing from scores, log a warning
+        and treat the per-metric check as failed.
+        """
+        global_threshold, per_metric = self._extract_threshold_config(eval_spec)
+        if per_metric:
+            missing_metrics = [metric for metric in per_metric if metric not in scores]
+            if missing_metrics:
+                logger.warning(
+                    "Per-metric thresholds reference missing scores; failing per-metric check. "
+                    f"missing={sorted(missing_metrics)} available={sorted(scores.keys())}"
+                )
+                per_metric_passed = False
+            else:
+                per_metric_passed = all(scores[metric] >= threshold for metric, threshold in per_metric.items())
+            if global_threshold is not None:
+                return per_metric_passed and avg_score >= global_threshold
+            return per_metric_passed
+
+        threshold = global_threshold if global_threshold is not None else default_threshold
+        return avg_score >= threshold
+
     def _calculate_aggregate_results(
         self,
-        results: List[Dict[str, Any]],
-        metrics: List[str],
+        results: list[dict[str, Any]],
+        metrics: Optional[list[str]],
         threshold: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculate aggregate statistics"""
+        _ = metrics
+        _ = threshold
         if not results:
             return {
                 "mean_score": 0,
@@ -2096,17 +2269,35 @@ class EvaluationRunner:
 
     def _calculate_metric_stats(
         self,
-        results: List[Dict[str, Any]],
-        metrics: List[str]
-    ) -> Dict[str, Dict[str, float]]:
+        results: list[dict[str, Any]],
+        metrics: Optional[list[str]]
+    ) -> dict[str, dict[str, float]]:
         """Calculate per-metric statistics"""
-        metric_scores = {metric: [] for metric in metrics}
+        metric_names = self._normalize_metrics(metrics, default=[])
+        if not metric_names:
+            inferred_metrics: set[str] = set()
+            for result in results:
+                scores_blob = result.get("scores")
+                if not isinstance(scores_blob, dict):
+                    continue
+                for metric_name in scores_blob:
+                    if isinstance(metric_name, str) and metric_name:
+                        inferred_metrics.add(metric_name)
+            metric_names = sorted(inferred_metrics)
+
+        metric_scores = {metric: [] for metric in metric_names}
 
         for result in results:
-            if "scores" in result:
-                for metric, score in result["scores"].items():
-                    if metric in metric_scores:
-                        metric_scores[metric].append(score)
+            scores_blob = result.get("scores")
+            if not isinstance(scores_blob, dict):
+                continue
+            for metric, score in scores_blob.items():
+                if metric not in metric_scores:
+                    continue
+                try:
+                    metric_scores[metric].append(float(score))
+                except (TypeError, ValueError):
+                    continue
 
         metric_stats = {}
         for metric, scores in metric_scores.items():
@@ -2122,7 +2313,7 @@ class EvaluationRunner:
 
         return metric_stats
 
-    def _calculate_usage(self, results: List[Dict[str, Any]]) -> Dict[str, int]:
+    def _calculate_usage(self, results: list[dict[str, Any]]) -> dict[str, int]:
         """Calculate token usage"""
         total_tokens = 0
         prompt_tokens = 0
@@ -2146,7 +2337,7 @@ class EvaluationRunner:
         run_id: str,
         eval_id: str,
         status: str,
-        summary: Dict[str, Any]
+        summary: dict[str, Any]
     ):
         """Send webhook notification"""
         try:
@@ -2163,11 +2354,11 @@ class EvaluationRunner:
             if resp.status_code >= 400:
                 try:
                     resp.raise_for_status()
-                except Exception as e:
-                    raise e
+                except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
+                    raise
             logger.info(f"Webhook sent to {webhook_url} for run {run_id}")
 
-        except Exception as e:
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to send webhook to {webhook_url}: {e}")
 
     def cancel_run(self, run_id: str) -> bool:
@@ -2198,7 +2389,7 @@ class EvaluationRunner:
         self.running_tasks.clear()
 
     # Alias for compatibility with tests
-    async def run_evaluation_async(self, run_id: str, eval_config: Dict[str, Any]):
+    async def run_evaluation_async(self, run_id: str, eval_config: dict[str, Any]):
         """Alias for run_evaluation to match test expectations"""
         eval_id = eval_config.get("eval_id")
         if not eval_id:

@@ -7,23 +7,20 @@
 #
 ########################################################################################################################
 
-import os
-import sys
-import json
-import secrets
-import sqlite3
-from pathlib import Path
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any
-import getpass
 import argparse
+import getpass
+import secrets
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tldw_Server_API.app.core.DB_Management.UserDatabase import UserDatabase
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
+from tldw_Server_API.app.core.DB_Management.UserDatabase import UserDatabase
 
 
 def _default_users_db_path() -> Path:
@@ -37,7 +34,7 @@ def _default_users_db_path() -> Path:
 # Migration Functions
 ########################################################################################################################
 
-def create_admin_user(user_db: UserDatabase, password_service: PasswordService) -> Dict[str, Any]:
+def create_admin_user(user_db: UserDatabase, password_service: PasswordService) -> dict[str, Any]:
     """
     Create the initial admin user for multi-user mode.
 
@@ -144,7 +141,7 @@ def generate_registration_codes(user_db: UserDatabase, admin_id: int, count: int
         # Save codes to file
         codes_file = Path("registration_codes.txt")
         with open(codes_file, "w") as f:
-            f.write("Registration Codes (Generated on {})\n".format(datetime.now().isoformat()))
+            f.write(f"Registration Codes (Generated on {datetime.now().isoformat()})\n")
             f.write("="*60 + "\n\n")
             for i, code in enumerate(codes, 1):
                 f.write(f"Code {i}: {code}\n")
@@ -242,7 +239,7 @@ def update_configuration() -> None:
 
     if response == 'y':
         jwt_secret = secrets.token_urlsafe(32)
-        print(f"\n🔑 JWT Secret Key (add to config or environment):")
+        print("\n🔑 JWT Secret Key (add to config or environment):")
         print(f"   JWT_SECRET_KEY={jwt_secret}")
         print("\n⚠️  Keep this secret secure and never commit it to version control!")
 

@@ -56,7 +56,21 @@ export const JobPreviewModal: React.FC<JobPreviewModalProps> = ({
       dataIndex: "matched_action",
       key: "matched_action",
       width: 120,
-      render: (action: string) => <Tag>{action}</Tag>
+      render: (action: string | null | undefined) => action ? <Tag>{action}</Tag> : "-"
+    },
+    {
+      title: t("watchlists:jobs.preview.columns.reason", "Reason"),
+      key: "reason",
+      width: 220,
+      render: (_, record) => {
+        if (!record.matched_filter_key && !record.matched_filter_type && record.matched_filter_id == null) {
+          return "-"
+        }
+        const reasonType = record.matched_filter_type ? String(record.matched_filter_type) : "filter"
+        const reasonId = record.matched_filter_id != null ? `#${record.matched_filter_id}` : ""
+        const reasonKey = record.matched_filter_key ?? ""
+        return [reasonType, reasonId, reasonKey].filter(Boolean).join(" ")
+      }
     },
     {
       title: t("watchlists:jobs.preview.columns.source", "Source"),

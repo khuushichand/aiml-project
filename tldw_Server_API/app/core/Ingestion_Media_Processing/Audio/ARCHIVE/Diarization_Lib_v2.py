@@ -22,12 +22,16 @@
 # Import necessary libraries
 import warnings
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Optional, Union
 
 # Import 3rd Party Libraries
 import yaml
+
 #from pyannote.audio import Pipeline
-#from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+try:
+    from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+except ImportError:
+    SpeakerDiarization = None
 # Filter out UserWarnings from Pyannote/Torch related to lazy loading or specific model features
 warnings.filterwarnings("ignore", category=UserWarning, message="Trying to infer the `batch_size` from an ambiguous collection.*")
 warnings.filterwarnings("ignore", category=UserWarning, message="Model was trained with pyannote.audio 0.0.1, yours is .*") # Ignore minor version mismatches if they cause warnings
@@ -83,7 +87,7 @@ def load_pipeline_from_config(config_path: Union[str, Path]) -> SpeakerDiarizati
         raise FileNotFoundError(f"Diarization config file not found: {resolved_path}")
 
     try:
-        with open(resolved_path, 'r') as config_file:
+        with open(resolved_path) as config_file:
             config = yaml.safe_load(config_file)
         logging.debug(f"Loaded diarization config: {config}")
 
@@ -144,7 +148,7 @@ def audio_diarization(
     num_speakers: Optional[int] = None, # Allow specifying number of speakers
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Performs speaker diarization on an audio file using a PyAnnote pipeline.
 
@@ -233,9 +237,9 @@ def calculate_overlap(start1: float, end1: float, start2: float, end2: float) ->
 
 @timeit
 def combine_transcription_and_diarization(
-    transcription_segments: List[Dict[str, Any]],
-    diarization_segments: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    transcription_segments: list[dict[str, Any]],
+    diarization_segments: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """
     Combines transcription segments with speaker diarization information based on maximum overlap.
 

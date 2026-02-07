@@ -39,6 +39,7 @@ import OptionLayout from "~/components/Layouts/Layout"
 import { OnboardingWizard } from "@/components/Option/Onboarding/OnboardingWizard"
 import { createSettingsRoute } from "./settings-route"
 import { Navigate } from "react-router-dom"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 
 // Eagerly loaded routes for instant navigation on frequently visited pages
 import OptionIndex from "./option-index"
@@ -175,6 +176,10 @@ const OptionWritingPlayground = lazy(() => import("./option-writing-playground")
 const OptionDocumentWorkspace = lazy(() => import("./option-document-workspace"))
 const OptionModelPlayground = lazy(() => import("./option-model-playground"))
 const OptionModerationPlayground = lazy(() => import("./option-moderation-playground"))
+const OptionGuardianSettings = createSettingsRoute(
+  () => import("~/components/Option/Settings/GuardianSettings"),
+  "GuardianSettings"
+)
 const OptionChatbooksPlayground = lazy(() => import("./option-chatbooks-playground"))
 const OptionWatchlists = lazy(() => import("./option-watchlists"))
 const OptionKanbanPlayground = lazy(() => import("./option-kanban-playground"))
@@ -617,7 +622,7 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
   },
   {
     kind: "options",
-    path: "/document-workspace",
+    path: DOCUMENT_WORKSPACE_PATH,
     element: <OptionDocumentWorkspace />,
     nav: {
       group: "workspace",
@@ -637,6 +642,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:moderationPlayground.nav",
       icon: ShieldCheck,
       order: 10
+    }
+  },
+  {
+    kind: "options",
+    path: "/settings/guardian",
+    element: <OptionGuardianSettings />,
+    nav: {
+      group: "server",
+      labelToken: "settings:guardianNav",
+      icon: ShieldCheck,
+      order: 8,
+      beta: true
     }
   },
   {

@@ -13,16 +13,22 @@
 #
 ####################
 
+import logging
 import queue
 import threading
 import time
-from loguru import logger
-import numpy as np
-from typing import Optional, Callable, List, Dict, Any, Union
 from dataclasses import dataclass
 from enum import Enum
+from typing import Callable, Optional
+
+import numpy as np
 import pyaudio
-import torch
+from loguru import logger
+
+from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+    is_transcription_error_message,
+)
 
 # Import Nemo transcription functions
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
@@ -30,10 +36,6 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcripti
     load_parakeet_model,
     transcribe_with_nemo,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-    is_transcription_error_message,
-)
-from tldw_Server_API.app.core.config import load_and_log_configs, loaded_config_data
 
 
 class TranscriptionMode(Enum):
@@ -142,7 +144,7 @@ class NemoLiveTranscriber:
             else:
                 logging.error(f"Failed to load {self.config.model} model")
         except Exception as e:
-            logging.error(f"Error loading model: {e}")
+            logging.exception(f"Error loading model: {e}")
 
     def _default_handler(self, text: str):
         """Default handler for transcriptions."""
@@ -261,7 +263,7 @@ class NemoLiveTranscriber:
                     self._process_silence_based(chunk)
 
             except Exception as e:
-                logging.error(f"Error in listen loop: {e}")
+                logging.exception(f"Error in listen loop: {e}")
 
     def _process_continuous(self):
         """Process audio in continuous mode."""
@@ -331,7 +333,7 @@ class NemoLiveTranscriber:
             # Speech detected, reset silence timer
             self.silence_start_time = None
 
-    def _process_buffer(self, buffer: List[np.ndarray]):
+    def _process_buffer(self, buffer: list[np.ndarray]):
         """Process audio buffer for transcription."""
         if not buffer:
             return
@@ -359,7 +361,7 @@ class NemoLiveTranscriber:
                 self.on_transcription(text)
 
         except Exception as e:
-            logging.error(f"Error processing buffer: {e}")
+            logging.exception(f"Error processing buffer: {e}")
 
     def _partial_loop(self):
         """Loop for generating partial transcriptions."""
@@ -377,7 +379,7 @@ class NemoLiveTranscriber:
                     self.last_partial_time = now
 
             except Exception as e:
-                logging.error(f"Error in partial loop: {e}")
+                logging.exception(f"Error in partial loop: {e}")
 
     def _process_partial(self):
         """Process partial buffer for interim results."""
@@ -418,7 +420,7 @@ class NemoLiveTranscriber:
             self.partial_buffer = self.partial_buffer[-5:]  # Keep last 5 chunks
 
         except Exception as e:
-            logging.error(f"Error processing partial: {e}")
+            logging.exception(f"Error processing partial: {e}")
 
     def __enter__(self):
         """Context manager entry."""

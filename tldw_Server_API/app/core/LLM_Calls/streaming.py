@@ -7,14 +7,16 @@ forwarding a provider's own [DONE] line; callers should append a single
 final sentinel using sse_done()/finalize_stream to avoid duplicates.
 """
 
-from typing import Iterator, AsyncIterator, Optional, Callable, Tuple, Any, Iterable
-
-import os
 import asyncio
+import os
 import threading
-from .sse import normalize_provider_line, is_done_line, sse_data
+from collections.abc import AsyncIterator, Iterable, Iterator
+from typing import Any, Callable, Optional
+
+from tldw_Server_API.app.core.http_client import RetryPolicy, astream_sse
 from tldw_Server_API.app.core.LLM_Calls.error_utils import is_chunked_encoding_error
-from tldw_Server_API.app.core.http_client import astream_sse, RetryPolicy
+
+from .sse import is_done_line, normalize_provider_line, sse_data
 
 
 def iter_sse_lines_requests(
@@ -23,7 +25,7 @@ def iter_sse_lines_requests(
     decode_unicode: bool = True,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
-    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+    control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
 ) -> Iterator[str]:
     """Yield normalized SSE lines from a Response-like stream.
 
@@ -71,7 +73,7 @@ async def aiter_sse_lines_httpx(
     *,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
-    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+    control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
 ) -> AsyncIterator[str]:
     """Async iterator of normalized SSE lines for an httpx streaming response.
 
@@ -152,7 +154,7 @@ async def aiter_normalized_sse(
     retry: Optional[RetryPolicy] = None,
     provider: str = "provider",
     provider_control_passthru: Optional[bool] = None,
-    control_filter: Optional[Callable[[str, str], Optional[Tuple[str, str]]]] = None,
+    control_filter: Optional[Callable[[str, str], Optional[tuple[str, str]]]] = None,
 ) -> AsyncIterator[str]:
     """Standardized SSE iterator built on the centralized astream_sse helper.
 

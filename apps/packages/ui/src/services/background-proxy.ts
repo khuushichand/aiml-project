@@ -773,19 +773,22 @@ export interface BgUploadInit<P extends AllowedPath = AllowedPath, M extends All
   file?: { name?: string; type?: string; data: ArrayBuffer | Uint8Array | number[] }
   // Optional override for the multipart file field name
   fileFieldName?: string
+  // Optional timeout override for upload requests
+  timeoutMs?: number
 }
 
 export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M extends AllowedMethodFor<P> = AllowedMethodFor<P>>(
-  { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName }: BgUploadInit<P, M>
+  { path, method = 'POST' as UpperLower<M>, fields = {}, file, fileFieldName, timeoutMs }: BgUploadInit<P, M>
 ): Promise<T> {
   const hasRuntimeMessage = Boolean(browser?.runtime?.sendMessage && browser?.runtime?.id)
   if (hasRuntimeMessage) {
     try {
       // Add timeout to extension messaging for uploads
-      const uploadTimeout = 5000 // 5 second timeout for upload messaging (longer due to file serialization)
+      const resolvedTimeout = typeof timeoutMs === "number" && timeoutMs > 0 ? timeoutMs : 60000
+      const uploadTimeout = Math.max(5000, resolvedTimeout)
       const uploadPromise = browser.runtime.sendMessage({
         type: 'tldw:upload',
-        payload: { path, method, fields, file, fileFieldName }
+        payload: { path, method, fields, file, fileFieldName, timeoutMs: resolvedTimeout }
       })
       const uploadTimeoutPromise = new Promise<null>((resolve) =>
         setTimeout(() => resolve(null), uploadTimeout)
@@ -848,7 +851,7 @@ export async function bgUpload<T = any, P extends AllowedPath = AllowedPath, M e
 
   const storage = createSafeStorage()
   const resp = await tldwRequest(
-    { path, method, body: formData },
+    { path, method, body: formData, timeoutMs },
     { getConfig: () => storage.get("tldwConfig").catch(() => null) }
   )
   if (!resp?.ok) {

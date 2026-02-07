@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel, Field
 from loguru import logger
+from pydantic import BaseModel, Field
 
-from tldw_Server_API.app.core.Setup import setup_manager
-from tldw_Server_API.app.core.Setup import install_manager
-from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
-from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
-from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     get_auth_principal,
     get_current_user,
@@ -21,8 +16,12 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     require_permissions,
     require_roles,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.api.v1.API_Deps.setup_deps import require_local_setup_access
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.Setup import install_manager, setup_manager
+from tldw_Server_API.app.core.Setup.install_manager import execute_install_plan
+from tldw_Server_API.app.core.Setup.install_schema import InstallPlan
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 router = APIRouter(prefix="/setup", tags=["setup"], include_in_schema=True)
@@ -35,11 +34,11 @@ class ConfigUpdates(BaseModel):
 
 
 class SetupCompleteRequest(BaseModel):
-    disable_first_time_setup: Optional[bool] = Field(
+    disable_first_time_setup: bool | None = Field(
         False,
         description="If true, flips enable_first_time_setup to false so the screen stays hidden",
     )
-    install_plan: Optional[InstallPlan] = Field(
+    install_plan: InstallPlan | None = Field(
         None,
         description="Backend installation instructions to execute after setup completes.",
     )

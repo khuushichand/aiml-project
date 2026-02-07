@@ -18,11 +18,11 @@ This helps reclaim disk space from files that were:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Set
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
@@ -30,16 +30,28 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
+_MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 # Configuration from environment
 CLEANUP_ENABLED = os.environ.get("MEDIA_FILES_CLEANUP_ENABLED", "false").lower() == "true"
 CLEANUP_INTERVAL_SEC = int(os.environ.get("MEDIA_FILES_CLEANUP_INTERVAL_SEC", "86400"))
 GRACE_PERIOD_DAYS = int(os.environ.get("MEDIA_FILES_CLEANUP_GRACE_DAYS", "7"))
 
 # Module-level task reference
-_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_task: asyncio.Task | None = None
 
 
-def _get_storage_base_path() -> Optional[Path]:
+def _get_storage_base_path() -> Path | None:
     """Get the storage base path from config."""
     try:
         from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -47,7 +59,7 @@ def _get_storage_base_path() -> Optional[Path]:
         storage_path = config.get("media_storage_path") or config.get("storage_path")
         if storage_path:
             return Path(storage_path)
-    except Exception as e:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"media_files_cleanup: failed to read storage path from config: {e}")
 
     # Fallback to default location
@@ -59,7 +71,7 @@ def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"media_files_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
@@ -74,15 +86,15 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
 
 
-def _collect_known_storage_paths(user_id: int) -> Set[str]:
+def _collect_known_storage_paths(user_id: int) -> set[str]:
     """Collect all storage_path values from a user's MediaFiles table."""
-    known_paths: Set[str] = set()
+    known_paths: set[str] = set()
     try:
         db_path = DatabasePaths.get_media_db_path(user_id)
         if not Path(db_path).exists():
@@ -99,13 +111,13 @@ def _collect_known_storage_paths(user_id: int) -> Set[str]:
                     known_paths.add(path)
         finally:
             db.close_connection()
-    except Exception as e:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"media_files_cleanup: failed to query MediaFiles for user {user_id}: {e}")
 
     return known_paths
 
 
-def _find_orphaned_files(storage_base: Path, known_paths: Set[str], grace_days: int) -> list[Path]:
+def _find_orphaned_files(storage_base: Path, known_paths: set[str], grace_days: int) -> list[Path]:
     """
     Find files on disk that are not in the known paths set
     and are older than the grace period.
@@ -171,7 +183,7 @@ async def cleanup_orphaned_files() -> dict:
         return {"status": "skipped", "reason": "storage_path_not_found"}
 
     # Collect all known paths from all user databases
-    all_known_paths: Set[str] = set()
+    all_known_paths: set[str] = set()
     user_ids = _enumerate_user_ids()
 
     for user_id in user_ids:
@@ -220,7 +232,7 @@ async def cleanup_orphaned_files() -> dict:
             except OSError:
                 pass
 
-        except Exception as e:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"media_files_cleanup: failed to remove {file_path}: {e}")
             errors.append(str(file_path))
 
@@ -239,7 +251,7 @@ async def cleanup_orphaned_files() -> dict:
             "media_files_cleanup_bytes_freed",
             bytes_freed
         )
-    except Exception:
+    except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS:
         pass
 
     logger.info(
@@ -267,20 +279,18 @@ async def _cleanup_loop():
         except asyncio.CancelledError:
             logger.info("media_files_cleanup: task cancelled")
             break
-        except Exception as e:
+        except _MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"media_files_cleanup: error in cleanup cycle: {e}")
-            try:
+            with contextlib.suppress(_MEDIA_CLEANUP_NONCRITICAL_EXCEPTIONS):
                 get_metrics_registry().increment(
                     "media_files_cleanup_runs_total",
                     labels={"status": "error"}
                 )
-            except Exception:
-                pass
 
         await asyncio.sleep(CLEANUP_INTERVAL_SEC)
 
 
-def start_cleanup_scheduler() -> Optional[asyncio.Task]:
+def start_cleanup_scheduler() -> asyncio.Task | None:
     """
     Start the background cleanup scheduler.
 

@@ -13,48 +13,65 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
 
-from tldw_Server_API.app.core.config import load_comprehensive_config, settings
-from tldw_Server_API.app.core.exceptions import (
-    InvalidStoragePathError,
-    InvalidStorageUserIdError,
-    StorageUnavailableError,
-)
-from tldw_Server_API.app.core.DB_Management.content_backend import (
-    load_content_db_settings,
-    get_content_backend,
-)
 from tldw_Server_API.app.core.Collections.utils import (
     build_highlight_context,
     find_highlight_span,
     hash_text_sha256,
 )
-from .backends.base import DatabaseBackend, DatabaseConfig, BackendType, DatabaseError
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings
+from tldw_Server_API.app.core.DB_Management.content_backend import (
+    get_content_backend,
+    load_content_db_settings,
+)
+from tldw_Server_API.app.core.exceptions import (
+    InvalidStorageUserIdError,
+    StorageUnavailableError,
+)
+
+from .backends.base import BackendType, DatabaseBackend, DatabaseConfig, DatabaseError
 from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths, normalize_output_storage_filename
+
+_COLLECTIONS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    DatabaseError,
+    StorageUnavailableError,
+    InvalidStorageUserIdError,
+)
 
 
 def _utcnow_iso() -> str:
     return datetime.utcnow().replace(tzinfo=timezone.utc).isoformat()
 
 
-def _extract_output_byte_size(metadata_json: Optional[str]) -> Optional[int]:
+def _extract_output_byte_size(metadata_json: str | None) -> int | None:
     if not metadata_json:
         return None
     try:
         payload = json.loads(metadata_json)
-    except Exception:
+    except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
         return None
     if not isinstance(payload, dict):
         return None
@@ -66,13 +83,13 @@ def _extract_output_byte_size(metadata_json: Optional[str]) -> Optional[int]:
     return value if value >= 0 else None
 
 
-def _is_audiobook_output_type(type_value: Optional[str]) -> bool:
+def _is_audiobook_output_type(type_value: str | None) -> bool:
     if not type_value:
         return False
     return str(type_value).startswith("audiobook_")
 
 
-def _resolve_output_size_bytes(user_id: str, storage_path: Optional[str]) -> Optional[int]:
+def _resolve_output_size_bytes(user_id: str, storage_path: str | None) -> int | None:
     if not storage_path:
         return None
     try:
@@ -117,11 +134,11 @@ class OutputTemplateRow:
     type: str
     format: str
     body: str
-    description: Optional[str]
+    description: str | None
     is_default: bool
     created_at: str
     updated_at: str
-    metadata_json: Optional[str] = None
+    metadata_json: str | None = None
 
 
 @dataclass
@@ -130,15 +147,15 @@ class HighlightRow:
     user_id: str
     item_id: int
     quote: str
-    start_offset: Optional[int]
-    end_offset: Optional[int]
-    color: Optional[str]
-    note: Optional[str]
+    start_offset: int | None
+    end_offset: int | None
+    color: str | None
+    note: str | None
     created_at: str
     anchor_strategy: str
-    content_hash_ref: Optional[str]
-    context_before: Optional[str]
-    context_after: Optional[str]
+    content_hash_ref: str | None
+    context_before: str | None
+    context_after: str | None
     state: str
 
 
@@ -154,28 +171,28 @@ class ContentItemRow:
     id: int
     user_id: str
     origin: str
-    origin_type: Optional[str]
-    origin_id: Optional[int]
-    url: Optional[str]
-    canonical_url: Optional[str]
-    domain: Optional[str]
-    title: Optional[str]
-    summary: Optional[str]
-    notes: Optional[str]
-    content_hash: Optional[str]
-    word_count: Optional[int]
-    published_at: Optional[str]
-    status: Optional[str]
+    origin_type: str | None
+    origin_id: int | None
+    url: str | None
+    canonical_url: str | None
+    domain: str | None
+    title: str | None
+    summary: str | None
+    notes: str | None
+    content_hash: str | None
+    word_count: int | None
+    published_at: str | None
+    status: str | None
     favorite: bool
-    metadata_json: Optional[str]
-    media_id: Optional[int]
-    job_id: Optional[int]
-    run_id: Optional[int]
-    source_id: Optional[int]
-    read_at: Optional[str]
+    metadata_json: str | None
+    media_id: int | None
+    job_id: int | None
+    run_id: int | None
+    source_id: int | None
+    read_at: str | None
     created_at: str
     updated_at: str
-    tags: List[str]
+    tags: list[str]
     is_new: bool = False
     content_changed: bool = False
 
@@ -186,19 +203,19 @@ class ReadingDigestScheduleRow:
     id: str
     tenant_id: str
     user_id: str
-    name: Optional[str]
+    name: str | None
     cron: str
-    timezone: Optional[str]
+    timezone: str | None
     enabled: bool
     require_online: bool
     filters_json: str
-    template_id: Optional[int]
-    template_name: Optional[str]
+    template_id: int | None
+    template_name: str | None
     format: str
-    retention_days: Optional[int]
-    last_run_at: Optional[str]
-    next_run_at: Optional[str]
-    last_status: Optional[str]
+    retention_days: int | None
+    last_run_at: str | None
+    next_run_at: str | None
+    last_status: str | None
     created_at: str
     updated_at: str
 
@@ -210,7 +227,7 @@ class VoiceProfileRow:
     name: str
     default_voice: str
     default_speed: float
-    chapter_overrides_json: Optional[str]
+    chapter_overrides_json: str | None
     created_at: str
     updated_at: str
 
@@ -219,11 +236,11 @@ class VoiceProfileRow:
 class AudiobookProjectRow:
     id: int
     user_id: str
-    project_id: Optional[str]
-    title: Optional[str]
-    source_ref: Optional[str]
-    status: Optional[str]
-    settings_json: Optional[str]
+    project_id: str | None
+    title: str | None
+    source_ref: str | None
+    status: str | None
+    settings_json: str | None
     created_at: str
     updated_at: str
 
@@ -233,12 +250,12 @@ class AudiobookChapterRow:
     id: int
     project_id: int
     chapter_index: int
-    title: Optional[str]
-    start_offset: Optional[int]
-    end_offset: Optional[int]
-    voice_profile_id: Optional[str]
-    speed: Optional[float]
-    metadata_json: Optional[str]
+    title: str | None
+    start_offset: int | None
+    end_offset: int | None
+    voice_profile_id: str | None
+    speed: float | None
+    metadata_json: str | None
 
 
 @dataclass
@@ -248,13 +265,13 @@ class AudiobookArtifactRow:
     artifact_type: str
     format: str
     output_id: int
-    metadata_json: Optional[str]
+    metadata_json: str | None
 
 
 class CollectionsDatabase:
     """Adapter for Collections tables stored in the per-user Media DB."""
 
-    def __init__(self, user_id: int | str, backend: Optional[DatabaseBackend] = None):
+    def __init__(self, user_id: int | str, backend: DatabaseBackend | None = None):
         self.user_id = str(user_id)
         self._owns_backend = False
         if backend is None:
@@ -267,11 +284,11 @@ class CollectionsDatabase:
         self._seed_watchlists_output_templates()
 
     @classmethod
-    def for_user(cls, user_id: int | str) -> "CollectionsDatabase":
+    def for_user(cls, user_id: int | str) -> CollectionsDatabase:
         return cls(user_id=user_id)
 
     @classmethod
-    def from_backend(cls, user_id: int | str, backend: DatabaseBackend) -> "CollectionsDatabase":
+    def from_backend(cls, user_id: int | str, backend: DatabaseBackend) -> CollectionsDatabase:
         """Construct using an existing backend (avoids path resolution and int casting)."""
         return cls(user_id=user_id, backend=backend)
 
@@ -287,7 +304,7 @@ class CollectionsDatabase:
 
         try:
             parser = load_comprehensive_config()
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             parser = None
 
         if parser is not None:
@@ -299,7 +316,7 @@ class CollectionsDatabase:
                         raise DatabaseError("PostgreSQL content backend requested but not initialized")
                     self._owns_backend = False
                     return resolved
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
@@ -313,16 +330,16 @@ class CollectionsDatabase:
             return
         try:
             self.backend.close_all()
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections_db: failed to close backend for user %s: %s", self.user_id, exc)
 
-    def __enter__(self) -> "CollectionsDatabase":
+    def __enter__(self) -> CollectionsDatabase:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
 
-    def _execute_insert(self, query: str, params: Tuple[Any, ...]) -> Any:
+    def _execute_insert(self, query: str, params: tuple[Any, ...]) -> Any:
         if self.backend.backend_type == BackendType.POSTGRESQL:
             prepared_query, prepared_params = prepare_backend_statement(
                 BackendType.POSTGRESQL,
@@ -335,7 +352,7 @@ class CollectionsDatabase:
         return self.backend.execute(query, params)
 
     @staticmethod
-    def _extract_lastrowid(result: Any) -> Optional[int]:
+    def _extract_lastrowid(result: Any) -> int | None:
         try:
             if result is None:
                 return None
@@ -345,7 +362,7 @@ class CollectionsDatabase:
             first = getattr(result, "first", None)
             if isinstance(first, dict) and first.get("id") is not None:
                 return int(first.get("id"))
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -369,7 +386,7 @@ class CollectionsDatabase:
         return default
 
     @staticmethod
-    def _seeded_template_hash(body: str, description: Optional[str], fmt: str, type_: str) -> Optional[str]:
+    def _seeded_template_hash(body: str, description: str | None, fmt: str, type_: str) -> str | None:
         payload = json.dumps(
             {
                 "body": body or "",
@@ -388,8 +405,8 @@ class CollectionsDatabase:
         if table not in _SQLITE_PRAGMA_TABLES:
             return set()
         try:
-            result = self.backend.execute(f"PRAGMA table_info({table})", tuple())
-        except Exception as exc:
+            result = self.backend.execute(f"PRAGMA table_info({table})", ())
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.exception(
                 "collections_db: failed to read sqlite columns for table {}: {}",
                 table,
@@ -407,9 +424,9 @@ class CollectionsDatabase:
         try:
             rows = self.backend.execute(
                 "SELECT id, settings_json FROM audiobook_projects WHERE project_id IS NULL OR project_id = ''",
-                tuple(),
+                (),
             ).rows
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections backfill: audiobook_projects.project_id fetch failed: %s", exc)
             return
         updated = 0
@@ -419,7 +436,7 @@ class CollectionsDatabase:
                 continue
             try:
                 settings = json.loads(raw_settings)
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 continue
             project_id = settings.get("project_id") if isinstance(settings, dict) else None
             if not isinstance(project_id, str) or not project_id:
@@ -430,7 +447,7 @@ class CollectionsDatabase:
                     (project_id, row.get("id"), self.user_id),
                 )
                 updated += 1
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections backfill: audiobook_projects.project_id update failed: %s", exc)
         if updated:
             logger.debug("collections backfill: audiobook_projects.project_id updated %s rows", updated)
@@ -773,7 +790,7 @@ class CollectionsDatabase:
             """
         try:
             self.backend.create_tables(ddl)
-        except Exception as e:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Collections schema init failed: {e}")
             raise
         output_template_columns: set[str] = set()
@@ -793,8 +810,8 @@ class CollectionsDatabase:
         if "metadata_json" not in output_template_columns:
             try:
                 # Attempt to add metadata_json if missing
-                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE output_templates ADD COLUMN metadata_json TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: output_templates.metadata_json already exists or skipped")
                 else:
@@ -806,47 +823,47 @@ class CollectionsDatabase:
                 deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE outputs ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.deleted already exists or skipped")
                 else:
                     raise
         if "deleted_at" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN deleted_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.deleted_at already exists or skipped")
                 else:
                     raise
         if "retention_until" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN retention_until TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.retention_until already exists or skipped")
                 else:
                     raise
         if "workspace_tag" not in output_columns:
             try:
-                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE outputs ADD COLUMN workspace_tag TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: outputs.workspace_tag already exists or skipped")
                 else:
                     raise
         try:
-            self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", tuple())
-        except Exception as exc:
+            self.backend.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_outputs_user_title_format ON outputs(user_id, title, format) WHERE deleted = 0", ())
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs unique index already exists or skipped")
             else:
                 raise
         try:
-            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", tuple())
-        except Exception as exc:
+            self.backend.execute("CREATE INDEX IF NOT EXISTS idx_outputs_workspace_tag ON outputs(workspace_tag)", ())
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             if _is_backfill_noop_error(exc):
                 logger.debug("collections backfill: outputs workspace_tag index already exists or skipped")
             else:
@@ -858,9 +875,9 @@ class CollectionsDatabase:
                 enabled_default = "TRUE" if self.backend.backend_type == BackendType.POSTGRESQL else "1"
                 self.backend.execute(
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN enabled {enabled_type} NOT NULL DEFAULT {enabled_default}",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.enabled already exists or skipped")
                 else:
@@ -871,17 +888,17 @@ class CollectionsDatabase:
                 online_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE reading_digest_schedules ADD COLUMN require_online {online_type} NOT NULL DEFAULT {online_default}",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.require_online already exists or skipped")
                 else:
                     raise
         if "filters_json" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN filters_json TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.filters_json already exists or skipped")
                 else:
@@ -889,56 +906,56 @@ class CollectionsDatabase:
         if "template_id" not in digest_columns:
             try:
                 template_id_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", tuple())
-            except Exception as exc:
+                self.backend.execute(f"ALTER TABLE reading_digest_schedules ADD COLUMN template_id {template_id_type}", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_id already exists or skipped")
                 else:
                     raise
         if "template_name" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN template_name TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.template_name already exists or skipped")
                 else:
                     raise
         if "format" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN format TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.format already exists or skipped")
                 else:
                     raise
         if "retention_days" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN retention_days INTEGER", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.retention_days already exists or skipped")
                 else:
                     raise
         if "last_run_at" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_run_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_run_at already exists or skipped")
                 else:
                     raise
         if "next_run_at" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN next_run_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.next_run_at already exists or skipped")
                 else:
                     raise
         if "last_status" not in digest_columns:
             try:
-                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE reading_digest_schedules ADD COLUMN last_status TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: reading_digest_schedules.last_status already exists or skipped")
                 else:
@@ -950,49 +967,49 @@ class CollectionsDatabase:
                 deleted_default = "FALSE" if self.backend.backend_type == BackendType.POSTGRESQL else "0"
                 self.backend.execute(
                     f"ALTER TABLE file_artifacts ADD COLUMN deleted {deleted_type} NOT NULL DEFAULT {deleted_default}",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.deleted already exists or skipped")
                 else:
                     raise
         if "deleted_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN deleted_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.deleted_at already exists or skipped")
                 else:
                     raise
         if "retention_until" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN retention_until TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.retention_until already exists or skipped")
                 else:
                     raise
         if "export_status" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_status TEXT NOT NULL DEFAULT 'none'", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_status already exists or skipped")
                 else:
                     raise
         if "export_format" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_format TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_format already exists or skipped")
                 else:
                     raise
         if "export_storage_path" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_storage_path TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_storage_path already exists or skipped")
                 else:
@@ -1000,40 +1017,40 @@ class CollectionsDatabase:
         if "export_bytes" not in file_artifact_columns:
             try:
                 export_bytes_type = "BIGINT" if self.backend.backend_type == BackendType.POSTGRESQL else "INTEGER"
-                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", tuple())
-            except Exception as exc:
+                self.backend.execute(f"ALTER TABLE file_artifacts ADD COLUMN export_bytes {export_bytes_type}", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_bytes already exists or skipped")
                 else:
                     raise
         if "export_content_type" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_content_type TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_content_type already exists or skipped")
                 else:
                     raise
         if "export_job_id" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_job_id TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_job_id already exists or skipped")
                 else:
                     raise
         if "export_expires_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_expires_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_expires_at already exists or skipped")
                 else:
                     raise
         if "export_consumed_at" not in file_artifact_columns:
             try:
-                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE file_artifacts ADD COLUMN export_consumed_at TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: file_artifacts.export_consumed_at already exists or skipped")
                 else:
@@ -1041,8 +1058,8 @@ class CollectionsDatabase:
         # Audiobook projects backfills
         if self.backend.backend_type == BackendType.POSTGRESQL:
             try:
-                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", tuple())
-            except Exception as exc:
+                self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN IF NOT EXISTS project_id TEXT", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
                 else:
@@ -1050,9 +1067,9 @@ class CollectionsDatabase:
             try:
                 self.backend.execute(
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
                 else:
@@ -1060,8 +1077,8 @@ class CollectionsDatabase:
         else:
             if "project_id" not in audiobook_project_columns:
                 try:
-                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", tuple())
-                except Exception as exc:
+                    self.backend.execute("ALTER TABLE audiobook_projects ADD COLUMN project_id TEXT", ())
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     if _is_backfill_noop_error(exc):
                         logger.debug("collections backfill: audiobook_projects.project_id already exists or skipped")
                     else:
@@ -1069,9 +1086,9 @@ class CollectionsDatabase:
             try:
                 self.backend.execute(
                     "CREATE INDEX IF NOT EXISTS idx_audiobook_projects_project_id ON audiobook_projects(user_id, project_id)",
-                    tuple(),
+                    (),
                 )
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: audiobook_projects.project_id index already exists or skipped")
                 else:
@@ -1179,7 +1196,7 @@ class CollectionsDatabase:
             """
         try:
             self.backend.create_tables(content_ddl)
-        except Exception as e:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Collections content_items schema init failed: {e}")
             raise
         if fts_available:
@@ -1194,11 +1211,11 @@ class CollectionsDatabase:
                     );
                     """
                 )
-            except Exception as e:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Collections FTS unavailable: {e}")
                 fts_available = False
         # Backfill columns for prior installs if table existed
-        _backfill_columns: Dict[str, str] = {
+        _backfill_columns: dict[str, str] = {
             "origin_type": "TEXT",
             "origin_id": "INTEGER",
             "job_id": "INTEGER",
@@ -1211,8 +1228,8 @@ class CollectionsDatabase:
             if column in content_columns:
                 continue
             try:
-                self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", tuple())
-            except Exception as exc:
+                self.backend.execute(f"ALTER TABLE content_items ADD COLUMN {column} {col_type}", ())
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 if _is_backfill_noop_error(exc):
                     logger.debug("collections backfill: content_items.%s already exists or skipped", column)
                 else:
@@ -1228,13 +1245,13 @@ class CollectionsDatabase:
 
         try:
             from tldw_Server_API.app.core.Watchlists import template_store
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections: watchlists template store unavailable: %s", exc)
             return
 
         try:
             summaries = template_store.list_templates()
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("collections: failed to list watchlists templates: %s", exc)
             return
 
@@ -1250,7 +1267,7 @@ class CollectionsDatabase:
             seen.add(name)
             try:
                 record = template_store.load_template(name)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections: failed to load watchlists template %s: %s", name, exc)
                 continue
             fmt = record.format.lower()
@@ -1275,7 +1292,7 @@ class CollectionsDatabase:
                         metadata_json=metadata_json,
                     )
                     existing.add(record.name)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("collections: failed to seed watchlists template %s: %s", record.name, exc)
                 continue
 
@@ -1283,15 +1300,15 @@ class CollectionsDatabase:
                 current = self.get_output_template_by_name(name)
             except KeyError:
                 continue
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("collections: failed to lookup watchlists template %s: %s", name, exc)
                 continue
 
-            current_meta: Dict[str, Any] = {}
+            current_meta: dict[str, Any] = {}
             if current.metadata_json:
                 try:
                     current_meta = json.loads(current.metadata_json)
-                except Exception:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                     current_meta = {}
 
             if current_meta.get("seeded_from") != "watchlists_templates":
@@ -1318,7 +1335,7 @@ class CollectionsDatabase:
             ):
                 continue
 
-            patch: Dict[str, Any] = {}
+            patch: dict[str, Any] = {}
             if current.body != record.content:
                 patch["body"] = record.content
             if current.description != record.description:
@@ -1337,7 +1354,7 @@ class CollectionsDatabase:
             if patch:
                 try:
                     self.update_output_template(current.id, patch)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug("collections: failed to refresh watchlists template %s: %s", name, exc)
 
     # ------------------------
@@ -1364,7 +1381,7 @@ class CollectionsDatabase:
                 "SELECT name FROM output_templates WHERE user_id = ?",
                 (self.user_id,),
             ).rows
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return set()
         names: set[str] = set()
         for row in rows:
@@ -1373,13 +1390,13 @@ class CollectionsDatabase:
         return names
 
     @staticmethod
-    def _domain_from_url(url: Optional[str]) -> Optional[str]:
+    def _domain_from_url(url: str | None) -> str | None:
         if not url:
             return None
         try:
             parsed = urlparse(url)
             return parsed.hostname
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
@@ -1391,7 +1408,7 @@ class CollectionsDatabase:
         return " AND ".join(f"{token}*" for token in tokens)
 
     @staticmethod
-    def _fts_query_candidates(query: str) -> List[str]:
+    def _fts_query_candidates(query: str) -> list[str]:
         """Generate FTS query candidates, preferring safe variants when needed."""
         raw = (query or "").strip()
         if not raw:
@@ -1403,7 +1420,7 @@ class CollectionsDatabase:
         has_syntax = bool(re.search(r'[":*()]', raw))
         prefer_raw = has_operator or has_syntax
 
-        candidates: List[str] = []
+        candidates: list[str] = []
         if prefer_raw:
             candidates.append(raw)
             if sanitized and sanitized != raw:
@@ -1431,8 +1448,8 @@ class CollectionsDatabase:
             or "malformed match expression" in msg
         )
 
-    def ensure_collection_tag_ids(self, names: Iterable[str]) -> List[int]:
-        normed: List[str] = []
+    def ensure_collection_tag_ids(self, names: Iterable[str]) -> list[int]:
+        normed: list[str] = []
         seen: set[str] = set()
         for raw in names or []:
             if not raw:
@@ -1445,7 +1462,7 @@ class CollectionsDatabase:
         if not normed:
             return []
 
-        ids: List[int] = []
+        ids: list[int] = []
         select_sql = "SELECT id FROM collection_tags WHERE user_id = ? AND name = ?"
         insert_sql = "INSERT INTO collection_tags (user_id, name) VALUES (?, ?)"
         for nm in normed:
@@ -1454,12 +1471,12 @@ class CollectionsDatabase:
             if row:
                 ids.append(int(row.get("id")))
                 continue
-            insert_exc: Optional[Exception] = None
-            tag_id: Optional[int] = None
+            insert_exc: Exception | None = None
+            tag_id: int | None = None
             try:
                 res = self._execute_insert(insert_sql, (self.user_id, nm))
                 tag_id = self._extract_lastrowid(res)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 insert_exc = exc
             if tag_id is None:
                 row = self.backend.execute(select_sql, select_params).first
@@ -1484,7 +1501,7 @@ class CollectionsDatabase:
                 # Ignore unique violations (already linked)
                 continue
 
-    def _fetch_tags_for_item_ids(self, item_ids: Iterable[int]) -> Dict[int, List[str]]:
+    def _fetch_tags_for_item_ids(self, item_ids: Iterable[int]) -> dict[int, list[str]]:
         ids = [int(i) for i in set(item_ids or []) if i is not None]
         if not ids:
             return {}
@@ -1498,7 +1515,7 @@ class CollectionsDatabase:
             """,
             tuple(ids),
         ).rows
-        mapping: Dict[int, List[str]] = {item_id: [] for item_id in ids}
+        mapping: dict[int, list[str]] = {item_id: [] for item_id in ids}
         for row in rows:
             item_id = int(row.get("item_id"))
             name = str(row.get("name"))
@@ -1511,11 +1528,11 @@ class CollectionsDatabase:
         self,
         item_id: int,
         *,
-        title: Optional[str],
-        summary: Optional[str],
-        notes: Optional[str],
-        tags: Optional[List[str]],
-        metadata_json: Optional[str],
+        title: str | None,
+        summary: str | None,
+        notes: str | None,
+        tags: list[str] | None,
+        metadata_json: str | None,
     ) -> None:
         if not self._fts_available:
             return
@@ -1535,7 +1552,7 @@ class CollectionsDatabase:
                 "INSERT INTO content_items_fts(rowid, title, summary, metadata) VALUES (?, ?, ?, ?)",
                 (item_id, title or "", summary or "", metadata_text),
             )
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS update failed for item {item_id}: {exc}")
 
     def _delete_content_fts_entry(self, item_id: int) -> None:
@@ -1546,13 +1563,13 @@ class CollectionsDatabase:
                 "DELETE FROM content_items_fts WHERE rowid = ?",
                 (item_id,),
             )
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Collections FTS delete failed for item {item_id}: {exc}")
 
     def _row_to_content_item(
         self,
-        row: Dict[str, Any],
-        tags: Optional[List[str]] = None,
+        row: dict[str, Any],
+        tags: list[str] | None = None,
         *,
         is_new: bool = False,
         content_changed: bool = False,
@@ -1620,7 +1637,7 @@ class CollectionsDatabase:
         tags_map = self._fetch_tags_for_item_ids([item_id])
         return self._row_to_content_item(row, tags_map.get(item_id, []))
 
-    def get_content_item_by_url(self, url: str) -> Optional[ContentItemRow]:
+    def get_content_item_by_url(self, url: str) -> ContentItemRow | None:
         if not url:
             return None
         row = self.backend.execute(
@@ -1644,26 +1661,26 @@ class CollectionsDatabase:
         self,
         *,
         origin: str,
-        origin_type: Optional[str] = None,
-        origin_id: Optional[int] = None,
-        url: Optional[str],
-        canonical_url: Optional[str],
-        domain: Optional[str],
-        title: Optional[str],
-        summary: Optional[str],
-        notes: Optional[str] = None,
-        content_hash: Optional[str],
-        word_count: Optional[int],
-        published_at: Optional[str],
-        status: Optional[str] = None,
-        favorite: Optional[bool] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        media_id: Optional[int] = None,
-        job_id: Optional[int] = None,
-        run_id: Optional[int] = None,
-        source_id: Optional[int] = None,
-        read_at: Optional[str] = None,
-        tags: Optional[Iterable[str]] = None,
+        origin_type: str | None = None,
+        origin_id: int | None = None,
+        url: str | None,
+        canonical_url: str | None,
+        domain: str | None,
+        title: str | None,
+        summary: str | None,
+        notes: str | None = None,
+        content_hash: str | None,
+        word_count: int | None,
+        published_at: str | None,
+        status: str | None = None,
+        favorite: bool | None = None,
+        metadata: dict[str, Any] | None = None,
+        media_id: int | None = None,
+        job_id: int | None = None,
+        run_id: int | None = None,
+        source_id: int | None = None,
+        read_at: str | None = None,
+        tags: Iterable[str] | None = None,
         merge_tags: bool = False,
         preserve_existing_on_null: bool = False,
     ) -> ContentItemRow:
@@ -1671,7 +1688,7 @@ class CollectionsDatabase:
         now = _utcnow_iso()
         canonical = canonical_url or url
 
-        selectors: List[Tuple[str, Any]] = []
+        selectors: list[tuple[str, Any]] = []
         if canonical:
             selectors.append(("canonical_url", canonical))
         if content_hash:
@@ -1679,7 +1696,7 @@ class CollectionsDatabase:
         if url:
             selectors.append(("url", url))
 
-        def _lookup_existing() -> tuple[Optional[Dict[str, Any]], Optional[int]]:
+        def _lookup_existing() -> tuple[dict[str, Any] | None, int | None]:
             for column, value in selectors:
                 row = self.backend.execute(
                     f"""
@@ -1695,7 +1712,7 @@ class CollectionsDatabase:
                     return row, int(row.get("id"))
             return None, None
 
-        def _apply_preserve(existing: Dict[str, Any]) -> Dict[str, Any]:
+        def _apply_preserve(existing: dict[str, Any]) -> dict[str, Any]:
             return {
                 "origin_type": origin_type if origin_type is not None else existing.get("origin_type"),
                 "origin_id": origin_id if origin_id is not None else existing.get("origin_id"),
@@ -1716,32 +1733,32 @@ class CollectionsDatabase:
                 "read_at": read_at if read_at is not None else existing.get("read_at"),
             }
 
-        def _build_metadata_json(existing: Optional[Dict[str, Any]]) -> Optional[str]:
+        def _build_metadata_json(existing: dict[str, Any] | None) -> str | None:
             if not metadata:
                 if preserve_existing_on_null and existing is not None:
                     return existing.get("metadata_json")
                 return None
             if preserve_existing_on_null and existing is not None:
-                current_meta: Dict[str, Any] = {}
+                current_meta: dict[str, Any] = {}
                 existing_json = existing.get("metadata_json")
                 if existing_json:
                     try:
                         current_meta = json.loads(existing_json)
-                    except Exception:
+                    except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                         current_meta = {}
                 current_meta.update(metadata)
                 try:
                     return json.dumps(current_meta, ensure_ascii=False)
-                except Exception as exc:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to encode collections metadata: {exc}")
                     return None
             try:
                 return json.dumps(metadata, ensure_ascii=False)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to encode collections metadata: {exc}")
                 return None
 
-        def _refresh_derived() -> tuple[Optional[str], Optional[str], int, str]:
+        def _refresh_derived() -> tuple[str | None, str | None, int, str]:
             current_canonical = canonical_url or url
             current_domain = domain or self._domain_from_url(current_canonical)
             if favorite is None and preserve_existing_on_null and existing_row is not None:
@@ -1850,7 +1867,7 @@ class CollectionsDatabase:
                 prev_hash = existing_row.get("content_hash")
 
         if item_id is not None and not created:
-            fields: List[str] = [
+            fields: list[str] = [
                 "origin = ?",
                 "origin_type = ?",
                 "origin_id = ?",
@@ -1902,10 +1919,7 @@ class CollectionsDatabase:
                 f"UPDATE content_items SET {', '.join(fields)} WHERE id = ? AND user_id = ?",
                 params,
             )
-            if prev_hash == content_hash or (prev_hash is None and content_hash is None):
-                content_changed = False
-            else:
-                content_changed = True
+            content_changed = not (prev_hash == content_hash or prev_hash is None and content_hash is None)
 
         if tags is not None:
             tag_list = list(tags)
@@ -1917,7 +1931,7 @@ class CollectionsDatabase:
             self._replace_item_tags(item_id, tag_ids)
 
         row = self.get_content_item(item_id)
-        try:
+        with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
             self._update_content_fts_entry(
                 item_id,
                 title=row.title,
@@ -1926,8 +1940,6 @@ class CollectionsDatabase:
                 tags=row.tags,
                 metadata_json=row.metadata_json,
             )
-        except Exception:
-            pass
         row.is_new = created
         row.content_changed = content_changed
         return row
@@ -1935,26 +1947,26 @@ class CollectionsDatabase:
     def list_content_items(
         self,
         *,
-        ids: Optional[Iterable[int]] = None,
-        q: Optional[str] = None,
-        tags: Optional[Iterable[str]] = None,
-        domain: Optional[str] = None,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        status: Optional[Iterable[str]] = None,
-        favorite: Optional[bool] = None,
-        job_id: Optional[int] = None,
-        run_id: Optional[int] = None,
-        origin: Optional[str] = None,
+        ids: Iterable[int] | None = None,
+        q: str | None = None,
+        tags: Iterable[str] | None = None,
+        domain: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        status: Iterable[str] | None = None,
+        favorite: bool | None = None,
+        job_id: int | None = None,
+        run_id: int | None = None,
+        origin: str | None = None,
         page: int = 1,
         size: int = 20,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        sort: Optional[str] = None,
-    ) -> Tuple[List[ContentItemRow], int]:
-        where: List[str] = ["ci.user_id = ?"]
-        params: List[Any] = [self.user_id]
-        joins: List[str] = []
+        offset: int | None = None,
+        limit: int | None = None,
+        sort: str | None = None,
+    ) -> tuple[list[ContentItemRow], int]:
+        where: list[str] = ["ci.user_id = ?"]
+        params: list[Any] = [self.user_id]
+        joins: list[str] = []
         having = ""
 
         if ids:
@@ -1988,12 +2000,9 @@ class CollectionsDatabase:
             where.append("ci.origin = ?")
             params.append(origin)
 
-        status_filters: List[str] = []
+        status_filters: list[str] = []
         if status:
-            if isinstance(status, str):
-                status_filters = [status.lower()]
-            else:
-                status_filters = [str(s).lower() for s in status if s]
+            status_filters = [status.lower()] if isinstance(status, str) else [str(s).lower() for s in status if s]
         if status_filters:
             placeholders = ",".join("?" for _ in status_filters)
             where.append(f"LOWER(ci.status) IN ({placeholders})")
@@ -2003,7 +2012,7 @@ class CollectionsDatabase:
             where.append("ci.favorite = ?")
             params.append(1 if favorite else 0)
 
-        tag_filters: List[str] = []
+        tag_filters: list[str] = []
         if tags:
             for t in tags:
                 if t:
@@ -2017,7 +2026,7 @@ class CollectionsDatabase:
             params.extend(tag_filters)
             having = f"HAVING COUNT(DISTINCT ct.name) >= {len(tag_filters)}"
 
-        def _apply_like_search(where_clause: List[str], clause_params: List[Any]) -> None:
+        def _apply_like_search(where_clause: list[str], clause_params: list[Any]) -> None:
             q_like = f"%{q.lower()}%"
             where_clause.append(
                 "("
@@ -2034,11 +2043,11 @@ class CollectionsDatabase:
             clause_params.extend([q_like, q_like, q_like, self.user_id, q_like])
 
         def _execute_query(
-            where_clause: List[str],
-            clause_params: List[Any],
-            query_joins: List[str],
+            where_clause: list[str],
+            clause_params: list[Any],
+            query_joins: list[str],
             fts_joined: bool,
-        ) -> Tuple[List[ContentItemRow], int]:
+        ) -> tuple[list[ContentItemRow], int]:
             where_sql = " AND ".join(where_clause) if where_clause else "1=1"
             group_by = "GROUP BY ci.id" if tag_filters else ""
             joins_sql = f" {' '.join(query_joins)}" if query_joins else ""
@@ -2048,10 +2057,7 @@ class CollectionsDatabase:
             total = int(self.backend.execute(count_sql, tuple(clause_params)).scalar or 0)
 
             resolved_limit = limit if isinstance(limit, int) and limit > 0 else size
-            if isinstance(offset, int) and offset >= 0:
-                resolved_offset = offset
-            else:
-                resolved_offset = max(0, (page - 1) * size)
+            resolved_offset = offset if isinstance(offset, int) and offset >= 0 else max(0, (page - 1) * size)
 
             sort_key = (sort or "").strip().lower()
             order_by = "ci.updated_at DESC, ci.id DESC"
@@ -2065,9 +2071,7 @@ class CollectionsDatabase:
                 order_by = "ci.title ASC, ci.id ASC"
             elif sort_key == "title_desc":
                 order_by = "ci.title DESC, ci.id DESC"
-            elif sort_key == "relevance" and fts_joined and not tag_filters:
-                order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
-            elif not sort_key and fts_joined and not tag_filters:
+            elif sort_key == "relevance" and fts_joined and not tag_filters or not sort_key and fts_joined and not tag_filters:
                 order_by = "bm25(content_items_fts) ASC, ci.updated_at DESC, ci.id DESC"
             rows_sql = f"""
                 SELECT
@@ -2120,20 +2124,20 @@ class CollectionsDatabase:
         self,
         item_id: int,
         *,
-        status: Optional[str] = None,
-        favorite: Optional[bool] = None,
-        tags: Optional[Iterable[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        title: Optional[str] = None,
-        summary: Optional[str] = None,
-        notes: Optional[str] = None,
-        read_at: Optional[str] = None,
+        status: str | None = None,
+        favorite: bool | None = None,
+        tags: Iterable[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        title: str | None = None,
+        summary: str | None = None,
+        notes: str | None = None,
+        read_at: str | None = None,
         clear_read_at: bool = False,
     ) -> ContentItemRow:
         """Update persisted content item fields and tags."""
         existing = self.get_content_item(item_id)
-        updates: List[str] = []
-        params: List[Any] = []
+        updates: list[str] = []
+        params: list[Any] = []
         if status is not None:
             updates.append("status = ?")
             params.append(status)
@@ -2155,11 +2159,11 @@ class CollectionsDatabase:
 
         metadata_json = None
         if metadata is not None:
-            current_meta: Dict[str, Any] = {}
+            current_meta: dict[str, Any] = {}
             if existing.metadata_json:
                 try:
                     current_meta = json.loads(existing.metadata_json)
-                except Exception:
+                except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                     current_meta = {}
             current_meta.update(metadata)
             metadata_json = json.dumps(current_meta, ensure_ascii=False)
@@ -2189,7 +2193,7 @@ class CollectionsDatabase:
                 tags=tgt.tags,
                 metadata_json=tgt.metadata_json,
             )
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             pass
 
         row = self.get_content_item(item_id)
@@ -2214,17 +2218,15 @@ class CollectionsDatabase:
             "DELETE FROM content_items WHERE id = ? AND user_id = ?",
             (item_id, self.user_id),
         )
-        try:
+        with contextlib.suppress(_COLLECTIONS_NONCRITICAL_EXCEPTIONS):
             self._delete_content_fts_entry(item_id)
-        except Exception:
-            pass
 
     # ------------------------
     # Output Templates API
     # ------------------------
-    def list_output_templates(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[OutputTemplateRow], int]:
+    def list_output_templates(self, q: str | None, limit: int, offset: int) -> tuple[list[OutputTemplateRow], int]:
         where = ["user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             where.append("(LOWER(name) LIKE ? OR LOWER(COALESCE(description, '')) LIKE ?)")
             like = f"%{q.lower()}%"
@@ -2242,7 +2244,7 @@ class CollectionsDatabase:
         mapped = [OutputTemplateRow(**{**r, "is_default": bool(r.get("is_default", 0))}) for r in rows]
         return mapped, total
 
-    def get_default_output_template_by_type(self, type_: str) -> Optional[OutputTemplateRow]:
+    def get_default_output_template_by_type(self, type_: str) -> OutputTemplateRow | None:
         q = (
             "SELECT id, user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json "
             "FROM output_templates WHERE user_id = ? AND type = ? AND is_default = 1 ORDER BY updated_at DESC LIMIT 1"
@@ -2253,7 +2255,7 @@ class CollectionsDatabase:
         row["is_default"] = bool(row.get("is_default", 0))
         return OutputTemplateRow(**row)
 
-    def create_output_template(self, name: str, type_: str, format_: str, body: str, description: Optional[str], is_default: bool, metadata_json: Optional[str] = None) -> OutputTemplateRow:
+    def create_output_template(self, name: str, type_: str, format_: str, body: str, description: str | None, is_default: bool, metadata_json: str | None = None) -> OutputTemplateRow:
         now = _utcnow_iso()
         q = (
             "INSERT INTO output_templates (user_id, name, type, format, body, description, is_default, created_at, updated_at, metadata_json) "
@@ -2289,11 +2291,11 @@ class CollectionsDatabase:
         row["is_default"] = bool(row.get("is_default", 0))
         return OutputTemplateRow(**row)
 
-    def update_output_template(self, template_id: int, patch: Dict[str, Any]) -> OutputTemplateRow:
+    def update_output_template(self, template_id: int, patch: dict[str, Any]) -> OutputTemplateRow:
         if not patch:
             return self.get_output_template(template_id)
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for key in ("name", "type", "format", "body", "description", "is_default", "metadata_json"):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")
@@ -2322,14 +2324,14 @@ class CollectionsDatabase:
         self,
         item_id: int,
         quote: str,
-        start_offset: Optional[int],
-        end_offset: Optional[int],
-        color: Optional[str],
-        note: Optional[str],
+        start_offset: int | None,
+        end_offset: int | None,
+        color: str | None,
+        note: str | None,
         anchor_strategy: str = "fuzzy_quote",
-        content_hash_ref: Optional[str] = None,
-        context_before: Optional[str] = None,
-        context_after: Optional[str] = None,
+        content_hash_ref: str | None = None,
+        context_before: str | None = None,
+        context_after: str | None = None,
         state: str = "active",
     ) -> HighlightRow:
         now = _utcnow_iso()
@@ -2359,7 +2361,7 @@ class CollectionsDatabase:
             raise DatabaseError("Failed to create highlight")
         return self.get_highlight(new_id)
 
-    def list_highlights_by_item(self, item_id: int) -> List[HighlightRow]:
+    def list_highlights_by_item(self, item_id: int) -> list[HighlightRow]:
         q = (
             "SELECT id, user_id, item_id, quote, start_offset, end_offset, color, note, created_at, "
             "anchor_strategy, content_hash_ref, context_before, context_after, state "
@@ -2379,11 +2381,11 @@ class CollectionsDatabase:
             raise KeyError("highlight_not_found")
         return HighlightRow(**row)
 
-    def update_highlight(self, highlight_id: int, patch: Dict[str, Any]) -> HighlightRow:
+    def update_highlight(self, highlight_id: int, patch: dict[str, Any]) -> HighlightRow:
         if not patch:
             return self.get_highlight(highlight_id)
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for key in (
             "quote",
             "start_offset",
@@ -2416,7 +2418,7 @@ class CollectionsDatabase:
     # ------------------------
     # Maintenance hooks
     # ------------------------
-    def mark_highlights_stale_if_content_changed(self, item_id: int, new_content_hash: Optional[str]) -> int:
+    def mark_highlights_stale_if_content_changed(self, item_id: int, new_content_hash: str | None) -> int:
         """Mark highlights as stale if their stored content_hash_ref doesn't match new hash.
 
         Returns number of rows updated. Intended to be called by item update pipeline.
@@ -2434,9 +2436,9 @@ class CollectionsDatabase:
         self,
         item_id: int,
         *,
-        content_text: Optional[str],
-        content_hash: Optional[str],
-    ) -> Dict[str, int]:
+        content_text: str | None,
+        content_hash: str | None,
+    ) -> dict[str, int]:
         if not content_text:
             return {"updated": 0, "stale": 0, "skipped": 0}
         resolved_hash = content_hash or hash_text_sha256(content_text)
@@ -2495,7 +2497,7 @@ class CollectionsDatabase:
         base_dir = DatabasePaths.get_user_base_directory(user_id) / "outputs"
         try:
             base_resolved = base_dir.resolve(strict=False)
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
             raise StorageUnavailableError("storage_unavailable") from exc
         return normalize_output_storage_filename(
@@ -2518,7 +2520,7 @@ class CollectionsDatabase:
         base_dir = DatabasePaths.get_user_temp_outputs_dir(user_id)
         try:
             base_resolved = base_dir.resolve(strict=False)
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"temp outputs: failed to resolve outputs base dir for user {self.user_id}: {exc}")
             raise StorageUnavailableError("storage_unavailable") from exc
         return normalize_output_storage_filename(
@@ -2535,17 +2537,17 @@ class CollectionsDatabase:
     class OutputArtifactRow:
         id: int
         user_id: str
-        job_id: Optional[int]
-        run_id: Optional[int]
+        job_id: int | None
+        run_id: int | None
         type: str
         title: str
         format: str
         storage_path: str
-        metadata_json: Optional[str]
-        workspace_tag: Optional[str]
+        metadata_json: str | None
+        workspace_tag: str | None
         created_at: str
-        media_item_id: Optional[int]
-        chatbook_path: Optional[str]
+        media_item_id: int | None
+        chatbook_path: str | None
 
     def create_output_artifact(
         self,
@@ -2554,14 +2556,14 @@ class CollectionsDatabase:
         title: str,
         format_: str,
         storage_path: str,
-        metadata_json: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
-        job_id: Optional[int] = None,
-        run_id: Optional[int] = None,
-        media_item_id: Optional[int] = None,
-        chatbook_path: Optional[str] = None,
-        retention_until: Optional[str] = None,
-    ) -> "CollectionsDatabase.OutputArtifactRow":
+        metadata_json: str | None = None,
+        workspace_tag: str | None = None,
+        job_id: int | None = None,
+        run_id: int | None = None,
+        media_item_id: int | None = None,
+        chatbook_path: str | None = None,
+        retention_until: str | None = None,
+    ) -> CollectionsDatabase.OutputArtifactRow:
         now = _utcnow_iso()
         resolved_storage_path = self.resolve_output_storage_path(storage_path)
         q = (
@@ -2589,7 +2591,7 @@ class CollectionsDatabase:
             raise DatabaseError("Failed to create output artifact")
         return self.get_output_artifact(new_id)
 
-    def update_output_media_item_id(self, output_id: int, media_item_id: Optional[int]) -> "CollectionsDatabase.OutputArtifactRow":
+    def update_output_media_item_id(self, output_id: int, media_item_id: int | None) -> CollectionsDatabase.OutputArtifactRow:
         q = "UPDATE outputs SET media_item_id = ? WHERE id = ? AND user_id = ?"
         res = self.backend.execute(q, (media_item_id, output_id, self.user_id))
         if res.rowcount <= 0:
@@ -2600,9 +2602,9 @@ class CollectionsDatabase:
         self,
         output_id: int,
         *,
-        metadata_json: Optional[str] = None,
-        chatbook_path: Optional[str] = None,
-    ) -> "CollectionsDatabase.OutputArtifactRow":
+        metadata_json: str | None = None,
+        chatbook_path: str | None = None,
+    ) -> CollectionsDatabase.OutputArtifactRow:
         fields: list[str] = []
         params: list[Any] = []
         if metadata_json is not None:
@@ -2620,7 +2622,7 @@ class CollectionsDatabase:
             raise KeyError("output_not_found")
         return self.get_output_artifact(output_id)
 
-    def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
+    def get_output_artifact(self, output_id: int, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
             "SELECT id, user_id, job_id, run_id, type, title, format, storage_path, metadata_json, workspace_tag, created_at, media_item_id, chatbook_path "
@@ -2659,11 +2661,11 @@ class CollectionsDatabase:
         if ok and should_decrement and size_bytes:
             try:
                 self.update_audiobook_output_usage(-size_bytes)
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning("audiobook_quota: failed to decrement usage: %s", exc)
         return ok
 
-    def get_output_artifact_by_title(self, title: str, format_: Optional[str] = None, include_deleted: bool = False) -> "CollectionsDatabase.OutputArtifactRow":
+    def get_output_artifact_by_title(self, title: str, format_: str | None = None, include_deleted: bool = False) -> CollectionsDatabase.OutputArtifactRow:
         where = ["user_id = ?", "title = ?"]
         params: list[Any] = [self.user_id, title]
         if format_:
@@ -2685,13 +2687,13 @@ class CollectionsDatabase:
         *,
         limit: int = 50,
         offset: int = 0,
-        job_id: Optional[int] = None,
-        run_id: Optional[int] = None,
-        type_: Optional[str] = None,
-        workspace_tag: Optional[str] = None,
+        job_id: int | None = None,
+        run_id: int | None = None,
+        type_: str | None = None,
+        workspace_tag: str | None = None,
         include_deleted: bool = False,
         only_deleted: bool = False,
-    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+    ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
         where = ["user_id = ?"]
         params: list[Any] = [self.user_id]
         if only_deleted:
@@ -2728,8 +2730,8 @@ class CollectionsDatabase:
         limit: int = 200,
         offset: int = 0,
         include_deleted: bool = False,
-        workspace_tag: Optional[str] = None,
-    ) -> tuple[list["CollectionsDatabase.OutputArtifactRow"], int]:
+        workspace_tag: str | None = None,
+    ) -> tuple[list[CollectionsDatabase.OutputArtifactRow], int]:
         if not types:
             return [], 0
         where = ["user_id = ?"]
@@ -2752,7 +2754,7 @@ class CollectionsDatabase:
         rows = self.backend.execute(sq, tuple(params + [limit, offset])).rows
         return [CollectionsDatabase.OutputArtifactRow(**row) for row in rows], total
 
-    def get_audiobook_output_usage(self) -> Optional[int]:
+    def get_audiobook_output_usage(self) -> int | None:
         row = self.backend.execute(
             "SELECT used_bytes FROM audiobook_output_usage WHERE user_id = ?",
             (self.user_id,),
@@ -2836,7 +2838,7 @@ class CollectionsDatabase:
         except (TypeError, ValueError):
             logger.warning("audiobook_quota: invalid user id for recompute: %s", self.user_id)
             return 0
-        outputs_dir = DatabasePaths.get_user_outputs_dir(user_int)
+        DatabasePaths.get_user_outputs_dir(user_int)
         total_bytes = 0
         offset = 0
         limit = 200
@@ -2857,7 +2859,7 @@ class CollectionsDatabase:
                 break
         return self.set_audiobook_output_usage(total_bytes)
 
-    def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: Optional[str] = None) -> "CollectionsDatabase.OutputArtifactRow":
+    def rename_output_artifact(self, output_id: int, new_title: str, new_storage_path: str | None = None) -> CollectionsDatabase.OutputArtifactRow:
         fields = ["title = ?"]
         params: list[Any] = [new_title]
         if new_storage_path is not None:
@@ -2877,11 +2879,11 @@ class CollectionsDatabase:
     def create_audiobook_project(
         self,
         *,
-        project_id: Optional[str],
-        title: Optional[str],
-        source_ref: Optional[str],
-        status: Optional[str],
-        settings_json: Optional[str],
+        project_id: str | None,
+        title: str | None,
+        source_ref: str | None,
+        status: str | None,
+        settings_json: str | None,
     ) -> AudiobookProjectRow:
         now = _utcnow_iso()
         q = (
@@ -2942,7 +2944,7 @@ class CollectionsDatabase:
         project_id: int,
         *,
         status: str,
-        settings_json: Optional[str] = None,
+        settings_json: str | None = None,
     ) -> AudiobookProjectRow:
         fields = ["status = ?", "updated_at = ?"]
         params: list[Any] = [status, _utcnow_iso()]
@@ -2961,12 +2963,12 @@ class CollectionsDatabase:
         *,
         project_id: int,
         chapter_index: int,
-        title: Optional[str],
-        start_offset: Optional[int],
-        end_offset: Optional[int],
-        voice_profile_id: Optional[str],
-        speed: Optional[float],
-        metadata_json: Optional[str],
+        title: str | None,
+        start_offset: int | None,
+        end_offset: int | None,
+        voice_profile_id: str | None,
+        speed: float | None,
+        metadata_json: str | None,
     ) -> AudiobookChapterRow:
         q = (
             "INSERT INTO audiobook_chapters (project_id, chapter_index, title, start_offset, end_offset, "
@@ -3020,7 +3022,7 @@ class CollectionsDatabase:
         artifact_type: str,
         format_: str,
         output_id: int,
-        metadata_json: Optional[str],
+        metadata_json: str | None,
     ) -> AudiobookArtifactRow:
         q = (
             "INSERT INTO audiobook_artifacts (project_id, artifact_type, format, output_id, metadata_json) "
@@ -3070,7 +3072,7 @@ class CollectionsDatabase:
         name: str,
         default_voice: str,
         default_speed: float,
-        chapter_overrides_json: Optional[str],
+        chapter_overrides_json: str | None,
     ) -> VoiceProfileRow:
         now = _utcnow_iso()
         q = (
@@ -3127,7 +3129,7 @@ class CollectionsDatabase:
             return value != 0
         return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "t"}
 
-    def _reading_digest_row_from_db(self, row: Dict[str, Any]) -> ReadingDigestScheduleRow:
+    def _reading_digest_row_from_db(self, row: dict[str, Any]) -> ReadingDigestScheduleRow:
         return ReadingDigestScheduleRow(
             id=str(row.get("id")),
             tenant_id=str(row.get("tenant_id") or "default"),
@@ -3154,16 +3156,16 @@ class CollectionsDatabase:
         *,
         id: str,
         tenant_id: str,
-        name: Optional[str],
+        name: str | None,
         cron: str,
-        timezone: Optional[str],
+        timezone: str | None,
         enabled: bool,
         require_online: bool,
-        filters: Dict[str, Any],
-        template_id: Optional[int],
-        template_name: Optional[str],
+        filters: dict[str, Any],
+        template_id: int | None,
+        template_name: str | None,
         format: str,
-        retention_days: Optional[int],
+        retention_days: int | None,
     ) -> ReadingDigestScheduleRow:
         """Create a reading digest schedule for the current user.
 
@@ -3220,7 +3222,7 @@ class CollectionsDatabase:
         self._execute_insert(q, params)
         return self.get_reading_digest_schedule(id)
 
-    def update_reading_digest_schedule(self, schedule_id: str, patch: Dict[str, Any]) -> ReadingDigestScheduleRow:
+    def update_reading_digest_schedule(self, schedule_id: str, patch: dict[str, Any]) -> ReadingDigestScheduleRow:
         """Update a reading digest schedule for the current user.
 
         Params:
@@ -3237,7 +3239,7 @@ class CollectionsDatabase:
         if not patch:
             return self.get_reading_digest_schedule(schedule_id)
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         if "filters" in patch:
             fields.append("filters_json = ?")
             params.append(json.dumps(patch.get("filters") or {}))
@@ -3312,7 +3314,7 @@ class CollectionsDatabase:
         tenant_id: str,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[ReadingDigestScheduleRow], int]:
+    ) -> tuple[list[ReadingDigestScheduleRow], int]:
         """List reading digest schedules for the current user and tenant.
 
         Params:
@@ -3327,23 +3329,23 @@ class CollectionsDatabase:
             DatabaseError: Query failure.
         """
         where = "user_id = ? AND tenant_id = ?"
-        params: List[Any] = [self.user_id, tenant_id]
+        params: list[Any] = [self.user_id, tenant_id]
         count_q = f"SELECT COUNT(*) AS cnt FROM reading_digest_schedules WHERE {where}"
         total = int(self.backend.execute(count_q, tuple(params)).scalar or 0)
         q = (
             "SELECT * FROM reading_digest_schedules "
             f"WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
         )
-        rows = self.backend.execute(q, tuple([*params, limit, offset])).rows
+        rows = self.backend.execute(q, (*params, limit, offset)).rows
         return [self._reading_digest_row_from_db(row) for row in rows], total
 
     def set_reading_digest_history(
         self,
         schedule_id: str,
         *,
-        last_run_at: Optional[str] = None,
-        next_run_at: Optional[str] = None,
-        last_status: Optional[str] = None,
+        last_run_at: str | None = None,
+        next_run_at: str | None = None,
+        last_status: str | None = None,
     ) -> None:
         """Update reading digest schedule history fields for the current user.
 
@@ -3360,7 +3362,7 @@ class CollectionsDatabase:
             KeyError: Schedule not found.
             DatabaseError: Update failure.
         """
-        update: Dict[str, Any] = {}
+        update: dict[str, Any] = {}
         if last_run_at is not None:
             update["last_run_at"] = last_run_at
         if next_run_at is not None:
@@ -3375,11 +3377,11 @@ class CollectionsDatabase:
         self,
         schedule_id: str,
         *,
-        expected_next_run_at: Optional[str],
-        next_run_at: Optional[str],
-        last_run_at: Optional[str],
-        last_status: Optional[str],
-        disallow_statuses: Optional[tuple[str, ...]] = None,
+        expected_next_run_at: str | None,
+        next_run_at: str | None,
+        last_run_at: str | None,
+        last_status: str | None,
+        disallow_statuses: tuple[str, ...] | None = None,
     ) -> bool:
         """Attempt to claim a schedule run by updating run timestamps/status.
 
@@ -3436,7 +3438,7 @@ class CollectionsDatabase:
                     (self.user_id,),
                 )
                 return int((r1.rowcount or 0) + (r2.rowcount or 0))
-            except Exception:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
                 return int(r1.rowcount or 0)
         # Hard delete those with retention_until past
         r1 = self.backend.execute(
@@ -3450,7 +3452,7 @@ class CollectionsDatabase:
                 (self.user_id, now),
             )
             return int((r1.rowcount or 0) + (r2.rowcount or 0))
-        except Exception:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS:
             return int(r1.rowcount or 0)
 
     # ------------------------
@@ -3465,17 +3467,17 @@ class CollectionsDatabase:
         structured_json: str
         validation_json: str
         export_status: str
-        export_format: Optional[str]
-        export_storage_path: Optional[str]
-        export_bytes: Optional[int]
-        export_content_type: Optional[str]
-        export_job_id: Optional[str]
-        export_expires_at: Optional[str]
-        export_consumed_at: Optional[str]
-        metadata_json: Optional[str]
+        export_format: str | None
+        export_storage_path: str | None
+        export_bytes: int | None
+        export_content_type: str | None
+        export_job_id: str | None
+        export_expires_at: str | None
+        export_consumed_at: str | None
+        metadata_json: str | None
         created_at: str
         updated_at: str
-        retention_until: Optional[str] = None
+        retention_until: str | None = None
 
     def create_file_artifact(
         self,
@@ -3485,16 +3487,16 @@ class CollectionsDatabase:
         structured_json: str,
         validation_json: str,
         export_status: str = "none",
-        export_format: Optional[str] = None,
-        export_storage_path: Optional[str] = None,
-        export_bytes: Optional[int] = None,
-        export_content_type: Optional[str] = None,
-        export_job_id: Optional[str] = None,
-        export_expires_at: Optional[str] = None,
-        export_consumed_at: Optional[str] = None,
-        metadata_json: Optional[str] = None,
-        retention_until: Optional[str] = None,
-    ) -> "CollectionsDatabase.FileArtifactRow":
+        export_format: str | None = None,
+        export_storage_path: str | None = None,
+        export_bytes: int | None = None,
+        export_content_type: str | None = None,
+        export_job_id: str | None = None,
+        export_expires_at: str | None = None,
+        export_consumed_at: str | None = None,
+        metadata_json: str | None = None,
+        retention_until: str | None = None,
+    ) -> CollectionsDatabase.FileArtifactRow:
         """Create a file artifact record and return the stored row."""
         now = _utcnow_iso()
         resolved_storage_path = None
@@ -3531,7 +3533,7 @@ class CollectionsDatabase:
             raise DatabaseError("Failed to create file artifact")
         return self.get_file_artifact(new_id)
 
-    def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> "CollectionsDatabase.FileArtifactRow":
+    def get_file_artifact(self, file_id: int, include_deleted: bool = False) -> CollectionsDatabase.FileArtifactRow:
         """Fetch a file artifact by id."""
         cond = "id = ? AND user_id = ?" + ("" if include_deleted else " AND deleted = 0")
         q = (
@@ -3549,14 +3551,14 @@ class CollectionsDatabase:
         file_id: int,
         *,
         export_status: str,
-        export_format: Optional[str] = None,
-        export_storage_path: Optional[str] = None,
-        export_bytes: Optional[int] = None,
-        export_content_type: Optional[str] = None,
-        export_job_id: Optional[str] = None,
-        export_expires_at: Optional[str] = None,
-        export_consumed_at: Optional[str] = None,
-    ) -> "CollectionsDatabase.FileArtifactRow":
+        export_format: str | None = None,
+        export_storage_path: str | None = None,
+        export_bytes: int | None = None,
+        export_content_type: str | None = None,
+        export_job_id: str | None = None,
+        export_expires_at: str | None = None,
+        export_consumed_at: str | None = None,
+    ) -> CollectionsDatabase.FileArtifactRow:
         """Update export fields for a file artifact."""
         updated_at = _utcnow_iso()
         resolved_storage_path = None
@@ -3619,9 +3621,9 @@ class CollectionsDatabase:
         now_iso: str,
         soft_deleted_grace_days: int,
         include_retention: bool,
-    ) -> Dict[int, Optional[str]]:
+    ) -> dict[int, str | None]:
         """List artifact ids and paths eligible for retention or soft-delete purges."""
-        paths: Dict[int, Optional[str]] = {}
+        paths: dict[int, str | None] = {}
         if include_retention:
             q = (
                 "SELECT id, export_storage_path FROM file_artifacts "
@@ -3632,7 +3634,7 @@ class CollectionsDatabase:
                 for row in cur.rows:
                     rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
                     paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
-            except Exception as exc:
+            except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"file_artifacts.purge: retention scan failed: {exc}")
         try:
             now_dt = datetime.fromisoformat(str(now_iso).replace("Z", "+00:00"))
@@ -3651,13 +3653,13 @@ class CollectionsDatabase:
             for row in cur2.rows:
                 rid = int(row["id"]) if isinstance(row, dict) else int(row[0])
                 paths[rid] = row["export_storage_path"] if isinstance(row, dict) else row[1]
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"file_artifacts.purge: soft-deleted scan failed: {exc}")
         return paths
 
-    def list_file_artifacts_expired_exports(self, *, now_iso: str) -> List[Dict[str, Any]]:
+    def list_file_artifacts_expired_exports(self, *, now_iso: str) -> list[dict[str, Any]]:
         """List ready exports that have expired for cleanup."""
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         q = (
             "SELECT id, export_storage_path, export_format, export_bytes, export_content_type, export_job_id, export_expires_at "
             "FROM file_artifacts WHERE user_id = ? AND export_status = 'ready' AND export_storage_path IS NOT NULL "
@@ -3665,7 +3667,7 @@ class CollectionsDatabase:
         )
         try:
             cur = self.backend.execute(q, (self.user_id, now_iso))
-        except Exception as exc:
+        except _COLLECTIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"file_artifacts.export_gc: expired export scan failed: {exc}")
             return rows
         for row in cur.rows:
@@ -3685,7 +3687,7 @@ class CollectionsDatabase:
             )
         return rows
 
-    def delete_file_artifacts_by_ids(self, ids: List[int]) -> int:
+    def delete_file_artifacts_by_ids(self, ids: list[int]) -> int:
         """Delete file artifacts by id list for the current user."""
         if not ids:
             return 0

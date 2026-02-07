@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..base import VLMBackend, VLMDetection, VLMResult
 
@@ -20,7 +20,7 @@ class HFTableTransformerBackend(VLMBackend):
 
     name = "hf_table_transformer"
 
-    def __init__(self, model_name: Optional[str] = None, revision: Optional[str] = None):
+    def __init__(self, model_name: str | None = None, revision: str | None = None):
         self._loaded = False
         self._model_name = model_name or (  # default model
             os.getenv("VLM_TABLE_MODEL_NAME", "microsoft/table-transformer-detection")
@@ -29,18 +29,18 @@ class HFTableTransformerBackend(VLMBackend):
         # Detection threshold: docs often use 0.9 for high precision
         try:
             self._threshold = float(os.getenv("VLM_TABLE_THRESHOLD", "0.9"))
-        except Exception:
+        except (TypeError, ValueError):
             self._threshold = 0.9
         self._processor = None
         self._model = None
-        self._id2label: Dict[int, str] = {}
+        self._id2label: dict[int, str] = {}
 
     @classmethod
     def available(cls) -> bool:
         try:
             import transformers  # noqa: F401
             from PIL import Image  # noqa: F401
-        except Exception:
+        except ImportError:
             return False
         return True
 
@@ -57,7 +57,7 @@ class HFTableTransformerBackend(VLMBackend):
             self._model = TableTransformerForObjectDetection.from_pretrained(
                 self._model_name, revision=self._revision
             )
-        except Exception:
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError):
             from transformers import AutoModelForObjectDetection  # fallback
 
             self._model = AutoModelForObjectDetection.from_pretrained(
@@ -70,11 +70,11 @@ class HFTableTransformerBackend(VLMBackend):
             if cfg and getattr(cfg, "id2label", None):
                 # Normalize to int keys -> str labels
                 self._id2label = {int(k): str(v) for k, v in cfg.id2label.items()}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             self._id2label = {}
         self._loaded = True
 
-    def describe(self) -> Dict[str, Any]:
+    def describe(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "model": self._model_name,
@@ -87,8 +87,8 @@ class HFTableTransformerBackend(VLMBackend):
         self,
         image_bytes: bytes,
         *,
-        mime_type: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
+        mime_type: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> VLMResult:
         self._lazy_load()
 
@@ -105,7 +105,7 @@ class HFTableTransformerBackend(VLMBackend):
             outputs, threshold=self._threshold, target_sizes=target_sizes
         )[0]
 
-        detections: List[VLMDetection] = []
+        detections: list[VLMDetection] = []
         for score, label_id, box in zip(results["scores"], results["labels"], results["boxes"]):
             # Convert tensors
             s = float(score.detach().cpu().item())

@@ -1,0 +1,70 @@
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from tldw_Server_API.app.core.Chatbooks.chatbook_models import ImportStatus
+from tldw_Server_API.app.core.Chatbooks.services import jobs_worker
+
+
+@pytest.mark.asyncio
+async def test_handle_import_defaults_import_media_to_false(tmp_path):
+    archive_path = tmp_path / "input.chatbook"
+    archive_path.write_text("dummy", encoding="utf-8")
+
+    class FakeService:
+        def __init__(self):
+            self.import_job = SimpleNamespace(
+                job_id="job-1",
+                status=ImportStatus.PENDING,
+                completed_at=None,
+                error_message=None,
+            )
+            self.called_args = None
+
+        def _claim_import_job(self, _job_id: str) -> bool:
+            return True
+
+        def _get_import_job(self, _job_id: str):
+            return self.import_job
+
+        def _save_import_job(self, ij):
+            self.import_job = ij
+
+        def _resolve_import_archive_path(self, _file_ref: str) -> Path:
+            return archive_path
+
+        def _import_chatbook_sync(
+            self,
+            file_path,
+            selections,
+            conflict_resolution,
+            prefix_imported,
+            import_media,
+            import_embeddings,
+        ):
+            self.called_args = {
+                "file_path": file_path,
+                "selections": selections,
+                "conflict_resolution": conflict_resolution,
+                "prefix_imported": prefix_imported,
+                "import_media": import_media,
+                "import_embeddings": import_embeddings,
+            }
+            return True, "ok", []
+
+    service = FakeService()
+
+    result = await jobs_worker._handle_import(
+        service,
+        payload={"file_token": str(archive_path)},
+        job_id="job-1",
+    )
+
+    assert result == {"warnings": []}
+    assert service.called_args is not None
+    assert service.called_args["import_media"] is False
+    assert service.import_job.status == ImportStatus.COMPLETED
+    assert isinstance(service.import_job.completed_at, datetime)
+    assert not archive_path.exists()

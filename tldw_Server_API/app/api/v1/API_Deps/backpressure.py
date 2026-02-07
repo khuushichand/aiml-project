@@ -2,21 +2,32 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional, Tuple
 
-from fastapi import Depends, HTTPException
-from fastapi import Request, Response
+import redis.asyncio as aioredis
+from fastapi import Depends, HTTPException, Request, Response
 from loguru import logger
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from redis.exceptions import RedisError
+
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_profile_mode
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import (
     create_async_redis_client,
     ensure_async_client_closed,
 )
 
-import redis.asyncio as aioredis
+_BACKPRESSURE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    RedisError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 async def _get_redis_client() -> aioredis.Redis:
@@ -28,13 +39,13 @@ def _cfg_int(name: str, default_val: int) -> int:
         v = settings.get(name, None)
         if isinstance(v, (int, float)):
             return int(v)
-    except Exception:
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         env = os.getenv(name)
         if env is not None and str(env).strip() != "":
             return int(env)
-    except Exception:
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
         pass
     return int(default_val)
 
@@ -44,25 +55,25 @@ def _cfg_float(name: str, default_val: float) -> float:
         v = settings.get(name, None)
         if isinstance(v, (int, float)):
             return float(v)
-    except Exception:
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         env = os.getenv(name)
         if env is not None and str(env).strip() != "":
             return float(env)
-    except Exception:
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
         pass
     return float(default_val)
 
 
-def _bp_limits() -> Tuple[int, float]:
+def _bp_limits() -> tuple[int, float]:
     """Return the current backpressure limits using latest config/env overrides."""
     max_depth = _cfg_int("EMB_BACKPRESSURE_MAX_DEPTH", 25000)
     max_age = _cfg_float("EMB_BACKPRESSURE_MAX_AGE_SECONDS", 300.0)
     return max_depth, max_age
 
 
-async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, float]:
+async def _orchestrator_depth_and_age(client: aioredis.Redis) -> tuple[int, float]:
     queues = ["embeddings:chunking", "embeddings:embedding", "embeddings:storage", "embeddings:content"]
     depths = []
     ages = []
@@ -70,7 +81,7 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, floa
     for q in queues:
         try:
             d = await client.xlen(q)
-        except Exception:
+        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
             d = 0
         depths.append(int(d or 0))
         try:
@@ -81,7 +92,7 @@ async def _orchestrator_depth_and_age(client: aioredis.Redis) -> Tuple[int, floa
                 ages.append(max(0.0, now - (ts_ms / 1000.0)))
             else:
                 ages.append(0.0)
-        except Exception:
+        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
             ages.append(0.0)
     return (max(depths) if depths else 0, max(ages) if ages else 0.0)
 
@@ -97,8 +108,8 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
     """
     try:
         ctx = getattr(request.state, "auth", None)
-        principal: Optional[AuthPrincipal] = ctx.principal if isinstance(ctx, AuthContext) else None
-    except Exception as exc:
+        principal: AuthPrincipal | None = ctx.principal if isinstance(ctx, AuthContext) else None
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Failed to extract principal from request.state.auth: {}", exc)
         principal = None
 
@@ -110,12 +121,12 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
     else:
         try:
             is_admin = bool(getattr(current_user, "is_admin", False))
-        except Exception as exc:
+        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to determine admin status from current_user: {}", exc)
 
     try:
         single_profile = is_single_user_profile_mode()
-    except Exception as exc:
+    except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Failed to determine single-user profile mode: {}", exc)
         single_profile = False
 
@@ -125,10 +136,7 @@ def _should_enforce_ingest_tenant_rps(request: Request, current_user: User) -> b
 
     # If we lack principal context entirely, treat local single-user-style profiles
     # as non-tenant for ingestion quotas.
-    if principal is None and single_profile:
-        return False
-
-    return True
+    return not (principal is None and single_profile)
 
 
 async def guard_backpressure_and_quota(
@@ -137,11 +145,11 @@ async def guard_backpressure_and_quota(
     current_user: User = Depends(get_request_user),
 ):
     # Backpressure by orchestrator depth/age
-    client: Optional[aioredis.Redis] = None
+    client: aioredis.Redis | None = None
     try:
         try:
             client = await _get_redis_client()
-        except Exception:
+        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
             client = None
         if client is not None:
             max_depth, max_age = _bp_limits()
@@ -155,13 +163,13 @@ async def guard_backpressure_and_quota(
         try:
             if client is not None:
                 await ensure_async_client_closed(client)
-        except Exception:
+        except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Tenant quota (allow override key for ingestion; fallback to embeddings quota)
     rps = _cfg_int("INGEST_TENANT_RPS", 0) or _cfg_int("EMBEDDINGS_TENANT_RPS", 0)
     if rps > 0 and _should_enforce_ingest_tenant_rps(request, current_user):
-        client2: Optional[aioredis.Redis] = None
+        client2: aioredis.Redis | None = None
         try:
             client2 = await _get_redis_client()
             ts = int(time.time())
@@ -175,13 +183,13 @@ async def guard_backpressure_and_quota(
                 try:
                     response.headers["X-RateLimit-Limit"] = str(rps)
                     response.headers["X-RateLimit-Remaining"] = str(remaining)
-                except Exception:
+                except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
                     pass
         finally:
             try:
                 if client2 is not None:
                     await ensure_async_client_closed(client2)
-            except Exception:
+            except _BACKPRESSURE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     # No return value; dependency completes

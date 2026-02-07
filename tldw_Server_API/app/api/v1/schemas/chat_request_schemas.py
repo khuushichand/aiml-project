@@ -5,7 +5,7 @@
 import json
 import os
 import re
-from typing import Optional, Dict, Any, Literal, Union, List
+from typing import Any, Literal, Optional, Union
 
 from dotenv import load_dotenv
 
@@ -15,7 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, mod
 
 #
 # Local Imports
-from tldw_Server_API.app.core.config import load_comprehensive_config
 
 #
 #######################################################################################################################
@@ -44,7 +43,7 @@ from tldw_Server_API.app.core.config import load_and_log_configs
 _config = load_and_log_configs() or {}
 
 
-def _config_default_llm_provider(config_data: Optional[Dict[str, Any]]) -> Optional[str]:
+def _config_default_llm_provider(config_data: Optional[dict[str, Any]]) -> Optional[str]:
     if not isinstance(config_data, dict):
         return None
     for section in ("llm_api_settings", "API"):
@@ -96,7 +95,7 @@ def _get_setting(env_var, section, key, default=""):
     return default
 
 
-ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
+ALL_SUPPORTED_PROVIDER_NAMES_LIST: list[str] = [
     "bedrock",
     "anthropic",
     "cohere",
@@ -115,12 +114,15 @@ ALL_SUPPORTED_PROVIDER_NAMES_LIST: List[str] = [
     "tabbyapi",
     "vllm",
     "local-llm",
+    "aphrodite",
     "custom-openai-api",
     "custom-openai-api-2",
+    "moonshot",
+    "zai",
 ]
 
 
-def get_api_keys() -> Dict[str, Optional[str]]:
+def get_api_keys() -> dict[str, Optional[str]]:
     """
     Get API keys dynamically to support runtime changes.
     This function reloads config and environment variables each time it's called,
@@ -192,8 +194,11 @@ SUPPORTED_API_ENDPOINTS = Literal[
     "tabbyapi",
     "vllm",
     "local-llm",
+    "aphrodite",
     "custom-openai-api",
     "custom-openai-api-2",
+    "moonshot",
+    "zai",
 ]
 
 
@@ -220,7 +225,7 @@ def _calculate_json_depth(obj: Any, current_depth: int = 0) -> int:
     return current_depth
 
 
-def _validate_json_schema_structure(schema: Dict[str, Any], path: str = "root") -> None:
+def _validate_json_schema_structure(schema: dict[str, Any], path: str = "root") -> None:
     """
     Basic validation that the schema follows JSON Schema conventions.
     Raises ValueError for invalid schema values and TypeError for type mismatches.
@@ -279,14 +284,14 @@ class FunctionDefinition(BaseModel):
         None,
         description="A description of what the function does, used by the model to choose when and how to call the function.",
     )
-    parameters: Optional[Dict[str, Any]] = Field(
+    parameters: Optional[dict[str, Any]] = Field(
         default_factory=dict,
         description="The parameters the functions accepts, described as a JSON Schema object. See the guide[1] for examples, and the JSON Schema reference[2] for documentation about the format. Omitting parameters defines a function with an empty parameter list. [1] https://platform.openai.com/docs/guides/function-calling [2] https://json-schema.org/understanding-json-schema/",
     )
 
     @field_validator("parameters")
     @classmethod
-    def validate_parameters_schema(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def validate_parameters_schema(cls, v: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """Validate that parameters follow JSON Schema conventions and security limits."""
         if v is None or not v:
             return v
@@ -327,7 +332,7 @@ class GeminiNativeToolDefinition(BaseModel):
     """Gemini-native tool definition (function declarations)."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
-    function_declarations: List[Dict[str, Any]] = Field(
+    function_declarations: list[dict[str, Any]] = Field(
         ...,
         alias="functionDeclarations",
         description="Gemini function declarations payload.",
@@ -448,16 +453,15 @@ class ChatCompletionSystemMessageParam(BaseMessage):
 
 class ChatCompletionUserMessageParam(BaseMessage):
     role: Literal["user"]
-    content: Union[str, List[ChatCompletionRequestMessageContentPart]]
+    content: Union[str, list[ChatCompletionRequestMessageContentPart]]
 
     @field_validator("content")
     @classmethod
     def validate_content_length(cls, v: Union[str, list]) -> Union[str, list]:
-        if isinstance(v, str):
-            if len(v) > MAX_MESSAGE_CONTENT_LENGTH:
-                raise ValueError(
-                    f"User message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
-                )
+        if isinstance(v, str) and len(v) > MAX_MESSAGE_CONTENT_LENGTH:
+            raise ValueError(
+                f"User message content exceeds maximum length ({MAX_MESSAGE_CONTENT_LENGTH} chars)"
+            )
         # Note: List content parts are validated by ChatCompletionRequestMessageContentPartText
         return v
 
@@ -511,7 +515,7 @@ class ToolCallFunctionPayload(BaseModel):
         None,
         description="Arguments to call the function with, as a JSON string.",
     )
-    parameters: Optional[Dict[str, Any]] = Field(
+    parameters: Optional[dict[str, Any]] = Field(
         default=None,
         description="Legacy JSON Schema parameters (accepted for backward compatibility).",
     )
@@ -541,7 +545,7 @@ class ToolCallFunctionPayload(BaseModel):
 
     @field_validator("parameters")
     @classmethod
-    def validate_tool_call_parameters_schema(cls, v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def validate_tool_call_parameters_schema(cls, v: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
         """Reuse FunctionDefinition JSON Schema validation for legacy parameters."""
         return FunctionDefinition.validate_parameters_schema(v)
 
@@ -572,7 +576,7 @@ class ChatCompletionAssistantMessageParam(BaseMessage):
         None,
         description="The contents of the assistant message. Required unless tool_calls or function_call is specified.",
     )
-    tool_calls: Optional[List[ChatCompletionMessageToolCallParam]] = Field(
+    tool_calls: Optional[list[ChatCompletionMessageToolCallParam]] = Field(
         None, description="The tool calls generated by the model, such as function calls."
     )
     # Deprecated function_call - include for compatibility if needed, but prefer tool_calls
@@ -656,13 +660,13 @@ class ChatCompletionRequest(BaseModel):
     model: Optional[str] = Field(
         None, description="ID of the model to use. Specific model compatibility depends on the selected `api_provider`."
     )
-    messages: List[ChatCompletionMessageParam] = Field(
+    messages: list[ChatCompletionMessageParam] = Field(
         ..., description="A list of messages comprising the conversation so far.", min_length=1
     )
     frequency_penalty: Optional[float] = Field(
         None, ge=-2.0, le=2.0, description="Frequency penalty parameter (provider support varies)."
     )
-    logit_bias: Optional[Dict[str, float]] = Field(None, description="Logit bias parameter (provider support varies).")
+    logit_bias: Optional[dict[str, float]] = Field(None, description="Logit bias parameter (provider support varies).")
     logprobs: Optional[bool] = Field(
         False, description="Whether to return log probabilities (provider support varies)."
     )
@@ -685,7 +689,7 @@ class ChatCompletionRequest(BaseModel):
         None, description="Response format specification (e.g., JSON mode, provider support varies)."
     )
     seed: Optional[int] = Field(None, description="Seed for deterministic sampling (provider support varies).")
-    stop: Optional[Union[str, List[str]]] = Field(None, description="Stop sequences (provider support varies).")
+    stop: Optional[Union[str, list[str]]] = Field(None, description="Stop sequences (provider support varies).")
     stream: Optional[bool] = Field(False, description="Whether to stream the response.")
     temperature: Optional[float] = Field(
         None, ge=0.0, le=2.0, description="Sampling temperature (provider support varies)."
@@ -693,7 +697,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = Field(
         None, ge=0.0, le=1.0, description="Top-p (nucleus) sampling parameter (provider support varies)."
     )
-    tools: Optional[List[Union[ToolDefinition, GeminiNativeToolDefinition]]] = Field(
+    tools: Optional[list[Union[ToolDefinition, GeminiNativeToolDefinition]]] = Field(
         None, max_length=128, description="Tools the model may call (provider support varies)."
     )
     tool_choice: Optional[Union[Literal["none", "auto", "required"], ToolChoiceOption]] = Field(
@@ -721,13 +725,13 @@ class ChatCompletionRequest(BaseModel):
     )
 
     # --- Bedrock Guardrails Extensions ---
-    extra_headers: Optional[Dict[str, str]] = Field(
+    extra_headers: Optional[dict[str, str]] = Field(
         None,
         description="Provider-specific additional headers to include via the request body (e.g., Bedrock guardrails)."
         " For Bedrock, include keys: 'X-Amzn-Bedrock-GuardrailIdentifier',"
         " 'X-Amzn-Bedrock-GuardrailVersion', and optional 'X-Amzn-Bedrock-Trace'.",
     )
-    extra_body: Optional[Dict[str, Any]] = Field(
+    extra_body: Optional[dict[str, Any]] = Field(
         None,
         description="Provider-specific extra body content. For Bedrock guardrails, include"
         " 'amazon-bedrock-guardrailConfig': { 'tagSuffix': '...'} if needed.",
@@ -778,12 +782,12 @@ class ChatCompletionRequest(BaseModel):
         # Only allow alphanumeric, underscore, and hyphen
         if not re.match(r"^[a-zA-Z0-9_-]+$", v):
             raise ValueError(
-                f"Invalid template name format. Only alphanumeric characters, underscores, and hyphens are allowed."
+                "Invalid template name format. Only alphanumeric characters, underscores, and hyphens are allowed."
             )
 
         # Additional security check for path traversal patterns
         if "/" in v or "\\" in v or ".." in v:
-            raise ValueError(f"Invalid template name. Path traversal patterns are not allowed.")
+            raise ValueError("Invalid template name. Path traversal patterns are not allowed.")
 
         return v
 
@@ -815,13 +819,13 @@ class RagContextDocument(BaseModel):
     excerpt: Optional[str] = Field(None, description="Relevant excerpt from the document")
     url: Optional[str] = Field(None, description="URL or path to original document")
     page_number: Optional[int] = Field(None, description="Page number if applicable")
-    line_range: Optional[List[int]] = Field(
+    line_range: Optional[list[int]] = Field(
         None,
         description="Line range [start, end] of the excerpt in the source",
         min_length=2,
         max_length=2
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Optional[dict[str, Any]] = Field(
         None,
         description="Additional metadata from the source"
     )
@@ -840,11 +844,11 @@ class RagContext(BaseModel):
         "hybrid",
         description="Search mode used: fts, vector, or hybrid"
     )
-    settings_snapshot: Optional[Dict[str, Any]] = Field(
+    settings_snapshot: Optional[dict[str, Any]] = Field(
         None,
         description="Snapshot of key RAG settings used for this search"
     )
-    retrieved_documents: List[RagContextDocument] = Field(
+    retrieved_documents: list[RagContextDocument] = Field(
         default_factory=list,
         description="List of retrieved documents with their metadata and scores"
     )
@@ -852,11 +856,11 @@ class RagContext(BaseModel):
         None,
         description="The AI-generated answer (if generation was enabled)"
     )
-    citations: Optional[List[Dict[str, Any]]] = Field(
+    citations: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Citation metadata (academic and chunk-level)"
     )
-    claims_verified: Optional[List[Dict[str, Any]]] = Field(
+    claims_verified: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Results from claims verification if enabled"
     )

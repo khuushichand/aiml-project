@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable, Tuple
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import yaml
 from loguru import logger
@@ -21,9 +21,9 @@ class PolicyReloadConfig:
 @dataclass(frozen=True)
 class PolicySnapshot:
     version: int
-    policies: Dict[str, Any]
-    tenant: Dict[str, Any]
-    route_map: Dict[str, Any]
+    policies: dict[str, Any]
+    tenant: dict[str, Any]
+    route_map: dict[str, Any]
     source_path: Path
     loaded_at_monotonic: float
     mtime: float
@@ -42,20 +42,20 @@ class PolicyLoader:
     def __init__(
         self,
         path: str | Path,
-        reload: Optional[PolicyReloadConfig] = None,
+        reload: PolicyReloadConfig | None = None,
         *,
         time_source: Callable[[], float] = time.monotonic,
-        store: Optional["PolicyStoreProtocol"] = None,
+        store: PolicyStoreProtocol | None = None,
     ) -> None:
         self._path = Path(path)
         self._reload_cfg = reload or PolicyReloadConfig(enabled=True, interval_sec=10)
         self._time_source = time_source
 
-        self._snapshot: Optional[PolicySnapshot] = None
+        self._snapshot: PolicySnapshot | None = None
         self._lock = asyncio.Lock()
-        self._reload_task: Optional[asyncio.Task] = None
+        self._reload_task: asyncio.Task | None = None
         self._on_change: list[Callable[[PolicySnapshot], None]] = []
-        self._store: Optional[PolicyStoreProtocol] = store
+        self._store: PolicyStoreProtocol | None = store
 
     def add_on_change(self, func: Callable[[PolicySnapshot], None]) -> None:
         self._on_change.append(func)
@@ -79,7 +79,7 @@ class PolicyLoader:
                 updated_at = float(res[3]) if len(res) >= 4 else self._time_source()
             mtime = float(updated_at)
             # Merge route_map from file and DB consistently (DB overrides file)
-            file_route_map: Dict[str, Any] = {}
+            file_route_map: dict[str, Any] = {}
             try:
                 if self._path.exists():
                     with self._path.open("r", encoding="utf-8") as f:
@@ -89,8 +89,8 @@ class PolicyLoader:
             except Exception as e:
                 logger.debug("PolicyLoader: failed to read route_map from file: {}", e)
 
-            def _merge_route_map(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-                out: Dict[str, Any] = {}
+            def _merge_route_map(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+                out: dict[str, Any] = {}
                 base = dict(base or {})
                 override = dict(override or {})
                 # Merge known nested maps with override precedence
@@ -150,7 +150,7 @@ class PolicyLoader:
             raise RuntimeError("PolicyLoader not initialized. Call load_once() first.")
         return snap
 
-    def get_policy(self, policy_id: str) -> Optional[Dict[str, Any]]:
+    def get_policy(self, policy_id: str) -> dict[str, Any] | None:
         snap = self.get_snapshot()
         return snap.policies.get(policy_id)
 
@@ -220,9 +220,9 @@ class PolicyLoader:
 def default_policy_loader() -> PolicyLoader:
     try:
         from tldw_Server_API.app.core.config import (
+            resolve_repo_relative_path,
             rg_policy_path,  # type: ignore
             rg_policy_path_default,
-            resolve_repo_relative_path,
             rg_repo_root,
         )
     except Exception:
@@ -258,14 +258,14 @@ def default_policy_loader() -> PolicyLoader:
 
 @runtime_checkable
 class PolicyStoreProtocol(Protocol):
-    async def get_latest_policy(self) -> Tuple[int, Dict[str, Any], Dict[str, Any], float]:
+    async def get_latest_policy(self) -> tuple[int, dict[str, Any], dict[str, Any], float]:
         """
         Returns a tuple: (version, policies, tenant, updated_at_epoch_seconds)
         """
         ...
 
 
-def db_policy_loader(store: PolicyStoreProtocol, reload: Optional[PolicyReloadConfig] = None) -> PolicyLoader:
+def db_policy_loader(store: PolicyStoreProtocol, reload: PolicyReloadConfig | None = None) -> PolicyLoader:
     try:
         from tldw_Server_API.app.core.config import rg_repo_root  # type: ignore
     except Exception:

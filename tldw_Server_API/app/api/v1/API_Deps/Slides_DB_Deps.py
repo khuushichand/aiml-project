@@ -5,19 +5,17 @@ from __future__ import annotations
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase, SlidesDatabaseError, SchemaError
-
+from tldw_Server_API.app.core.Slides.slides_db import SchemaError, SlidesDatabase, SlidesDatabaseError
 
 _MAX_CACHED_SLIDES_DB = 20
 _slides_db_lock = threading.Lock()
-_slides_db_instances: "OrderedDict[str, SlidesDatabase]" = OrderedDict()
+_slides_db_instances: OrderedDict[str, SlidesDatabase] = OrderedDict()
 
 
 def _get_slides_db_path_for_user(user_id: int) -> Path:
@@ -81,7 +79,7 @@ def get_slides_db_for_user(
 
 def try_get_slides_db_for_user(
     current_user: User = Depends(get_request_user),
-) -> Optional[SlidesDatabase]:
+) -> SlidesDatabase | None:
     """Best-effort SlidesDatabase resolver that returns None on failure."""
     try:
         return get_slides_db_for_user(current_user=current_user)

@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
-
-RETENTION_POLICIES: Dict[str, Dict[str, Any]] = {
+RETENTION_POLICIES: dict[str, dict[str, Any]] = {
     "audit_logs": {
         "attr": "AUDIT_LOG_RETENTION_DAYS",
         "min": 30,
@@ -60,11 +59,11 @@ RETENTION_POLICIES: Dict[str, Dict[str, Any]] = {
 }
 
 
-async def _fetch_retention_overrides(db_pool: DatabasePool) -> Dict[str, int]:
+async def _fetch_retention_overrides(db_pool: DatabasePool) -> dict[str, int]:
     rows = await db_pool.fetch(
         "SELECT policy_key, days FROM retention_policy_overrides"
     )
-    overrides: Dict[str, int] = {}
+    overrides: dict[str, int] = {}
     for row in rows:
         try:
             key = row["policy_key"]
@@ -80,7 +79,7 @@ async def _fetch_retention_overrides(db_pool: DatabasePool) -> Dict[str, int]:
     return overrides
 
 
-async def fetch_retention_overrides() -> Dict[str, int]:
+async def fetch_retention_overrides() -> dict[str, int]:
     """Return persisted retention overrides keyed by policy_key."""
     try:
         db_pool = await get_db_pool()
@@ -90,7 +89,7 @@ async def fetch_retention_overrides() -> Dict[str, int]:
         return {}
 
 
-async def apply_retention_overrides(settings=None) -> Dict[str, int]:
+async def apply_retention_overrides(settings=None) -> dict[str, int]:
     """Apply persisted retention overrides to the provided settings object."""
     overrides = await fetch_retention_overrides()
     if not overrides:

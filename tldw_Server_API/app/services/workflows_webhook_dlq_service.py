@@ -1,18 +1,44 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import random
-from typing import Any, Dict, List, Optional, Tuple
+import sqlite3
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.exceptions import EgressPolicyError, NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+_WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EgressPolicyError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    NetworkError,
+    OSError,
+    PermissionError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 def _now_iso() -> str:
@@ -27,7 +53,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return v.lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _get_lists_for_tenant(tenant_id: str) -> Tuple[List[str], List[str]]:
+def _get_lists_for_tenant(tenant_id: str) -> tuple[list[str], list[str]]:
     """Return (allowlist, denylist) patterns for a tenant.
 
     Patterns are comma-separated; entries may be hostnames or wildcard like '*.example.com'.
@@ -62,14 +88,14 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
                 if _allowed:
                     return True
                 # If not allowed, continue to fallback logic below for test-friendly match
-            except Exception as e:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
                 # Fall back to explicit evaluate_url_policy with derived lists
                 logger.debug(f"DLQ: is_webhook_url_allowed_for_tenant failed, falling back: {e}")
         # Fallback path: derive allow/deny lists and evaluate via core policy
         allow, deny = _get_lists_for_tenant(tenant_id)
         # Normalize wildcard patterns to bare host suffixes for policy evaluation
-        def _norm(pats: List[str]) -> List[str]:
-            out: List[str] = []
+        def _norm(pats: list[str]) -> list[str]:
+            out: list[str] = []
             for s in pats:
                 v = (s or "").strip().lower()
                 if v.startswith("*."):
@@ -102,22 +128,22 @@ def _host_allowed(url: str, tenant_id: str) -> bool:
                                 if host == a or host.endswith(f".{a}"):
                                     return True
                         return False
-                    except Exception:
+                    except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                         return False
                 return False
-            except Exception as e:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"DLQ: evaluate_url_policy failed: {e}")
                 return False
         # If policy module is missing, fail safe
         return False
-    except Exception as e:
+    except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"DLQ egress policy check failed for url={url}: {e}")
         try:
             get_metrics_registry().increment(
                 "app_exception_events_total",
                 labels={"component": "workflows_dlq", "event": "egress_policy_check_failed"},
             )
-        except Exception:
+        except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics increment failed for workflows_dlq egress_policy_check_failed")
         return False
 
@@ -131,7 +157,7 @@ def _compute_next_backoff(attempts: int) -> int:
     return max(1, int(jitter))
 
 
-async def _attempt_delivery(url: str, payload: Dict[str, Any], timeout: float) -> Tuple[bool, Optional[str]]:
+async def _attempt_delivery(url: str, payload: dict[str, Any], timeout: float) -> tuple[bool, str | None]:
     try:
         policy = RetryPolicy()
         resp = await afetch(method="POST", url=url, json=payload, timeout=timeout, retry=policy)
@@ -141,7 +167,7 @@ async def _attempt_delivery(url: str, payload: Dict[str, Any], timeout: float) -
             # Consume body text safely
             try:
                 body_text = resp.text[:200]
-            except Exception:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                 body_text = ""
             return False, f"status={resp.status_code}: {body_text}"
         finally:
@@ -152,7 +178,7 @@ async def _attempt_delivery(url: str, payload: Dict[str, Any], timeout: float) -
                 close = getattr(resp, "close", None)
                 if callable(close):
                     close()
-    except Exception as e:  # network or other error
+    except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:  # network or other error
         return False, str(e)
 
 
@@ -183,22 +209,20 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             rows = db.list_webhook_dlq_due(limit=batch)
-        except Exception as e:
+        except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"DLQ fetch failed: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "workflows_dlq", "event": "fetch_failed"},
                 )
-            except Exception:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics increment failed for workflows_dlq fetch_failed")
             rows = []
 
         if not rows:
-            try:
+            with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
-            except asyncio.TimeoutError:
-                pass
             continue
 
         for r in rows:
@@ -218,18 +242,18 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
                     next_attempt_at_iso=None,
                     attempts=current_attempt,
                 )
-            except Exception:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                 current_attempt = attempts + 1
             try:
                 body = json.loads(r.get("body_json") or "{}")
-            except Exception as e:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"DLQ: invalid body_json for id={dlq_id}: {e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "workflows_dlq", "event": "bad_body_json"},
                     )
-                except Exception:
+                except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for workflows_dlq bad_body_json")
                 body = {}
 
@@ -245,19 +269,19 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
 
             try:
                 ok, err = await _attempt_delivery(url, body, timeout=timeout_sec)
-            except Exception as e:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
                 ok, err = False, str(e)
             if ok:
                 try:
                     db.delete_webhook_dlq(dlq_id=dlq_id)
-                except Exception as _e:
+                except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as _e:
                     logger.warning(f"Failed to delete DLQ id={dlq_id} after success: {_e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "workflows_dlq", "event": "delete_after_success_failed"},
                         )
-                    except Exception:
+                    except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                         logger.debug("metrics increment failed for workflows_dlq delete_after_success_failed")
                 continue
 
@@ -266,14 +290,14 @@ async def run_workflows_webhook_dlq_worker(stop_event: asyncio.Event) -> None:
             try:
                 import datetime as _dt
                 next_at = (_dt.datetime.utcnow() + _dt.timedelta(seconds=next_delay)).isoformat()
-            except Exception as e:
+            except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"DLQ: failed to compute next_attempt_at for id={dlq_id}: {e}")
                 try:
                     get_metrics_registry().increment(
                         "app_warning_events_total",
                         labels={"component": "workflows_dlq", "event": "next_attempt_compute_failed"},
                     )
-                except Exception:
+                except _WORKFLOWS_DLQ_NONCRITICAL_EXCEPTIONS:
                     logger.debug("metrics increment failed for workflows_dlq next_attempt_compute_failed")
                 next_at = None
 

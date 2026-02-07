@@ -2,16 +2,32 @@
 # Description: Database migrations for AuthNZ module tables
 #
 # Imports
-from typing import Any, Dict, List, Optional
-import sqlite3
+import contextlib
 import json
+import sqlite3
 from pathlib import Path
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+
+_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
 
 #######################################################################################################################
 #
@@ -98,7 +114,7 @@ def migration_002_create_sessions_table(conn: sqlite3.Connection) -> None:
         add_col('revoked_at', "revoked_at TIMESTAMP")
         add_col('revoked_by', "revoked_by INTEGER")
         add_col('revoke_reason', "revoke_reason TEXT")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash)")
@@ -166,17 +182,15 @@ def migration_003_create_api_keys_table(conn: sqlite3.Connection) -> None:
         add_col('revoked_at', "revoked_at TIMESTAMP")
         add_col('revoked_by', "revoked_by INTEGER")
         add_col('revoke_reason', "revoke_reason TEXT")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Create indexes (only if columns exist)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash)")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_id ON api_keys(key_id)")
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_status ON api_keys(status)")
-    except Exception:
-        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at)")
 
     conn.commit()
@@ -387,13 +401,11 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in cur.fetchall()}
         if 'token_hash' not in cols:
             conn.execute("ALTER TABLE password_reset_tokens ADD COLUMN token_hash TEXT UNIQUE")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
     # Indexes
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_hash ON password_reset_tokens(token_hash)")
-    except Exception:
-        pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id)")
 
     # Failed attempts table for lockout tracking
@@ -452,7 +464,7 @@ def migration_011_add_enhanced_auth_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
         try:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)")
-        except Exception:
+        except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
             # If an older schema already enforced uniqueness differently, ignore
             pass
         logger.info("Added uuid column to users table with unique index")
@@ -589,7 +601,7 @@ def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None
             or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         _relax_fk = False
 
     if _relax_fk:
@@ -783,7 +795,7 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
             or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         _relax_fk = False
 
     if _relax_fk:
@@ -1007,22 +1019,14 @@ def migration_017_extend_api_keys_virtual(conn: sqlite3.Connection) -> None:
 
 def migration_018_add_usage_indexes(conn: sqlite3.Connection) -> None:
     """Add helpful indexes for usage tables (SQLite)."""
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts)")
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_user ON usage_log(user_id)")
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_status ON usage_log(status)")
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_daily_day_user ON usage_daily(day, user_id)")
-    except Exception:
-        pass
     conn.commit()
     logger.info("Migration 018: Added indexes for usage_log and usage_daily")
 
@@ -1031,13 +1035,11 @@ def migration_019_usage_log_add_request_id(conn: sqlite3.Connection) -> None:
     """Add request_id column to usage_log and index it (SQLite)."""
     try:
         conn.execute("ALTER TABLE usage_log ADD COLUMN request_id TEXT")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         # Column may already exist
         pass
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_log_request_id ON usage_log(request_id)")
-    except Exception:
-        pass
     conn.commit()
     logger.info("Migration 019: Added request_id column to usage_log")
 
@@ -1046,7 +1048,7 @@ def migration_020_usage_log_add_bytes_in(conn: sqlite3.Connection) -> None:
     """Add bytes_in column to usage_log (SQLite)."""
     try:
         conn.execute("ALTER TABLE usage_log ADD COLUMN bytes_in INTEGER")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         # Column may already exist
         pass
     conn.commit()
@@ -1057,7 +1059,7 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
     """Add bytes_in_total column to usage_daily (SQLite)."""
     try:
         conn.execute("ALTER TABLE usage_daily ADD COLUMN bytes_in_total INTEGER DEFAULT 0")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         # Column may already exist
         pass
     conn.commit()
@@ -1066,12 +1068,10 @@ def migration_021_usage_daily_add_bytes_in_total(conn: sqlite3.Connection) -> No
 
 def migration_049_add_llm_usage_log_key_ts_index(conn: sqlite3.Connection) -> None:
     """Add composite index for llm_usage_log key_id + ts (SQLite)."""
-    try:
+    with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_llm_usage_log_key_ts ON llm_usage_log(key_id, ts)"
         )
-    except Exception:
-        pass
     conn.commit()
     logger.info("Migration 049: Added llm_usage_log key_id + ts index")
 
@@ -1347,17 +1347,13 @@ def migration_023_create_virtual_key_counters(conn: sqlite3.Connection) -> None:
             """
         )
         # Helpful indexes for reporting/cleanup (best-effort)
-        try:
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_jwt_counters_type ON vk_jwt_counters(counter_type)")
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(_AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS):
             conn.execute("CREATE INDEX IF NOT EXISTS idx_vk_api_key_counters_type ON vk_api_key_counters(counter_type)")
-        except Exception:
-            pass
         conn.commit()
         logger.info("Migration 023: Created virtual key counters tables")
-    except Exception as e:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Migration 023 skipped/failed: {e}")
 
 
@@ -1372,7 +1368,7 @@ def migration_024_ensure_api_keys_status_column(conn: sqlite3.Connection) -> Non
         ).fetchone()
         if not teams_exists or not orgs_exists:
             migration_016_create_orgs_teams(conn)
-    except Exception as error:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as error:
         logger.warning(f"Migration 024: unable to verify organization/team tables ({error})")
 
     try:
@@ -1385,7 +1381,7 @@ def migration_024_ensure_api_keys_status_column(conn: sqlite3.Connection) -> Non
         logger.warning(f"Migration 024 skipped: api_keys table unavailable ({error})")
         conn.commit()
         return
-    except Exception as error:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as error:
         logger.warning(f"Migration 024 encountered an unexpected error inspecting api_keys: {error}")
         conn.commit()
         return
@@ -1482,7 +1478,7 @@ def migration_027_add_session_revocation_columns(conn: sqlite3.Connection) -> No
         add_col("revoke_reason", "revoke_reason TEXT")
         conn.commit()
         logger.info("Migration 027: Harmonized session revocation columns")
-    except Exception as exc:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Migration 027: Unable to harmonize session columns: {exc}")
 
 
@@ -1971,7 +1967,7 @@ def migration_036_create_user_provider_secrets(conn: sqlite3.Connection) -> None
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_user_provider_secrets_user_id ON user_provider_secrets(user_id)")
@@ -2036,7 +2032,7 @@ def migration_037_create_org_provider_secrets(conn: sqlite3.Connection) -> None:
         add_col("created_at", "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("last_used_at", "last_used_at TIMESTAMP")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_org_provider_secrets_scope ON org_provider_secrets(scope_type, scope_id)")
@@ -2108,7 +2104,7 @@ def migration_039_ensure_user_storage_columns(conn: sqlite3.Connection) -> None:
 
         conn.commit()
         logger.info("Migration 039: storage columns ensured on users table")
-    except Exception as exc:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Migration 039: failed to ensure storage columns: %s", exc)
         raise
 
@@ -2168,7 +2164,7 @@ def migration_046_add_org_invite_allowlist_domain(conn: sqlite3.Connection) -> N
             conn.execute("ALTER TABLE org_invites ADD COLUMN allowed_email_domain TEXT")
         conn.commit()
         logger.info("Migration 046: org_invites allowlist domain ensured")
-    except Exception as exc:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Migration 046: failed to add org_invites allowlist domain: %s", exc)
         raise
 
@@ -2205,7 +2201,7 @@ def migration_047_create_user_config_overrides_table(conn: sqlite3.Connection) -
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("created_by", "created_by INTEGER")
         add_col("updated_by", "updated_by INTEGER")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     conn.execute(
@@ -2272,7 +2268,7 @@ def migration_048_create_org_team_config_overrides_table(conn: sqlite3.Connectio
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("created_by", "created_by INTEGER")
         add_col("updated_by", "updated_by INTEGER")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     try:
@@ -2289,7 +2285,7 @@ def migration_048_create_org_team_config_overrides_table(conn: sqlite3.Connectio
         add_col("updated_at", "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         add_col("created_by", "created_by INTEGER")
         add_col("updated_by", "updated_by INTEGER")
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     conn.execute(
@@ -2363,13 +2359,13 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_org_budgets_org ON org_budgets(org_id)")
 
-    def _normalize_alert_thresholds(value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_alert_thresholds(value: Any) -> Optional[dict[str, Any]]:
         if value is None:
             return None
         if isinstance(value, list):
             return {"global": value}
         if isinstance(value, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             if "global" in value:
                 out["global"] = value.get("global")
             if "per_metric" in value:
@@ -2377,13 +2373,13 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             return out or None
         return None
 
-    def _normalize_enforcement_mode(value: Any) -> Optional[Dict[str, Any]]:
+    def _normalize_enforcement_mode(value: Any) -> Optional[dict[str, Any]]:
         if value is None:
             return None
         if isinstance(value, str):
             return {"global": value}
         if isinstance(value, dict):
-            out: Dict[str, Any] = {}
+            out: dict[str, Any] = {}
             if "global" in value:
                 out["global"] = value.get("global")
             if "per_metric" in value:
@@ -2391,8 +2387,8 @@ def migration_042_create_org_budgets(conn: sqlite3.Connection) -> None:
             return out or None
         return None
 
-    def _inflate_legacy_budgets(legacy: Dict[str, Any]) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
+    def _inflate_legacy_budgets(legacy: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
         for key in ("budget_day_usd", "budget_month_usd", "budget_day_tokens", "budget_month_tokens"):
             if key in legacy:
                 payload[key] = legacy[key]
@@ -2508,7 +2504,7 @@ def migration_045_add_users_created_by(conn: sqlite3.Connection) -> None:
 # Migration Registry
 #
 
-def get_authnz_migrations() -> List[Migration]:
+def get_authnz_migrations() -> list[Migration]:
     """Get all AuthNZ migrations in order"""
     return [
         Migration(1, "Create users table", migration_001_create_users_table, rollback_001_drop_users_table),
@@ -2703,7 +2699,7 @@ def apply_authnz_migrations(db_path: Path, target_version: int = None) -> None:
         _logger.info(
             f"AuthNZ.apply_migrations: db={db_path} target={'latest' if target_version is None else target_version} latest={_latest}"
         )
-    except Exception:
+    except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Add all migrations to the manager

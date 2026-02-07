@@ -3,12 +3,12 @@
 #
 # Imports
 import json
-from typing import Optional, Any, List, Union, Dict
+from typing import Any, Optional, Union
+
 #
 # Third-party imports
-from loguru import logger
-from pydantic import BaseModel, field_validator, Field
-from pydantic import ValidationInfo
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
+
 #
 ######################################################################################################################
 #
@@ -38,15 +38,15 @@ class CharacterBase(BaseModel):
     first_message: Optional[str] = Field(None, examples=["Greetings, traveler!"], max_length=MAX_FIRST_MESSAGE_LENGTH)
     message_example: Optional[str] = Field(None, examples=["<START>\nUSER: Hello\nASSISTANT: Hi there!\n<END>"], max_length=MAX_MESSAGE_EXAMPLE_LENGTH)
     creator_notes: Optional[str] = Field(None, max_length=MAX_CREATOR_NOTES_LENGTH)
-    alternate_greetings: Optional[Union[List[str], str]] = Field(None,
+    alternate_greetings: Optional[Union[list[str], str]] = Field(None,
                                                                  description="List of strings or a JSON string representation of a list.",
                                                                  examples=[["Hello!", "Good day!"]])
-    tags: Optional[Union[List[str], str]] = Field(None,
+    tags: Optional[Union[list[str], str]] = Field(None,
                                                   description="List of strings or a JSON string representation of a list.",
                                                   examples=[["fantasy", "knight"]])
     creator: Optional[str] = Field(None, max_length=MAX_CREATOR_LENGTH)
     character_version: Optional[str] = Field(None, max_length=MAX_VERSION_LENGTH)
-    extensions: Optional[Union[Dict[str, Any], str]] = Field(None,
+    extensions: Optional[Union[dict[str, Any], str]] = Field(None,
                                                              description="Dictionary or a JSON string representation of a dictionary.")
     image_base64: Optional[str] = Field(None,
                                         description="Base64 encoded image string (without 'data:image/...;base64,' prefix).",
@@ -125,11 +125,10 @@ class CharacterBase(BaseModel):
                             f"Field '{info.field_name}' must contain only strings, "
                             f"item at index {i} is {type(item).__name__}"
                         )
-        elif info.field_name == "extensions":
-            if not isinstance(value, dict):
-                raise ValueError(
-                    f"Field 'extensions' must be a dictionary, got {type(value).__name__}"
-                )
+        elif info.field_name == "extensions" and not isinstance(value, dict):
+            raise ValueError(
+                f"Field 'extensions' must be a dictionary, got {type(value).__name__}"
+            )
 
         return value
 

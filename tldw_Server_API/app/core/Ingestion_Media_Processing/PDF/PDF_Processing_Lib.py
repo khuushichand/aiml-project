@@ -14,28 +14,51 @@
 # Import necessary libraries
 import asyncio
 import gc
-from datetime import datetime
+import importlib.util
 import re
-from typing import Dict, Any, Optional, List, Union
+from datetime import datetime
+from typing import Any, Optional, Union
+
 #
 # Import External Libs
 import pymupdf
 import pymupdf4llm
+
 #
 # Import Local
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
+from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend as _get_ocr_backend
-from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+
+_PDF_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 try:
     # Optional VLM module (vision backends)
     from tldw_Server_API.app.core.Ingestion_Media_Processing.VLM.registry import (
         get_backend as _get_vlm_backend,
     )
-except Exception:
-    _get_vlm_backend = lambda name=None: None  # type: ignore
+except ImportError:
+    def _get_vlm_backend(name=None):
+        return None  # type: ignore
 #
 # Constants
 # Get configuration values or use defaults
@@ -113,7 +136,7 @@ def extract_text_and_format_from_pdf(pdf_path):
         log_counter("pdf_text_extraction_success", labels={"file_path": pdf_path})
 
         return markdown_text
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error extracting text and formatting from PDF: {str(e)}")
         log_counter("pdf_text_extraction_error", labels={"file_path": pdf_path, "error": str(e)})
         raise
@@ -146,7 +169,7 @@ def docling_parse_pdf(pdf_path: str):
         log_counter("pdf_text_extraction_success", labels={"file_path": pdf_path, "parser": parser_name})
         return markdown_text
 
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error extracting text ({parser_name}) from PDF {pdf_path}: {str(e)}", exc_info=True)
         log_counter("pdf_text_extraction_error", labels={"file_path": pdf_path, "parser": parser_name, "error": str(e)})
         raise
@@ -168,7 +191,7 @@ def pymupdf4llm_parse_pdf(pdf_path):
         log_counter("pdf_text_extraction_success", labels={"file_path": pdf_path})
 
         return markdown_text
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error extracting text and formatting from PDF: {str(e)}")
         log_counter("pdf_text_extraction_error", labels={"file_path": pdf_path, "error": str(e)})
         raise
@@ -184,7 +207,7 @@ def extract_metadata_from_pdf(pdf_path):
             metadata = doc.metadata
         log_counter("pdf_metadata_extraction_success", labels={"file_path": pdf_path})
         return metadata
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error extracting metadata from PDF: {str(e)}")
         log_counter("pdf_metadata_extraction_error", labels={"file_path": pdf_path, "error": str(e)})
         return {}
@@ -192,11 +215,11 @@ def extract_metadata_from_pdf(pdf_path):
 
 # PDF_Ingestion_Lib.py
 # Add these imports at the top if not already present
-import tempfile
-import shutil
-import uuid
-import time
 import os
+import shutil
+import tempfile
+import time
+import uuid
 from pathlib import Path
 
 # ... other imports ...
@@ -207,9 +230,9 @@ def process_pdf(
     parser: str = "pymupdf4llm",
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
-    chunk_options: Optional[Dict[str, Any]] = None,
+    chunk_options: Optional[dict[str, Any]] = None,
     perform_analysis: bool = False,
     api_name: Optional[str] = None,
     api_key: Optional[str] = None,
@@ -277,7 +300,7 @@ def process_pdf(
     start_time = datetime.now()
     # Initialize the result dictionary structure
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Pending",
         "input_ref": filename,
         "media_type": "pdf",
@@ -333,27 +356,30 @@ def process_pdf(
                 logging.debug(f"Input bytes written to temporary file: {path_for_processing} in dir {temp_dir_for_pdf}")
                 result["processing_source"] = path_for_processing # Update source info
 
-            except Exception as temp_err:
+            except _PDF_NONCRITICAL_EXCEPTIONS as temp_err:
                 # Cleanup directory if creation failed partially
                 if temp_dir_for_pdf and os.path.isdir(temp_dir_for_pdf):
-                    try: shutil.rmtree(temp_dir_for_pdf)
-                    except Exception: logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
-                raise IOError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
+                    try:
+                        shutil.rmtree(temp_dir_for_pdf)
+                    except _PDF_NONCRITICAL_EXCEPTIONS:
+                        logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
+                raise OSError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
 
         elif isinstance(file_input, Path):
             path_str = str(file_input)
-            if not file_input.exists(): raise FileNotFoundError(f"Input file path does not exist: {path_str}")
+            if not file_input.exists():
+                raise FileNotFoundError(f"Input file path does not exist: {path_str}")
             path_for_processing = path_str # Use original path
             result["processing_source"] = path_str
         elif isinstance(file_input, str):
-            if not os.path.exists(file_input): raise FileNotFoundError(f"Input file path does not exist: {file_input}")
+            if not os.path.exists(file_input):
+                raise FileNotFoundError(f"Input file path does not exist: {file_input}")
             path_for_processing = file_input # Use original path
             result["processing_source"] = file_input
         else:
             raise TypeError(f"Unsupported file_input type: {type(file_input)}")
 
         # --- Step 1: Extract Text (Now always uses path_for_processing) ---
-        text_content = None
         if not path_for_processing: # Should not happen, but defensive check
              raise RuntimeError("Internal logic error: path_for_processing not set")
 
@@ -365,12 +391,7 @@ def process_pdf(
             elif parser == "pymupdf":
                  content = extract_text_and_format_from_pdf(path_for_processing)
             elif parser == "docling":
-                DOCLING_AVAILABLE = False
-                try:
-                    from docling.document_converter import DocumentConverter
-                    DOCLING_AVAILABLE = True
-                except ImportError:
-                    DOCLING_AVAILABLE = False
+                DOCLING_AVAILABLE = importlib.util.find_spec("docling.document_converter") is not None
                 if not DOCLING_AVAILABLE:
                     raise ImportError("Docling parser selected, but library is not installed.")
                 content = docling_parse_pdf(path_for_processing)
@@ -395,9 +416,7 @@ def process_pdf(
                 should_ocr = False
                 if enable_ocr:
                     mode = (ocr_mode or "fallback").lower()
-                    if mode == "always":
-                        should_ocr = True
-                    elif content_text_len < max(ocr_min_page_text_chars, 1):
+                    if mode == "always" or content_text_len < max(ocr_min_page_text_chars, 1):
                         should_ocr = True
 
                 if should_ocr:
@@ -418,7 +437,7 @@ def process_pdf(
                                 # Fall back to config default if present
                                 cfg = loaded_config_data.get('OCR', {}) if loaded_config_data else {}
                                 concurrency_env = int(cfg.get('page_concurrency_default', 1))
-                        except Exception:
+                        except _PDF_NONCRITICAL_EXCEPTIONS:
                             concurrency_env = 1
 
                         ocr_text, page_count, ocr_pages, structured_pages = _ocr_pdf_pages(
@@ -446,11 +465,11 @@ def process_pdf(
                         }
                         # Attach backend-specific metadata if available
                         try:
-                            if hasattr(backend, "describe") and callable(getattr(backend, "describe")):
+                            if hasattr(backend, "describe") and callable(backend.describe):
                                 extra = backend.describe() or {}
                                 if isinstance(extra, dict):
                                     details.update(extra)
-                        except Exception:
+                        except _PDF_NONCRITICAL_EXCEPTIONS:
                             pass
                         if structured_pages is not None:
                             try:
@@ -472,7 +491,7 @@ def process_pdf(
                                         "output_format": ocr_output_format,
                                     },
                                 ).as_dict()
-                            except Exception:
+                            except _PDF_NONCRITICAL_EXCEPTIONS:
                                 pass
                         result["analysis_details"]["ocr"] = details
 
@@ -485,23 +504,27 @@ def process_pdf(
                                 result["parser_used"] = f"{result['parser_used']}+ocr-appended"
                         else:
                             result["warnings"] = (result.get("warnings") or []) + ["OCR produced no text"]
-            except Exception as _ocr_err:
+            except _PDF_NONCRITICAL_EXCEPTIONS as _ocr_err:
                 logging.error(f"OCR error for {filename}: {_ocr_err}", exc_info=True)
                 result["warnings"] = (result.get("warnings") or []) + [f"OCR error: {_ocr_err}"]
 
         except (RuntimeError, pymupdf.FileDataError, pymupdf.EmptyFileError) as parse_lib_err:
              # --- CATCH PDF library errors during parsing specifically ---
              err_msg = str(parse_lib_err)
-             if "password" in err_msg.lower(): log_msg = f"PDF password error during text extraction for {filename}: {err_msg}"
-             elif isinstance(parse_lib_err, pymupdf.EmptyFileError): log_msg = f"PDF empty file error during text extraction for {filename}: {err_msg}"
-             elif isinstance(parse_lib_err, pymupdf.FileDataError): log_msg = f"PDF file data error during text extraction for {filename}: {err_msg}"
-             else: log_msg = f"PDF library runtime error during text extraction for {filename}: {err_msg}"
+             if "password" in err_msg.lower():
+                 log_msg = f"PDF password error during text extraction for {filename}: {err_msg}"
+             elif isinstance(parse_lib_err, pymupdf.EmptyFileError):
+                 log_msg = f"PDF empty file error during text extraction for {filename}: {err_msg}"
+             elif isinstance(parse_lib_err, pymupdf.FileDataError):
+                 log_msg = f"PDF file data error during text extraction for {filename}: {err_msg}"
+             else:
+                 log_msg = f"PDF library runtime error during text extraction for {filename}: {err_msg}"
 
              logging.error(log_msg, exc_info=True) # Log specifics
              result["warnings"].append(f"Text extraction failed ({parser}): {err_msg}")
              # Don't raise here, allow metadata extraction attempt
 
-        except Exception as parse_err:
+        except _PDF_NONCRITICAL_EXCEPTIONS as parse_err:
              # Catch other potential errors during parsing
              logging.error(f"Unexpected error during text extraction for {filename} using {parser}: {parse_err}", exc_info=True)
              result["warnings"].append(f"Unexpected text extraction error ({parser}): {str(parse_err)}")
@@ -526,12 +549,12 @@ def process_pdf(
             pdf_keywords_str = raw_metadata.get('keywords', '')
             pdf_subject = raw_metadata.get('subject')
             # Use sets for efficient merging and deduplication
-            combined_keywords = set(k.strip() for k in (keywords or []) if k.strip()) # Start with input keywords
+            combined_keywords = {k.strip() for k in (keywords or []) if k.strip()} # Start with input keywords
             if pdf_keywords_str and isinstance(pdf_keywords_str, str):
                 combined_keywords.update(k.strip() for k in pdf_keywords_str.split(',') if k.strip())
             if pdf_subject and isinstance(pdf_subject, str) and pdf_subject.strip():
                  combined_keywords.add(pdf_subject.strip())
-            result["keywords"] = sorted(list(combined_keywords)) # Store unique, sorted keywords
+            result["keywords"] = sorted(combined_keywords) # Store unique, sorted keywords
 
             # Determine final title/author using overrides, then metadata, then filename
             final_title = title_override or raw_metadata.get('title') or Path(filename).stem
@@ -552,10 +575,14 @@ def process_pdf(
              # --- CATCH PDF library errors during metadata specifically ---
              err_msg = str(meta_lib_err)
              # Create user-friendly error message for metadata failure
-             if "password" in err_msg.lower(): meta_fail_reason = f"PDF Error: Password required or invalid."
-             elif isinstance(meta_lib_err, pymupdf.EmptyFileError): meta_fail_reason = f"PDF Error: Input file is empty."
-             elif isinstance(meta_lib_err, pymupdf.FileDataError): meta_fail_reason = f"PDF Error: Corrupted or invalid file data."
-             else: meta_fail_reason = f"PDF Library Error: {err_msg}" # General PDF error
+             if "password" in err_msg.lower():
+                 meta_fail_reason = "PDF Error: Password required or invalid."
+             elif isinstance(meta_lib_err, pymupdf.EmptyFileError):
+                 meta_fail_reason = "PDF Error: Input file is empty."
+             elif isinstance(meta_lib_err, pymupdf.FileDataError):
+                 meta_fail_reason = "PDF Error: Corrupted or invalid file data."
+             else:
+                 meta_fail_reason = f"PDF Library Error: {err_msg}" # General PDF error
 
              logging.error(f"Metadata extraction failed for {filename}: {meta_fail_reason}", exc_info=True)
              result["warnings"].append(f"Metadata extraction failed: {meta_fail_reason}")
@@ -564,7 +591,7 @@ def process_pdf(
                  "page_count": 0, "raw": {"error": f"Metadata extraction failed: {meta_fail_reason}"}
              }
 
-        except Exception as meta_err:
+        except _PDF_NONCRITICAL_EXCEPTIONS as meta_err:
              logging.error(f"Unexpected metadata extraction error for {filename}: {meta_err}", exc_info=True)
              meta_fail_reason = f"Unexpected error: {str(meta_err)}"
              result["warnings"].append(f"Metadata extraction failed: {meta_fail_reason}")
@@ -581,13 +608,13 @@ def process_pdf(
                 if backend is None:
                     result["warnings"].append("VLM requested but no backend available")
                 else:
-                    vlm_summary: Dict[str, Any] = {
+                    vlm_summary: dict[str, Any] = {
                         "backend": getattr(backend, "name", "unknown"),
                         "pages_scanned": 0,
                         "detections_total": 0,
                         "by_page": [],
                     }
-                    extra_chunks: List[Dict[str, Any]] = []
+                    extra_chunks: list[dict[str, Any]] = []
 
                     # Prefer document-level processing if backend exposes it (e.g., docling)
                     if hasattr(backend, "process_pdf"):
@@ -641,7 +668,7 @@ def process_pdf(
                                     })
                                     vlm_summary["detections_total"] += 1
                                 vlm_summary["by_page"].append({"page": page_no, "detections": page_dets})
-                        except Exception as _pdf_vlm_err:
+                        except _PDF_NONCRITICAL_EXCEPTIONS as _pdf_vlm_err:
                             logging.warning(f"VLM document-level processing failed: {_pdf_vlm_err}")
                     else:
                         with pymupdf.open(path_for_processing) as doc:
@@ -682,7 +709,7 @@ def process_pdf(
                     result.setdefault("analysis_details", {})["vlm"] = vlm_summary
                     if extra_chunks:
                         result["extra_chunks"] = extra_chunks
-        except Exception as vlm_err:
+        except _PDF_NONCRITICAL_EXCEPTIONS as vlm_err:
             logging.warning(f"VLM processing failed for {filename}: {vlm_err}")
             result["warnings"].append(f"VLM processing error: {vlm_err}")
 
@@ -713,7 +740,7 @@ def process_pdf(
 
                 result["chunks"] = processed_chunks # Store the list of chunks
 
-            except Exception as chunk_err:
+            except _PDF_NONCRITICAL_EXCEPTIONS as chunk_err:
                  logging.error(f"Chunking failed for {filename}: {chunk_err}", exc_info=True)
                  result["warnings"].append(f"Chunking failed: {str(chunk_err)}")
                  processed_chunks = [{'text': content, 'metadata': {'chunk_num': 0, 'error': f"Chunking failed: {chunk_err}"}}]
@@ -730,7 +757,6 @@ def process_pdf(
 
 
         # --- Step 4: Summarization / Analysis ---
-        final_analysis = None # Or final_summary
         # Use path_for_processing for logging context if needed
         logging.debug(f"PROCESS_PDF: Checking condition -> perform_analysis={perform_analysis}, api_name='{api_name}', api_key='{api_key}', chunks_exist={bool(processed_chunks)}") # Keep this log
         # Allow analysis to proceed without explicit api_key (resolved from server config)
@@ -744,7 +770,7 @@ def process_pdf(
             # Iterate through each chunk generated earlier
             for i, chunk in enumerate(processed_chunks):
                 chunk_text = chunk.get('text', '') # Get the text content of the chunk
-                chunk_metadata: Dict[str, Any] = chunk.get('metadata', {}) # Get existing metadata
+                chunk_metadata: dict[str, Any] = chunk.get('metadata', {}) # Get existing metadata
 
                 # Only summarize if the chunk has actual text content
                 if chunk_text:
@@ -771,7 +797,7 @@ def process_pdf(
                             chunk_metadata['analysis'] = None # Indicate no analysis available
                             logging.debug(f"Summarization yielded empty result for chunk {i+1} of {filename}.")
 
-                    except Exception as summ_err:
+                    except _PDF_NONCRITICAL_EXCEPTIONS as summ_err:
                         # Handle errors during the API call or summarization process
                         logging.warning(f"Summarization failed for chunk {i+1} of {filename}: {summ_err}", exc_info=True)
                         # Store error information in the chunk's metadata
@@ -818,7 +844,7 @@ def process_pdf(
                         else:
                              log_counter("pdf_recursive_summarization_success", labels={"file_name": filename})
 
-                    except Exception as rec_summ_err:
+                    except _PDF_NONCRITICAL_EXCEPTIONS as rec_summ_err:
                         # Handle errors during the recursive summarization step
                         logging.error(f"Recursive summarization failed for {filename}: {rec_summ_err}", exc_info=True)
                         # Fallback: Use the joined chunk summaries as the final analysis, but mark the error
@@ -856,7 +882,6 @@ def process_pdf(
         # Check if critical step (text extraction) failed. Check warnings for specific errors.
         extraction_failed = not content and any("Text extraction failed" in w for w in result["warnings"])
         # Treat metadata failures as warnings unless text extraction also failed
-        metadata_failed_critically = False
 
         if extraction_failed:
             result["status"] = "Error"
@@ -879,7 +904,7 @@ def process_pdf(
         result["status"] = "Error"
         result["error"] = str(fnf_err)
         log_counter("pdf_processing_error", labels={"file_name": filename, "parser": parser, "error": "FileNotFoundError"})
-    except IOError as io_err: # Catch temp file creation errors
+    except OSError as io_err: # Catch temp file creation errors
         logging.error(f"IO error during temp file handling for {filename}: {io_err}", exc_info=True)
         result["status"] = "Error"
         result["error"] = f"Temporary file error: {io_err}"
@@ -893,15 +918,15 @@ def process_pdf(
         if "password" in err_msg.lower():
             log_msg = f"PDF password error for {filename}: {err_msg}"
             err_type_label = "PasswordError"  # Specific label for metrics
-            result["error"] = f"PDF Error: Password required or invalid."  # User-friendly message
+            result["error"] = "PDF Error: Password required or invalid."  # User-friendly message
         elif isinstance(pdf_lib_err, pymupdf.EmptyFileError):
             log_msg = f"PDF empty file error for {filename}: {err_msg}"
             err_type_label = "EmptyFileError"
-            result["error"] = f"PDF Error: Input file is empty."
+            result["error"] = "PDF Error: Input file is empty."
         elif isinstance(pdf_lib_err, pymupdf.FileDataError):
             log_msg = f"PDF file data error for {filename}: {err_msg}"
             err_type_label = "FileDataError"
-            result["error"] = f"PDF Error: Corrupted or invalid file data."
+            result["error"] = "PDF Error: Corrupted or invalid file data."
         else:  # General RuntimeError or other caught types
             log_msg = f"PDF library runtime error for {filename}: {err_msg}"
             err_type_label = type(pdf_lib_err).__name__  # Use 'RuntimeError' usually
@@ -914,7 +939,7 @@ def process_pdf(
         log_counter("pdf_processing_error", labels={"file_name": filename, "parser": parser, "error": err_type_label})
         current_status_before_cleanup = result["status"] # Store status before cleanup attempt
 
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         # Catch any other unexpected exceptions
         logging.error(f"Unexpected error processing PDF {filename}: {str(e)}", exc_info=True)
         result["status"] = "Error"
@@ -926,7 +951,6 @@ def process_pdf(
     # --- Finally Block: Cleanup ---
     finally:
         current_status_before_cleanup = result["status"]
-        temp_file_removed = False
 
         if path_for_processing and temp_dir_for_pdf and os.path.exists(path_for_processing):
             try:
@@ -939,13 +963,12 @@ def process_pdf(
                 logging.debug(f"Attempting to remove temporary file: {path_for_processing}")
                 os.remove(path_for_processing)
                 logging.debug(f"Successfully removed temporary file: {path_for_processing}")
-                temp_file_removed = True
                 time.sleep(0.1) # Small delay AFTER file removal before dir removal
 
             except OSError as file_rm_err:
                  logging.warning(f"OSError removing temporary file {path_for_processing}: {file_rm_err}")
                  result["warnings"].append(f"Failed to cleanup temp file: {file_rm_err}")
-            except Exception as file_rm_exc:
+            except _PDF_NONCRITICAL_EXCEPTIONS as file_rm_exc:
                  logging.error(f"Unexpected error removing temporary file {path_for_processing}: {file_rm_exc}", exc_info=True)
                  result["warnings"].append(f"Unexpected error cleaning up temp file: {file_rm_exc}")
 
@@ -976,10 +999,10 @@ def process_pdf(
                             logging.warning(f"Temp dir cleanup failed, but original status was already {current_status_before_cleanup}. Keeping status.")
                          # --- End modify status handling ---
                      else:
-                         logging.info(f"Retrying temp dir removal after delay...")
+                         logging.info("Retrying temp dir removal after delay...")
                          time.sleep(retry_delay * (attempt + 1))
 
-                 except Exception as rm_exc:
+                 except _PDF_NONCRITICAL_EXCEPTIONS as rm_exc:
                       logging.error(f"Unexpected error removing temporary directory {temp_dir_for_pdf} (Attempt {attempt + 1}): {rm_exc}", exc_info=True)
                       warning_msg = f"Unexpected error cleaning up temp dir: {rm_exc}"
                       result["warnings"] = (result["warnings"] or []) + [warning_msg]
@@ -1028,7 +1051,7 @@ async def process_pdf_task(
     parser: str = "pymupdf4llm",
     title_override: Optional[str] = None,
     author_override: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
+    keywords: Optional[list[str]] = None,
     perform_chunking: bool = True,
     chunk_method: Optional[str] = None,
     max_chunk_size: Optional[int] = 500,
@@ -1053,7 +1076,7 @@ async def process_pdf_task(
     vlm_backend: Optional[str] = None,
     vlm_detect_tables_only: bool = True,
     vlm_max_pages: Optional[int] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Async wrapper task to process a single PDF (provided as bytes)
     using the core `process_pdf` function. Returns its result dictionary.
@@ -1108,13 +1131,13 @@ async def process_pdf_task(
         logging.info(f"process_pdf_task completed for {filename} with status: {result_dict.get('status')}")
         return result_dict
 
-    except Exception as e:
+    except _PDF_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error within process_pdf_task for {filename}: {str(e)}", exc_info=True)
         # Return a standard error dictionary matching process_pdf's structure
         return {
             "status": "Error",
             "input_ref": filename,
-            "processing_source": f"bytes_input_task_error",
+            "processing_source": "bytes_input_task_error",
             "media_type": "pdf",
             "parser_used": parser,
             "error": f"Task-level error: {str(e)}",
@@ -1139,18 +1162,18 @@ def _ocr_pdf_pages(
     concurrency: int = 1,
     output_format: Optional[str] = None,
     prompt_preset: Optional[str] = None,
-) -> tuple[str, int, int, Optional[List[Dict[str, Any]]]]:
+) -> tuple[str, int, int, Optional[list[dict[str, Any]]]]:
     """
     Render PDF pages to images and run OCR.
 
     Returns: (markdown_text, total_pages, ocr_pages_count, structured_pages)
     """
-    text_by_index: List[str] = []
+    text_by_index: list[str] = []
     ocr_pages = 0
     with pymupdf.open(pdf_path) as doc:
         page_count = len(doc)
         text_by_index = [""] * page_count
-        structured_pages: Optional[List[Dict[str, Any]]] = None
+        structured_pages: Optional[list[dict[str, Any]]] = None
         supports_structured = False
         try:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import (
@@ -1160,7 +1183,7 @@ def _ocr_pdf_pages(
                 getattr(backend.__class__, "ocr_image_structured", None)
                 is not getattr(_OCRBackend, "ocr_image_structured", None)
             )
-        except Exception:
+        except _PDF_NONCRITICAL_EXCEPTIONS:
             supports_structured = False
 
         # Persist structured OCR outputs whenever a backend provides them,
@@ -1202,10 +1225,10 @@ def _ocr_pdf_pages(
                                         format="text",
                                         meta={"source": "pdf_text"},
                                     ).as_dict()
-                                except Exception:
+                                except _PDF_NONCRITICAL_EXCEPTIONS:
                                     pass
                             do_ocr = False
-                    except Exception:
+                    except _PDF_NONCRITICAL_EXCEPTIONS:
                         do_ocr = True
 
                 if do_ocr:
@@ -1246,7 +1269,7 @@ def _ocr_pdf_pages(
                                 structured_pages[idx - 1] = result  # type: ignore[index]
                         else:
                             page_text = str(result or "")
-                    except Exception:
+                    except _PDF_NONCRITICAL_EXCEPTIONS:
                         page_text = str(result or "")
                 else:
                     page_text = str(result or "")

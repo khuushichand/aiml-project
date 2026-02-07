@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_workflow_file_uri,
     resolve_workflow_file_path,
+    resolve_workflow_file_uri,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import AudioDiarizeConfig
 
 
@@ -27,7 +27,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio._config import AudioDiari
     config_model=AudioDiarizeConfig,
     tags=["audio"],
 )
-async def run_audio_diarize_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_diarize_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Perform speaker diarization on an audio file.
 
     Config:
@@ -77,8 +77,8 @@ async def run_audio_diarize_adapter(config: Dict[str, Any], context: Dict[str, A
     try:
         # Try to use pyannote for diarization
         try:
-            from pyannote.audio import Pipeline
             import torch
+            from pyannote.audio import Pipeline
 
             # Load diarization pipeline
             pipeline = Pipeline.from_pretrained(
@@ -118,7 +118,7 @@ async def run_audio_diarize_adapter(config: Dict[str, Any], context: Dict[str, A
 
             return {
                 "segments": segments,
-                "speakers": sorted(list(speakers)),
+                "speakers": sorted(speakers),
                 "total_duration": total_duration,
             }
 
@@ -154,7 +154,7 @@ async def run_audio_diarize_adapter(config: Dict[str, Any], context: Dict[str, A
 
                     return {
                         "segments": segments,
-                        "speakers": sorted(list(speakers)),
+                        "speakers": sorted(speakers),
                         "total_duration": result.get("duration", 0),
                     }
 

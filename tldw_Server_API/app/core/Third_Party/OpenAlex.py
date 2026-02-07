@@ -5,16 +5,17 @@ standardized return signatures expected by the API layer.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-import os
+import contextlib
 import math
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+import os
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.openalex.org"
 
 
-def _norm_authors(authorships: Any) -> Optional[str]:
+def _norm_authors(authorships: Any) -> str | None:
     try:
         names = []
         for a in authorships or []:
@@ -27,7 +28,7 @@ def _norm_authors(authorships: Any) -> Optional[str]:
         return None
 
 
-def _norm_venue(result: Dict[str, Any]) -> Optional[str]:
+def _norm_venue(result: dict[str, Any]) -> str | None:
     hv = result.get("host_venue") or {}
     name = hv.get("display_name")
     if name:
@@ -38,7 +39,7 @@ def _norm_venue(result: Dict[str, Any]) -> Optional[str]:
     return name or None
 
 
-def _norm_pdf_url(result: Dict[str, Any]) -> Optional[str]:
+def _norm_pdf_url(result: dict[str, Any]) -> str | None:
     # OpenAlex has open_access.oa_url or best_oa_location.url
     oa = result.get("open_access") or {}
     if oa.get("oa_url"):
@@ -48,7 +49,7 @@ def _norm_pdf_url(result: Dict[str, Any]) -> Optional[str]:
     return url or None
 
 
-def _norm_url(result: Dict[str, Any]) -> Optional[str]:
+def _norm_url(result: dict[str, Any]) -> str | None:
     # Prefer DOI link; fallback landing page
     doi = result.get("doi")
     if isinstance(doi, str) and doi:
@@ -57,7 +58,7 @@ def _norm_url(result: Dict[str, Any]) -> Optional[str]:
     return pl.get("landing_page_url") or None
 
 
-def _normalize_openalex_work(result: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_openalex_work(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": result.get("id"),
         "title": result.get("title") or "",
@@ -73,13 +74,13 @@ def _normalize_openalex_work(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_openalex(
-    q: Optional[str],
+    q: str | None,
     offset: int,
     limit: int,
-    filter_venue: Optional[str] = None,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
-) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
+    filter_venue: str | None = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
+) -> tuple[list[dict] | None, int, str | None]:
     try:
         url = f"{BASE_URL}/works"
         page = math.floor(offset / max(1, limit)) + 1
@@ -91,7 +92,7 @@ def search_openalex(
         if filter_venue:
             filters.append(f"host_venue.display_name.search:{filter_venue}")
 
-        params: Dict[str, Any] = {"per-page": limit, "page": page}
+        params: dict[str, Any] = {"per-page": limit, "page": page}
         if q:
             params["search"] = q
         if filters:
@@ -111,16 +112,14 @@ def search_openalex(
         return None, 0, f"OpenAlex error: {str(e)}"
 
 
-def get_openalex_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_openalex_by_doi(doi: str) -> tuple[dict | None, str | None]:
     try:
         doi_clean = doi.strip()
         url = f"{BASE_URL}/works/doi:{doi_clean}"
         r = fetch(method="GET", url=url, timeout=20, headers={"Accept": "application/json", "User-Agent": "tldw_server/0.1 (+https://github.com/openai/tldw_server)"})
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json()
         return _normalize_openalex_work(data), None

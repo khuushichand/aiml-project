@@ -99,7 +99,7 @@ async def test_revoked_authnz_jwt_rejected_for_evaluations(isolated_test_environ
     from fastapi import HTTPException
     from fastapi.security import HTTPAuthorizationCredentials
     from starlette.requests import Request
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import verify_api_key
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import verify_api_key
 
     creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
     request = Request({"type": "http", "client": ("127.0.0.1", 12345), "headers": []})

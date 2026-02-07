@@ -124,6 +124,18 @@ class TestACPWebSocketConnection:
             assert data["session_id"] == "test-session"
             assert "agent_capabilities" in data
 
+    def test_websocket_connect_with_subprotocol_bearer(
+        self, client_user_only, mock_get_runner_client, mock_jwt_manager
+    ):
+        """Test WebSocket connection using Sec-WebSocket-Protocol bearer token."""
+        with client_user_only.websocket_connect(
+            "/api/v1/acp/sessions/test-session/stream",
+            subprotocols=["bearer", "valid-token"],
+        ) as websocket:
+            data = websocket.receive_json()
+            assert data["type"] == "connected"
+            assert data["session_id"] == "test-session"
+
     def test_websocket_connect_with_api_key(
         self, client_user_only, mock_get_runner_client, monkeypatch
     ):

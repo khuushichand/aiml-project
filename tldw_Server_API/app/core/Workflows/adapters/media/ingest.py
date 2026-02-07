@@ -12,13 +12,12 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
-from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_workflow_file_uri,
 )
@@ -26,6 +25,18 @@ from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     MediaIngestConfig,
     ProcessMediaConfig,
+)
+from tldw_Server_API.app.core.Workflows.subprocess_utils import start_process, terminate_process
+
+_MEDIA_INGEST_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
 )
 
 
@@ -37,7 +48,7 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     tags=["media", "ingest"],
     config_model=MediaIngestConfig,
 )
-async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Media ingestion step (v0.1 minimal) with optional yt-dlp/ffmpeg integration.
 
     Config:
@@ -83,9 +94,9 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             try:
                 try:
                     text = resolved_path.read_text(encoding="utf-8")
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     text = resolved_path.read_text(errors="ignore")
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 out["metadata"].append({"source": uri, "status": "read_error"})
                 continue
 
@@ -93,7 +104,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             if extracted_text:
                 out["text"] = (out.get("text") or "") + ("\n\n" if out.get("text") else "") + extracted_text
 
-            chunks_desc: List[Dict[str, Any]] = []
+            chunks_desc: list[dict[str, Any]] = []
             try:
                 from tldw_Server_API.app.core.Chunking import Chunker
                 chunker = Chunker()
@@ -162,7 +173,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                                     "language": part.metadata.language,
                                 },
                             })
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
             if chunks_desc:
@@ -181,7 +192,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     try:
                         from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
                         _mdb_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-                    except Exception as exc:
+                    except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as exc:
                         logger.error(f"Failed to resolve Media DB path for workflow indexing: {exc}")
                         raise
                     mdb = MediaDatabase(_mdb_path, client_id="workflow_engine")
@@ -204,7 +215,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         meta_local["db_message"] = msg
                         # Mark as indexed at DB level (vectorization may still be pending)
                         out["rag_indexed"] = True
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 # Non-fatal; proceed without DB write
                 pass
             out["metadata"].append(meta_local)
@@ -226,7 +237,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         if host == dom or host.endswith(f".{dom}"):
                             host_allowed = True
                             break
-                    except Exception:
+                    except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                         continue
                 if not host_allowed:
                     out["metadata"].append({
@@ -236,11 +247,11 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     continue
             # Global egress policy: private IPs and allowlist
             try:
-                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
                 allowed = False
                 try:
                     allowed = is_url_allowed_for_tenant(uri, tenant_id)
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     allowed = is_url_allowed(uri)
                 if not allowed:
                     out["metadata"].append({
@@ -248,7 +259,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         "status": "blocked_egress",
                     })
                     continue
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 out["metadata"].append({"source": uri, "status": "blocked_egress_err"})
                 continue
 
@@ -299,7 +310,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 try:
                     _mb = int(max_mb)
                     cmd.extend(["--max-filesize", f"{_mb}M"])
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     pass
 
             task = start_process(cmd, workdir=step_dir, log_dir=log_dir)
@@ -313,7 +324,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         stdout_path=str(task.stdout_path),
                         stderr_path=str(task.stderr_path),
                     )
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Poll with timeout
@@ -327,7 +338,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 try:
                     if callable(context.get("heartbeat")):
                         context["heartbeat"]()
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     pass
                 await asyncio.sleep(0.25)
                 # Check if any file downloaded
@@ -345,7 +356,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         if len(data) > 4096:
                             data = data[-4096:]
                         stdout_tail = data.decode("utf-8", errors="replace")
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     pass
                 try:
                     if task.stderr_path.exists():
@@ -353,7 +364,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                         if len(data) > 4096:
                             data = data[-4096:]
                         stderr_tail = data.decode("utf-8", errors="replace")
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     pass
                 meta_timeout = {
                     "source": uri,
@@ -367,7 +378,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                 try:
                     if callable(context.get("append_event")):
                         context["append_event"]("step_log_tail", {"stdout_tail": stdout_tail, "stderr_tail": stderr_tail, "source": uri})
-                except Exception:
+                except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                     pass
                 continue
 
@@ -380,7 +391,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     if len(data) > 4096:
                         data = data[-4096:]
                     stdout_tail2 = data.decode("utf-8", errors="replace")
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 if task.stderr_path.exists():
@@ -388,7 +399,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                     if len(data) > 4096:
                         data = data[-4096:]
                     stderr_tail2 = data.decode("utf-8", errors="replace")
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
             meta_entry = {
@@ -403,7 +414,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             try:
                 if (stdout_tail2 or stderr_tail2) and callable(context.get("append_event")):
                     context["append_event"]("step_log_tail", {"stdout_tail": stdout_tail2, "stderr_tail": stderr_tail2, "source": uri})
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Attach chunking/indexing metadata if requested in config
@@ -428,19 +439,19 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
             # Persist artifacts for downloaded files
             try:
                 if callable(context.get("add_artifact")):
-                    import mimetypes
                     import hashlib
+                    import mimetypes
                     for fp in step_dir.glob("*.*"):
                         # Skip log files
                         if fp.name in {"stdout.log", "stderr.log"} or fp.parent.name == "logs":
                             continue
                         try:
                             size_b = fp.stat().st_size
-                        except Exception:
+                        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                             size_b = None
                         try:
                             mime, _ = mimetypes.guess_type(str(fp))
-                        except Exception:
+                        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                             mime = None
                         sha256 = None
                         try:
@@ -449,7 +460,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                                 for chunk in iter(lambda: f.read(65536), b""):
                                     h.update(chunk)
                             sha256 = h.hexdigest()
-                        except Exception as e:
+                        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Media ingest adapter: failed to compute sha256 for {fp}: {e}")
                         context["add_artifact"](
                             type="download",
@@ -459,7 +470,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
                             checksum_sha256=sha256,
                             metadata={"workdir": str(step_dir)},
                         )
-            except Exception:
+            except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
                 pass
 
     return out
@@ -473,7 +484,7 @@ async def run_media_ingest_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["media", "processing"],
     config_model=ProcessMediaConfig,
 )
-async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_process_media_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Process media ephemerally using internal services (no persistence).
 
     Supports kinds:
@@ -488,12 +499,12 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
     outputs (e.g., first article summary/content, or extracted text), so
     downstream steps like `prompt` and `tts` can use `last.text` directly.
     """
-    def _emit(out: Dict[str, Any]) -> Dict[str, Any]:
+    def _emit(out: dict[str, Any]) -> dict[str, Any]:
         # Attach best-effort text for chaining convenience
         try:
             if "text" not in out or not out.get("text"):
                 # Try to find first rich text content
-                txt: Optional[str] = None
+                txt: str | None = None
                 # Web scraping shape: results -> list of {content, summary}
                 results = out.get("results") if isinstance(out, dict) else None
                 if isinstance(results, list) and results:
@@ -505,7 +516,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
                     txt = out.get("content") or out.get("text") or ""
                 if txt:
                     out["text"] = txt
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             pass
         return out
 
@@ -513,14 +524,14 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
     try:
         if callable(context.get("is_cancelled")) and context["is_cancelled"]():
             return {"__status__": "cancelled"}
-    except Exception:
+    except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
         pass
     kind = str(config.get("kind") or "web_scraping").strip().lower()
     # Web scraping
     if kind == "web_scraping":
         try:
             from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             return {"error": "web_scraping_service_unavailable"}
         # Extract and sanitize config
         scrape_method = str(config.get("scrape_method") or "Individual URLs")
@@ -528,7 +539,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         url_level = config.get("url_level")
         try:
             url_level = int(url_level) if url_level is not None else None
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             url_level = None
         max_pages = int(config.get("max_pages", 10))
         max_depth = int(config.get("max_depth", 3))
@@ -538,7 +549,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
         system_prompt = config.get("system_prompt")
         try:
             temperature = float(config.get("temperature", 0.7))
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             temperature = 0.7
         custom_cookies = config.get("custom_cookies") if isinstance(config.get("custom_cookies"), list) else None
         user_agent = config.get("user_agent")
@@ -565,7 +576,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
                 user_agent=user_agent,
                 custom_headers=custom_headers,
             )
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             logger.exception("Web scraping process media failed")
             return {"error": "process_media_error"}
         # Normalize response
@@ -574,7 +585,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             articles = result.get("results") or result.get("articles") or []
             if isinstance(articles, dict):
                 articles = [articles]
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             articles = []
         return _emit({"kind": "web_scraping", "status": result.get("status", "ok"), "count": len(articles), "results": articles})
 
@@ -605,7 +616,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
                 max_chunk_size=chunk_opts.get("max_size"),
                 chunk_overlap=chunk_opts.get("overlap"),
             )
-        except Exception as e:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
             return {"error": f"pdf_process_error:{e}"}
         # Map to a simple shape
         out = {
@@ -630,7 +641,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             res = await process_ebook_task(file_path=str(resolved_path), title=config.get("title"), author=config.get("author"), custom_prompt=config.get("custom_prompt"), api_name=config.get("api_name"))
             out = {"kind": "ebook", "content": res.get("text") or "", "summary": res.get("summary") or "", "metadata": res.get("metadata") or {}}
             return _emit(out)
-        except Exception as e:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
             return {"error": f"ebook_process_error:{e}"}
 
     # XML (file_uri; placeholder service)
@@ -660,7 +671,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             text = "\n".join([seg.get("Text") or "" for seg in (res.get("segments") or [])])
             out = {"kind": "xml", "content": text, "summary": res.get("summary"), "metadata": res.get("info_dict") or {}}
             return _emit(out)
-        except Exception as e:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
             return {"error": f"xml_process_error:{e}"}
 
     # MediaWiki dump (file_uri) - ephemeral process
@@ -675,7 +686,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             return {"error": str(e)}
         try:
             content = resolved_path.read_text(errors="ignore")
-        except Exception:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS:
             content = ""
         return _emit({"kind": "mediawiki_dump", "content": content[:5000], "metadata": {"file": resolved_path.name}})
 
@@ -702,7 +713,7 @@ async def run_process_media_adapter(config: Dict[str, Any], context: Dict[str, A
             )
             out = {"kind": "podcast", "content": res.get("transcript") or "", "summary": res.get("summary"), "metadata": res.get("metadata")}
             return _emit(out)
-        except Exception as e:
+        except _MEDIA_INGEST_NONCRITICAL_EXCEPTIONS as e:
             return {"error": f"podcast_process_error:{e}"}
 
     return {"error": f"unsupported_process_media_kind:{kind}"}

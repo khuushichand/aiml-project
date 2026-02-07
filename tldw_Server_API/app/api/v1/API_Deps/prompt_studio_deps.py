@@ -1,28 +1,31 @@
 # prompt_studio_deps.py
 # FastAPI dependency injection for Prompt Studio feature
 
-import threading
-from pathlib import Path
-from typing import Dict, Optional, Any
-from functools import lru_cache
-
-from fastapi import Depends, HTTPException, status, Header, Request
 import asyncio
+import contextlib
+import threading
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Optional
+
 from cachetools import LRUCache
+from fastapi import Depends, Header, HTTPException, Request, status
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
-    PromptStudioDatabase, DatabaseError, SchemaError, InputError, ConflictError
-)
+from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_prompt_studio_database,
     get_content_backend_instance,
 )
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.api.v1.schemas.prompt_studio_base import SecurityConfig
+
+# Local imports
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
+    DatabaseError,
+    PromptStudioDatabase,
+)
 
 ########################################################################################################################
 # Configuration
@@ -33,6 +36,35 @@ SERVER_CLIENT_ID = settings.get("SERVER_CLIENT_ID", "prompt_studio_server")
 MAX_CACHED_INSTANCES = settings.get("MAX_CACHED_PROMPT_STUDIO_DB_INSTANCES", 20)
 _db_instances_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_INSTANCES)
 _db_lock = threading.Lock()
+
+_PROMPT_STUDIO_DB_EXCEPTIONS = (
+    DatabaseError,
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    AttributeError,
+)
+
+_PROMPT_STUDIO_CONTEXT_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+)
 
 ########################################################################################################################
 # Helper Functions
@@ -98,12 +130,12 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
             _db_instances_cache[cache_key] = db_instance
             logger.info("Created new PromptStudioDatabase instance for user {}", user_id)
             return db_instance
-        except Exception as e:
+        except _PROMPT_STUDIO_DB_EXCEPTIONS as e:
             logger.error(f"Failed to create PromptStudioDatabase for user {user_id}: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to initialize database"
-            )
+            ) from e
 
 ########################################################################################################################
 # User Context Dependencies
@@ -120,7 +152,7 @@ def get_current_active_user():  # noqa: D401 - simple hook for test patching
 async def get_prompt_studio_user(
     request: Request,
     x_client_id: Optional[str] = Header(None)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Extract user context for Prompt Studio operations.
 
@@ -135,7 +167,7 @@ async def get_prompt_studio_user(
     import os
 
     # Debug trace to aid tests
-    try:
+    with contextlib.suppress(_PROMPT_STUDIO_CONTEXT_EXCEPTIONS):
         logger.debug(
             "PS get_user path={} method={} authz={} api_key={}",
             getattr(request.url, "path", ""),
@@ -143,8 +175,6 @@ async def get_prompt_studio_user(
             "yes" if request.headers.get("Authorization") else "no",
             "yes" if request.headers.get("X-API-KEY") else "no",
         )
-    except Exception:
-        pass
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     client_id_value = x_client_id if isinstance(x_client_id, str) else None
@@ -157,7 +187,7 @@ async def get_prompt_studio_user(
                 uid = str(maybe_user.get("id"))
             else:
                 uid = "test-user-123"
-        except Exception:
+        except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
             uid = "test-user-123"
 
         user_context = {
@@ -192,10 +222,10 @@ async def get_prompt_studio_user(
                     apply_prompt_studio_quota_policy,
                 )
                 await apply_prompt_studio_quota_policy(user_context["user_id"])
-            except Exception as exc:
+            except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS as exc:
                 logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
             return user_context
-    except Exception:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
         # Ignore and fall through to standard handling
         pass
 
@@ -263,15 +293,15 @@ async def get_prompt_studio_user(
     # Extract the needed header values from the Request and pass them explicitly.
     try:
         hdr_api_key = request.headers.get("X-API-KEY")
-    except Exception:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
         hdr_api_key = None
     try:
         hdr_authz = request.headers.get("Authorization")
-    except Exception:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
         hdr_authz = None
     try:
         hdr_legacy = request.headers.get("Token")
-    except Exception:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
         hdr_legacy = None
 
     bearer_token = None
@@ -280,7 +310,7 @@ async def get_prompt_studio_user(
             scheme, _, credential = hdr_authz.partition(" ")
             if scheme.lower() == "bearer":
                 bearer_token = credential.strip()
-    except Exception:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS:
         bearer_token = None
 
     # Use unified request-user dependency, passing extracted headers explicitly
@@ -297,7 +327,7 @@ async def get_prompt_studio_user(
     perms = getattr(current_user, "permissions", []) or []
     is_admin = bool(getattr(current_user, "is_admin", False) or ("admin" in normalized_roles))
 
-    user_context: Dict[str, Any] = {
+    user_context: dict[str, Any] = {
         "user_id": str(getattr(current_user, "id", "anonymous")),
         "client_id": x_client_id or "web",
         "is_authenticated": True,
@@ -314,7 +344,7 @@ async def get_prompt_studio_user(
             apply_prompt_studio_quota_policy,
         )
         await apply_prompt_studio_quota_policy(user_context["user_id"])
-    except Exception as exc:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS as exc:
         logger.debug("Prompt Studio quota policy lookup failed: {}", exc)
 
     return user_context
@@ -323,7 +353,7 @@ async def get_prompt_studio_user(
 # Database Dependencies
 
 async def get_prompt_studio_db(
-    user_context: Dict = Depends(get_prompt_studio_user)
+    user_context: dict = Depends(get_prompt_studio_user)
 ) -> PromptStudioDatabase:
     """
     Get PromptStudioDatabase instance for the current user.
@@ -356,7 +386,7 @@ async def get_prompt_studio_db(
 
 async def require_project_access(
     project_id: int,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> bool:
     """
@@ -399,11 +429,11 @@ async def require_project_access(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error"
-        )
+        ) from e
 
 async def require_project_write_access(
     project_id: int,
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     db: PromptStudioDatabase = Depends(get_prompt_studio_db)
 ) -> bool:
     """
@@ -415,7 +445,7 @@ async def require_project_write_access(
 ########################################################################################################################
 # Security Configuration
 
-@lru_cache()
+@lru_cache
 def get_security_config() -> SecurityConfig:
     """
     Get security configuration for Prompt Studio.
@@ -436,12 +466,12 @@ def get_security_config() -> SecurityConfig:
 # Rate Limiting (shared AuthNZ limiter with Redis support)
 try:
     from tldw_Server_API.app.core.AuthNZ.rate_limiter import check_rate_limit as _authnz_check_rate_limit
-except Exception:  # pragma: no cover - defensive fallback
+except ImportError:  # pragma: no cover - defensive fallback
     _authnz_check_rate_limit = None  # type: ignore[assignment]
 
 async def check_rate_limit(
     operation: str = "default",
-    user_context: Dict = Depends(get_prompt_studio_user),
+    user_context: dict = Depends(get_prompt_studio_user),
     security_config: SecurityConfig = Depends(get_security_config)
 ) -> bool:
     """
@@ -470,7 +500,7 @@ async def check_rate_limit(
     try:
         if user_context.get("rg_policy_id"):
             return True
-    except Exception as exc:
+    except _PROMPT_STUDIO_CONTEXT_EXCEPTIONS as exc:
         logger.debug("Prompt Studio rate-limit bypass: failed to read rg_policy_id from user_context: {}", exc)
 
     user_id = str(user_context.get("user_id", "anonymous"))
@@ -502,7 +532,7 @@ async def check_rate_limit(
             return True
         except HTTPException:
             raise
-        except Exception as e:
+        except _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS as e:
             logger.warning(f"Shared rate limiter unavailable, falling back to local limiter: {e}")
 
     # Fallback: simple in-memory limiter (process-local)
@@ -537,7 +567,7 @@ def shutdown_prompt_studio_deps():
             try:
                 if hasattr(db_instance, 'close'):
                     db_instance.close()
-            except Exception as e:
+            except _PROMPT_STUDIO_DB_EXCEPTIONS as e:
                 logger.error(f"Error closing database instance: {e}")
 
         _db_instances_cache.clear()

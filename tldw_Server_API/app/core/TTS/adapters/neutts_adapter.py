@@ -15,37 +15,37 @@ Reference upstream: https://github.com/neuphonic/neutts-air
 from __future__ import annotations
 
 import asyncio
-import base64
+import contextlib
 import os
 import tempfile
-from typing import AsyncGenerator, Dict, Optional, Any
+from collections.abc import AsyncGenerator
+from typing import Any
 
 import numpy as np
 from loguru import logger
 
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSResponse,
-    TTSRequest,
-    AudioFormat,
-    ProviderStatus,
-)
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSModelLoadError,
-    TTSModelNotFoundError,
     TTSProviderNotConfiguredError,
     TTSValidationError,
 )
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
 
 
 class NeuTTSAdapter(TTSAdapter):
     """Adapter for NeuTTS provider (Air/Nano)."""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config)
         self.sample_rate: int = int(self.config.get("sample_rate", 24000))
 
@@ -84,6 +84,19 @@ class NeuTTSAdapter(TTSAdapter):
                 codec_device=self.codec_device,
                 auto_download=auto_download,
             )
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                register_result = resource_manager.register_model(
+                    provider=self.provider_name.lower(),
+                    model_instance=self._engine,
+                    cleanup_callback=lambda: setattr(self, "_engine", None),
+                    model_key=f"{self.backbone_repo}:{self.codec_repo}",
+                )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
+            except Exception:
+                pass
 
             # Detect capabilities from engine flags
             self._is_quantized_model = getattr(self._engine, "_is_quantized_model", False)
@@ -108,14 +121,14 @@ class NeuTTSAdapter(TTSAdapter):
                     "error": str(e),
                     "suggestion": "Install: neucodec>=0.0.4, librosa, phonemizer, transformers; optional llama-cpp-python for GGUF",
                 },
-            )
+            ) from e
         except Exception as e:
             logger.error(f"NeuTTS initialization failed: {e}")
             raise TTSModelLoadError(
                 "Failed to initialize NeuTTS",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         return TTSCapabilities(
@@ -253,13 +266,11 @@ class NeuTTSAdapter(TTSAdapter):
                 "NeuTTS generation failed",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
         finally:
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(temp_path)
-                except Exception:
-                    pass
 
     async def generate_stream(self, request: TTSRequest) -> AsyncGenerator[bytes, None]:
         if not await self.ensure_initialized():
@@ -349,15 +360,13 @@ class NeuTTSAdapter(TTSAdapter):
                 "NeuTTS streaming failed",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
         finally:
             if temp_path and os.path.exists(temp_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(temp_path)
-                except Exception:
-                    pass
 
-    def _maybe_override_engine(self, extras: Dict[str, Any]):
+    def _maybe_override_engine(self, extras: dict[str, Any]):
         """Allow per-request override of model repos/devices via extra_params."""
         # No hot-reload to different repos; only accept if same repos to avoid reinit
         bb = extras.get("backbone_repo")

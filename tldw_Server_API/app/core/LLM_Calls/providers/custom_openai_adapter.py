@@ -1,22 +1,24 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
+import asyncio
 import os
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     finalize_stream,
     is_done_line,
     normalize_provider_line,
     sse_done,
 )
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 
+from .base import ChatProvider
 
 http_client_factory = _hc_create_client
 
@@ -24,7 +26,7 @@ http_client_factory = _hc_create_client
 class CustomOpenAIAdapter(ChatProvider):
     name = "custom-openai-api"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -32,7 +34,7 @@ class CustomOpenAIAdapter(ChatProvider):
             "max_output_tokens_default": 4096,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any]) -> dict[str, Any]:
         streaming_raw = request.get("stream")
         if streaming_raw is None:
             streaming_raw = request.get("streaming")
@@ -76,13 +78,13 @@ class CustomOpenAIAdapter(ChatProvider):
             return True
         return True
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _resolve_base(self, request: Dict[str, Any], cfg_section: str) -> str:
+    def _resolve_base(self, request: dict[str, Any], cfg_section: str) -> str:
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip().rstrip("/")
@@ -96,14 +98,14 @@ class CustomOpenAIAdapter(ChatProvider):
             base = "http://127.0.0.1:11434/v1"
         return str(base).rstrip("/")
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
-        payload: Dict[str, Any] = {"messages": payload_messages, "stream": False}
+        payload: dict[str, Any] = {"messages": payload_messages, "stream": False}
         if request.get("model") is not None:
             payload["model"] = request.get("model")
         # OpenAI-compatible
@@ -135,11 +137,11 @@ class CustomOpenAIAdapter(ChatProvider):
             payload["user"] = request.get("user")
         return payload
 
-    def _normalize_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_response(self, data: dict[str, Any]) -> dict[str, Any]:
         # Assume OpenAI-compatible; passthrough
         return data
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -163,10 +165,10 @@ class CustomOpenAIAdapter(ChatProvider):
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -203,34 +205,33 @@ class CustomOpenAIAdapter(ChatProvider):
                             normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
@@ -263,7 +264,7 @@ class CustomOpenAIAdapter(ChatProvider):
 class CustomOpenAIAdapter2(CustomOpenAIAdapter):
     name = "custom-openai-api-2"
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -286,10 +287,10 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if self._use_native_http():
             api_key = request.get("api_key")
@@ -326,9 +327,8 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                             normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")

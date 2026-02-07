@@ -9,16 +9,16 @@ import asyncio
 import os
 import sqlite3
 import threading
-from typing import Optional, Callable, Any, Dict, List, AsyncContextManager
-from contextlib import contextmanager, asynccontextmanager
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from loguru import logger
 import time
-from collections import deque
-from threading import Lock, Condition
 import weakref
+from collections import deque
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Condition, Lock
+from typing import Any, Optional
+
+from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
@@ -89,7 +89,7 @@ class PooledConnection:
             self.last_used = time.time()
             return self.connection.execute(query, parameters)
 
-    def executemany(self, query: str, parameters: List[tuple]) -> sqlite3.Cursor:
+    def executemany(self, query: str, parameters: list[tuple]) -> sqlite3.Cursor:
         """Execute query multiple times."""
         with self._lock:
             self.last_used = time.time()
@@ -161,7 +161,7 @@ class ConnectionPool:
 
         # Connection management
         self._pool: deque = deque()
-        self._overflow_connections: Dict[int, PooledConnection] = {}
+        self._overflow_connections: dict[int, PooledConnection] = {}
         self._lock = Lock()
         self._condition = Condition(self._lock)
 
@@ -304,12 +304,12 @@ class ConnectionPool:
             if connection:
                 self._return_connection(connection)
 
-    async def get_connection_async(self) -> AsyncContextManager[PooledConnection]:
+    async def get_connection_async(self) -> AbstractAsyncContextManager[PooledConnection]:
         """
         Get a connection asynchronously (future aiosqlite compatibility).
 
         Returns:
-            AsyncContextManager[PooledConnection]: Connection wrapper
+            AbstractAsyncContextManager[PooledConnection]: Connection wrapper
         """
         return self._async_connection_context()
 
@@ -482,7 +482,7 @@ class ConnectionPool:
 
             return stats
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """Get pool health status."""
         stats = self.get_statistics()
 
@@ -610,11 +610,11 @@ class EvaluationsConnectionManager:
         """Get a database connection (synchronous)."""
         return self._pool.get_connection()
 
-    async def get_connection_async(self) -> AsyncContextManager[PooledConnection]:
+    async def get_connection_async(self) -> AbstractAsyncContextManager[PooledConnection]:
         """Get a database connection (asynchronous)."""
         return await self._pool.get_connection_async()
 
-    def get_health_status(self) -> Dict[str, Any]:
+    def get_health_status(self) -> dict[str, Any]:
         """Get connection manager health status."""
         return self._pool.get_health_status()
 
@@ -654,7 +654,7 @@ async def get_connection_async():
     return await get_connection_manager().get_connection_async()
 
 
-def get_connection_health() -> Dict[str, Any]:
+def get_connection_health() -> dict[str, Any]:
     """Get connection pool health status."""
     # Prefer patched global if present (used by tests), else lazy getter
     mgr = connection_manager or get_connection_manager()

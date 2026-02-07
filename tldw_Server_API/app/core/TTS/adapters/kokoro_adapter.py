@@ -2,56 +2,74 @@
 # Description: Kokoro TTS adapter implementation
 #
 # Imports
-import builtins
-import os
-import sys
-import platform
-import time
 import asyncio
+import builtins
 import concurrent.futures
-from ctypes.util import find_library as _ctypes_find_library
+import os
+import platform
 import re
-from contextlib import contextmanager
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List, Tuple
+import sys
+import time
+from collections.abc import AsyncGenerator
+from contextlib import contextmanager, suppress
+from ctypes.util import find_library as _ctypes_find_library
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
-from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSModelLoadError,
-    TTSGenerationError,
-    TTSResourceError,
-    TTSInsufficientMemoryError
-)
-from ..tts_validation import validate_tts_request
-from ..utils import parse_bool
-from ..tts_resource_manager import get_resource_manager
+
 from ..phoneme_overrides import (
+    PhonemeOverrideEntry,
     apply_overrides_to_text,
     filter_overrides_for_provider,
     load_override_entries,
     merge_override_entries,
     parse_override_entries,
-    PhonemeOverrideEntry,
 )
+from ..tts_exceptions import (
+    TTSGenerationError,
+    TTSModelLoadError,
+    TTSModelNotFoundError,
+    TTSProviderNotConfiguredError,
+)
+from ..tts_validation import validate_tts_request
+from ..utils import parse_bool
+
+#
+# Local Imports
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
 # Kokoro TTS Adapter Implementation
+
+_KOKORO_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    builtins.TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    TTSGenerationError,
+    TTSModelLoadError,
+    TTSModelNotFoundError,
+    TTSProviderNotConfiguredError,
+)
 
 _KOKORO_REPO_WARNING_PREFIX = "WARNING: Defaulting repo_id to "
 
@@ -63,14 +81,14 @@ def _capture_kokoro_repo_warning():
 
     def _print(*args, **kwargs):
         try:
-            target = kwargs.get("file", None)
+            target = kwargs.get("file")
             if target not in (None, sys.stdout):
                 return original_print(*args, **kwargs)
             sep = kwargs.get("sep", " ")
             if sep is None:
                 sep = " "
             msg = sep.join(str(arg) for arg in args)
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             return original_print(*args, **kwargs)
         if msg.startswith(_KOKORO_REPO_WARNING_PREFIX):
             logger.warning(msg)
@@ -161,7 +179,7 @@ class KokoroAdapter(TTSAdapter):
         "absolute_max_tokens": 150  # Lowered for testing
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Determine backend type (ONNX or PyTorch). Default to PyTorch; ONNX is opt-in.
@@ -174,7 +192,7 @@ class KokoroAdapter(TTSAdapter):
         )
         try:
             self.device_probe_timeout_sec = float(probe_timeout_raw) if probe_timeout_raw is not None else 2.0
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             self.device_probe_timeout_sec = 2.0
         cuda_avail = False
         mps_avail = False
@@ -185,7 +203,7 @@ class KokoroAdapter(TTSAdapter):
                 cuda_ok = torch.cuda.is_available()
                 mps_ok = hasattr(torch.backends, 'mps') and getattr(torch.backends.mps, 'is_available', lambda: False)()
                 return cuda_ok, mps_ok
-            except Exception:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                 return False, False
 
         if preferred and str(preferred).lower() == "cpu":
@@ -200,7 +218,7 @@ class KokoroAdapter(TTSAdapter):
                 logger.warning(f"{self.provider_name}: Device probe timed out; defaulting to CPU")
                 cuda_avail = False
                 mps_avail = False
-            except Exception:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                 cuda_avail = False
                 mps_avail = False
         if preferred:
@@ -271,13 +289,13 @@ class KokoroAdapter(TTSAdapter):
             or self.config.get("phoneme_override_path")
             or os.getenv("TTS_PHONEME_OVERRIDES_PATH")
         )
-        self._provider_override_entries: List[PhonemeOverrideEntry] = parse_override_entries(
+        self._provider_override_entries: list[PhonemeOverrideEntry] = parse_override_entries(
             self.config.get("kokoro_phoneme_overrides") or self.config.get("phoneme_overrides"),
             provider_hint="kokoro",
         )
         try:
-            self._global_override_entries: List[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
-        except Exception as exc:  # noqa: BLE001
+            self._global_override_entries: list[PhonemeOverrideEntry] = load_override_entries(self.phoneme_override_path)
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.debug(f"{self.provider_name}: Failed to load global phoneme overrides: {exc}")
             self._global_override_entries = []
 
@@ -289,7 +307,7 @@ class KokoroAdapter(TTSAdapter):
         )
         try:
             self.init_timeout_sec = float(init_timeout_raw) if init_timeout_raw is not None else None
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             self.init_timeout_sec = None
         # Pause insertion pacing (configurable)
         try:
@@ -298,7 +316,7 @@ class KokoroAdapter(TTSAdapter):
                 or (self.config.get("extra_params", {}) or {}).get("pause_interval_words")
                 or 500
             )
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             self.pause_interval_words = 500
         try:
             self.pause_tag = str(
@@ -306,7 +324,7 @@ class KokoroAdapter(TTSAdapter):
                 or (self.config.get("extra_params", {}) or {}).get("pause_tag")
                 or "[pause=1.1]"
             )
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             self.pause_tag = "[pause=1.1]"
 
         # Model instances
@@ -316,7 +334,7 @@ class KokoroAdapter(TTSAdapter):
         self.kokoro_pt_pipelines = {}
         self.tokenizer = None
         self.audio_normalizer = None
-        self._dynamic_voices: List[VoiceInfo] = []
+        self._dynamic_voices: list[VoiceInfo] = []
 
     def _ensure_audio_normalizer(self) -> None:
         if self.audio_normalizer is not None:
@@ -352,7 +370,7 @@ class KokoroAdapter(TTSAdapter):
             if self._lazy_init:
                 try:
                     self._load_dynamic_voices()
-                except Exception as ve:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS as ve:
                     logger.warning(f"{self.provider_name}: Failed to load dynamic voices.json: {ve}")
                 logger.info(f"{self.provider_name}: Lazy init enabled; deferring model load")
                 self._status = ProviderStatus.AVAILABLE
@@ -373,7 +391,7 @@ class KokoroAdapter(TTSAdapter):
             # Load dynamic voices if available
             try:
                 self._load_dynamic_voices()
-            except Exception as ve:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS as ve:
                 logger.warning(f"{self.provider_name}: Failed to load dynamic voices.json: {ve}")
 
             if success:
@@ -384,7 +402,7 @@ class KokoroAdapter(TTSAdapter):
                 self._status = ProviderStatus.ERROR
                 return False
 
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             return False
@@ -392,7 +410,7 @@ class KokoroAdapter(TTSAdapter):
     async def _initialize_onnx(self) -> bool:
         """Initialize ONNX backend"""
         try:
-            from kokoro_onnx import Kokoro, EspeakConfig
+            from kokoro_onnx import EspeakConfig, Kokoro
 
             # Check model file exists
             if not os.path.exists(self.model_path):
@@ -473,7 +491,7 @@ class KokoroAdapter(TTSAdapter):
                     lib_name = _ctypes_find_library("espeak-ng") or _ctypes_find_library("espeak")
                     if lib_name and os.path.isabs(lib_name) and os.path.exists(lib_name):
                         candidates.insert(0, lib_name)
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     pass
                 for cand in candidates:
                     if cand and os.path.exists(cand):
@@ -511,14 +529,14 @@ class KokoroAdapter(TTSAdapter):
             #   Actual: tensor(int32), expected: tensor(float)
             # Patch Kokoro._create_audio locally to always pass speed as float.
             try:
-                import numpy as _np  # type: ignore
                 import kokoro_onnx as _konnx  # type: ignore
+                import numpy as _np  # type: ignore
 
                 orig_create_audio = getattr(_konnx.Kokoro, "_create_audio", None)
 
                 if callable(orig_create_audio) and not getattr(_konnx.Kokoro, "_tldw_speed_patch", False):
                     def _patched_create_audio(self_k, phonemes, voice, speed):
-                        from kokoro_onnx.config import SAMPLE_RATE, MAX_PHONEME_LENGTH  # type: ignore
+                        from kokoro_onnx.config import MAX_PHONEME_LENGTH, SAMPLE_RATE  # type: ignore
                         from kokoro_onnx.log import log as _log  # type: ignore
 
                         _log.debug(f"Phonemes: {phonemes}")
@@ -562,8 +580,24 @@ class KokoroAdapter(TTSAdapter):
 
                     _konnx.Kokoro._create_audio = _patched_create_audio  # type: ignore[assignment]
                     _konnx.Kokoro._tldw_speed_patch = True  # type: ignore[attr-defined]
-            except Exception as _patch_exc:  # pragma: no cover - best-effort patch
+            except _KOKORO_NONCRITICAL_EXCEPTIONS as _patch_exc:  # pragma: no cover - best-effort patch
                 logger.debug(f"{self.provider_name}: speed dtype patch skipped: {_patch_exc}")
+
+            # Register model with resource manager (best-effort)
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                if self.kokoro_instance:
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.kokoro_instance,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"onnx:{self.model_path}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
+                pass
 
             logger.info(f"{self.provider_name}: ONNX model loaded successfully")
             return True
@@ -574,16 +608,16 @@ class KokoroAdapter(TTSAdapter):
                 "Failed to import kokoro_onnx library",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install kokoro-onnx"}
-            )
+            ) from e
         except TTSModelNotFoundError:
             raise
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: ONNX initialization error: {e}")
             raise TTSModelLoadError(
                 "Failed to initialize ONNX model",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
@@ -594,7 +628,7 @@ class KokoroAdapter(TTSAdapter):
                 "PyTorch is required for Kokoro PyTorch backend",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install torch"}
-            )
+            ) from e
         # Check model file
         if not os.path.exists(self.model_path):
             raise TTSModelNotFoundError(
@@ -621,46 +655,72 @@ class KokoroAdapter(TTSAdapter):
             try:
                 with _capture_kokoro_repo_warning():
                     self.kokoro_pt_model = await asyncio.to_thread(_load_model)
-            except Exception:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                 # Fallback to sync load if threading fails in constrained envs
                 with _capture_kokoro_repo_warning():
                     self.kokoro_pt_model = _load_model()
             # Move to device
             dev = str(self.device).lower()
             if dev.startswith("cuda"):
-                try:
+                with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                     self.kokoro_pt_model = self.kokoro_pt_model.cuda()
-                except Exception:
-                    pass
             elif dev == "mps":
                 try:
                     self.kokoro_pt_model = self.kokoro_pt_model.to(torch.device("mps"))
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     logger.warning("MPS device not available; using CPU for Kokoro")
                     self.kokoro_pt_model = self.kokoro_pt_model.cpu()
             else:
                 self.kokoro_pt_model = self.kokoro_pt_model.cpu()
             logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
+            # Register model with resource manager (best-effort)
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                if self.kokoro_pt_model is not None:
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.kokoro_pt_model,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"torch:{self.model_path}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
+                pass
             return True
         except ImportError:
             # Fallback: generic torch.load
             try:
                 try:
                     self.model_pt = torch.jit.load(self.model_path, map_location=self.device)
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     self.model_pt = torch.load(self.model_path, map_location=self.device)
-                try:
+                with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                     self.model_pt.eval()
-                except Exception:
-                    pass
                 logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    if self.model_pt is not None:
+                        register_result = resource_manager.register_model(
+                            provider=self.provider_name.lower(),
+                            model_instance=self.model_pt,
+                            cleanup_callback=self._cleanup_resources,
+                            model_key=f"torch:{self.model_path}",
+                        )
+                        if asyncio.iscoroutine(register_result):
+                            await register_result
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
+                    pass
                 return True
-            except Exception as e:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
                 raise TTSModelLoadError(
                     "Failed to initialize PyTorch model",
                     provider=self.provider_name,
                     details={"error": str(e), "model_path": self.model_path}
-                )
+                ) from e
 
     # Thin wrapper methods for tests to patch
     async def _load_onnx_model(self) -> bool:
@@ -717,7 +777,7 @@ class KokoroAdapter(TTSAdapter):
         # Validate request using new validation system
         try:
             validate_tts_request(request, provider=self.provider_key)
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} request validation failed: {e}")
             raise
 
@@ -805,7 +865,7 @@ class KokoroAdapter(TTSAdapter):
                 metadata=metadata
             )
 
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise
 
@@ -846,8 +906,7 @@ class KokoroAdapter(TTSAdapter):
                     stream_iter = base_iter
                 else:
                     def _sync_source():
-                        for item in base_iter:
-                            yield item
+                        yield from base_iter
 
                     async def _async_wrap():
                         for item in _sync_source():
@@ -863,7 +922,7 @@ class KokoroAdapter(TTSAdapter):
                         "Kokoro PyTorch generation requires 'kokoro' package",
                         provider=self.provider_name,
                         details={"suggestion": "pip install kokoro-tts or Kokoro PyTorch package"}
-                    )
+                    ) from None
                 # Capture the logical voice id before resolving file path
                 voice_id = voice
 
@@ -875,7 +934,7 @@ class KokoroAdapter(TTSAdapter):
                         candidate = os.path.join(self.voice_dir, f"{voice}.pt")
                         if os.path.exists(candidate):
                             voice_path = candidate
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Pick pipeline by Kokoro language code (e.g., 'a' for American, 'b' for British)
                 lang_code = self._get_kpipeline_lang_code(voice_id if isinstance(voice_id, str) else "", lang)
@@ -893,8 +952,7 @@ class KokoroAdapter(TTSAdapter):
 
                 # Define a sync generator wrapper to async iterate
                 def _sync_iter():
-                    for result in pipeline(text, voice=voice_path, speed=request.speed, model=self.kokoro_pt_model):
-                        yield result
+                    yield from pipeline(text, voice=voice_path, speed=request.speed, model=self.kokoro_pt_model)
 
                 async def _async_iter():
                     for result in _sync_iter():
@@ -916,25 +974,23 @@ class KokoroAdapter(TTSAdapter):
                                         meta = token.Underscore()
                                         token._ = meta
                                     meta["segment_index"] = text_index
-                                except Exception:
+                                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                                     pass
                                 alignment_out.append(token)
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         pass
                 samples_chunk, sr_chunk = self._unpack_stream_item(item)
                 if samples_chunk is not None and len(samples_chunk) > 0:
                     # Heuristic de-duplication for providers that may repeat phrases
-                    try:
+                    with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
                         samples_chunk = self._dedupe_repeated_audio(samples_chunk)
-                    except Exception:
-                        pass
                     chunk_count += 1
 
                     # Create writer on first chunk so we can pass the true SR
                     if writer is None:
                         try:
                             effective_sr = int(sr_chunk) if sr_chunk else self.sample_rate
-                        except Exception:
+                        except _KOKORO_NONCRITICAL_EXCEPTIONS:
                             effective_sr = self.sample_rate
                         writer = StreamingAudioWriter(
                             format=request.format.value,
@@ -963,14 +1019,14 @@ class KokoroAdapter(TTSAdapter):
 
             logger.info(f"{self.provider_name}: Successfully streamed {chunk_count} chunks")
 
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} streaming error: {e}")
             raise
         finally:
             try:
                 if writer is not None:
                     writer.close()
-            except Exception:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _generate_complete_kokoro(
@@ -1004,7 +1060,7 @@ class KokoroAdapter(TTSAdapter):
                 else:
                     logger.debug(f"{self.provider_name}: de-duplication not applied (len={original_len})")
                 samples = deduped
-            except Exception as _dedupe_exc:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS as _dedupe_exc:
                 logger.debug(f"{self.provider_name}: de-duplication skipped: {_dedupe_exc}")
 
             from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter
@@ -1089,7 +1145,7 @@ class KokoroAdapter(TTSAdapter):
                 if meta is not None:
                     try:
                         segment_index = meta.get("segment_index")
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         segment_index = None
                 if (
                     segment_index is not None
@@ -1101,14 +1157,14 @@ class KokoroAdapter(TTSAdapter):
                     seg_cursor = segment_cursors.get(segment_index, 0)
                     try:
                         idx = seg_text.find(token_text, seg_cursor)
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         idx = -1
                     if idx == -1 and seg_cursor < len(seg_text):
                         try:
                             candidate = seg_text[seg_cursor : seg_cursor + len(token_text)]
                             if candidate == token_text:
                                 idx = seg_cursor
-                        except Exception:
+                        except _KOKORO_NONCRITICAL_EXCEPTIONS:
                             idx = -1
                     if idx != -1:
                         char_start = segment["start"] + idx
@@ -1119,7 +1175,7 @@ class KokoroAdapter(TTSAdapter):
                             try:
                                 if seg_text[seg_cursor : seg_cursor + len(whitespace)] == whitespace:
                                     seg_cursor = seg_cursor + len(whitespace)
-                            except Exception:
+                            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                                 pass
                         segment_cursors[segment_index] = seg_cursor
                         if char_end is not None:
@@ -1128,19 +1184,19 @@ class KokoroAdapter(TTSAdapter):
                                 try:
                                     if source_text[char_end : char_end + len(whitespace)] == whitespace:
                                         cursor = max(cursor, char_end + len(whitespace))
-                                except Exception:
+                                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                                     pass
                 if char_start is None:
                     try:
                         idx = source_text.find(token_text, cursor)
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         idx = -1
                     if idx == -1 and cursor < text_len:
                         try:
                             candidate = source_text[cursor : cursor + len(token_text)]
                             if candidate == token_text:
                                 idx = cursor
-                        except Exception:
+                        except _KOKORO_NONCRITICAL_EXCEPTIONS:
                             idx = -1
                     if idx != -1:
                         char_start = idx
@@ -1151,7 +1207,7 @@ class KokoroAdapter(TTSAdapter):
                             try:
                                 if source_text[char_end : char_end + len(whitespace)] == whitespace:
                                     cursor = char_end + len(whitespace)
-                            except Exception:
+                            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                                 pass
             words.append(
                 {
@@ -1202,7 +1258,7 @@ class KokoroAdapter(TTSAdapter):
         # Accept known voices (static or dynamically discovered)
         try:
             dynamic_ids = {v.id for v in self._dynamic_voices}
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             dynamic_ids = set()
         if voice in self.VOICES or voice in dynamic_ids:
             return voice
@@ -1250,7 +1306,7 @@ class KokoroAdapter(TTSAdapter):
             if best_diff is not None and best_offset is not None and best_diff < 0.08:
                 return samples[:best_offset]
             return samples
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             return samples
 
     def _load_dynamic_voices(self) -> None:
@@ -1262,7 +1318,7 @@ class KokoroAdapter(TTSAdapter):
         path = self.voices_json
         if not path or not os.path.exists(path):
             return
-        dyn: List[VoiceInfo] = []
+        dyn: list[VoiceInfo] = []
         existing_ids = set(self.VOICES.keys()) | {v.id for v in self._dynamic_voices}
         try:
             if os.path.isdir(path):
@@ -1280,7 +1336,7 @@ class KokoroAdapter(TTSAdapter):
                             lang = 'en-us'
                         elif vid.startswith('b'):
                             lang = 'en-gb'
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         pass
                     vinfo = VoiceInfo(
                         id=vid,
@@ -1293,18 +1349,15 @@ class KokoroAdapter(TTSAdapter):
                     existing_ids.add(vid)
                 self._dynamic_voices = dyn
                 return
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             # Fall back to JSON parsing
             pass
         # JSON file layout (legacy)
         try:
             import json
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
-            if isinstance(data, dict) and "voices" in data:
-                entries = data["voices"]
-            else:
-                entries = data
+            entries = data["voices"] if isinstance(data, dict) and "voices" in data else data
             if not isinstance(entries, list):
                 return
             for entry in entries:
@@ -1321,10 +1374,10 @@ class KokoroAdapter(TTSAdapter):
                     )
                     dyn.append(vinfo)
                     existing_ids.add(vid)
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     continue
             self._dynamic_voices = dyn
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             return
 
     def _get_language_from_voice(self, voice: str) -> str:
@@ -1352,7 +1405,7 @@ class KokoroAdapter(TTSAdapter):
             base = os.path.basename(base)
             if "." in base:
                 base = base.split(".", 1)[0]
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             base = voice or ""
         base = base.strip()
 
@@ -1371,7 +1424,7 @@ class KokoroAdapter(TTSAdapter):
         # Default to American English code
         return "a"
 
-    def _unpack_stream_item(self, item: Any) -> Tuple[Optional[np.ndarray], Optional[int]]:
+    def _unpack_stream_item(self, item: Any) -> tuple[Optional[np.ndarray], Optional[int]]:
         """
         Normalize stream items from both ONNX and PyTorch backends into (samples, sample_rate).
 
@@ -1392,14 +1445,14 @@ class KokoroAdapter(TTSAdapter):
 
                     if isinstance(audio, torch.Tensor):
                         audio = audio.detach().cpu().numpy()
-                except Exception:
+                except _KOKORO_NONCRITICAL_EXCEPTIONS:
                     # Fallback: try NumPy conversion directly
                     try:
                         audio = np.asarray(audio)
-                    except Exception:
+                    except _KOKORO_NONCRITICAL_EXCEPTIONS:
                         return None, None
                 return audio, self.sample_rate
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Tuple/list variants
@@ -1413,7 +1466,7 @@ class KokoroAdapter(TTSAdapter):
             sr = item[1]
             try:
                 sr_int = int(sr) if sr is not None else self.sample_rate
-            except Exception:
+            except _KOKORO_NONCRITICAL_EXCEPTIONS:
                 sr_int = self.sample_rate
             return samples, sr_int
 
@@ -1447,7 +1500,7 @@ class KokoroAdapter(TTSAdapter):
         """Determine whether phoneme overrides should be applied for this request."""
         try:
             extra = getattr(request, "extra_params", {}) or {}
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             extra = {}
         if "phoneme_overrides_enabled" in extra:
             return parse_bool(extra.get("phoneme_overrides_enabled"), default=self.enable_phoneme_overrides)
@@ -1455,13 +1508,13 @@ class KokoroAdapter(TTSAdapter):
             return False
         return self.enable_phoneme_overrides
 
-    def _collect_phoneme_overrides(self, request: TTSRequest) -> List[PhonemeOverrideEntry]:
+    def _collect_phoneme_overrides(self, request: TTSRequest) -> list[PhonemeOverrideEntry]:
         """Merge global, provider, and request-level overrides (request wins)."""
         base = filter_overrides_for_provider(self._global_override_entries, "kokoro")
         provider = filter_overrides_for_provider(self._provider_override_entries, "kokoro")
         try:
             extra = getattr(request, "extra_params", {}) or {}
-        except Exception:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS:
             extra = {}
         request_overrides_raw = extra.get("phoneme_overrides") or extra.get("phoneme_map")
         request_entries = parse_override_entries(request_overrides_raw, provider_hint="kokoro")
@@ -1477,14 +1530,14 @@ class KokoroAdapter(TTSAdapter):
         """Apply applicable phoneme overrides to the provided text."""
         try:
             entries = self._collect_phoneme_overrides(request)
-        except Exception as exc:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"{self.provider_name}: failed to collect phoneme overrides: {exc}")
             return text
         if not entries:
             return text
         try:
             updated = apply_overrides_to_text(text, entries, lang_hint=lang_hint)
-        except Exception as exc:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"{self.provider_name}: failed to apply phoneme overrides: {exc}")
             return text
         else:
@@ -1504,10 +1557,8 @@ class KokoroAdapter(TTSAdapter):
             text = text.replace('‘', "'").replace('’', "'")
 
         # Insert periodic pause tags to keep very long inputs paced
-        try:
+        with suppress(_KOKORO_NONCRITICAL_EXCEPTIONS):
             text = self._insert_pause_tags(text, words_between=self.pause_interval_words, pause_tag=self.pause_tag)
-        except Exception:
-            pass
 
         return text
 
@@ -1537,7 +1588,7 @@ class KokoroAdapter(TTSAdapter):
                 cnt = 0
         return ' '.join(out)
 
-    def chunk_text(self, text: str) -> List[str]:
+    def chunk_text(self, text: str) -> list[str]:
         """
         Chunk text for optimal Kokoro processing.
         Based on Kokoro-FastAPI chunking strategy.
@@ -1604,7 +1655,7 @@ class KokoroAdapter(TTSAdapter):
                 except ImportError:
                     pass
 
-        except Exception as e:
+        except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"{self.provider_name}: Error during cleanup: {e}")
 
 #

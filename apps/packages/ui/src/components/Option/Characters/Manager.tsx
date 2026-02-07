@@ -14,13 +14,14 @@ import {
   Segmented,
   Pagination,
   Upload,
-  Dropdown
+  Dropdown,
+  InputNumber
 } from "antd"
 import type { InputRef, FormInstance } from "antd"
 import React from "react"
 import { tldwClient, type ServerChatSummary } from "@/services/tldw/TldwApiClient"
 import { fetchChatModels } from "@/services/tldw-server"
-import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X } from "lucide-react"
+import { History, Pen, Trash2, UserCircle2, MessageCircle, Copy, ChevronDown, ChevronUp, LayoutGrid, List, Keyboard, Download, CheckSquare, Square, Tags, X, MoreHorizontal } from "lucide-react"
 import { CharacterPreview } from "./CharacterPreview"
 import { CharacterGalleryCard } from "./CharacterGalleryCard"
 import { CharacterPreviewPopup } from "./CharacterPreviewPopup"
@@ -31,6 +32,12 @@ import { useCharacterGeneration } from "@/hooks/useCharacterGeneration"
 import { useFormDraft, formatDraftAge } from "@/hooks/useFormDraft"
 import { useCharacterShortcuts } from "@/hooks/useCharacterShortcuts"
 import { CHARACTER_TEMPLATES, type CharacterTemplate } from "@/data/character-templates"
+import {
+  CHARACTER_PROMPT_PRESETS,
+  DEFAULT_CHARACTER_PROMPT_PRESET,
+  isCharacterPromptPresetId,
+  type CharacterPromptPresetId
+} from "@/data/character-prompt-presets"
 import type { GeneratedCharacter, CharacterField } from "@/services/character-generation"
 import { useStorage } from "@plasmohq/storage/hook"
 import { validateAndCreateImageDataUrl } from "@/utils/image-utils"
@@ -81,8 +88,357 @@ const normalizeAlternateGreetings = (value: any): string[] => {
   return []
 }
 
-const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
-  !!(
+const isPlainObject = (value: unknown): value is Record<string, any> =>
+  !!value && typeof value === "object" && !Array.isArray(value)
+
+const parseExtensionsObject = (
+  value: unknown
+): Record<string, any> | null => {
+  if (!value) return {}
+  if (isPlainObject(value)) return { ...value }
+  if (typeof value === "string") {
+    if (!value.trim()) return {}
+    try {
+      const parsed = JSON.parse(value)
+      return isPlainObject(parsed) ? { ...parsed } : {}
+    } catch {
+      return null
+    }
+  }
+  return {}
+}
+
+const normalizePromptPresetId = (
+  value: unknown
+): CharacterPromptPresetId =>
+  isCharacterPromptPresetId(value)
+    ? value
+    : DEFAULT_CHARACTER_PROMPT_PRESET
+
+const readPromptPresetFromExtensions = (
+  extensions: unknown
+): CharacterPromptPresetId => {
+  const parsed = parseExtensionsObject(extensions)
+  if (!parsed) return DEFAULT_CHARACTER_PROMPT_PRESET
+  const tldw = parsed.tldw
+  const nestedPreset = isPlainObject(tldw)
+    ? tldw.prompt_preset || tldw.promptPreset
+    : undefined
+  const topPreset = parsed.prompt_preset || parsed.promptPreset
+  return normalizePromptPresetId(nestedPreset || topPreset)
+}
+
+const readDefaultAuthorNoteFromExtensions = (extensions: unknown): string => {
+  const parsed = parseExtensionsObject(extensions)
+  if (!parsed) return ""
+
+  const tldw = isPlainObject(parsed.tldw) ? parsed.tldw : undefined
+  const candidates: unknown[] = [
+    parsed.default_author_note,
+    parsed.defaultAuthorNote,
+    parsed.author_note,
+    parsed.authorNote,
+    parsed.memory_note,
+    parsed.memoryNote,
+    tldw?.default_author_note,
+    tldw?.defaultAuthorNote,
+    tldw?.author_note,
+    tldw?.authorNote,
+    tldw?.memory_note,
+    tldw?.memoryNote
+  ]
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  return ""
+}
+
+const readDefaultAuthorNoteFromRecord = (record: any): string => {
+  const directCandidates: unknown[] = [
+    record?.default_author_note,
+    record?.defaultAuthorNote,
+    record?.author_note,
+    record?.authorNote,
+    record?.memory_note,
+    record?.memoryNote
+  ]
+  for (const candidate of directCandidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  return readDefaultAuthorNoteFromExtensions(record?.extensions)
+}
+
+type CharacterGenerationSettings = {
+  temperature?: number
+  top_p?: number
+  repetition_penalty?: number
+  stop?: string[]
+}
+
+const parseGenerationNumber = (
+  value: unknown,
+  minimum: number,
+  maximum: number
+): number | undefined => {
+  if (typeof value === "boolean" || value === null || value === undefined) {
+    return undefined
+  }
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : Number.NaN
+  if (!Number.isFinite(parsed)) return undefined
+  if (parsed < minimum || parsed > maximum) return undefined
+  return parsed
+}
+
+const normalizeGenerationStopStrings = (value: unknown): string[] | undefined => {
+  if (value === null || value === undefined) return undefined
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0)
+    return normalized.length > 0 ? normalized : undefined
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    try {
+      const parsed = JSON.parse(trimmed)
+      if (Array.isArray(parsed)) {
+        const normalized = parsed
+          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+          .filter((entry) => entry.length > 0)
+        if (normalized.length > 0) return normalized
+      }
+    } catch {
+      // fall back to simple splitting
+    }
+    const normalized = trimmed
+      .split(/\r?\n|;/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    return normalized.length > 0 ? normalized : undefined
+  }
+  return undefined
+}
+
+const resolveGenerationSetting = <T,>(
+  containers: Record<string, any>[],
+  keys: string[],
+  parser: (value: unknown) => T | undefined
+): T | undefined => {
+  for (const container of containers) {
+    for (const key of keys) {
+      if (!(key in container)) continue
+      const parsed = parser(container[key])
+      if (typeof parsed !== "undefined") {
+        return parsed
+      }
+    }
+  }
+  return undefined
+}
+
+const readGenerationSettingsFromRecord = (
+  record: any
+): CharacterGenerationSettings => {
+  const parsed = parseExtensionsObject(record?.extensions)
+  const parsedObject = parsed && isPlainObject(parsed) ? parsed : undefined
+  const tldw = parsedObject && isPlainObject(parsedObject.tldw)
+    ? parsedObject.tldw
+    : undefined
+  const generation = tldw && isPlainObject(tldw.generation)
+    ? tldw.generation
+    : undefined
+
+  const containers: Record<string, any>[] = []
+  if (generation) containers.push(generation)
+  if (parsedObject) containers.push(parsedObject)
+  if (isPlainObject(record)) containers.push(record)
+
+  const temperature = resolveGenerationSetting(
+    containers,
+    ["temperature", "generation_temperature"],
+    (value) => parseGenerationNumber(value, 0, 2)
+  )
+  const topP = resolveGenerationSetting(
+    containers,
+    ["top_p", "topP", "generation_top_p"],
+    (value) => parseGenerationNumber(value, 0, 1)
+  )
+  const repetitionPenalty = resolveGenerationSetting(
+    containers,
+    ["repetition_penalty", "repetitionPenalty", "generation_repetition_penalty"],
+    (value) => parseGenerationNumber(value, 0, 3)
+  )
+  const stop = resolveGenerationSetting(
+    containers,
+    [
+      "stop",
+      "stop_strings",
+      "stopStrings",
+      "stop_sequences",
+      "stopSequences",
+      "generation_stop_strings"
+    ],
+    normalizeGenerationStopStrings
+  )
+
+  const settings: CharacterGenerationSettings = {}
+  if (typeof temperature !== "undefined") settings.temperature = temperature
+  if (typeof topP !== "undefined") settings.top_p = topP
+  if (typeof repetitionPenalty !== "undefined") {
+    settings.repetition_penalty = repetitionPenalty
+  }
+  if (stop && stop.length > 0) settings.stop = stop
+  return settings
+}
+
+const readGenerationSettingsFromFormValues = (
+  values: Record<string, any>
+): CharacterGenerationSettings => {
+  const settings: CharacterGenerationSettings = {}
+  const temperature = parseGenerationNumber(values.generation_temperature, 0, 2)
+  const topP = parseGenerationNumber(values.generation_top_p, 0, 1)
+  const repetitionPenalty = parseGenerationNumber(
+    values.generation_repetition_penalty,
+    0,
+    3
+  )
+  const stop = normalizeGenerationStopStrings(values.generation_stop_strings)
+
+  if (typeof temperature !== "undefined") settings.temperature = temperature
+  if (typeof topP !== "undefined") settings.top_p = topP
+  if (typeof repetitionPenalty !== "undefined") {
+    settings.repetition_penalty = repetitionPenalty
+  }
+  if (stop && stop.length > 0) settings.stop = stop
+  return settings
+}
+
+const removeLegacyGenerationKeys = (target: Record<string, any>) => {
+  delete target.generation
+  delete target.top_p
+  delete target.topP
+  delete target.repetition_penalty
+  delete target.repetitionPenalty
+  delete target.stop_strings
+  delete target.stopStrings
+  delete target.stop_sequences
+  delete target.stopSequences
+}
+
+const applyCharacterMetadataToExtensions = (
+  rawExtensions: unknown,
+  params: {
+    preset: CharacterPromptPresetId
+    defaultAuthorNote?: unknown
+    generation?: CharacterGenerationSettings
+  }
+): Record<string, any> | string | undefined => {
+  const parsed = parseExtensionsObject(rawExtensions)
+  const hadRawString =
+    typeof rawExtensions === "string" &&
+    rawExtensions.trim().length > 0 &&
+    parsed === null
+
+  if (hadRawString) {
+    return rawExtensions as string
+  }
+
+  let next: Record<string, any> = parsed && parsed !== null ? { ...parsed } : {}
+
+  const tldw = isPlainObject(next.tldw) ? { ...next.tldw } : {}
+
+  if (params.preset === DEFAULT_CHARACTER_PROMPT_PRESET) {
+    delete tldw.prompt_preset
+    delete tldw.promptPreset
+    delete next.prompt_preset
+    delete next.promptPreset
+  } else {
+    tldw.prompt_preset = params.preset
+    delete next.prompt_preset
+    delete next.promptPreset
+  }
+
+  const defaultAuthorNote =
+    typeof params.defaultAuthorNote === "string"
+      ? params.defaultAuthorNote.trim()
+      : ""
+  if (defaultAuthorNote) {
+    next.default_author_note = defaultAuthorNote
+    delete next.defaultAuthorNote
+  } else {
+    delete next.default_author_note
+    delete next.defaultAuthorNote
+  }
+
+  const generation = params.generation || {}
+  const normalizedGeneration: Record<string, any> = {}
+  const normalizedTemp = parseGenerationNumber(generation.temperature, 0, 2)
+  const normalizedTopP = parseGenerationNumber(generation.top_p, 0, 1)
+  const normalizedRepetition = parseGenerationNumber(
+    generation.repetition_penalty,
+    0,
+    3
+  )
+  const normalizedStop = normalizeGenerationStopStrings(generation.stop)
+
+  if (typeof normalizedTemp !== "undefined") {
+    normalizedGeneration.temperature = normalizedTemp
+  }
+  if (typeof normalizedTopP !== "undefined") {
+    normalizedGeneration.top_p = normalizedTopP
+  }
+  if (typeof normalizedRepetition !== "undefined") {
+    normalizedGeneration.repetition_penalty = normalizedRepetition
+  }
+  if (normalizedStop && normalizedStop.length > 0) {
+    normalizedGeneration.stop = normalizedStop
+  }
+
+  removeLegacyGenerationKeys(next)
+  if (Object.keys(normalizedGeneration).length > 0) {
+    tldw.generation = normalizedGeneration
+  } else {
+    delete tldw.generation
+  }
+
+  if (Object.keys(tldw).length > 0) {
+    next.tldw = tldw
+  } else {
+    delete next.tldw
+  }
+
+  if (Object.keys(next).length > 0) {
+    return next
+  }
+
+  return undefined
+}
+
+const hasAdvancedData = (record: any, extensionsValue: string): boolean => {
+  const normalizedRecord = {
+    ...record,
+    extensions: record?.extensions ?? extensionsValue
+  }
+  const defaultAuthorNote = readDefaultAuthorNoteFromRecord(normalizedRecord)
+  const generationSettings = readGenerationSettingsFromRecord(normalizedRecord)
+  const hasGenerationSettings =
+    typeof generationSettings.temperature !== "undefined" ||
+    typeof generationSettings.top_p !== "undefined" ||
+    typeof generationSettings.repetition_penalty !== "undefined" ||
+    (Array.isArray(generationSettings.stop) &&
+      generationSettings.stop.length > 0)
+  return !!(
     record.personality ||
     record.scenario ||
     record.post_history_instructions ||
@@ -91,8 +447,11 @@ const hasAdvancedData = (record: any, extensionsValue: string): boolean =>
     (record.alternate_greetings && record.alternate_greetings.length > 0) ||
     record.creator ||
     record.character_version ||
+    hasGenerationSettings ||
+    defaultAuthorNote ||
     extensionsValue
   )
+}
 
 const buildCharacterPayload = (values: any): Record<string, any> => {
   const payload: Record<string, any> = {
@@ -112,8 +471,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
       ? values.alternate_greetings.filter((g: string) => g && g.trim().length > 0)
       : values.alternate_greetings,
     creator: values.creator,
-    character_version: values.character_version,
-    extensions: values.extensions
+    character_version: values.character_version
   }
 
   // Extract avatar values from unified avatar field
@@ -141,6 +499,7 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
   }
 
   Object.keys(payload).forEach((key) => {
+    if (key === "extensions") return
     const v = payload[key]
     if (
       typeof v === "undefined" ||
@@ -152,13 +511,15 @@ const buildCharacterPayload = (values: any): Record<string, any> => {
     }
   })
 
-  // Parse extensions JSON when user provides structured data
-  if (typeof values.extensions === "string" && values.extensions.trim().length > 0) {
-    try {
-      payload.extensions = JSON.parse(values.extensions)
-    } catch {
-      payload.extensions = values.extensions
-    }
+  const resolvedPreset = normalizePromptPresetId(values.prompt_preset)
+  const generationSettings = readGenerationSettingsFromFormValues(values)
+  const mergedExtensions = applyCharacterMetadataToExtensions(values.extensions, {
+    preset: resolvedPreset,
+    defaultAuthorNote: values.default_author_note,
+    generation: generationSettings
+  })
+  if (typeof mergedExtensions !== "undefined") {
+    payload.extensions = mergedExtensions
   }
 
   return payload
@@ -174,6 +535,17 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
   autoOpenCreate = false
 }) => {
   const { t } = useTranslation(["settings", "common"])
+  const promptPresetOptions = React.useMemo(
+    () =>
+      CHARACTER_PROMPT_PRESETS.map((preset) => ({
+        value: preset.id,
+        label: t(
+          `settings:manageCharacters.promptPresets.${preset.id}.label`,
+          { defaultValue: preset.label }
+        )
+      })),
+    [t]
+  )
   const qc = useQueryClient()
   const navigate = useNavigate()
   const notification = useAntdNotification()
@@ -1375,6 +1747,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         : typeof ex === "string"
           ? ex
           : ""
+    const promptPreset = readPromptPresetFromExtensions(record.extensions)
+    const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
+    const generationSettings = readGenerationSettingsFromRecord(record)
     editForm.setFieldsValue({
       name: record.name,
       description: record.description,
@@ -1396,6 +1771,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       ),
       creator: record.creator,
       character_version: record.character_version,
+      prompt_preset: promptPreset,
+      default_author_note: defaultAuthorNote,
+      generation_temperature: generationSettings.temperature,
+      generation_top_p: generationSettings.top_p,
+      generation_repetition_penalty: generationSettings.repetition_penalty,
+      generation_stop_strings: generationSettings.stop?.join("\n") || "",
       extensions: extensionsValue
     })
     setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
@@ -1410,6 +1791,9 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         : typeof ex === "string"
           ? ex
           : ""
+    const promptPreset = readPromptPresetFromExtensions(record.extensions)
+    const defaultAuthorNote = readDefaultAuthorNoteFromRecord(record)
+    const generationSettings = readGenerationSettingsFromRecord(record)
     createForm.setFieldsValue({
       name: `${record.name || ""} (copy)`,
       description: record.description,
@@ -1431,6 +1815,12 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
       ),
       creator: record.creator,
       character_version: record.character_version,
+      prompt_preset: promptPreset,
+      default_author_note: defaultAuthorNote,
+      generation_temperature: generationSettings.temperature,
+      generation_top_p: generationSettings.top_p,
+      generation_repetition_penalty: generationSettings.repetition_penalty,
+      generation_stop_strings: generationSettings.stop?.join("\n") || "",
       extensions: extensionsValue
     })
     setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
@@ -2126,6 +2516,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                 const name = record?.name || record?.title || record?.slug || ""
                 return (
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Primary: Chat */}
                     <Tooltip
                       title={chatLabel}>
                       <button
@@ -2166,31 +2557,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         </span>
                       </button>
                     </Tooltip>
-                    <Tooltip
-                      title={t("settings:manageCharacters.actions.viewConversations", {
-                        defaultValue: "View conversations"
-                      })}>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
-                        aria-label={t("settings:manageCharacters.aria.viewConversations", {
-                          defaultValue: "View conversations for {{name}}",
-                          name
-                        })}
-                        onClick={() => {
-                          setConversationCharacter(record)
-                          setCharacterChats([])
-                          setChatsError(null)
-                          setConversationsOpen(true)
-                        }}>
-                        <History className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {t("settings:manageCharacters.actions.viewConversations", {
-                            defaultValue: "View conversations"
-                          })}
-                        </span>
-                      </button>
-                    </Tooltip>
+                    {/* Primary: Edit */}
                     <Tooltip
                       title={editLabel}>
                       <button
@@ -2201,42 +2568,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                           name
                         })}
                         onClick={(e) => {
-                          lastEditTriggerRef.current = e.currentTarget
-                          setEditId(record.id || record.slug || record.name)
-                          setEditVersion(record?.version ?? null)
-                          const ex = record.extensions
-                          const extensionsValue =
-                            ex && typeof ex === "object" && !Array.isArray(ex)
-                              ? JSON.stringify(ex, null, 2)
-                              : typeof ex === "string"
-                                ? ex
-                                : ""
-                          editForm.setFieldsValue({
-                            name: record.name,
-                            description: record.description,
-                            avatar: createAvatarValue(record.avatar_url, record.image_base64),
-                            tags: record.tags,
-                            greeting:
-                              record.greeting ||
-                              record.first_message ||
-                              record.greet,
-                            system_prompt: record.system_prompt,
-                            personality: record.personality,
-                            scenario: record.scenario,
-                            post_history_instructions:
-                              record.post_history_instructions,
-                            message_example: record.message_example,
-                            creator_notes: record.creator_notes,
-                            alternate_greetings: normalizeAlternateGreetings(
-                              record.alternate_greetings
-                            ),
-                            creator: record.creator,
-                            character_version: record.character_version,
-                            extensions: extensionsValue
-                          })
-                          // Auto-expand advanced section if character has advanced field data
-                          setShowEditAdvanced(hasAdvancedData(record, extensionsValue))
-                          setOpenEdit(true)
+                          handleEdit(record, e.currentTarget)
                         }}>
                         <Pen className="w-4 h-4" />
                         <span className="hidden sm:inline text-xs font-medium">
@@ -2244,90 +2576,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         </span>
                       </button>
                     </Tooltip>
-                    <Tooltip
-                      title={duplicateLabel}>
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
-                        aria-label={t("settings:manageCharacters.aria.duplicate", {
-                          defaultValue: "Duplicate character {{name}}",
-                          name
-                        })}
-                        onClick={() => {
-                          // Pre-fill create form with character data (excluding id/version)
-                          const ex = record.extensions
-                          const extensionsValue =
-                            ex && typeof ex === "object" && !Array.isArray(ex)
-                              ? JSON.stringify(ex, null, 2)
-                              : typeof ex === "string"
-                                ? ex
-                                : ""
-                          createForm.setFieldsValue({
-                            name: `${record.name || ""} (copy)`,
-                            description: record.description,
-                            avatar: createAvatarValue(record.avatar_url, record.image_base64),
-                            tags: record.tags,
-                            greeting:
-                              record.greeting ||
-                              record.first_message ||
-                              record.greet,
-                            system_prompt: record.system_prompt,
-                            personality: record.personality,
-                            scenario: record.scenario,
-                            post_history_instructions:
-                              record.post_history_instructions,
-                            message_example: record.message_example,
-                            creator_notes: record.creator_notes,
-                            alternate_greetings: normalizeAlternateGreetings(
-                              record.alternate_greetings
-                            ),
-                            creator: record.creator,
-                            character_version: record.character_version,
-                            extensions: extensionsValue
-                          })
-                          // Auto-expand advanced section if source character has advanced data
-                          setShowCreateAdvanced(hasAdvancedData(record, extensionsValue))
-                          setOpen(true)
-                        }}>
-                        <Copy className="w-4 h-4" />
-                        <span className="hidden sm:inline text-xs font-medium">
-                          {duplicateLabel}
-                        </span>
-                      </button>
-                    </Tooltip>
-                    <Dropdown
-                      menu={{
-                        items: [
-                          {
-                            key: 'json',
-                            label: t("settings:manageCharacters.export.json", { defaultValue: "Export as JSON" }),
-                            onClick: () => handleExport(record, 'json')
-                          },
-                          {
-                            key: 'png',
-                            label: t("settings:manageCharacters.export.png", { defaultValue: "Export as PNG (with metadata)" }),
-                            onClick: () => handleExport(record, 'png')
-                          }
-                        ]
-                      }}
-                      trigger={['click']}
-                      disabled={exporting === (record.id || record.slug || record.name)}>
-                      <Tooltip title={exportLabel}>
-                        <button
-                          type="button"
-                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-60"
-                          aria-label={t("settings:manageCharacters.aria.export", {
-                            defaultValue: "Export character {{name}}",
-                            name
-                          })}
-                          disabled={exporting === (record.id || record.slug || record.name)}>
-                          <Download className="w-4 h-4" />
-                          <span className="hidden sm:inline text-xs font-medium">
-                            {exportLabel}
-                          </span>
-                        </button>
-                      </Tooltip>
-                    </Dropdown>
+                    {/* Primary: Delete */}
                     <Tooltip
                       title={deleteLabel}>
                       <button
@@ -2365,6 +2614,60 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                         </span>
                       </button>
                     </Tooltip>
+                    {/* Overflow: View Conversations, Duplicate, Export */}
+                    <Dropdown
+                      menu={{
+                        items: [
+                          {
+                            key: 'conversations',
+                            icon: <History className="w-4 h-4" />,
+                            label: t("settings:manageCharacters.actions.viewConversations", {
+                              defaultValue: "View conversations"
+                            }),
+                            onClick: () => {
+                              setConversationCharacter(record)
+                              setCharacterChats([])
+                              setChatsError(null)
+                              setConversationsOpen(true)
+                            }
+                          },
+                          {
+                            key: 'duplicate',
+                            icon: <Copy className="w-4 h-4" />,
+                            label: duplicateLabel,
+                            onClick: () => handleDuplicate(record)
+                          },
+                          { type: 'divider' as const },
+                          {
+                            key: 'export-json',
+                            icon: <Download className="w-4 h-4" />,
+                            label: t("settings:manageCharacters.export.json", { defaultValue: "Export as JSON" }),
+                            disabled: exporting === (record.id || record.slug || record.name),
+                            onClick: () => handleExport(record, 'json')
+                          },
+                          {
+                            key: 'export-png',
+                            icon: <Download className="w-4 h-4" />,
+                            label: t("settings:manageCharacters.export.png", { defaultValue: "Export as PNG (with metadata)" }),
+                            disabled: exporting === (record.id || record.slug || record.name),
+                            onClick: () => handleExport(record, 'png')
+                          }
+                        ]
+                      }}
+                      trigger={['click']}
+                      placement="bottomRight">
+                      <Tooltip title={t("settings:manageCharacters.actions.more", { defaultValue: "More actions" })}>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-text-muted transition hover:border-border hover:bg-surface2 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-1 focus:ring-offset-bg"
+                          aria-label={t("settings:manageCharacters.aria.moreActions", {
+                            defaultValue: "More actions for {{name}}",
+                            name
+                          })}>
+                          <MoreHorizontal className="w-4 h-4" />
+                        </button>
+                      </Tooltip>
+                    </Dropdown>
                   </div>
                 )
               }
@@ -2872,6 +3175,7 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
         <Form
           layout="vertical"
           form={createForm}
+          initialValues={{ prompt_preset: DEFAULT_CHARACTER_PROMPT_PRESET }}
           className="space-y-3"
           onValuesChange={(_, allValues) => {
             setCreateFormDirty(true)
@@ -3274,6 +3578,116 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   }
                 )}>
                 <Input />
+              </Form.Item>
+              <Form.Item
+                name="prompt_preset"
+                label={t(
+                  "settings:manageCharacters.form.promptPreset.label",
+                  { defaultValue: "Prompt preset" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.promptPreset.help",
+                  {
+                    defaultValue:
+                      "Controls how character fields are formatted in system prompts for character chats."
+                  }
+                )}>
+                <Select options={promptPresetOptions} />
+              </Form.Item>
+              <Form.Item
+                name="default_author_note"
+                label={t(
+                  "settings:manageCharacters.form.defaultAuthorNote.label",
+                  { defaultValue: "Default author note" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.defaultAuthorNote.help",
+                  {
+                    defaultValue:
+                      "Optional default note used by character chats when the chat-level author note is empty."
+                  }
+                )}>
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                  showCount
+                  maxLength={2000}
+                  placeholder={t(
+                    "settings:manageCharacters.form.defaultAuthorNote.placeholder",
+                    {
+                      defaultValue:
+                        "E.g., Keep replies concise, grounded, and in first-person voice."
+                    }
+                  )}
+                />
+              </Form.Item>
+              <Form.Item
+                name="generation_temperature"
+                label={t(
+                  "settings:manageCharacters.form.generationTemperature.label",
+                  { defaultValue: "Generation temperature" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationTemperature.help",
+                  {
+                    defaultValue:
+                      "Optional per-character sampling temperature for character chat completions."
+                  }
+                )}>
+                <InputNumber min={0} max={2} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_top_p"
+                label={t(
+                  "settings:manageCharacters.form.generationTopP.label",
+                  { defaultValue: "Generation top_p" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationTopP.help",
+                  {
+                    defaultValue:
+                      "Optional per-character nucleus sampling value (0.0 to 1.0)."
+                  }
+                )}>
+                <InputNumber min={0} max={1} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_repetition_penalty"
+                label={t(
+                  "settings:manageCharacters.form.generationRepetitionPenalty.label",
+                  { defaultValue: "Repetition penalty" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationRepetitionPenalty.help",
+                  {
+                    defaultValue:
+                      "Optional per-character repetition penalty used for character chat completions."
+                  }
+                )}>
+                <InputNumber min={0} max={3} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_stop_strings"
+                label={t(
+                  "settings:manageCharacters.form.generationStopStrings.label",
+                  { defaultValue: "Stop strings" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationStopStrings.help",
+                  {
+                    defaultValue:
+                      "Optional stop sequences for this character. Use one per line."
+                  }
+                )}>
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                  placeholder={t(
+                    "settings:manageCharacters.form.generationStopStrings.placeholder",
+                    {
+                      defaultValue:
+                        "Example:\n###\nEND"
+                    }
+                  )}
+                />
               </Form.Item>
               <Form.Item
                 name="extensions"
@@ -3842,6 +4256,116 @@ export const CharactersManager: React.FC<CharactersManagerProps> = ({
                   }
                 )}>
                 <Input />
+              </Form.Item>
+              <Form.Item
+                name="prompt_preset"
+                label={t(
+                  "settings:manageCharacters.form.promptPreset.label",
+                  { defaultValue: "Prompt preset" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.promptPreset.help",
+                  {
+                    defaultValue:
+                      "Controls how character fields are formatted in system prompts for character chats."
+                  }
+                )}>
+                <Select options={promptPresetOptions} />
+              </Form.Item>
+              <Form.Item
+                name="default_author_note"
+                label={t(
+                  "settings:manageCharacters.form.defaultAuthorNote.label",
+                  { defaultValue: "Default author note" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.defaultAuthorNote.help",
+                  {
+                    defaultValue:
+                      "Optional default note used by character chats when the chat-level author note is empty."
+                  }
+                )}>
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                  showCount
+                  maxLength={2000}
+                  placeholder={t(
+                    "settings:manageCharacters.form.defaultAuthorNote.placeholder",
+                    {
+                      defaultValue:
+                        "E.g., Keep replies concise, grounded, and in first-person voice."
+                    }
+                  )}
+                />
+              </Form.Item>
+              <Form.Item
+                name="generation_temperature"
+                label={t(
+                  "settings:manageCharacters.form.generationTemperature.label",
+                  { defaultValue: "Generation temperature" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationTemperature.help",
+                  {
+                    defaultValue:
+                      "Optional per-character sampling temperature for character chat completions."
+                  }
+                )}>
+                <InputNumber min={0} max={2} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_top_p"
+                label={t(
+                  "settings:manageCharacters.form.generationTopP.label",
+                  { defaultValue: "Generation top_p" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationTopP.help",
+                  {
+                    defaultValue:
+                      "Optional per-character nucleus sampling value (0.0 to 1.0)."
+                  }
+                )}>
+                <InputNumber min={0} max={1} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_repetition_penalty"
+                label={t(
+                  "settings:manageCharacters.form.generationRepetitionPenalty.label",
+                  { defaultValue: "Repetition penalty" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationRepetitionPenalty.help",
+                  {
+                    defaultValue:
+                      "Optional per-character repetition penalty used for character chat completions."
+                  }
+                )}>
+                <InputNumber min={0} max={3} step={0.01} className="w-full" />
+              </Form.Item>
+              <Form.Item
+                name="generation_stop_strings"
+                label={t(
+                  "settings:manageCharacters.form.generationStopStrings.label",
+                  { defaultValue: "Stop strings" }
+                )}
+                help={t(
+                  "settings:manageCharacters.form.generationStopStrings.help",
+                  {
+                    defaultValue:
+                      "Optional stop sequences for this character. Use one per line."
+                  }
+                )}>
+                <Input.TextArea
+                  autoSize={{ minRows: 2, maxRows: 6 }}
+                  placeholder={t(
+                    "settings:manageCharacters.form.generationStopStrings.placeholder",
+                    {
+                      defaultValue:
+                        "Example:\n###\nEND"
+                    }
+                  )}
+                />
               </Form.Item>
               <Form.Item
                 name="extensions"

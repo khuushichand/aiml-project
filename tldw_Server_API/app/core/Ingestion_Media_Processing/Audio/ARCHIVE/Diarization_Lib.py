@@ -13,14 +13,20 @@
 ####################
 # Import necessary libraries
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any
+
+import yaml
+
 #
 # Import 3rd Party Libraries
 from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
-import yaml
+
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import speech_to_text
+
 # Import Local Libraries
 from tldw_Server_API.app.core.Metrics.metrics_logger import timeit
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 #
 #######################################################################################################################
 # Function Definitions
@@ -35,7 +41,7 @@ def load_pipeline_from_pretrained(path_to_config: str | Path) -> SpeakerDiarizat
         raise FileNotFoundError(f"Config file not found: {path_to_config}")
 
     # Load the YAML configuration
-    with open(path_to_config, 'r') as config_file:
+    with open(path_to_config) as config_file:
         config = yaml.safe_load(config_file)
 
     # Debug: print the entire config
@@ -192,7 +198,7 @@ def audio_diarization(audio_file_path: str) -> list:
 #     return segments
 
 @timeit
-def combine_transcription_and_diarization(audio_file_path: str) -> List[Dict[str, Any]]:
+def combine_transcription_and_diarization(audio_file_path: str) -> list[dict[str, Any]]:
     logging.info('combine-transcription-and-diarization: Starting transcription and diarization...')
 
     try:

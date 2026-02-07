@@ -81,6 +81,7 @@ type ActorFormValues = {
   actorChatDepth?: ActorSettings["chatDepth"]
   actorChatRole?: ActorSettings["chatRole"]
   actorTemplateMode?: ActorSettings["templateMode"]
+  actorAppendable?: ActorSettings["appendable"]
   [key: `actor_${string}`]: string | undefined
   [key: `actor_key_${string}`]: string | undefined
 }
@@ -401,7 +402,8 @@ export const CurrentChatModelSettings = ({
         actorChatPosition: actor.chatPosition,
         actorChatDepth: actor.chatDepth,
         actorChatRole: actor.chatRole,
-        actorTemplateMode: actor.templateMode ?? "merge"
+        actorTemplateMode: actor.templateMode ?? "merge",
+        actorAppendable: actor.appendable ?? false
       }
       for (const aspect of actor.aspects || []) {
         actorFields[`actor_${aspect.id}`] = aspect.value
@@ -597,6 +599,7 @@ export const CurrentChatModelSettings = ({
         children: (
           <ConversationTab
             useDrawer={useDrawer}
+            historyId={historyId}
             selectedSystemPrompt={selectedSystemPrompt}
             onSystemPromptChange={savePrompt}
             uploadedFiles={uploadedFiles}
@@ -694,6 +697,7 @@ export const CurrentChatModelSettings = ({
                   k === "actorChatPosition" ||
                   k === "actorChatDepth" ||
                   k === "actorChatRole" ||
+                  k === "actorAppendable" ||
                   k.startsWith("actor_")
               )
               if (shouldUpdate) {

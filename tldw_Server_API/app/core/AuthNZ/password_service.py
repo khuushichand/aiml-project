@@ -6,16 +6,19 @@ import re
 import secrets
 import string
 import threading
-from typing import Tuple, Optional, List
+from typing import Optional
+
 #
 # 3rd-party imports
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError, VerificationError
+from argon2.exceptions import VerificationError, VerifyMismatchError
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.AuthNZ.exceptions import WeakPasswordError
 
 #######################################################################################################################
 #
@@ -74,7 +77,7 @@ class PasswordService:
             "whatever", "freedom", "starwars", "jordan23", "cheese",
             "pepper", "guitar", "yankees", "ranger", "killer",
             "mercedes", "harley", "maverick", "ginger", "corvette",
-            "computer", "internet", "server", "database", "network",
+            "computer", "internet", "database", "network",
         }
 
         logger.debug(
@@ -108,7 +111,7 @@ class PasswordService:
             logger.error(f"Failed to hash password: {e}")
             raise
 
-    def verify_password(self, password: str, password_hash: str) -> Tuple[bool, bool]:
+    def verify_password(self, password: str, password_hash: str) -> tuple[bool, bool]:
         """
         Verify a password against its hash
 
@@ -221,10 +224,7 @@ class PasswordService:
 
     def _has_repeated_chars(self, password: str, max_repeat: int = 3) -> bool:
         """Check if password has repeated characters (e.g., 'aaa', '111')"""
-        for i in range(len(password) - max_repeat + 1):
-            if len(set(password[i:i + max_repeat])) == 1:
-                return True
-        return False
+        return any(len(set(password[i:i + max_repeat])) == 1 for i in range(len(password) - max_repeat + 1))
 
     def generate_secure_password(self, length: int = 16) -> str:
         """
@@ -450,7 +450,7 @@ def hash_password(password: str) -> str:
     return get_password_service().hash_password(password)
 
 
-def verify_password(password: str, password_hash: str) -> Tuple[bool, bool]:
+def verify_password(password: str, password_hash: str) -> tuple[bool, bool]:
     """Convenience function to verify a password"""
     return get_password_service().verify_password(password, password_hash)
 

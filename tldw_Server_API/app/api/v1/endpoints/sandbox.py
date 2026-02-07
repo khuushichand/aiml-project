@@ -1,58 +1,103 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter, Body, Depends, HTTPException, Path, Header, File, UploadFile, WebSocket, WebSocketDisconnect, Request, Query
-from fastapi.responses import StreamingResponse, Response, JSONResponse
-from fastapi.routing import APIRoute
 import asyncio
+import contextlib
+import hashlib
+import hmac
+import json
+import mimetypes
 import os
+import time
+
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
 from tldw_Server_API.app.api.v1.schemas.sandbox_schemas import (
     ArtifactListResponse,
     CancelResponse,
-    RuntimeType,
+    SandboxAdminIdempotencyItem,
+    SandboxAdminIdempotencyListResponse,
+    SandboxAdminRunDetails,
+    SandboxAdminRunListResponse,
+    SandboxAdminRunSummary,
+    SandboxAdminUsageItem,
+    SandboxAdminUsageResponse,
     SandboxFileUploadResponse,
-    SandboxRun,
     SandboxRunCreateRequest,
     SandboxRunStatus,
     SandboxRuntimesResponse,
     SandboxSession,
     SandboxSessionCreateRequest,
-    SandboxAdminRunListResponse,
-    SandboxAdminRunSummary,
-    SandboxAdminRunDetails,
-    SandboxAdminIdempotencyListResponse,
-    SandboxAdminIdempotencyItem,
-    SandboxAdminUsageResponse,
-    SandboxAdminUsageItem,
+    SessionCloneRequest,
+    SessionCloneResponse,
     SnapshotCreateResponse,
     SnapshotInfo,
     SnapshotListResponse,
     SnapshotRestoreRequest,
     SnapshotRestoreResponse,
-    SessionCloneRequest,
-    SessionCloneResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventCategory,
+    AuditEventType,
+    AuditSeverity,
+)
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec, RuntimeType as CoreRuntimeType, TrustLevel as CoreTrustLevel
-from tldw_Server_API.app.core.Sandbox.service import SandboxService
-from tldw_Server_API.app.core.config import settings as app_settings
-from tldw_Server_API.app.core.Sandbox.streams import get_hub
-from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
-from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import get_audit_service_for_user
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType, AuditEventCategory, AuditSeverity, AuditContext
-from tldw_Server_API.app.api.v1.API_Deps import auth_deps
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import is_single_user_ip_allowed, resolve_client_ip
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-import mimetypes
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.core.Sandbox.models import RunSpec, SessionSpec
+from tldw_Server_API.app.core.Sandbox.models import RuntimeType as CoreRuntimeType
+from tldw_Server_API.app.core.Sandbox.models import TrustLevel as CoreTrustLevel
+from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
+from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
+from tldw_Server_API.app.core.Sandbox.service import SandboxService
+from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
-import hmac
-import hashlib
-import time
+from tldw_Server_API.app.core.Utils.path_utils import safe_join
+
+_SANDBOX_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    IdempotencyConflict,
+    QueueFull,
+    SandboxPolicy.RuntimeUnavailable,
+    SandboxService.InvalidSpecVersion,
+    SandboxService.InvalidFirecrackerConfig,
+)
 
 
 class SandboxArtifactGuardRoute(APIRoute):
@@ -74,8 +119,8 @@ class SandboxArtifactGuardRoute(APIRoute):
                 if "/api/v1/sandbox/runs/" in path_raw and "/../" in path_raw:
                     return JSONResponse({"detail": "invalid_path"}, status_code=400)
                 if "/api/v1/sandbox/runs/" in path_raw and "/artifacts/" in path_raw:
-                    from urllib.parse import unquote
                     import posixpath as _pp
+                    from urllib.parse import unquote
                     idx = path_raw.find("/artifacts/")
                     tail = path_raw[idx + len("/artifacts/"):]
                     tail_unquoted = unquote(tail)
@@ -86,7 +131,7 @@ class SandboxArtifactGuardRoute(APIRoute):
                         or _pp.normpath(tail_unquoted) != tail_unquoted
                     ):
                         return JSONResponse({"detail": "invalid_path"}, status_code=400)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 # Fail open on guard errors
                 pass
             return await original(request)
@@ -103,13 +148,13 @@ def _is_admin_user(user: User) -> bool:
     try:
         if bool(getattr(user, "is_admin", False)):
             return True
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         roles = getattr(user, "roles", None)
         if roles and "admin" in roles:
             return True
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
     return False
 
@@ -132,15 +177,15 @@ def _require_session_owner(session_id: str, current_user: User) -> str:
     return str(owner)
 
 
-def _looks_like_jwt(token: Optional[str]) -> bool:
+def _looks_like_jwt(token: str | None) -> bool:
     return isinstance(token, str) and token.count(".") == 2
 
 
 async def _resolve_sandbox_ws_user_id(
     websocket: WebSocket,
     *,
-    token: Optional[str],
-    api_key: Optional[str],
+    token: str | None,
+    api_key: str | None,
 ) -> int:
     if not token:
         auth_hdr = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
@@ -155,9 +200,9 @@ async def _resolve_sandbox_ws_user_id(
 
     if token:
         try:
+            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
             from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
             from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-            from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
 
             jwt_service = get_jwt_service()
             payload = await jwt_service.verify_token_async(token, token_type="access")
@@ -167,17 +212,17 @@ async def _resolve_sandbox_ws_user_id(
         except HTTPException:
             raise
         except (InvalidTokenError, TokenExpiredError):
-            raise HTTPException(status_code=401, detail="invalid_token")
-        except Exception:
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
         sub = payload.get("user_id") or payload.get("sub")
         if sub is None:
             raise HTTPException(status_code=401, detail="invalid_token")
         try:
             return int(sub)
-        except Exception:
-            raise HTTPException(status_code=401, detail="invalid_token")
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
     if api_key:
         settings = get_settings()
@@ -206,7 +251,7 @@ async def _resolve_sandbox_ws_user_id(
     raise HTTPException(status_code=401, detail="auth_required")
 
 
-def _normalize_reason(outcome: str, message: Optional[str]) -> str:
+def _normalize_reason(outcome: str, message: str | None) -> str:
     """Normalize a possibly long/unique error message into a small, bounded set for metrics labels.
 
     Prefers bucketing into a fixed taxonomy to prevent Prometheus label cardinality explosions.
@@ -255,7 +300,7 @@ def _normalize_reason(outcome: str, message: Optional[str]) -> str:
         if o in {"failed", "error"}:
             return "internal"
         return o or "other"
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         return "other"
 
 
@@ -273,7 +318,8 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
     - Redis: reports whether WS fan-out is enabled and connected.
     """
     import time as _time
-    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+
+    from tldw_Server_API.app.core.Sandbox.store import get_store, get_store_mode
     store_info: dict = {"mode": None, "healthy": True}
     timings: dict = {}
     try:
@@ -287,11 +333,11 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
                 _ = int(st.count_runs())
                 timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 logger.exception("Sandbox health: store connectivity check failed")
                 store_info["healthy"] = False
                 store_info["code"] = "internal_error"
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         logger.exception("Sandbox health: store mode detection failed")
         store_info["healthy"] = False
         store_info["code"] = "internal_error"
@@ -303,7 +349,7 @@ async def sandbox_health(current_user: User = Depends(get_request_user)) -> dict
             pong = hub.ping_redis()
             redis_status["ping_ms"] = pong.get("ms")
             timings["redis_ping_ms"] = pong.get("ms")
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         redis_status = {"enabled": False}
     ok = bool(store_info.get("healthy", True)) and (True if not redis_status.get("enabled") else bool(redis_status.get("connected")))
     return {"ok": ok, "store": store_info, "redis": redis_status, "timings": timings}
@@ -317,7 +363,8 @@ async def sandbox_health_public() -> dict:
     Redis fan-out status and ping timings when available.
     """
     import time as _time
-    from tldw_Server_API.app.core.Sandbox.store import get_store_mode, get_store
+
+    from tldw_Server_API.app.core.Sandbox.store import get_store, get_store_mode
     store_info: dict = {"mode": None, "healthy": True}
     timings: dict = {}
     try:
@@ -330,12 +377,12 @@ async def sandbox_health_public() -> dict:
                 _ = int(st.count_runs())
                 timings["store_ms"] = float((_time.perf_counter() - t0) * 1000.0)
                 store_info["healthy"] = True
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 # Do not leak exception details publicly; log with traceback server-side
                 logger.exception("Sandbox public health: store connectivity check failed")
                 store_info["healthy"] = False
                 store_info["code"] = "internal_error"
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         # Do not leak exception details publicly; log with traceback server-side
         logger.exception("Sandbox public health: store mode detection failed")
         store_info["healthy"] = False
@@ -348,7 +395,7 @@ async def sandbox_health_public() -> dict:
             pong = hub.ping_redis()
             redis_status["ping_ms"] = pong.get("ms")
             timings["redis_ping_ms"] = pong.get("ms")
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         redis_status = {"enabled": False}
     ok = bool(store_info.get("healthy", True)) and (True if not redis_status.get("enabled") else bool(redis_status.get("connected")))
     return {"ok": ok, "store": store_info, "redis": redis_status, "timings": timings}
@@ -359,13 +406,13 @@ async def create_session(
     request: Request,
     payload: SandboxSessionCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxSession:
     # Default execution timeout from settings (fallback handled in schema)
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         default_exec_to = 300
 
     spec = SessionSpec(
@@ -387,11 +434,8 @@ async def create_session(
             idem_key=idempotency_key,
             raw_body=payload.model_dump(exclude_none=True),
         )
-    except Exception as e:
-        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
-        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
-        from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
-        if isinstance(e, _Pol.RuntimeUnavailable):
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+        if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Map to 503 with details per PRD; read runtime from exception with safe fallback
             rt_attr = getattr(e, "runtime", None)
             if rt_attr is None:
@@ -399,7 +443,7 @@ async def create_session(
             else:
                 try:
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
             logger.exception("RuntimeUnavailable error occurred on sandbox session creation: %s", str(e))
             return JSONResponse(status_code=503, content={
@@ -420,7 +464,7 @@ async def create_session(
                         "prior_created_at": getattr(e, "prior_created_at", None),
                     }
                 }
-            })
+            }) from e
         if isinstance(e, QueueFull):
             # Backpressure: 429 with Retry-After
             retry_after = getattr(e, "retry_after", 30)
@@ -430,16 +474,16 @@ async def create_session(
                     "message": "Sandbox run queue is full",
                     "details": {"retry_after": retry_after}
                 }
-            }, headers={"Retry-After": str(int(retry_after))})
-        if isinstance(e, _Svc.InvalidSpecVersion):
+            }, headers={"Retry-After": str(int(retry_after))}) from e
+        if isinstance(e, SandboxService.InvalidSpecVersion):
             raise HTTPException(status_code=400, detail={
                 "error": {
                     "code": "invalid_spec_version",
                     "message": str(e),
                     "details": {"supported": e.supported, "provided": e.provided}
                 }
-            })
-        if isinstance(e, _Svc.InvalidFirecrackerConfig):
+            }) from e
+        if isinstance(e, SandboxService.InvalidFirecrackerConfig):
             return JSONResponse(status_code=400, content={
                 "error": {
                     "code": "invalid_firecracker_config",
@@ -454,7 +498,7 @@ async def create_session(
             "sandbox_sessions_created_total",
             labels={"runtime": session.runtime.value},
         )
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         logger.debug("metrics: sandbox_sessions_created_total failed")
 
     # Audit
@@ -483,7 +527,7 @@ async def create_session(
                     "labels": payload.labels or {},
                 },
             )
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"sandbox audit(session.create) failed: {e}")
 
     # Compute canonical policy hash for reproducibility
@@ -491,7 +535,7 @@ async def create_session(
         from tldw_Server_API.app.core.Sandbox.policy import compute_policy_hash
         cfg = _service.policy.cfg  # type: ignore[attr-defined]
         ph = compute_policy_hash(cfg)
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         ph = None
     return SandboxSession(
         id=session.id,
@@ -540,9 +584,9 @@ async def create_snapshot(
             size_bytes=result["size_bytes"],
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except IOError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post(
@@ -567,9 +611,9 @@ async def restore_snapshot(
             snapshot_id=payload.snapshot_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except IOError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post(
@@ -597,10 +641,10 @@ async def clone_session(
             cloned_from=session_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Clone session failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get(
@@ -657,23 +701,19 @@ async def upload_files(
 
     try:
         cap_mb = int(os.getenv("SANDBOX_WORKSPACE_CAP_MB") or 256)
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         cap_mb = 256
     cap_bytes = cap_mb * 1024 * 1024
     written = 0
     count = 0
 
-    def _safe_join(base: str, name: str) -> str:
-        name = name.replace("\\", "/").lstrip("/")
-        while ".." in name.split("/"):
-            name = name.replace("..", "_")
-        return os.path.join(base, name)
-
-    import tarfile, zipfile, io
+    import io
+    import tarfile
+    import zipfile
     for up in files:
         try:
             content = await up.read()
-        except Exception as e:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed reading upload file {up.filename}: {e}")
             continue
         if written + len(content) > cap_bytes:
@@ -684,10 +724,13 @@ async def upload_files(
                 mode = "r:*"
                 tf = tarfile.open(fileobj=io.BytesIO(content), mode=mode)
                 for m in tf.getmembers():
+                    # Skip device files, symlinks, and hard links
                     if m.isdev() or m.issym() or m.islnk():
                         continue
-                    target = _safe_join(ws_root, m.name)
-                    if not target.startswith(ws_root):
+                    # Use secure path join to prevent traversal
+                    target = safe_join(ws_root, m.name)
+                    if target is None:
+                        # Path traversal attempt detected, skip this entry
                         continue
                     if m.isdir():
                         os.makedirs(target, exist_ok=True)
@@ -703,7 +746,7 @@ async def upload_files(
                         out.write(data)
                     written += len(data)
                     count += 1
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to extract tar: {e}")
         elif lower.endswith(".zip"):
             try:
@@ -711,9 +754,15 @@ async def upload_files(
                 for m in zf.infolist():
                     if m.is_dir():
                         continue
+                    # Check for symlinks in zip files (external_attr >> 28 == 0xA indicates symlink)
+                    # Unix symlink mode is 0o120000 (0xA000), stored in high 16 bits of external_attr
+                    if (m.external_attr >> 16) & 0xF000 == 0xA000:
+                        continue
                     name = m.filename
-                    target = _safe_join(ws_root, name)
-                    if not target.startswith(ws_root):
+                    # Use secure path join to prevent traversal
+                    target = safe_join(ws_root, name)
+                    if target is None:
+                        # Path traversal attempt detected, skip this entry
                         continue
                     data = zf.read(m)
                     if written + len(data) > cap_bytes:
@@ -723,11 +772,13 @@ async def upload_files(
                         out.write(data)
                     written += len(data)
                     count += 1
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to extract zip: {e}")
         else:
-            target = _safe_join(ws_root, up.filename or f"file_{count}")
-            if not target.startswith(ws_root):
+            # Use secure path join for regular file uploads
+            target = safe_join(ws_root, up.filename or f"file_{count}")
+            if target is None:
+                # Path traversal attempt detected, skip this file
                 continue
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "wb") as out:
@@ -741,7 +792,7 @@ async def upload_files(
             increment_counter("sandbox_upload_bytes_total", value=float(written), labels={"kind": "session_upload"})
         if count:
             increment_counter("sandbox_upload_files_total", value=float(count), labels={"kind": "session_upload"})
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         logger.debug("metrics: sandbox upload counters failed")
 
     # Audit
@@ -766,7 +817,7 @@ async def upload_files(
                 action="upload",
                 metadata={"bytes_received": written, "file_count": count},
             )
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"sandbox audit(session.upload) failed: {e}")
 
     return SandboxFileUploadResponse(session_id=session_id, bytes_received=written, file_count=count)
@@ -777,7 +828,7 @@ async def start_run(
     request: Request,
     payload: SandboxRunCreateRequest = Body(...),
     current_user: User = Depends(get_request_user),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     audit_service=Depends(get_audit_service_for_user),
 ) -> SandboxRunStatus:
     """
@@ -804,12 +855,12 @@ async def start_run(
     files_inline = _service.parse_inline_files([f.dict() for f in (payload.files or [])])
     try:
         default_exec_to = int(getattr(app_settings, "SANDBOX_DEFAULT_EXEC_TIMEOUT_SEC", 300))
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         default_exec_to = 300
 
     try:
         default_startup_to = int(getattr(app_settings, "SANDBOX_DEFAULT_STARTUP_TIMEOUT_SEC", 20))
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         default_startup_to = 20
 
     spec = RunSpec(
@@ -838,7 +889,7 @@ async def start_run(
         try:
             rt = (spec.runtime.value if spec.runtime else (payload.runtime or "unknown"))
             increment_counter("sandbox_runs_started_total", labels={"runtime": str(rt)})
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             logger.debug("metrics: sandbox_runs_started_total failed")
 
         status = _service.start_run_scaffold(
@@ -848,11 +899,8 @@ async def start_run(
             idem_key=idempotency_key,
             raw_body=payload.model_dump(exclude_none=True),
         )
-    except Exception as e:
-        from tldw_Server_API.app.core.Sandbox.orchestrator import IdempotencyConflict, QueueFull
-        from tldw_Server_API.app.core.Sandbox.service import SandboxService as _Svc
-        from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy as _Pol
-        if isinstance(e, _Pol.RuntimeUnavailable):
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
+        if isinstance(e, SandboxPolicy.RuntimeUnavailable):
             # Use runtime from exception; fallback only if missing/None
             rt_attr = getattr(e, "runtime", None)
             if rt_attr is None:
@@ -860,24 +908,25 @@ async def start_run(
             else:
                 try:
                     rt = rt_attr.value if hasattr(rt_attr, "value") else str(rt_attr)
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     rt = str(rt_attr) if rt_attr is not None else "unknown"
             # Build dynamic suggestions based on availability
             suggestions = []
             try:
                 # Prefer suggesting Docker when Firecracker unavailable
                 from tldw_Server_API.app.core.Sandbox.runners.docker_runner import docker_available as _dock_avail
-                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import firecracker_available as _fc_avail
+                from tldw_Server_API.app.core.Sandbox.runners.firecracker_runner import (
+                    firecracker_available as _fc_avail,
+                )
                 if str(rt) == "firecracker":
                     # Suggest docker even if availability is unknown (tests expect this)
                     if _dock_avail() or True:
                         suggestions.append("docker")
-                elif str(rt) == "docker":
-                    if _fc_avail():
-                        suggestions.append("firecracker")
+                elif str(rt) == "docker" and _fc_avail():
+                    suggestions.append("firecracker")
                 # Ensure uniqueness
                 suggestions = sorted(set(suggestions))
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 suggestions = ["docker"]
             return JSONResponse(status_code=503, content={
                 "error": {
@@ -905,7 +954,7 @@ async def start_run(
                 # Include runtime label where possible for taxonomy consistency
                 rt_label = str(payload.runtime or "unknown")
                 increment_counter("sandbox_queue_full_total", labels={"component": "sandbox", "runtime": rt_label, "reason": "queue_full"})
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             return JSONResponse(status_code=429, content={
                 "error": {
@@ -914,7 +963,7 @@ async def start_run(
                     "details": {"retry_after": retry_after}
                 }
             }, headers={"Retry-After": str(int(retry_after))})
-        if isinstance(e, _Svc.InvalidSpecVersion):
+        if isinstance(e, SandboxService.InvalidSpecVersion):
             return JSONResponse(status_code=400, content={
                 "error": {
                     "code": "invalid_spec_version",
@@ -922,7 +971,7 @@ async def start_run(
                     "details": {"supported": e.supported, "provided": e.provided}
                 }
             })
-        if isinstance(e, _Svc.InvalidFirecrackerConfig):
+        if isinstance(e, SandboxService.InvalidFirecrackerConfig):
             return JSONResponse(status_code=400, content={
                 "error": {
                     "code": "invalid_firecracker_config",
@@ -951,7 +1000,7 @@ async def start_run(
                     "reason": reason_norm,
                 }
                 increment_counter("sandbox_runs_completed_total", labels=labels_completed)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics: sandbox_runs_completed_total failed")
             try:
                 reason_norm = _normalize_reason(outcome, getattr(status, "message", None))
@@ -961,7 +1010,7 @@ async def start_run(
                     "reason": reason_norm,
                 }
                 observe_histogram("sandbox_run_duration_seconds", value=float(duration), labels=labels_duration)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 logger.debug("metrics: sandbox_run_duration_seconds failed")
 
             # Audit: run completion
@@ -981,7 +1030,7 @@ async def start_run(
                     try:
                         if outcome in ("timeout", "failed"):
                             reason_code = (status.message or None)
-                    except Exception:
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                         reason_code = None
                     await audit_service.log_event(
                         event_type=AuditEventType.API_RESPONSE,
@@ -1004,7 +1053,7 @@ async def start_run(
                             "reason_code": reason_code,
                         },
                     )
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"sandbox audit(run.complete) failed: {e}")
         else:
             # Audit: run started (background or queued)
@@ -1034,9 +1083,9 @@ async def start_run(
                             "spec_version": payload.spec_version,
                         },
                     )
-            except Exception as e:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"sandbox audit(run.start) failed: {e}")
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         logger.debug("sandbox metrics/audit post-run block failed")
 
     # Optional synthetic frames for tests: when enabled via config/env,
@@ -1046,11 +1095,11 @@ async def start_run(
             hub = get_hub()
             hub.publish_event(status.id, "start", {"source": "endpoint_synthetic"})
             hub.publish_event(status.id, "end", {"source": "endpoint_synthetic"})
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Build optional log_stream_url (signed or unsigned)
-    log_stream_url: Optional[str] = None
+    log_stream_url: str | None = None
     try:
         base_path = f"/api/v1/sandbox/runs/{status.id}/stream"
         # Prefer explicit env override to avoid stale cached settings in tests.
@@ -1058,7 +1107,7 @@ async def start_run(
         try:
             import os as _os
             signed_env = _os.getenv("SANDBOX_WS_SIGNED_URLS")
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             signed_env = None
         if signed_env is not None:
             signed_flag = str(signed_env).strip().lower() in {"1","true","yes","on","y"}
@@ -1068,7 +1117,7 @@ async def start_run(
         try:
             import os as _os
             secret_env = _os.getenv("SANDBOX_WS_SIGNING_SECRET")
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             secret_env = None
         if secret_env is not None:
             secret_val = secret_env or None
@@ -1077,7 +1126,7 @@ async def start_run(
         if signed_flag and secret_val:
             ttl = int(getattr(app_settings, "SANDBOX_WS_SIGNED_URL_TTL_SEC", 60))
             exp = int(time.time()) + max(1, ttl)
-            msg = f"{status.id}:{exp}".encode("utf-8")
+            msg = f"{status.id}:{exp}".encode()
             secret = str(secret_val).encode("utf-8")
             token = hmac.new(secret, msg, hashlib.sha256).hexdigest()
             log_stream_url = f"{base_path}?token={token}&exp={exp}"
@@ -1088,9 +1137,9 @@ async def start_run(
             if hasattr(payload, "resume_from_seq") and payload.resume_from_seq and int(payload.resume_from_seq) > 0:
                 sep = "&" if ("?" in str(log_stream_url)) else "?"
                 log_stream_url = f"{log_stream_url}{sep}from_seq={int(payload.resume_from_seq)}"
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         # Fail open: omit URL on error
         log_stream_url = None
 
@@ -1156,19 +1205,17 @@ async def list_artifacts(
                 rp = request.scope.get("raw_path")
                 if isinstance(rp, (bytes, bytearray)):
                     candidates.append(rp.decode("utf-8", "ignore"))
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 # Starlette URL may expose raw_path in some versions
                 rp2 = getattr(request.url, "raw_path", None)
                 if isinstance(rp2, str):
                     candidates.append(rp2)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except Exception:
-                pass
             try:
                 # HTTP/2 pseudo-header path may be present
                 pseudo = None
@@ -1177,17 +1224,17 @@ async def list_artifacts(
                         if hk.decode("latin-1").lower() == ":path":
                             pseudo = hv.decode("utf-8", "ignore")
                             break
-                    except Exception:
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                         continue
                 if pseudo:
                     candidates.append(pseudo)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
         if any("/../" in str(c) for c in candidates if c):
             raise HTTPException(status_code=400, detail="invalid_path")
     except HTTPException:
         raise
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         # If guard fails, continue with normal listing
         pass
     sizes = _service._orch.list_artifacts(run_id)  # type: ignore[attr-defined]
@@ -1218,7 +1265,7 @@ async def download_artifact(
     run_id: str = Path(..., min_length=1),
     path: str = Path(..., min_length=1),
     current_user: User = Depends(get_request_user),
-    range_header: Optional[str] = Header(None, alias="Range"),
+    range_header: str | None = Header(None, alias="Range"),
 ):
     _require_run_owner(run_id, current_user)
     # Basic path normalization checks (orchestrator also normalizes on FS)
@@ -1232,18 +1279,16 @@ async def download_artifact(
                 rp = request.scope.get("raw_path")
                 if isinstance(rp, (bytes, bytearray)):
                     candidates.append(rp.decode("utf-8", "ignore"))
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 rp2 = getattr(request.url, "raw_path", None)
                 if isinstance(rp2, str):
                     candidates.append(rp2)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except Exception:
-                pass
             try:
                 pseudo = None
                 for (hk, hv) in request.scope.get("headers", []) or []:
@@ -1251,17 +1296,17 @@ async def download_artifact(
                         if hk.decode("latin-1").lower() == ":path":
                             pseudo = hv.decode("utf-8", "ignore")
                             break
-                    except Exception:
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                         continue
                 if pseudo:
                     candidates.append(pseudo)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
         if any("/../" in str(c) for c in candidates if c):
             raise HTTPException(status_code=400, detail="invalid_path")
     except HTTPException:
         raise
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
     raw = str(path)
     if (
@@ -1303,7 +1348,7 @@ async def download_artifact(
                 return None
             end = min(end, size - 1)
             return (start, end)
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return None
 
     headers = {"Accept-Ranges": "bytes"}
@@ -1333,14 +1378,14 @@ async def cancel_run(
         _require_run_owner(run_id, current_user)
         ok = _service.cancel_run(run_id)
         return CancelResponse(id=run_id, cancelled=bool(ok), message=("canceled_by_user" if ok else "not_running_or_not_found"))
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         raise HTTPException(status_code=500, detail={
             "error": {
                 "code": "cancel_failed",
                 "message": str(e),
                 "details": {"run_id": run_id}
             }
-        })
+        }) from e
 
 
 @router.websocket("/runs/{run_id}/stream")
@@ -1362,7 +1407,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             signed_flag = str(signed_env).strip().lower() in {"1", "true", "yes", "on", "y"}
         else:
             signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         signed_flag = False
     try:
         qp = websocket.query_params  # type: ignore[attr-defined]
@@ -1372,11 +1417,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             auth_token = qp.get("auth_token")
             if not auth_token and not signed_flag:
                 auth_token = qp.get("token")
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         auth_token = None
     try:
         api_key = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         api_key = None
     try:
         user_id = await _resolve_sandbox_ws_user_id(websocket, token=auth_token, api_key=api_key)
@@ -1384,26 +1429,24 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             await websocket.close(code=4401)
         finally:
-            return
+            return  # noqa: B012
     # Ownership check before streaming
     try:
         owner = _service._orch.get_run_owner(run_id)  # type: ignore[attr-defined]
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         owner = None
     if owner is None:
         # In test mode, allow streaming for untracked runs so hub-only WS tests
         # can publish frames without going through the run store.
         try:
             test_mode = bool(getattr(app_settings, "TEST_MODE", False))
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             test_mode = False
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             test_mode = test_mode or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
-        except Exception:
-            pass
         try:
             allow_untracked = str(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             allow_untracked = False
         if test_mode or allow_untracked:
             owner = str(user_id)
@@ -1411,12 +1454,12 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             try:
                 await websocket.close(code=4404)
             finally:
-                return
+                return  # noqa: B012
     if str(owner) != str(user_id):
         try:
             await websocket.close(code=4404)
         finally:
-            return
+            return  # noqa: B012
 
     # Enforce signed WS URL validation when enabled (in addition to auth).
     try:
@@ -1431,36 +1474,36 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
+                    return  # noqa: B012
             qp = websocket.query_params  # type: ignore[attr-defined]
             token = qp.get("token") if qp else None  # type: ignore[assignment]
             exp = qp.get("exp") if qp else None  # type: ignore[assignment]
             try:
                 exp_i = int(str(exp)) if exp is not None else 0
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 exp_i = 0
             now_i = int(time.time())
             if not token or exp_i <= now_i:
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
+                    return  # noqa: B012
             try:
-                msg = f"{run_id}:{exp_i}".encode("utf-8")
+                msg = f"{run_id}:{exp_i}".encode()
                 expected = hmac.new(str(secret).encode("utf-8"), msg, hashlib.sha256).hexdigest()
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 expected = ""
             if not hmac.compare_digest(str(token), expected):
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
-    except Exception:
+                    return  # noqa: B012
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         # On any unexpected error during validation, fail closed
         try:
             await websocket.close(code=1008)
         finally:
-            return
+            return  # noqa: B012
 
     await websocket.accept()
     # Wrap for WS metrics; keep domain frames unchanged
@@ -1479,7 +1522,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         qp = websocket.query_params  # type: ignore[attr-defined]
         from_seq_raw = qp.get("from_seq") if qp else None  # type: ignore[assignment]
         from_seq = int(str(from_seq_raw)) if from_seq_raw is not None else 0
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         from_seq = 0
     # Subscribe with buffered frames prefilled to avoid races
     if from_seq and from_seq > 0:
@@ -1499,24 +1542,22 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             st = _service.get_run(run_id)
             try:
                 q_empty = q.empty()
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 q_empty = False
             # Optionally publish synthetic frames via hub for test determinism
             if st is not None and q_empty:
                 # Publish synthetic frames via hub so they participate in ordering and seq stamping
-                try:
+                with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                     hub.publish_event(run_id, "start", {"source": "ws_synthetic"})
-                except Exception:
-                    pass
                 async def _enqueue_end_later():
                     try:
                         await asyncio.sleep(0.05)
                         hub.publish_event(run_id, "end", {"source": "ws_synthetic"})
-                    except Exception:
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                         return
                 # Store task to avoid premature GC and enable cleanup
                 synth_task = asyncio.create_task(_enqueue_end_later())
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
     # Buffered frames are already enqueued for this subscriber by the hub,
     # ensuring seq-stamped history arrives before live frames.
@@ -1527,7 +1568,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     # Metrics: connection opened
     try:
         increment_counter("sandbox_ws_connections_opened_total", labels={"component": "sandbox"})
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         logger.debug("metrics: sandbox_ws_connections_opened_total failed")
 
     async def _heartbeats() -> None:
@@ -1539,13 +1580,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 # with potentially inconsistent sequencing.
                 try:
                     hub.publish_heartbeat(run_id)
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         increment_counter("sandbox_ws_heartbeats_sent_total", labels={"component": "sandbox"})
-                    except Exception:
-                        pass
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     continue
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return
 
     spawn_hb = True
@@ -1553,7 +1592,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         # If run already ended, avoid spawning heartbeats that could interleave
         if bool(run_id in getattr(hub, "_ended", set())):
             spawn_hb = False
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         spawn_hb = True
     hb_task = asyncio.create_task(_heartbeats()) if spawn_hb else None
 
@@ -1563,13 +1602,11 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             while True:
                 try:
                     msg = await websocket.receive_json()
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         stream.mark_activity()
-                    except Exception:
-                        pass
                 except WebSocketDisconnect:
                     return
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     # Non-JSON or decode error: ignore and continue
                     continue
                 if not isinstance(msg, dict):
@@ -1587,7 +1624,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                         raw = _b64.b64decode(data_field)
                     else:
                         raw = data_field.encode("utf-8")
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     raw = b""
                 if not raw:
                     continue
@@ -1596,24 +1633,20 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 if allowed <= 0:
                     # Rate limited or cap reached: notify client via truncated frame
                     if reason:
-                        try:
+                        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                             hub.publish_truncated(run_id, str(reason))
-                        except Exception:
-                            pass
                     continue
                 if allowed < len(raw):
                     # Truncated by cap; notify once
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         hub.publish_truncated(run_id, str(reason or "stdin_cap"))
-                    except Exception:
-                        pass
                 # Enqueue allowed bytes for runner-side stdin pump
                 try:
                     if allowed > 0:
                         hub.push_stdin(run_id, raw[:allowed])
-                except Exception:
+                except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return
 
     reader_task = asyncio.create_task(_reader())
@@ -1631,16 +1664,12 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 if last is None:
                     continue
                 if (_time.time() - float(last)) > float(tout):
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         hub.publish_truncated(run_id, "stdin_idle")
-                    except Exception:
-                        pass
-                    try:
+                    with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                         await stream.ws.close()
-                    except Exception:
-                        pass
                     return
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             return
 
     idle_task = asyncio.create_task(_idle_watchdog())
@@ -1649,7 +1678,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             _pt_env = os.getenv("SANDBOX_WS_POLL_TIMEOUT_SEC")
             poll_timeout = float(_pt_env) if _pt_env is not None else float(getattr(app_settings, "SANDBOX_WS_POLL_TIMEOUT_SEC", 30))
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             poll_timeout = 30.0
         while True:
             try:
@@ -1663,38 +1692,34 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             # We intentionally keep the socket open in both synthetic and normal modes.
     except WebSocketDisconnect:
         logger.info(f"WS disconnected for run {run_id}")
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             increment_counter("sandbox_ws_disconnects_total", labels={"component": "sandbox"})
-        except Exception:
-            pass
-    except Exception as e:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"WS stream error: {e}")
     finally:
         try:
             if hb_task:
                 hb_task.cancel()
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if reader_task:
                 reader_task.cancel()
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if idle_task:
                 idle_task.cancel()
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
         # Ensure any synthetic end task is also cancelled if still pending
         try:
             if synth_task and not synth_task.done():
                 synth_task.cancel()
-        except Exception:
+        except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
             await stream.ws.close()
-        except Exception:
-            pass
 
 
 
@@ -1709,14 +1734,14 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     summary="Admin: list sandbox runs with filters",
 )
 async def admin_list_runs(
-    image_digest: Optional[str] = Query(None, description="Filter by image digest"),
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
-    phase: Optional[str] = Query(None, description="Filter by run phase"),
-    started_at_from: Optional[str] = Query(None, description="ISO timestamp inclusive lower bound"),
-    started_at_to: Optional[str] = Query(None, description="ISO timestamp inclusive upper bound"),
+    image_digest: str | None = Query(None, description="Filter by image digest"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    phase: str | None = Query(None, description="Filter by run phase"),
+    started_at_from: str | None = Query(None, description="ISO timestamp inclusive lower bound"),
+    started_at_to: str | None = Query(None, description="ISO timestamp inclusive upper bound"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminRunListResponse:
@@ -1775,7 +1800,7 @@ async def admin_get_run_details(
         raise HTTPException(status_code=404, detail="run_not_found")
     try:
         owner = _service._orch.get_run_owner(run_id)  # type: ignore[attr-defined]
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         owner = None
     return SandboxAdminRunDetails(
         id=st.id,
@@ -1810,18 +1835,16 @@ async def sandbox_runs_fallback_guard(
                 rp = request.scope.get("raw_path")
                 if isinstance(rp, (bytes, bytearray)):
                     candidates.append(rp.decode("utf-8", "ignore"))
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
             try:
                 rp2 = getattr(request.url, "raw_path", None)
                 if isinstance(rp2, str):
                     candidates.append(rp2)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
-            try:
+            with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
                 candidates.append(request.url.path)
-            except Exception:
-                pass
             try:
                 # HTTP/2 pseudo-header path may be present
                 pseudo = None
@@ -1830,17 +1853,17 @@ async def sandbox_runs_fallback_guard(
                         if hk.decode("latin-1").lower() == ":path":
                             pseudo = hv.decode("utf-8", "ignore")
                             break
-                    except Exception:
+                    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                         continue
                 if pseudo:
                     candidates.append(pseudo)
-            except Exception:
+            except _SANDBOX_NONCRITICAL_EXCEPTIONS:
                 pass
         if any(("/api/v1/sandbox/runs/" in c and "/artifacts/../" in c) for c in candidates if c):
             raise HTTPException(status_code=400, detail="invalid_path")
     except HTTPException:
         raise
-    except Exception:
+    except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         pass
     # Fallback: not found under /runs/{run_id}
     raise HTTPException(status_code=404, detail="Not Found")
@@ -1856,14 +1879,14 @@ async def sandbox_runs_fallback_guard(
     summary="Admin: list idempotency records",
 )
 async def admin_list_idempotency(
-    endpoint: Optional[str] = Query(None, description="Filter by endpoint, e.g., 'runs' or 'sessions'"),
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
-    key: Optional[str] = Query(None, description="Filter by idempotency key"),
-    created_at_from: Optional[str] = Query(None, description="ISO timestamp inclusive lower bound"),
-    created_at_to: Optional[str] = Query(None, description="ISO timestamp inclusive upper bound"),
+    endpoint: str | None = Query(None, description="Filter by endpoint, e.g., 'runs' or 'sessions'"),
+    user_id: str | None = Query(None, description="Filter by user id"),
+    key: str | None = Query(None, description="Filter by idempotency key"),
+    created_at_from: str | None = Query(None, description="ISO timestamp inclusive lower bound"),
+    created_at_to: str | None = Query(None, description="ISO timestamp inclusive upper bound"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminIdempotencyListResponse:
@@ -1906,10 +1929,10 @@ async def admin_list_idempotency(
     summary="Admin: usage aggregates per user",
 )
 async def admin_usage(
-    user_id: Optional[str] = Query(None, description="Filter by user id"),
+    user_id: str | None = Query(None, description="Filter by user id"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query("desc", pattern="^(asc|desc)$"),
+    sort: str | None = Query("desc", pattern="^(asc|desc)$"),
     principal: AuthPrincipal = Depends(auth_deps.require_roles("admin")),
     current_user: User = Depends(get_request_user),
 ) -> SandboxAdminUsageResponse:

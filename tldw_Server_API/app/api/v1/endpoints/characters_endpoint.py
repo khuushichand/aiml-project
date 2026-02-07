@@ -3,13 +3,18 @@
 #
 # Imports
 import base64
+import json
 import pathlib
+import struct
+import zlib
 from datetime import datetime
-from typing import List, Any, Dict, Optional, Tuple
+from typing import Any, Optional
+
 #
 # Third-party Libraries
-from fastapi import HTTPException, Depends, Query, UploadFile, File, Form, APIRouter, Path as FastAPIPath
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import Path as FastAPIPath
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from starlette import status
 
@@ -57,7 +62,7 @@ def _detect_mime_type(data: bytes) -> Optional[str]:
     return None
 
 
-def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str, Optional[str]]:
+def _validate_file_type(data: bytes, filename: Optional[str]) -> tuple[bool, str, Optional[str]]:
     """
     Validate file type via both magic bytes and extension.
 
@@ -112,25 +117,69 @@ def _validate_file_type(data: bytes, filename: Optional[str]) -> Tuple[bool, str
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
-from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
-from tldw_Server_API.app.api.v1.schemas.character_schemas import CharacterResponse, CharacterImportResponse, \
-    CharacterCreate, CharacterUpdate, DeletionResponse
-from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
-    WorldBookCreate, WorldBookUpdate, WorldBookResponse, WorldBookWithEntries,
-    WorldBookListResponse, WorldBookEntryCreate, WorldBookEntryUpdate,
-    WorldBookEntryResponse, EntryListResponse, CharacterWorldBookAttachment,
-    CharacterWorldBookResponse, ProcessContextRequest, ProcessContextResponse,
-    WorldBookImportRequest, WorldBookImportResponse, WorldBookExport,
-    WorldBookStatistics, BulkEntryOperation, BulkOperationResponse
+from tldw_Server_API.app.api.v1.schemas.character_schemas import (
+    CharacterCreate,
+    CharacterImportResponse,
+    CharacterResponse,
+    CharacterUpdate,
+    DeletionResponse,
 )
-from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import import_and_save_character_from_file, \
-    search_characters_by_query_text, delete_character_from_db, get_character_details, update_existing_character_details, \
-    create_new_character_from_data, restore_character_from_db
+from tldw_Server_API.app.api.v1.schemas.world_book_schemas import (
+    BulkEntryOperation,
+    BulkOperationResponse,
+    CharacterWorldBookAttachment,
+    CharacterWorldBookResponse,
+    EntryListResponse,
+    ProcessContextRequest,
+    ProcessContextResponse,
+    WorldBookCreate,
+    WorldBookEntryCreate,
+    WorldBookEntryResponse,
+    WorldBookEntryUpdate,
+    WorldBookExport,
+    WorldBookImportRequest,
+    WorldBookImportResponse,
+    WorldBookListResponse,
+    WorldBookResponse,
+    WorldBookStatistics,
+    WorldBookUpdate,
+    WorldBookWithEntries,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
+    create_new_character_from_data,
+    delete_character_from_db,
+    get_character_details,
+    import_and_save_character_from_file,
+    restore_character_from_db,
+    search_characters_by_query_text,
+    update_existing_character_details,
+)
+from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
+from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import ConflictError, InputError, CharactersRAGDBError
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
+_CHARACTERS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    UnicodeError,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+
 #
 #######################################################################################################################
 #
@@ -143,13 +192,13 @@ router = APIRouter()
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
-def _convert_db_char_to_response_model(char_dict_from_db: Dict[str, Any]) -> CharacterResponse:
+def _convert_db_char_to_response_model(char_dict_from_db: dict[str, Any]) -> CharacterResponse:
     response_data = char_dict_from_db.copy()
     if response_data.get('image') and isinstance(response_data['image'], bytes):
         try:
             response_data['image_base64'] = base64.b64encode(response_data['image']).decode('utf-8')
             response_data['image_present'] = True
-        except Exception as e:
+        except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error encoding image for char {response_data.get('id')}: {e}")
             response_data['image_base64'] = None
             response_data['image_present'] = False
@@ -224,7 +273,7 @@ async def import_character_endpoint(
             limits = get_character_limits()
             max_import_size_mb = int(limits.max_import_size_mb)
             max_import_bytes = max_import_size_mb * 1024 * 1024
-        except Exception:
+        except _CHARACTERS_NONCRITICAL_EXCEPTIONS:
             max_import_bytes = MAX_CHARACTER_FILE_SIZE
             max_import_size_mb = MAX_CHARACTER_FILE_SIZE // (1024 * 1024)
 
@@ -334,23 +383,23 @@ async def import_character_endpoint(
                 content=conflict_response.model_dump()
             )
 
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
 
     except (InputError, CharactersRAGDBError) as e:
         logger.error(f"Error during character import: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error during character import: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="An unexpected error occurred during file import.")
+                            detail="An unexpected error occurred during file import.") from e
     finally:
         await character_file.close()
 
 
 
-@router.get("/", response_model=List[CharacterResponse], summary="List characters", tags=["characters"])
+@router.get("/", response_model=list[CharacterResponse], summary="List characters", tags=["characters"])
 async def list_all_characters(  # Renamed from list_characters to avoid conflict with Python's list
         db: CharactersRAGDB = Depends(get_chacha_db_for_user),
         limit: int = Query(100, ge=1, le=1000),
@@ -363,10 +412,10 @@ async def list_all_characters(  # Renamed from list_characters to avoid conflict
         return [_convert_db_char_to_response_model(card) for card in raw_cards]
     except CharactersRAGDBError as e:
         logger.error(f"DB error listing characters: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error listing characters: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
 @router.get("/rate-limit-status", summary="Get rate limit status", tags=["characters"])
@@ -418,21 +467,21 @@ async def create_new_character_endpoint(
     except (InputError, ConflictError) as e:  # Propagated from lib
         status_code = status.HTTP_400_BAD_REQUEST if isinstance(e, InputError) else status.HTTP_409_CONFLICT
         logger.warning(f"Error creating character: {e} (Status: {status_code})")
-        raise HTTPException(status_code=status_code, detail=str(e))
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error creating character: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating character: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.get("/filter", response_model=List[CharacterResponse],
+@router.get("/filter", response_model=list[CharacterResponse],
             summary="Filter characters by tags", tags=["characters"])
 async def filter_characters_by_tags(
-    tags: List[str] = Query([], description="List of tags to filter by"),
+    tags: list[str] = Query([], description="List of tags to filter by"),
     match_all: bool = Query(False, description="Require all tags (AND) vs any tag (OR)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -467,7 +516,7 @@ async def filter_characters_by_tags(
                 import json
                 try:
                     char_tags = json.loads(char_tags)
-                except Exception as e:
+                except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Failed to decode character tags JSON; skipping tags. error={e}")
                     char_tags = []
 
@@ -489,12 +538,12 @@ async def filter_characters_by_tags(
 
         return [_convert_db_char_to_response_model(char) for char in paginated]
 
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error filtering characters by tags: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while filtering characters"
-        )
+        ) from e
 
 
 
@@ -541,10 +590,10 @@ async def list_world_books(
 
     except CharactersRAGDBError as e:
         logger.error(f"DB error listing world books: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error listing world books: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 @router.get("/{character_id}", response_model=CharacterResponse, summary="Get character by ID", tags=["characters"])
 async def get_character_by_id_endpoint(  # Renamed from get_character
@@ -559,12 +608,12 @@ async def get_character_by_id_endpoint(  # Renamed from get_character
         return _convert_db_char_to_response_model(char_db)
     except CharactersRAGDBError as e:
         logger.error(f"DB error getting character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error getting character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
 @router.put("/{character_id}", response_model=CharacterResponse, summary="Update character", tags=["characters"])
@@ -604,15 +653,15 @@ async def update_character_endpoint(  # Renamed from update_character
     except (InputError, ConflictError) as e:
         status_code = status.HTTP_400_BAD_REQUEST if isinstance(e, InputError) else status.HTTP_409_CONFLICT
         logger.warning(f"Error updating character {character_id}: {e} (Status: {status_code})")
-        raise HTTPException(status_code=status_code, detail=str(e))
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error updating character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error updating character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
 @router.delete("/{character_id}", response_model=DeletionResponse, summary="Delete character", tags=["characters"])
@@ -647,15 +696,15 @@ async def delete_character_endpoint(  # Renamed from delete_character
         )
     except ConflictError as e:  # From lib (e.g. if somehow version changed between API check and lib call, or FK issue)
         logger.warning(f"Conflict error deleting character {character_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error deleting character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
 @router.post("/{character_id}/restore", response_model=CharacterResponse, summary="Restore deleted character", tags=["characters"])
@@ -690,18 +739,18 @@ async def restore_character_endpoint(
 
     except ConflictError as e:
         logger.warning(f"Conflict error restoring character {character_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error restoring character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error restoring character {character_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 
-@router.get("/search/", response_model=List[CharacterResponse], summary="Search characters", tags=["characters"])
+@router.get("/search/", response_model=list[CharacterResponse], summary="Search characters", tags=["characters"])
 async def search_characters_endpoint(
         query: str = Query(..., description="Search term for character name, description, etc."),
         limit: int = Query(10, ge=1, le=100),
@@ -718,10 +767,10 @@ async def search_characters_endpoint(
         return [_convert_db_char_to_response_model(card) for card in results_db]
     except CharactersRAGDBError as e:
         logger.error(f"DB error searching characters for '{query}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error searching characters for '{query}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 # --- World Book Endpoints ---
 
@@ -758,16 +807,16 @@ async def create_world_book(
 
     except InputError as e:
         logger.warning(f"Input error creating world book: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
         logger.warning(f"Conflict creating world book: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error creating world book: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating world book: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 
@@ -809,10 +858,10 @@ async def get_world_book(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error getting world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error getting world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.put("/world-books/{world_book_id}", response_model=WorldBookResponse,
@@ -862,13 +911,13 @@ async def update_world_book(
         raise
     except ConflictError as e:
         logger.warning(f"Conflict updating world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error updating world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error updating world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.delete("/world-books/{world_book_id}", response_model=DeletionResponse,
@@ -909,13 +958,23 @@ async def delete_world_book(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error deleting world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- World Book Entry Endpoints ---
+
+def _merge_entry_appendable_metadata(
+        metadata: Optional[dict[str, Any]],
+        appendable: Optional[bool],
+) -> Optional[dict[str, Any]]:
+    if appendable is None:
+        return metadata
+    merged = dict(metadata or {})
+    merged["appendable"] = bool(appendable)
+    return merged
 
 @router.post("/world-books/{world_book_id}/entries", response_model=WorldBookEntryResponse,
              status_code=status.HTTP_201_CREATED, summary="Add entry to world book", tags=["World Books"])
@@ -936,6 +995,11 @@ async def add_world_book_entry(
                 detail=f"World book with ID {world_book_id} not found"
             )
 
+        entry_metadata = _merge_entry_appendable_metadata(
+            entry.metadata,
+            entry.appendable,
+        )
+
         entry_id = service.add_entry(
             world_book_id=world_book_id,
             keywords=entry.keywords,
@@ -945,7 +1009,7 @@ async def add_world_book_entry(
             case_sensitive=entry.case_sensitive,
             regex_match=entry.regex_match,
             whole_word_match=entry.whole_word_match,
-            metadata=entry.metadata
+            metadata=entry_metadata
         )
 
         # Get the created entry
@@ -973,13 +1037,13 @@ async def add_world_book_entry(
         raise
     except InputError as e:
         logger.warning(f"Input error adding entry to world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error adding entry to world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error adding entry to world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.get("/world-books/{world_book_id}/entries", response_model=EntryListResponse,
@@ -1026,10 +1090,10 @@ async def list_world_book_entries(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error listing entries for world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error listing entries for world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.put("/world-books/entries/{entry_id}", response_model=WorldBookEntryResponse,
@@ -1043,6 +1107,29 @@ async def update_world_book_entry(
     try:
         service = WorldBookService(db)
 
+        entry_metadata = update_data.metadata
+        if update_data.appendable is not None:
+            if entry_metadata is None:
+                existing_entries = service.get_entries(enabled_only=False)
+                existing_entry = next(
+                    (
+                        e
+                        for e in existing_entries
+                        if (getattr(e, 'id', None) == entry_id)
+                        or (hasattr(e, 'get') and e.get('id') == entry_id)
+                    ),
+                    None,
+                )
+                if existing_entry is not None:
+                    if hasattr(existing_entry, 'get'):
+                        entry_metadata = existing_entry.get('metadata') or {}
+                    elif hasattr(existing_entry, '_d'):
+                        entry_metadata = getattr(existing_entry, '_d', {}).get('metadata') or {}
+            entry_metadata = _merge_entry_appendable_metadata(
+                entry_metadata,
+                update_data.appendable,
+            )
+
         success = service.update_entry(
             entry_id=entry_id,
             keywords=update_data.keywords,
@@ -1052,7 +1139,7 @@ async def update_world_book_entry(
             case_sensitive=update_data.case_sensitive,
             regex_match=update_data.regex_match,
             whole_word_match=update_data.whole_word_match,
-            metadata=update_data.metadata
+            metadata=entry_metadata
         )
 
         if not success:
@@ -1093,13 +1180,13 @@ async def update_world_book_entry(
         raise
     except InputError as e:
         logger.warning(f"Input error updating entry {entry_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error updating entry {entry_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error updating entry {entry_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.delete("/world-books/entries/{entry_id}", response_model=DeletionResponse,
@@ -1129,10 +1216,10 @@ async def delete_world_book_entry(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting entry {entry_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error deleting entry {entry_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- Character-World Book Association Endpoints ---
@@ -1192,10 +1279,10 @@ async def attach_world_book_to_character(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error attaching world book {attachment.world_book_id} to character {character_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error attaching world book to character: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.delete("/{character_id:int}/world-books/{world_book_id:int}", response_model=DeletionResponse,
@@ -1226,13 +1313,13 @@ async def detach_world_book_from_character(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error detaching world book {world_book_id} from character {character_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error detaching world book from character: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
-@router.get("/{character_id:int}/world-books", response_model=List[CharacterWorldBookResponse],
+@router.get("/{character_id:int}/world-books", response_model=list[CharacterWorldBookResponse],
             summary="List character's world books", tags=["World Books"])
 async def get_character_world_books(
         character_id: int = FastAPIPath(..., description="Character ID", gt=0),
@@ -1268,10 +1355,10 @@ async def get_character_world_books(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error getting world books for character {character_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error getting character's world books: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- Processing Endpoints ---
@@ -1292,7 +1379,8 @@ async def process_context_with_world_info(
             character_id=request.character_id,
             scan_depth=request.scan_depth,
             token_budget=request.token_budget,
-            recursive_scanning=request.recursive_scanning
+            recursive_scanning=request.recursive_scanning,
+            include_diagnostics=True,
         )
 
         if isinstance(result, dict):
@@ -1301,7 +1389,13 @@ async def process_context_with_world_info(
                 entries_matched=int(result.get("entries_matched", 0)),
                 tokens_used=int(result.get("tokens_used", 0)),
                 books_used=int(result.get("books_used", 0)),
-                entry_ids=[int(e) for e in result.get("entry_ids", [])]
+                entry_ids=[int(e) for e in result.get("entry_ids", [])],
+                token_budget=int(result.get("token_budget", request.token_budget)),
+                budget_exhausted=bool(result.get("budget_exhausted", False)),
+                skipped_entries_due_to_budget=int(
+                    result.get("skipped_entries_due_to_budget", 0)
+                ),
+                diagnostics=list(result.get("diagnostics") or []),
             )
 
         if isinstance(result, list):
@@ -1329,7 +1423,29 @@ async def process_context_with_world_info(
                 entries_matched=len(result),
                 tokens_used=tokens_used,
                 books_used=len(books_used),
-                entry_ids=entry_ids
+                entry_ids=entry_ids,
+                token_budget=request.token_budget,
+                budget_exhausted=tokens_used >= request.token_budget
+                if request.token_budget
+                else False,
+                skipped_entries_due_to_budget=0,
+                diagnostics=[
+                    {
+                        "entry_id": entry.get("id"),
+                        "world_book_id": entry.get("world_book_id"),
+                        "activation_reason": "regex_match"
+                        if bool(entry.get("regex_match"))
+                        else "keyword_match",
+                        "keyword": (entry.get("keywords") or [None])[0],
+                        "token_cost": int(service.count_tokens(entry.get("content", ""))),
+                        "priority": int(entry.get("priority") or 0),
+                        "regex_match": bool(entry.get("regex_match")),
+                        "content_preview": str(entry.get("content", ""))[:240],
+                        "depth_level": None,
+                    }
+                    for entry in result
+                    if isinstance(entry, dict)
+                ],
             )
 
         logger.error(
@@ -1343,10 +1459,10 @@ async def process_context_with_world_info(
 
     except CharactersRAGDBError as e:
         logger.error(f"DB error processing context: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error processing context: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- Import/Export Endpoints ---
@@ -1386,16 +1502,16 @@ async def import_world_book(
 
     except InputError as e:
         logger.warning(f"Input error importing world book: {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
         logger.warning(f"Conflict importing world book: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error importing world book: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error importing world book: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 @router.get("/world-books/{world_book_id}/export", response_model=WorldBookExport,
@@ -1419,13 +1535,13 @@ async def export_world_book(
 
     except InputError as e:
         logger.warning(f"World book {world_book_id} not found for export: {e}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error exporting world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error exporting world book {world_book_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- Statistics Endpoint ---
@@ -1480,10 +1596,10 @@ async def get_world_book_statistics(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"DB error getting statistics for world book {world_book_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error getting world book statistics: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # --- Bulk Operations Endpoint ---
@@ -1519,7 +1635,7 @@ async def bulk_entry_operations(
                 else:
                     failed_ids.append(entry_id)
 
-            except Exception as e:
+            except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to perform {operation.operation} on entry {entry_id}: {e}")
                 failed_ids.append(entry_id)
 
@@ -1536,10 +1652,10 @@ async def bulk_entry_operations(
 
     except CharactersRAGDBError as e:
         logger.error(f"DB error performing bulk operation: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error performing bulk operation: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred") from e
 
 
 # ========================================================================
@@ -1547,11 +1663,67 @@ async def bulk_entry_operations(
 # ========================================================================
 
 
-@router.get("/{character_id}/export", response_model=Dict[str, Any],
+def _encode_png_with_chara_metadata(
+    image_data: Optional[bytes],
+    card_json: str,
+) -> bytes:
+    """Create a PNG file with character card JSON in a tEXt chunk.
+
+    If *image_data* is valid PNG bytes the character data is injected into it;
+    otherwise a minimal 1x1 transparent PNG is generated as the carrier.
+    """
+    chara_b64 = base64.b64encode(card_json.encode("utf-8")).decode("ascii")
+
+    # Build tEXt chunk: keyword NUL text
+    keyword = b"chara"
+    text_data = keyword + b"\x00" + chara_b64.encode("ascii")
+    chunk_type = b"tEXt"
+    chunk_length = struct.pack(">I", len(text_data))
+    chunk_crc = struct.pack(">I", zlib.crc32(chunk_type + text_data) & 0xFFFFFFFF)
+    text_chunk = chunk_length + chunk_type + text_data + chunk_crc
+
+    if image_data and image_data[:8] == b"\x89PNG\r\n\x1a\n":
+        # Insert tEXt chunk before the IEND chunk (last 12 bytes of a valid PNG).
+        iend_pos = image_data.rfind(b"IEND")
+        if iend_pos >= 4:
+            iend_start = iend_pos - 4  # length field is 4 bytes before type
+            return image_data[:iend_start] + text_chunk + image_data[iend_start:]
+
+    # Fallback: generate a minimal 1x1 transparent PNG.
+    png_header = b"\x89PNG\r\n\x1a\n"
+
+    # IHDR chunk
+    ihdr_data = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)  # 1x1 RGBA
+    ihdr_type = b"IHDR"
+    ihdr = (
+        struct.pack(">I", len(ihdr_data))
+        + ihdr_type
+        + ihdr_data
+        + struct.pack(">I", zlib.crc32(ihdr_type + ihdr_data) & 0xFFFFFFFF)
+    )
+
+    # IDAT chunk (1x1 transparent pixel: filter byte + 4 zero bytes)
+    raw_data = zlib.compress(b"\x00\x00\x00\x00\x00")
+    idat_type = b"IDAT"
+    idat = (
+        struct.pack(">I", len(raw_data))
+        + idat_type
+        + raw_data
+        + struct.pack(">I", zlib.crc32(idat_type + raw_data) & 0xFFFFFFFF)
+    )
+
+    # IEND chunk
+    iend_type = b"IEND"
+    iend = struct.pack(">I", 0) + iend_type + struct.pack(">I", zlib.crc32(iend_type) & 0xFFFFFFFF)
+
+    return png_header + ihdr + text_chunk + idat + iend
+
+
+@router.get("/{character_id}/export", response_model=None,
             summary="Export character in various formats", tags=["characters"])
 async def export_character(
     character_id: int = FastAPIPath(..., description="Character ID to export", gt=0),
-    format: str = Query("v3", description="Export format (v3, v2, json)"),
+    format: str = Query("v3", description="Export format (v3, v2, json, png)"),
     include_world_books: bool = Query(False, description="Include associated world books"),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user)
 ):
@@ -1571,6 +1743,18 @@ async def export_character(
         HTTPException: 404 if character not found
     """
     try:
+        def _as_export_str(value: Any, default: str = "") -> str:
+            if value is None:
+                return default
+            if isinstance(value, str):
+                return value
+            return str(value)
+
+        def _as_export_str_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            return [str(item) for item in value if item is not None]
+
         # Get character
         character = get_character_details(db, character_id)
         if not character:
@@ -1578,6 +1762,13 @@ async def export_character(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Character with ID {character_id} not found"
             )
+
+        get_character_world_books_fn = getattr(db, "get_character_world_books", None)
+        character_world_books: list[dict[str, Any]] = []
+        if (format == "v2" or include_world_books) and callable(get_character_world_books_fn):
+            result = get_character_world_books_fn(character_id)
+            if isinstance(result, list):
+                character_world_books = result
 
         # Build export data based on format
         if format == "v3":
@@ -1604,18 +1795,38 @@ async def export_character(
             }
         elif format == "v2":
             # Character Card V2 format
+            extensions = character.get("extensions")
+            if not isinstance(extensions, dict):
+                extensions = {}
+            if character_world_books:
+                extensions = extensions.copy()
+                extensions.setdefault(
+                    "world_book_links",
+                    [
+                        wb["world_book_id"]
+                        for wb in character_world_books
+                        if isinstance(wb.get("world_book_id"), int)
+                    ],
+                )
+
             export_data = {
-                "name": character.get('name'),
-                "description": character.get('description'),
-                "personality": character.get('personality'),
-                "scenario": character.get('scenario'),
-                "first_mes": character.get('first_message'),
-                "mes_example": character.get('message_example'),
-                "metadata": {
-                    "version": 2,
-                    "created": character.get('created_at'),
-                    "modified": character.get('last_modified'),
-                    "id": character_id
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": _as_export_str(character.get("name")),
+                    "description": _as_export_str(character.get("description")),
+                    "personality": _as_export_str(character.get("personality")),
+                    "scenario": _as_export_str(character.get("scenario")),
+                    "first_mes": _as_export_str(character.get("first_message")),
+                    "mes_example": _as_export_str(character.get("message_example")),
+                    "creator_notes": _as_export_str(character.get("creator_notes")),
+                    "system_prompt": _as_export_str(character.get("system_prompt")),
+                    "post_history_instructions": _as_export_str(character.get("post_history_instructions")),
+                    "alternate_greetings": _as_export_str_list(character.get("alternate_greetings")),
+                    "tags": _as_export_str_list(character.get("tags")),
+                    "creator": _as_export_str(character.get("creator")),
+                    "character_version": _as_export_str(character.get("character_version"), default="1.0"),
+                    "extensions": extensions,
                 }
             }
         else:
@@ -1624,7 +1835,13 @@ async def export_character(
 
         # Add world books if requested
         if include_world_books:
-            world_books = db.get_character_world_books(character_id)
+            if character_world_books:
+                world_books = character_world_books
+            elif callable(get_character_world_books_fn):
+                fetched = get_character_world_books_fn(character_id)
+                world_books = fetched if isinstance(fetched, list) else []
+            else:
+                world_books = []
             if world_books:
                 export_data["world_books"] = []
                 for wb in world_books:
@@ -1637,20 +1854,60 @@ async def export_character(
         # Add character image if present
         if character.get('image'):
             import base64
-            export_data["character_image"] = base64.b64encode(character['image']).decode('utf-8')
+            encoded_image = base64.b64encode(character['image']).decode('utf-8')
+            if format == "v2":
+                export_data["data"]["char_image"] = encoded_image
+            export_data["character_image"] = encoded_image
 
         logger.info(f"Exported character {character_id} in format {format}")
+
+        # PNG export: embed V2 card JSON in PNG tEXt metadata chunk.
+        if format == "png":
+            # Build V2 card JSON for embedding (standard interchange format).
+            v2_data: dict[str, Any] = {
+                "spec": "chara_card_v2",
+                "spec_version": "2.0",
+                "data": {
+                    "name": _as_export_str(character.get("name")),
+                    "description": _as_export_str(character.get("description")),
+                    "personality": _as_export_str(character.get("personality")),
+                    "scenario": _as_export_str(character.get("scenario")),
+                    "first_mes": _as_export_str(character.get("first_message")),
+                    "mes_example": _as_export_str(character.get("message_example")),
+                    "creator_notes": _as_export_str(character.get("creator_notes")),
+                    "system_prompt": _as_export_str(character.get("system_prompt")),
+                    "post_history_instructions": _as_export_str(character.get("post_history_instructions")),
+                    "alternate_greetings": _as_export_str_list(character.get("alternate_greetings")),
+                    "tags": _as_export_str_list(character.get("tags")),
+                    "creator": _as_export_str(character.get("creator")),
+                    "character_version": _as_export_str(character.get("character_version"), default="1.0"),
+                    "extensions": character.get("extensions") if isinstance(character.get("extensions"), dict) else {},
+                },
+            }
+            card_json_str = json.dumps(v2_data, ensure_ascii=False)
+
+            image_bytes = character.get("image") if isinstance(character.get("image"), bytes) else None
+            png_bytes = _encode_png_with_chara_metadata(image_bytes, card_json_str)
+
+            safe_name = (character.get("name") or "character").replace(" ", "_")[:50]
+            return Response(
+                content=png_bytes,
+                media_type="image/png",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{safe_name}.png"',
+                },
+            )
 
         return export_data
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error exporting character {character_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while exporting character"
-        )
+        ) from e
 
 
 #

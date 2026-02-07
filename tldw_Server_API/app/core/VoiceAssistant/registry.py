@@ -3,11 +3,10 @@
 #
 #######################################################################################################################
 import json
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import yaml
 from loguru import logger
@@ -33,8 +32,8 @@ class VoiceCommandRegistry:
             config_path: Path to YAML config file with default commands.
                         If None, loads from Config_Files/voice_commands.yaml
         """
-        self._commands: Dict[str, VoiceCommand] = {}
-        self._user_commands: Dict[int, Dict[str, VoiceCommand]] = {}
+        self._commands: dict[str, VoiceCommand] = {}
+        self._user_commands: dict[int, dict[str, VoiceCommand]] = {}
         self._config_path = config_path
         self._loaded = False
 
@@ -60,7 +59,7 @@ class VoiceCommandRegistry:
             return
 
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 config = yaml.safe_load(f)
 
             commands = config.get("commands", [])
@@ -217,7 +216,7 @@ class VoiceCommandRegistry:
         user_id: int = 0,
         include_system: bool = True,
         include_disabled: bool = False,
-    ) -> List[VoiceCommand]:
+    ) -> list[VoiceCommand]:
         """
         Get all available commands for a user.
 
@@ -248,7 +247,7 @@ class VoiceCommandRegistry:
         db,
         user_id: int,
         include_disabled: bool = True,
-    ) -> List[VoiceCommand]:
+    ) -> list[VoiceCommand]:
         """
         Replace cached user commands from the database.
 
@@ -275,7 +274,7 @@ class VoiceCommandRegistry:
         self,
         text: str,
         user_id: int = 0,
-    ) -> List[tuple[VoiceCommand, str, float]]:
+    ) -> list[tuple[VoiceCommand, str, float]]:
         """
         Find commands that match the given text.
 
@@ -321,7 +320,7 @@ class VoiceCommandRegistry:
     def load_user_commands_from_db(
         self,
         user_id: int,
-        db_rows: List[Dict[str, Any]],
+        db_rows: list[dict[str, Any]],
     ) -> None:
         """
         Load user commands from database rows.

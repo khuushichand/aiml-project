@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback } from "react"
 import { useTranslation } from "react-i18next"
 import { Tooltip } from "antd"
-import { X, FileText, BookOpen } from "lucide-react"
+import { X, FileText, BookOpen, Plus } from "lucide-react"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import type { OpenDocument } from "./types"
 
@@ -47,19 +47,20 @@ const DocumentTab: React.FC<DocumentTabProps> = ({
       <Tooltip title={document.title} mouseEnterDelay={0.5}>
         <span className="truncate text-sm">{document.title}</span>
       </Tooltip>
-      <button
-        onClick={onClose}
-        className={`
-          ml-1 p-0.5 rounded shrink-0
-          opacity-0 group-hover:opacity-100 focus:opacity-100
-          hover:bg-hover-strong focus:outline-none focus:ring-1 focus:ring-primary
-          transition-opacity duration-150
-        `}
-        aria-label={t("common:close", "Close")}
-        title={t("option:documentWorkspace.closeDocument", "Close document")}
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip title={t("option:documentWorkspace.closeDocument", "Close document")}>
+        <button
+          onClick={onClose}
+          className={`
+            ml-1 p-0.5 rounded shrink-0
+            opacity-0 group-hover:opacity-100 focus:opacity-100
+            hover:bg-hover-strong focus:outline-none focus:ring-1 focus:ring-primary
+            transition-opacity duration-150
+          `}
+          aria-label={t("common:close", "Close")}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
     </div>
   )
 }
@@ -75,7 +76,9 @@ const DocumentTab: React.FC<DocumentTabProps> = ({
  * - Horizontal scrolling when many documents are open
  * - Keyboard navigation support
  */
-export const DocumentTabBar: React.FC = () => {
+export const DocumentTabBar: React.FC<{ onOpenPicker?: () => void }> = ({
+  onOpenPicker
+}) => {
   const { t } = useTranslation(["option", "common"])
   const tabsContainerRef = useRef<HTMLDivElement>(null)
 
@@ -136,21 +139,14 @@ export const DocumentTabBar: React.FC = () => {
     return null
   }
 
-  // Don't render if only one document is open (no need for tabs)
-  if (openDocuments.length === 1) {
-    return null
-  }
-
   return (
-    <div
-      className="flex h-10 shrink-0 border-b border-border bg-bg-subtle overflow-hidden"
-      role="tablist"
-      aria-label={t("option:documentWorkspace.openDocuments", "Open documents")}
-      onKeyDown={handleKeyDown}
-    >
+    <div className="flex h-10 shrink-0 items-center border-b border-border bg-bg-subtle overflow-hidden">
       <div
         ref={tabsContainerRef}
-        className="flex items-stretch overflow-x-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border"
+        className="flex flex-1 items-stretch overflow-x-auto scrollbar-thin scrollbar-track-transparent scrollbar-thumb-border"
+        role="tablist"
+        aria-label={t("option:documentWorkspace.openDocuments", "Open documents")}
+        onKeyDown={handleKeyDown}
       >
         {openDocuments.map((doc) => (
           <DocumentTab
@@ -162,6 +158,18 @@ export const DocumentTabBar: React.FC = () => {
           />
         ))}
       </div>
+      {onOpenPicker && (
+        <Tooltip title={t("option:documentWorkspace.openDocument", "Open document")}>
+          <button
+            type="button"
+            onClick={onOpenPicker}
+            className="mx-2 flex h-7 w-7 items-center justify-center rounded border border-dashed border-border text-text-subtle hover:bg-hover hover:text-text"
+            aria-label={t("option:documentWorkspace.openDocument", "Open document")}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      )}
     </div>
   )
 }

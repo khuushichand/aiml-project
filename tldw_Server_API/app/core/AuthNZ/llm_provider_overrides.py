@@ -4,11 +4,11 @@ import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.llm_provider_overrides_repo import (
     AuthnzLLMProviderOverridesRepo,
 )
@@ -22,21 +22,21 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
 @dataclass(frozen=True)
 class LLMProviderOverride:
     provider: str
-    is_enabled: Optional[bool] = None
-    allowed_models: Optional[List[str]] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    api_key: Optional[str] = None
-    credential_fields: Dict[str, Any] = field(default_factory=dict)
-    api_key_hint: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    is_enabled: bool | None = None
+    allowed_models: list[str] | None = None
+    config: dict[str, Any] = field(default_factory=dict)
+    api_key: str | None = None
+    credential_fields: dict[str, Any] = field(default_factory=dict)
+    api_key_hint: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
-_OVERRIDE_CACHE: Dict[str, LLMProviderOverride] = {}
+_OVERRIDE_CACHE: dict[str, LLMProviderOverride] = {}
 _OVERRIDE_LOCK = threading.Lock()
 
 
-def _parse_json_value(raw: Any) -> Optional[Any]:
+def _parse_json_value(raw: Any) -> Any | None:
     if raw is None:
         return None
     if isinstance(raw, (dict, list)):
@@ -51,7 +51,7 @@ def _parse_json_value(raw: Any) -> Optional[Any]:
     return None
 
 
-def _normalize_models(raw: Optional[Any]) -> Optional[List[str]]:
+def _normalize_models(raw: Any | None) -> list[str] | None:
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -62,7 +62,7 @@ def _normalize_models(raw: Optional[Any]) -> Optional[List[str]]:
     return cleaned or None
 
 
-def _normalize_optional_bool(raw: Any) -> Optional[bool]:
+def _normalize_optional_bool(raw: Any) -> bool | None:
     if raw is None:
         return None
     if isinstance(raw, bool):
@@ -78,15 +78,15 @@ def _normalize_optional_bool(raw: Any) -> Optional[bool]:
     return None
 
 
-def _parse_override_row(row: Dict[str, Any]) -> LLMProviderOverride:
+def _parse_override_row(row: dict[str, Any]) -> LLMProviderOverride:
     provider = normalize_provider_name(row.get("provider"))
     allowed_models = _normalize_models(_parse_json_value(row.get("allowed_models")))
     config = _parse_json_value(row.get("config_json")) or {}
     if not isinstance(config, dict):
         config = {}
 
-    api_key: Optional[str] = None
-    credential_fields: Dict[str, Any] = {}
+    api_key: str | None = None
+    credential_fields: dict[str, Any] = {}
     secret_blob = row.get("secret_blob")
     if secret_blob:
         try:
@@ -111,25 +111,25 @@ def _parse_override_row(row: Dict[str, Any]) -> LLMProviderOverride:
     )
 
 
-def get_llm_provider_override(provider: str) -> Optional[LLMProviderOverride]:
+def get_llm_provider_override(provider: str) -> LLMProviderOverride | None:
     provider_norm = normalize_provider_name(provider)
     with _OVERRIDE_LOCK:
         return _OVERRIDE_CACHE.get(provider_norm)
 
 
-def get_llm_provider_overrides_snapshot() -> Dict[str, LLMProviderOverride]:
+def get_llm_provider_overrides_snapshot() -> dict[str, LLMProviderOverride]:
     with _OVERRIDE_LOCK:
         return dict(_OVERRIDE_CACHE)
 
 
-def set_llm_provider_overrides_cache_for_tests(overrides: Optional[Dict[str, LLMProviderOverride]]) -> None:
+def set_llm_provider_overrides_cache_for_tests(overrides: dict[str, LLMProviderOverride] | None) -> None:
     with _OVERRIDE_LOCK:
         _OVERRIDE_CACHE.clear()
         if overrides:
             _OVERRIDE_CACHE.update(overrides)
 
 
-def apply_llm_provider_overrides_to_listing(payload: Dict[str, Any]) -> Dict[str, Any]:
+def apply_llm_provider_overrides_to_listing(payload: dict[str, Any]) -> dict[str, Any]:
     overrides = get_llm_provider_overrides_snapshot()
     if not overrides:
         return payload
@@ -158,10 +158,7 @@ def apply_llm_provider_overrides_to_listing(payload: Dict[str, Any]) -> Dict[str
         if isinstance(config_models, list):
             models = [str(v).strip() for v in config_models if str(v).strip()]
         if override.allowed_models:
-            if models:
-                models = [m for m in models if m in override.allowed_models]
-            else:
-                models = list(override.allowed_models)
+            models = [m for m in models if m in override.allowed_models] if models else list(override.allowed_models)
         merged["models"] = models
 
         models_info = merged.get("models_info")
@@ -193,7 +190,7 @@ def apply_llm_provider_overrides_to_listing(payload: Dict[str, Any]) -> Dict[str
     return updated
 
 
-def validate_provider_override(provider: str, model: Optional[str]) -> Optional[Dict[str, str]]:
+def validate_provider_override(provider: str, model: str | None) -> dict[str, str] | None:
     override = get_llm_provider_override(provider)
     if not override:
         return None
@@ -210,7 +207,7 @@ def validate_provider_override(provider: str, model: Optional[str]) -> Optional[
     return None
 
 
-def get_override_default_model(provider: str) -> Optional[str]:
+def get_override_default_model(provider: str) -> str | None:
     override = get_llm_provider_override(provider)
     if not override:
         return None
@@ -220,7 +217,7 @@ def get_override_default_model(provider: str) -> Optional[str]:
     return None
 
 
-def get_override_credentials(provider: str) -> Optional[Dict[str, Any]]:
+def get_override_credentials(provider: str) -> dict[str, Any] | None:
     override = get_llm_provider_override(provider)
     if not override:
         return None
@@ -232,7 +229,7 @@ def get_override_credentials(provider: str) -> Optional[Dict[str, Any]]:
     }
 
 
-async def refresh_llm_provider_overrides(pool: Optional[DatabasePool] = None) -> Dict[str, LLMProviderOverride]:
+async def refresh_llm_provider_overrides(pool: DatabasePool | None = None) -> dict[str, LLMProviderOverride]:
     try:
         db_pool = pool or await get_db_pool()
         repo = AuthnzLLMProviderOverridesRepo(db_pool)
@@ -242,7 +239,7 @@ async def refresh_llm_provider_overrides(pool: Optional[DatabasePool] = None) ->
         logger.warning(f"Failed to load provider overrides: {exc}")
         rows = []
 
-    overrides: Dict[str, LLMProviderOverride] = {}
+    overrides: dict[str, LLMProviderOverride] = {}
     for row in rows:
         try:
             override = _parse_override_row(row)

@@ -1,14 +1,19 @@
 # Media_Update_lib.py
 # Description: File contains functions relating to updating media items in the database.
 #
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional
 
 # Local Imports
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     MediaDatabase,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     check_media_exists as _check_media_exists,
+)
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     get_document_version as _get_document_version,
 )
+
 #
 ########################################################################################################################
 #
@@ -21,8 +26,8 @@ def process_media_update(
     content: Optional[str] = None,
     prompt: Optional[str] = None,
     summary: Optional[str] = None,
-    keywords: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+    keywords: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """
     Centralized media update processing (DB-layer only; no FastAPI deps).
 
@@ -57,7 +62,7 @@ def process_media_update(
 
     with db.transaction() as conn:
         # Create a new document version
-        dv_info = db.create_document_version(
+        db.create_document_version(
             media_id=media_id,
             content=new_content,
             prompt=new_prompt,
@@ -70,7 +75,7 @@ def process_media_update(
 
     # Return concise details about latest version after update
     latest_after = _get_document_version(db, media_id=media_id, version_number=None, include_content=False) or {}
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "status": "Success",
         "media_id": media_id,
         "latest_version": {

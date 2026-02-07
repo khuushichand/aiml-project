@@ -3,11 +3,12 @@
 
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
+from typing import Any, Optional
+
 from loguru import logger
 
-from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 
 
 class ModelWarmup:
@@ -25,7 +26,7 @@ class ModelWarmup:
         """
         self.config = config or get_config()
         self.metrics = get_metrics()
-        self.warmed_models: Dict[str, bool] = {}
+        self.warmed_models: dict[str, bool] = {}
 
     async def warmup_model(self, provider: str, model: str) -> bool:
         """
@@ -108,7 +109,7 @@ class ModelWarmup:
 
         return success_count
 
-    async def warmup_priority_models(self) -> Dict[str, int]:
+    async def warmup_priority_models(self) -> dict[str, int]:
         """
         Warmup models based on configuration priority.
         Only warms up models explicitly listed in warmup_models config.
@@ -150,7 +151,7 @@ class ModelWarmup:
         logger.info(f"Model warmup completed: {results}")
         return results
 
-    async def warmup_all_enabled_providers(self) -> Dict[str, int]:
+    async def warmup_all_enabled_providers(self) -> dict[str, int]:
         """
         Warmup all models from all enabled providers.
         This is more aggressive and typically not recommended.
@@ -184,7 +185,7 @@ class ModelWarmup:
         model_key = f"{provider}:{model}"
         return self.warmed_models.get(model_key, False)
 
-    def get_warmup_status(self) -> Dict[str, Any]:
+    def get_warmup_status(self) -> dict[str, Any]:
         """
         Get current warmup status.
 

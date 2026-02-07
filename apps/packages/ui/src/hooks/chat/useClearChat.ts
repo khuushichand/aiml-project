@@ -6,6 +6,7 @@ import { useStorage } from "@plasmohq/storage/hook"
 import { useChatBaseState } from "@/hooks/chat/useChatBaseState"
 import { focusTextArea } from "@/hooks/utils/messageHelpers"
 import { useStoreMessageOption } from "@/store/option"
+import { useStoreMessage } from "@/store"
 import { usePlaygroundSessionStore } from "@/store/playground-session"
 import { useStoreChatModelSettings } from "@/store/model"
 import { cleanupAntOverlays } from "@/utils/cleanup-ant-overlays"
@@ -15,20 +16,35 @@ type UseClearChatOptions = {
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>
 }
 
+type ResettableChatBase = {
+  setMessages: (messagesOrUpdater: unknown) => void
+  setHistory: (historyOrUpdater: unknown) => void
+  setHistoryId: (
+    historyId: string | null,
+    options?: { preserveServerChatId?: boolean }
+  ) => void
+  setIsFirstMessage: (isFirstMessage: boolean) => void
+  setIsLoading: (isLoading: boolean) => void
+  setIsProcessing: (isProcessing: boolean) => void
+  setStreaming: (streaming: boolean) => void
+}
+
 export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
   const navigate = useNavigate()
   const currentChatModelSettings = useStoreChatModelSettings()
   const [defaultInternetSearchOn] = useStorage("defaultInternetSearchOn", false)
 
-  const {
-    setMessages,
-    setHistory,
-    setHistoryId,
-    setIsFirstMessage,
-    setIsLoading,
-    setIsProcessing,
-    setStreaming
-  } = useChatBaseState(useStoreMessageOption)
+  const primaryBase = useChatBaseState(useStoreMessageOption)
+  const secondaryBase = useChatBaseState(useStoreMessage)
+  const resolveClearChatPath = React.useCallback(() => {
+    if (typeof window !== "undefined") {
+      const hostPath = window.location.pathname.toLowerCase()
+      if (hostPath.endsWith("sidepanel.html")) {
+        return "/"
+      }
+    }
+    return "/chat"
+  }, [])
   const {
     setServerChatId,
     setServerChatVersion,
@@ -77,16 +93,20 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
       Modal.destroyAll()
       cleanupAntOverlays()
     }
-    navigate("/")
-    setMessages([])
-    setHistory([])
-    setHistoryId(null)
+    navigate(resolveClearChatPath())
+    const resetBaseState = (base: ResettableChatBase) => {
+      base.setMessages([])
+      base.setHistory([])
+      base.setHistoryId(null)
+      base.setIsFirstMessage(true)
+      base.setIsLoading(false)
+      base.setIsProcessing(false)
+      base.setStreaming(false)
+    }
+    resetBaseState(primaryBase)
+    resetBaseState(secondaryBase)
     setServerChatId(null)
     setServerChatVersion(null)
-    setIsFirstMessage(true)
-    setIsLoading(false)
-    setIsProcessing(false)
-    setStreaming(false)
     setContextFiles([])
     updatePageTitle()
     currentChatModelSettings.reset()
@@ -123,18 +143,15 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     currentChatModelSettings,
     defaultInternetSearchOn,
     navigate,
+    resolveClearChatPath,
     setActionInfo,
     setCompareMode,
     setCompareSelectedModels,
     setContextFiles,
     setDocumentContext,
     setFileRetrievalEnabled,
-    setHistory,
-    setHistoryId,
-    setIsFirstMessage,
-    setIsLoading,
-    setIsProcessing,
-    setMessages,
+    primaryBase,
+    secondaryBase,
     setRagEnableCitations,
     setRagEnableGeneration,
     setRagMediaIds,
@@ -143,7 +160,6 @@ export const useClearChat = ({ textareaRef }: UseClearChatOptions = {}) => {
     setRagTopK,
     setServerChatId,
     setServerChatVersion,
-    setStreaming,
     setUploadedFiles,
     setWebSearch,
     textareaRef

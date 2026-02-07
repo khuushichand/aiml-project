@@ -30,6 +30,12 @@ def _make_postgres_db() -> CharactersRAGDB:
     return db
 
 
+@pytest.fixture()
+def postgres_db() -> CharactersRAGDB:
+    """Return a Postgres-backed CharactersRAGDB stub."""
+    return _make_postgres_db()
+
+
 def test_rebuild_full_text_indexes_postgres_calls_backend():
 
     db = _make_postgres_db()
@@ -113,6 +119,22 @@ def test_list_flashcards_postgres_translates_fts(monkeypatch: pytest.MonkeyPatch
     sql, params = db.execute_query.call_args[0]
     assert "flashcards_fts_tsv @@ to_tsquery('english', ?)" in sql
     assert "alchemy" in params
+
+
+@pytest.mark.unit
+def test_get_flashcards_by_uuids_postgres_uses_boolean_deleted(
+    postgres_db: CharactersRAGDB,
+) -> None:
+    """Verify Postgres uses boolean deleted clause for UUID lookups."""
+    db = postgres_db
+    db.execute_query = MagicMock(return_value=_CursorStub([]))
+
+    result = db.get_flashcards_by_uuids(["uuid-1", "uuid-2"])
+
+    assert result == []
+    sql, params = db.execute_query.call_args[0]
+    assert "f.deleted = FALSE" in sql
+    assert params == ("uuid-1", "uuid-2")
 
 
 def test_manage_link_postgres_uses_on_conflict():

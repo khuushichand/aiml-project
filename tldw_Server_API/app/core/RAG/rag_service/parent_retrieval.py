@@ -6,15 +6,14 @@ This module provides hierarchical document retrieval with parent-child relations
 sibling chunk retrieval, and context expansion for improved retrieval quality.
 """
 
-import asyncio
-from typing import List, Dict, Any, Optional, Set, Tuple
-from dataclasses import dataclass, field
-from enum import Enum
 import hashlib
 from collections import defaultdict
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
 
-from loguru import logger
 import numpy as np
+from loguru import logger
 
 from .types import Document
 
@@ -34,12 +33,12 @@ class ParentDocument:
     id: str
     title: str
     source: str
-    chunks: List[str]           # Chunk IDs
-    chunk_positions: Dict[str, int]  # Chunk ID to position mapping
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    chunks: list[str]           # Chunk IDs
+    chunk_positions: dict[str, int]  # Chunk ID to position mapping
+    metadata: dict[str, Any] = field(default_factory=dict)
     embedding: Optional[np.ndarray] = None
 
-    def get_chunk_window(self, chunk_id: str, window_size: int = 2) -> List[str]:
+    def get_chunk_window(self, chunk_id: str, window_size: int = 2) -> list[str]:
         """Get surrounding chunks within window."""
         if chunk_id not in self.chunk_positions:
             return [chunk_id]
@@ -50,7 +49,7 @@ class ParentDocument:
 
         return self.chunks[start:end]
 
-    def get_siblings(self, chunk_id: str) -> List[str]:
+    def get_siblings(self, chunk_id: str) -> list[str]:
         """Get all sibling chunks (excluding the given chunk)."""
         return [cid for cid in self.chunks if cid != chunk_id]
 
@@ -59,11 +58,11 @@ class ParentDocument:
 class RetrievalContext:
     """Context for parent document retrieval."""
     query: str
-    initial_chunks: List[Document]
-    expanded_chunks: List[Document] = field(default_factory=list)
-    parent_documents: List[ParentDocument] = field(default_factory=list)
+    initial_chunks: list[Document]
+    expanded_chunks: list[Document] = field(default_factory=list)
+    parent_documents: list[ParentDocument] = field(default_factory=list)
     expansion_strategy: ExpansionStrategy = ExpansionStrategy.SIBLINGS
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ParentDocumentIndex:
@@ -71,16 +70,16 @@ class ParentDocumentIndex:
 
     def __init__(self):
         """Initialize the parent document index."""
-        self.parent_docs: Dict[str, ParentDocument] = {}
-        self.chunk_to_parent: Dict[str, str] = {}
-        self.parent_embeddings: Dict[str, np.ndarray] = {}
+        self.parent_docs: dict[str, ParentDocument] = {}
+        self.chunk_to_parent: dict[str, str] = {}
+        self.parent_embeddings: dict[str, np.ndarray] = {}
 
     def add_parent_document(
         self,
         parent_id: str,
         title: str,
         source: str,
-        chunks: List[Document],
+        chunks: list[Document],
         parent_embedding: Optional[np.ndarray] = None
     ) -> ParentDocument:
         """Add a parent document with its chunks to the index."""
@@ -124,7 +123,7 @@ class ParentDocumentIndex:
 
     def build_from_documents(
         self,
-        documents: List[Document],
+        documents: list[Document],
         group_by: str = "source"
     ) -> None:
         """Build index from a list of documents."""
@@ -193,7 +192,7 @@ class ParentDocumentRetriever:
     async def retrieve_with_parents(
         self,
         query: str,
-        initial_documents: List[Document],
+        initial_documents: list[Document],
         strategy: Optional[ExpansionStrategy] = None,
         window_size: int = 2,
         max_siblings: int = 5
@@ -443,7 +442,7 @@ class ParentDocumentRetriever:
             parent_groups[parent_id].append(chunk)
 
         # Apply diversity penalty within groups
-        for parent_id, chunks in parent_groups.items():
+        for _parent_id, chunks in parent_groups.items():
             if len(chunks) > 1:
                 # Sort by score
                 chunks.sort(key=lambda x: x.score, reverse=True)
@@ -472,7 +471,7 @@ class SmartParentRetriever(ParentDocumentRetriever):
     async def retrieve_adaptively(
         self,
         query: str,
-        initial_documents: List[Document],
+        initial_documents: list[Document],
         query_type: Optional[str] = None
     ) -> RetrievalContext:
         """
@@ -506,7 +505,7 @@ class SmartParentRetriever(ParentDocumentRetriever):
     def _select_strategy(
         self,
         query: str,
-        documents: List[Document],
+        documents: list[Document],
         query_type: Optional[str] = None
     ) -> ExpansionStrategy:
         """Select best expansion strategy based on query and documents."""

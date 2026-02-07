@@ -13,38 +13,64 @@ Env:
 from __future__ import annotations
 
 import asyncio
+import builtins
+import contextlib
 import os
-from typing import Any, Dict, Optional, List, Set
-from loguru import logger
+import random
+from datetime import datetime, timedelta
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime, timedelta
-import random
+from loguru import logger
 
-from tldw_Server_API.app.core.Scheduler import get_global_scheduler, Scheduler
-from tldw_Server_API.app.core.Scheduler.handlers import workflows as _ensure_handlers  # noqa: F401  # register workflow_run
-from tldw_Server_API.app.core.Scheduler.handlers import watchlists as _ensure_watchlists  # noqa: F401  # register watchlist_run
-from tldw_Server_API.app.core.Scheduler.base.registry import get_registry
-from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
-    WorkflowsSchedulerDB,
-    WorkflowSchedule,
-)
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.DB_Management.Workflows_Scheduler_DB import (
+    WorkflowSchedule,
+    WorkflowsSchedulerDB,
+)
+from tldw_Server_API.app.core.Scheduler import Scheduler, get_global_scheduler
+from tldw_Server_API.app.core.Scheduler.handlers import (
+    watchlists as _ensure_watchlists,  # noqa: F401  # register watchlist_run
+)
+from tldw_Server_API.app.core.Scheduler.handlers import (
+    workflows as _ensure_handlers,  # noqa: F401  # register workflow_run
+)
+
+_WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    builtins.TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
 
 
 class _WFRecurringScheduler:
     def __init__(self) -> None:
-        self._core_scheduler: Optional[Scheduler] = None
-        self._aps: Optional[AsyncIOScheduler] = None
+        self._core_scheduler: Scheduler | None = None
+        self._aps: AsyncIOScheduler | None = None
         self._db = WorkflowsSchedulerDB()
         self._lock = asyncio.Lock()
         self._started = False
         # Cache of per-user scheduler DB handles
-        self._db_cache: Dict[int, WorkflowsSchedulerDB] = {}
-        self._rescan_task: Optional[asyncio.Task] = None
+        self._db_cache: dict[int, WorkflowsSchedulerDB] = {}
+        self._rescan_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         async with self._lock:
@@ -61,7 +87,7 @@ class _WFRecurringScheduler:
             # Periodic rescan to pick up new/removed schedules
             try:
                 interval = int(os.getenv("WORKFLOWS_SCHEDULER_RESCAN_SEC", "600") or 600)
-            except Exception:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                 interval = 600
             async def _rescan_loop():
                 while True:
@@ -70,7 +96,7 @@ class _WFRecurringScheduler:
                         await self._rescan_once()
                     except asyncio.CancelledError:
                         break
-                    except Exception as e:
+                    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Workflows scheduler: rescan error: {e}")
             self._rescan_task = asyncio.create_task(_rescan_loop(), name="workflows_scheduler_rescan")
             self._started = True
@@ -81,23 +107,21 @@ class _WFRecurringScheduler:
             try:
                 if self._aps:
                     self._aps.shutdown(wait=False)
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: APS shutdown failed: {e}")
             try:
                 if self._core_scheduler:
                     await self._core_scheduler.stop()
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: core scheduler stop failed: {e}")
             self._aps = None
             self._core_scheduler = None
             try:
                 if self._rescan_task:
                     self._rescan_task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await self._rescan_task
-                    except asyncio.CancelledError:
-                        pass
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: rescan task cancel failed: {e}")
             self._rescan_task = None
             self._started = False
@@ -107,35 +131,35 @@ class _WFRecurringScheduler:
         """Scan all user directories and register their schedules."""
         loaded = 0
         try:
-            user_ids: Set[int] = set()
+            user_ids: set[int] = set()
             try:
                 base = DatabasePaths.get_user_db_base_dir()
                 for p in base.iterdir():
                     if p.is_dir():
                         try:
                             user_ids.add(int(p.name))
-                        except Exception:
+                        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                             continue
-            except Exception as exc:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Workflows scheduler: failed to enumerate user dirs: {exc}")
             # Always include single-user fixed ID
             try:
                 user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: invalid SINGLE_USER_FIXED_ID: {e}")
 
             for uid in sorted(user_ids):
                 try:
                     db = self._get_db(uid)
                     items = db.list_schedules(tenant_id="default", user_id=None, limit=1000, offset=0)
-                except Exception as e:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Workflows scheduler: list_schedules failed for user {uid}: {e}")
                     items = []
                 for s in items:
                     if s.enabled:
                         self._add_job(s, uid)
                         loaded += 1
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler load_all failed: {e}")
         if loaded:
             logger.info(f"Workflows scheduler: registered {loaded} schedule(s)")
@@ -149,27 +173,27 @@ class _WFRecurringScheduler:
         if not self._aps:
             return
         # Collect desired enabled schedule IDs from all users
-        desired: Set[str] = set()
-        user_ids: Set[int] = set()
+        desired: set[str] = set()
+        user_ids: set[int] = set()
         try:
             base = DatabasePaths.get_user_db_base_dir()
             for p in base.iterdir():
                 if p.is_dir():
                     try:
                         user_ids.add(int(p.name))
-                    except Exception:
+                    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                         continue
-        except Exception as exc:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Workflows scheduler: failed to enumerate user dirs: {exc}")
         try:
             user_ids.add(int(core_settings.get("SINGLE_USER_FIXED_ID", 1)))
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler: invalid SINGLE_USER_FIXED_ID: {e}")
         for uid in sorted(user_ids):
             try:
                 db = self._get_db(uid)
                 items = db.list_schedules(tenant_id="default", user_id=None, limit=1000, offset=0)
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: list_schedules failed for user {uid}: {e}")
                 items = []
             for s in items:
@@ -183,25 +207,25 @@ class _WFRecurringScheduler:
             for jid in list(current_ids - desired):
                 try:
                     self._aps.remove_job(jid)
-                except Exception as e:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Workflows scheduler: failed to remove job {jid}: {e}")
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler: failed to reconcile jobs: {e}")
 
-    def _add_job(self, schedule: WorkflowSchedule, user_id: Optional[int] = None) -> None:
+    def _add_job(self, schedule: WorkflowSchedule, user_id: int | None = None) -> None:
         if not self._aps:
             return
         try:
             # Remove existing job with same id
             try:
                 self._aps.remove_job(schedule.id)
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: remove_job failed for {schedule.id}: {e}")
             tz = schedule.timezone or os.getenv("WORKFLOWS_SCHEDULER_TZ", "UTC")
             # Validate cron; provide feedback via logs on errors
             try:
                 trigger = CronTrigger.from_crontab(schedule.cron, timezone=tz)
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Invalid cron for schedule {schedule.id}: {e}")
                 return
 
@@ -229,10 +253,10 @@ class _WFRecurringScheduler:
                         jitter_sec = int(jitter_env) if str(jitter_env).strip() else 90
                         if jitter_sec < 0:
                             jitter_sec = 0
-                    except Exception as e:
+                    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Workflows scheduler: invalid WATCHLISTS_SCHEDULER_JITTER_SEC: {e}")
                         jitter_sec = 90
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: watchlist jitter parse failed: {e}")
                 jitter_sec = 0
 
@@ -240,7 +264,7 @@ class _WFRecurringScheduler:
             try:
                 if jitter_sec > 0:
                     self._get_db(effective_uid).update_schedule(schedule.id, {"jitter_sec": jitter_sec})
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: failed to persist jitter for {schedule.id}: {e}")
 
             self._aps.add_job(
@@ -266,16 +290,16 @@ class _WFRecurringScheduler:
                         if ui_jitter > 0 and next_dt is not None:
                             delta = random.randint(-ui_jitter, ui_jitter)
                             next_dt = next_dt + timedelta(seconds=delta)
-                except Exception as e:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Workflows scheduler: UI jitter calc failed for {schedule.id}: {e}")
                 next_iso = next_dt.isoformat() if next_dt else None
                 self._get_db(effective_uid).set_history(schedule.id, next_run_at=next_iso)
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: failed to set next_run_at for {schedule.id}: {e}")
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to add schedule job {schedule.id}: {e}")
 
-    async def _run_schedule(self, schedule_id: str, user_id: Optional[int] = None) -> None:
+    async def _run_schedule(self, schedule_id: str, user_id: int | None = None) -> None:
         # Fetch latest schedule in case it was modified
         # Backward compatibility: determine user_id from stored schedule when not provided
         db = None
@@ -287,7 +311,7 @@ class _WFRecurringScheduler:
             if s is not None:
                 try:
                     db = self._get_db(int(s.user_id))
-                except Exception:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                     db = self._db
             else:
                 db = self._db
@@ -298,7 +322,7 @@ class _WFRecurringScheduler:
         try:
             from datetime import timezone
             db.set_history(schedule_id, last_run_at=datetime.now(timezone.utc).isoformat(), last_status="pending")
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler: failed to set pending status for {schedule_id}: {e}")
         payload = {
             "workflow_id": s.workflow_id,
@@ -321,10 +345,10 @@ class _WFRecurringScheduler:
                         now = datetime.now(trigger.timezone)
                         nxt = trigger.get_next_fire_time(None, now)
                         db.set_history(schedule_id, last_status="skipped_offline", next_run_at=(nxt.isoformat() if nxt else None))
-                    except Exception:
+                    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                         db.set_history(schedule_id, last_status="skipped_offline")
                     return
-        except Exception as _e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as _e:
             logger.debug(f"Presence gating check failed for schedule {schedule_id}: {_e}")
         # Optionally mint a short-lived, scoped bearer token and inject into run secrets
         try:
@@ -344,7 +368,7 @@ class _WFRecurringScheduler:
                     schedule_id=str(schedule_id),
                 )
                 payload["secrets"] = {"jwt": token}
-        except Exception as _vk_e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as _vk_e:
             logger.debug(f"Scheduler: virtual-key minting disabled/failed: {_vk_e}")
         try:
             if self._core_scheduler is None:
@@ -354,7 +378,7 @@ class _WFRecurringScheduler:
             try:
                 if isinstance(payload.get("inputs"), dict) and payload["inputs"].get("watchlist_job_id"):
                     handler_name = "watchlist_run"
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: handler selection failed for {schedule_id}: {e}")
             task_id = await self._core_scheduler.submit(
                 handler=handler_name,
@@ -365,17 +389,17 @@ class _WFRecurringScheduler:
             logger.info(f"Scheduled workflow_run submitted: task_id={task_id} schedule_id={s.id}")
             try:
                 db.set_history(schedule_id, last_status="queued")
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: failed to set queued status for {schedule_id}: {e}")
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to submit scheduled workflow_run: {e}")
             try:
                 db.set_history(schedule_id, last_status="error")
-            except Exception as e:
+            except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Workflows scheduler: failed to set error status for {schedule_id}: {e}")
 
     # CRUD wrappers
-    def create(self, *, tenant_id: str, user_id: str, workflow_id: Optional[int], name: Optional[str], cron: str, timezone: Optional[str], inputs: Dict[str, Any], run_mode: str, validation_mode: str, enabled: bool, concurrency_mode: str = "skip", misfire_grace_sec: int = 300, coalesce: bool = True, require_online: bool = False) -> str:
+    def create(self, *, tenant_id: str, user_id: str, workflow_id: int | None, name: str | None, cron: str, timezone: str | None, inputs: dict[str, Any], run_mode: str, validation_mode: str, enabled: bool, concurrency_mode: str = "skip", misfire_grace_sec: int = 300, coalesce: bool = True, require_online: bool = False) -> str:
         sid = __import__("uuid").uuid4().hex
         db = self._get_db(int(user_id))
         db.create_schedule(
@@ -400,7 +424,7 @@ class _WFRecurringScheduler:
             self._add_job(s, int(user_id))
         return sid
 
-    def update(self, schedule_id: str, update: Dict[str, Any]) -> bool:
+    def update(self, schedule_id: str, update: dict[str, Any]) -> bool:
         # Resolve correct DB by locating the schedule first
         s = self.get(schedule_id)
         if not s:
@@ -415,7 +439,7 @@ class _WFRecurringScheduler:
                 try:
                     if self._aps:
                         self._aps.remove_job(schedule_id)
-                except Exception as e:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Workflows scheduler: failed to remove job {schedule_id}: {e}")
         return ok
 
@@ -426,12 +450,12 @@ class _WFRecurringScheduler:
         try:
             if self._aps:
                 self._aps.remove_job(schedule_id)
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler: failed to remove job {schedule_id}: {e}")
         db = self._get_db(int(s.user_id))
         return db.delete_schedule(schedule_id)
 
-    def get(self, schedule_id: str) -> Optional[WorkflowSchedule]:
+    def get(self, schedule_id: str) -> WorkflowSchedule | None:
         # Check default DB first
         found = self._db.get_schedule(schedule_id)
         if found:
@@ -444,29 +468,29 @@ class _WFRecurringScheduler:
                     continue
                 try:
                     uid = int(p.name)
-                except Exception:
+                except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
                     continue
                 db = self._get_db(uid)
                 s = db.get_schedule(schedule_id)
                 if s:
                     return s
-        except Exception:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS:
             logger.debug(f"Workflows scheduler: failed to locate schedule {schedule_id}")
         return None
 
-    def list(self, *, tenant_id: str, user_id: Optional[str] = None, limit: int = 50, offset: int = 0) -> List[WorkflowSchedule]:
+    def list(self, *, tenant_id: str, user_id: str | None = None, limit: int = 50, offset: int = 0) -> builtins.list[WorkflowSchedule]:
         # Require user_id to select correct per-user DB
         if not user_id:
             return []
         try:
             db = self._get_db(int(user_id))
             return db.list_schedules(tenant_id=tenant_id, user_id=user_id, limit=limit, offset=offset)
-        except Exception as e:
+        except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Workflows scheduler: list failed for user {user_id}: {e}")
             return []
 
 
-_INSTANCE: Optional[_WFRecurringScheduler] = None
+_INSTANCE: _WFRecurringScheduler | None = None
 
 
 def get_workflows_scheduler() -> _WFRecurringScheduler:
@@ -476,7 +500,7 @@ def get_workflows_scheduler() -> _WFRecurringScheduler:
     return _INSTANCE
 
 
-async def start_workflows_scheduler() -> Optional[asyncio.Task]:
+async def start_workflows_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("WORKFLOWS_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -490,17 +514,15 @@ async def start_workflows_scheduler() -> Optional[asyncio.Task]:
     return task
 
 
-async def stop_workflows_scheduler(task: Optional[asyncio.Task]) -> None:
+async def stop_workflows_scheduler(task: asyncio.Task | None) -> None:
     try:
         if task:
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
-    except Exception as e:
+    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows scheduler: stop task cancel failed: {e}")
     try:
         await get_workflows_scheduler().stop()
-    except Exception as e:
+    except _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows scheduler: stop failed: {e}")

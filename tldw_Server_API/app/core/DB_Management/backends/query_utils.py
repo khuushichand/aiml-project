@@ -8,14 +8,15 @@ bespoke implementations.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from collections.abc import Sequence
+from typing import Any, Optional, Union
 
 from .base import BackendType
 
-ParamsType = Optional[Union[Tuple[Any, ...], List[Any], Dict[str, Any], Any]]
+ParamsType = Optional[Union[tuple[Any, ...], list[Any], dict[str, Any], Any]]
 
 
-def normalise_params(params: ParamsType) -> Optional[Union[Tuple[Any, ...], Dict[str, Any]]]:
+def normalise_params(params: ParamsType) -> tuple[Any, ...] | dict[str, Any] | None:
     """Normalize parameter containers for backend execution.
 
     Rules:
@@ -40,7 +41,7 @@ def convert_sqlite_placeholders_to_postgres(query: str) -> str:
     if "?" not in query:
         return query
 
-    result: List[str] = []
+    result: list[str] = []
     in_single = False
     in_double = False
     i = 0
@@ -280,7 +281,6 @@ def _ensure_returning_id(query: str) -> str:
         stripped = stripped[:-1].rstrip()
 
     # Try to detect table name for special-case handling
-    target = stripped
     try:
         m = re.match(r'\s*INSERT\s+INTO\s+([\w\."]+)', stripped, flags=re.IGNORECASE)
         table_token = (m.group(1) if m else "")
@@ -296,10 +296,10 @@ def _ensure_returning_id(query: str) -> str:
         return f"{stripped} RETURNING *{trailing_semicolon}"
     return f"{stripped} RETURNING id{trailing_semicolon}"
 
-def _split_csv_ignoring_quotes_and_parens(text: str) -> List[str]:
+def _split_csv_ignoring_quotes_and_parens(text: str) -> list[str]:
     """Split a comma-separated list, ignoring commas in quotes/parentheses."""
-    parts: List[str] = []
-    buf: List[str] = []
+    parts: list[str] = []
+    buf: list[str] = []
     depth = 0
     in_single = False
     in_double = False
@@ -375,6 +375,7 @@ def _convert_insert_boolean_literals(query: str) -> str:
         if not m:
             return query
         cols_open = m.end() - 1  # position of '('
+
         # Find matching ')' for columns
         depth = 1
         i = cols_open + 1
@@ -402,62 +403,92 @@ def _convert_insert_boolean_literals(query: str) -> str:
             return query
         cols_close = i
         columns_block = query[cols_open + 1:cols_close]
+        column_names = [c.strip().strip('"') for c in _split_csv_ignoring_quotes_and_parens(columns_block)]
 
-        # Find VALUES(...)
+        # Find VALUES keyword, then parse one or more VALUES tuples.
         tail = query[cols_close + 1:]
-        m2 = re.search(r"\bVALUES\b\s*\(", tail, flags=re.IGNORECASE)
+        m2 = re.search(r"\bVALUES\b", tail, flags=re.IGNORECASE)
         if not m2:
             return query
-        vals_open = cols_close + 1 + m2.end() - 1
-        depth = 1
-        i = vals_open + 1
-        while i < len(query) and depth > 0:
-            ch = query[i]
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
-                if depth == 0:
-                    break
-            elif ch in ("'", '"'):
-                quote = ch
-                i += 1
-                while i < len(query):
-                    c = query[i]
-                    if c == quote:
-                        if i + 1 < len(query) and query[i + 1] == quote:
-                            i += 2
-                            continue
-                        break
-                    i += 1
+        values_kw_end = cols_close + 1 + m2.end()
+        i = values_kw_end
+        while i < len(query) and query[i].isspace():
             i += 1
-        if depth != 0:
-            return query
-        vals_close = i
-        values_block = query[vals_open + 1:vals_close]
 
-        column_names = [c.strip().strip('"') for c in _split_csv_ignoring_quotes_and_parens(columns_block)]
-        values = _split_csv_ignoring_quotes_and_parens(values_block)
-        if len(column_names) != len(values):
-            return query
+        first_tuple_start = i
+        converted_tuples: list[str] = []
+        changed_any = False
 
-        changed = False
-        for idx, (col, val) in enumerate(zip(column_names, values)):
-            if not _LIKELY_BOOLEAN_COLUMN.match(col):
+        while i < len(query):
+            while i < len(query) and query[i].isspace():
+                i += 1
+            if i >= len(query) or query[i] != '(':
+                break
+
+            tuple_open = i
+            depth = 1
+            i += 1
+            in_single = False
+            in_double = False
+            while i < len(query) and depth > 0:
+                ch = query[i]
+                nxt = query[i + 1] if i + 1 < len(query) else ""
+                if ch == "'" and not in_double:
+                    if in_single and nxt == "'":
+                        i += 2
+                        continue
+                    in_single = not in_single
+                elif ch == '"' and not in_single:
+                    if in_double and nxt == '"':
+                        i += 2
+                        continue
+                    in_double = not in_double
+                elif not in_single and not in_double:
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                i += 1
+
+            if depth != 0:
+                return query
+
+            tuple_close = i
+            tuple_block = query[tuple_open + 1:tuple_close]
+            values = _split_csv_ignoring_quotes_and_parens(tuple_block)
+            if len(column_names) != len(values):
+                return query
+
+            tuple_changed = False
+            for idx, (col, val) in enumerate(zip(column_names, values)):
+                if not _LIKELY_BOOLEAN_COLUMN.match(col):
+                    continue
+                v = val.strip()
+                if re.fullmatch(r"0", v):
+                    values[idx] = "FALSE"
+                    tuple_changed = True
+                elif re.fullmatch(r"1", v):
+                    values[idx] = "TRUE"
+                    tuple_changed = True
+
+            changed_any = changed_any or tuple_changed
+            converted_tuples.append(f"({', '.join(values)})")
+
+            i = tuple_close + 1
+            while i < len(query) and query[i].isspace():
+                i += 1
+            if i < len(query) and query[i] == ',':
+                i += 1
                 continue
-            v = val.strip()
-            if re.fullmatch(r"0", v):
-                values[idx] = "FALSE"
-                changed = True
-            elif re.fullmatch(r"1", v):
-                values[idx] = "TRUE"
-                changed = True
+            break
 
-        if not changed:
+        if not changed_any or not converted_tuples:
             return query
 
-        new_values_block = ", ".join(values)
-        return query[:vals_open + 1] + new_values_block + query[vals_close:]
+        suffix = query[i:]
+        return query[:first_tuple_start] + ", ".join(converted_tuples) + suffix
     except Exception:
         # On any parsing error, return original query unchanged
         return query
@@ -484,8 +515,8 @@ def _replace_boolean_comparisons(query: str) -> str:
     if "=" not in query:
         return query
 
-    result: List[str] = []
-    buf: List[str] = []
+    result: list[str] = []
+    buf: list[str] = []
     in_single = False
     in_double = False
     in_line_comment = False
@@ -604,10 +635,10 @@ def prepare_backend_statement(
     query: str,
     params: ParamsType = None,
     *,
-    transformer: Optional[Any] = None,
+    transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> Tuple[str, Optional[Union[Tuple[Any, ...], Dict[str, Any]]]]:
+) -> tuple[str, tuple[Any, ...] | dict[str, Any] | None]:
     """Prepare a query/params pair for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, params
@@ -635,10 +666,10 @@ def prepare_backend_many_statement(
     query: str,
     params_list: Sequence[ParamsType],
     *,
-    transformer: Optional[Any] = None,
+    transformer: Any | None = None,
     apply_default_transform: bool = False,
     ensure_returning: bool = False,
-) -> Tuple[str, List[Optional[Union[Tuple[Any, ...], Dict[str, Any]]]]]:
+) -> tuple[str, list[tuple[Any, ...] | dict[str, Any] | None]]:
     """Prepare a batch query/params list for execution on the configured backend."""
     if backend_type != BackendType.POSTGRESQL:
         return query, list(params_list)

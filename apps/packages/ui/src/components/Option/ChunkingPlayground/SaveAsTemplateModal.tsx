@@ -201,7 +201,7 @@ export const SaveAsTemplateModal: React.FC<SaveAsTemplateModalProps> = ({
       okText={t("common:save", "Save")}
       cancelText={t("common:cancel", "Cancel")}
       width={600}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="space-y-4">
         {error && (

@@ -3,24 +3,45 @@
 #
 # Imports
 import asyncio
+import contextlib
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
 #
 # 3rd-party imports
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
+from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
+from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.alerting import get_security_alert_dispatcher
-from tldw_Server_API.app.core.AuthNZ.repos.usage_repo import AuthnzUsageRepo
-from tldw_Server_API.app.core.AuthNZ.repos.monitoring_repo import AuthnzMonitoringRepo
 from tldw_Server_API.app.core.Metrics import set_gauge
+
+_AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 #######################################################################################################################
 #
@@ -50,7 +71,7 @@ class AuthNZScheduler:
             logger.info("Restarting AuthNZ scheduler on new event loop")
             try:
                 self.scheduler.shutdown(wait=True)
-            except Exception as e:
+            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring scheduler shutdown error during restart: {e}")
             finally:
                 self.scheduler = None
@@ -67,7 +88,7 @@ class AuthNZScheduler:
                 from tldw_Server_API.app.core.AuthNZ.retention_policies import apply_retention_overrides
 
                 await apply_retention_overrides(self.settings)
-            except Exception as exc:
+            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"AuthNZ scheduler: failed to apply retention overrides: {exc}")
 
             # Register cleanup jobs
@@ -96,14 +117,12 @@ class AuthNZScheduler:
             self._started = True
             self._loop = loop
             logger.info("AuthNZ scheduler started with all jobs registered")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             # Cleanup scheduler on initialization failure to prevent resource leak
             logger.error(f"Failed to initialize scheduler jobs: {e}")
             if self.scheduler:
-                try:
+                with contextlib.suppress(_AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS):
                     self.scheduler.shutdown(wait=False)
-                except Exception:
-                    pass
             self.scheduler = None
             self._started = False
             self._loop = None
@@ -119,7 +138,7 @@ class AuthNZScheduler:
         if self.scheduler.running:
             try:
                 self.scheduler.shutdown(wait=True)
-            except Exception as e:
+            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring scheduler shutdown error: {e}")
 
         self._started = False
@@ -288,6 +307,7 @@ class AuthNZScheduler:
         """Iterate user evaluation DBs and purge old idempotency keys."""
         try:
             from pathlib import Path
+
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
             from tldw_Server_API.app.core.DB_Management.Evaluations_DB import EvaluationsDatabase as _EDB
             # Discover user database base dir (reuse DatabasePaths fallback by building a known path)
@@ -295,19 +315,17 @@ class AuthNZScheduler:
             deleted_total = 0
             # Include single-user fixed id explicitly
             candidate_ids = set()
-            try:
+            with contextlib.suppress(_AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS):
                 candidate_ids.add(int(_DP.get_single_user_id()))
-            except Exception:
-                pass
             try:
                 if base.exists():
                     for entry in base.iterdir():
                         if entry.is_dir():
                             try:
                                 candidate_ids.add(int(entry.name))
-                            except Exception:
+                            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
                                 continue
-            except Exception:
+            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
                 pass
             for uid in sorted(candidate_ids):
                 try:
@@ -317,11 +335,11 @@ class AuthNZScheduler:
                     db = _EDB(str(db_path))
                     deleted = db.cleanup_idempotency_keys(ttl_hours=72)
                     deleted_total += int(deleted)
-                except Exception:
+                except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
                     continue
             if deleted_total:
                 logger.info(f"Evaluations idempotency cleanup removed {deleted_total} rows across user DBs")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed evaluations idempotency cleanup: {e}")
 
     # Cleanup Jobs
@@ -333,7 +351,7 @@ class AuthNZScheduler:
             count = await session_manager.cleanup_expired_sessions()
             if count and count > 0:
                 logger.info(f"Cleaned up {count} expired sessions")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup expired sessions: {e}")
 
     async def _cleanup_expired_api_keys(self):
@@ -342,7 +360,7 @@ class AuthNZScheduler:
             api_key_manager = await get_api_key_manager()
             await api_key_manager.cleanup_expired_keys()
             logger.info("Completed API key expiration check")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup expired API keys: {e}")
 
     async def _prune_audit_logs(self):
@@ -357,7 +375,7 @@ class AuthNZScheduler:
 
             if count > 0:
                 logger.info(f"Pruned {count} audit log entries older than {retention_days} days")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune audit logs: {e}")
 
     async def _prune_usage_logs(self):
@@ -370,7 +388,7 @@ class AuthNZScheduler:
             count = await repo.prune_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} usage_log rows older than {self.settings.USAGE_LOG_RETENTION_DAYS} days")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune usage_log: {e}")
 
     async def _prune_llm_usage_logs(self):
@@ -383,7 +401,7 @@ class AuthNZScheduler:
             count = await repo.prune_llm_usage_log_before(cutoff)
             if count:
                 logger.info(f"Pruned {count} llm_usage_log rows older than {self.settings.LLM_USAGE_LOG_RETENTION_DAYS} days")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune llm_usage_log: {e}")
 
     async def _prune_usage_daily(self):
@@ -398,7 +416,7 @@ class AuthNZScheduler:
             count = await repo.prune_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} usage_daily rows older than {retention_days} days")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune usage_daily: {e}")
 
     async def _prune_llm_usage_daily(self):
@@ -413,7 +431,7 @@ class AuthNZScheduler:
             count = await repo.prune_llm_usage_daily_before(cutoff_date.date())
             if count:
                 logger.info(f"Pruned {count} llm_usage_daily rows older than {retention_days} days")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune llm_usage_daily: {e}")
 
     async def _prune_privilege_snapshots(self):
@@ -538,7 +556,7 @@ class AuthNZScheduler:
                 size_bytes = await db_pool.fetchval(
                     "SELECT pg_total_relation_size('privilege_snapshots')"
                 )
-            except Exception:
+            except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS:
                 size_bytes = None
 
             if size_bytes is not None:
@@ -553,7 +571,7 @@ class AuthNZScheduler:
                 retention_days,
                 row_count,
             )
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to prune privilege snapshots: {e}")
 
     async def _cleanup_expired_registration_codes(self):
@@ -570,7 +588,7 @@ class AuthNZScheduler:
 
             if count > 0:
                 logger.info(f"Deactivated {count} expired registration codes")
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup registration codes: {e}")
 
     # Monitoring Jobs
@@ -632,7 +650,7 @@ class AuthNZScheduler:
                             "window_minutes": 5,
                         },
                     )
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to monitor auth failures: {e}")
 
     async def _monitor_api_usage(self):
@@ -681,7 +699,7 @@ class AuthNZScheduler:
                 total_usage = sum(r['usage_count'] for r in results)
                 logger.info(f"API usage monitoring: {total_usage} total requests in last hour")
 
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to monitor API usage: {e}")
 
     async def _send_security_alert(
@@ -690,7 +708,7 @@ class AuthNZScheduler:
         message: str,
         *,
         severity: str = "high",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """
         Dispatch a security alert using the configured dispatcher.
@@ -699,7 +717,7 @@ class AuthNZScheduler:
             True if the dispatcher attempted to send the alert, False otherwise.
         """
         dispatcher = get_security_alert_dispatcher()
-        payload_metadata: Dict[str, Any] = {"source": "authnz_scheduler"}
+        payload_metadata: dict[str, Any] = {"source": "authnz_scheduler"}
         if metadata:
             payload_metadata.update(metadata)
 
@@ -710,7 +728,7 @@ class AuthNZScheduler:
                 severity=severity,
                 metadata=payload_metadata,
             )
-        except Exception as exc:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Security alert dispatch failed: {exc}")
             logger.critical(f"🚨 SECURITY ALERT [{severity.upper()}]: {subject} - {message}")
             return False
@@ -751,7 +769,7 @@ async def reset_authnz_scheduler():
     if _scheduler:
         try:
             await _scheduler.stop()
-        except Exception as e:
+        except _AUTHNZ_SCHEDULER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Ignoring scheduler stop error during reset: {e}")
         finally:
             _scheduler = None

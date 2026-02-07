@@ -4,18 +4,28 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import sqlite3
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend, DatabaseConfig
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
-
 logger = logging.getLogger(__name__)
+_MIGRATION_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
 
 
 @dataclass
@@ -24,11 +34,11 @@ class TableMeta:
 
     name: str
     source_name: str
-    columns: List[str]
-    pg_columns: List[str]
-    pk_columns: List[str]
-    sequence_columns: List[str]
-    dependencies: Set[str] = field(default_factory=set)
+    columns: list[str]
+    pg_columns: list[str]
+    pk_columns: list[str]
+    sequence_columns: list[str]
+    dependencies: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.name = self.name.lower()
@@ -47,14 +57,27 @@ _DEFAULT_SKIP_SUFFIXES = (
 )
 
 
+def _sqlite_quote_identifier(identifier: str) -> str:
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _escape_backend_identifier(backend: DatabaseBackend, identifier: str) -> str:
+    escape = getattr(backend, "escape_identifier", None)
+    if callable(escape):
+        return escape(identifier)
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
 def migrate_sqlite_to_postgres(
     sqlite_path: Path | str,
     postgres_config: DatabaseConfig,
     *,
     batch_size: int = 500,
-    skip_tables: Optional[Iterable[str]] = None,
+    skip_tables: Iterable[str] | None = None,
     label: str = 'content',
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> None:
     """Copy rows from a SQLite database into a PostgreSQL database.
 
@@ -89,7 +112,7 @@ def migrate_sqlite_to_postgres(
         finally:
             try:
                 backend.get_pool().close_all()
-            except Exception:  # pragma: no cover - defensive close
+            except _MIGRATION_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive close
                 pass
     finally:
         sqlite_conn.close()
@@ -169,7 +192,7 @@ def migrate_workflows_sqlite_to_postgres(
                         for row in pg_cols_info
                         if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
                     }
-                except Exception:
+                except _MIGRATION_NONCRITICAL_EXCEPTIONS:
                     bool_cols = set()
                 while rows := cursor.fetchmany(batch_size):
                     params = []
@@ -216,19 +239,17 @@ def migrate_workflows_sqlite_to_postgres(
             run_count,
         )
     finally:
-        try:
+        with contextlib.suppress(_MIGRATION_NONCRITICAL_EXCEPTIONS):
             backend.get_pool().close_all()
-        except Exception:
-            pass
         sqlite_conn.close()
 
 
 def _introspect_sqlite_schema(
     conn: sqlite3.Connection,
-    skip_tables: Optional[Iterable[str]] = None,
-) -> Dict[str, TableMeta]:
+    skip_tables: Iterable[str] | None = None,
+) -> dict[str, TableMeta]:
     configured_skips = {name.lower() for name in (skip_tables or [])}
-    tables: Dict[str, TableMeta] = {}
+    tables: dict[str, TableMeta] = {}
 
     cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     table_names = [row[0] for row in cursor.fetchall()]
@@ -273,9 +294,9 @@ def _introspect_sqlite_schema(
     return tables
 
 
-def _topological_sort(tables: Dict[str, TableMeta]) -> List[str]:
-    indegree: Dict[str, int] = {name: 0 for name in tables}
-    adjacency: Dict[str, Set[str]] = {name: set() for name in tables}
+def _topological_sort(tables: dict[str, TableMeta]) -> list[str]:
+    indegree: dict[str, int] = dict.fromkeys(tables, 0)
+    adjacency: dict[str, set[str]] = {name: set() for name in tables}
 
     for table in tables.values():
         for dep in table.dependencies:
@@ -284,8 +305,8 @@ def _topological_sort(tables: Dict[str, TableMeta]) -> List[str]:
             indegree[table.name] += 1
             adjacency.setdefault(dep, set()).add(table.name)
 
-    queue: List[str] = [name for name, degree in indegree.items() if degree == 0]
-    order: List[str] = []
+    queue: list[str] = [name for name, degree in indegree.items() if degree == 0]
+    order: list[str] = []
 
     while queue:
         current = queue.pop(0)
@@ -306,14 +327,16 @@ def _truncate_tables(
     backend: DatabaseBackend,
     pg_conn,
     insertion_order: Sequence[str],
-    tables: Dict[str, TableMeta],
-    user_id: Optional[str] = None,
+    tables: dict[str, TableMeta],
+    user_id: str | None = None,
 ) -> None:
     for table_name in reversed(list(insertion_order)):
         meta = tables.get(table_name)
+        table_ident = _escape_backend_identifier(backend, table_name)
+        user_col_ident = _escape_backend_identifier(backend, "user_id")
         has_user_id = bool(meta and any(col.lower() == "user_id" for col in meta.columns))
         if user_id and has_user_id:
-            sql = f'DELETE FROM {table_name} WHERE user_id = %s'
+            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'
             params = (user_id,)
         elif user_id and not has_user_id:
             logger.info(
@@ -322,11 +345,11 @@ def _truncate_tables(
             )
             continue
         else:
-            sql = f'DELETE FROM {table_name}'
+            sql = f'DELETE FROM {table_ident}'
             params = None
         try:
             backend.execute(sql, params, connection=pg_conn)
-        except Exception as exc:  # pragma: no cover - defensive logging
+        except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
             logger.warning('Unable to clear table %s: %s', table_name, exc)
 
 
@@ -336,19 +359,21 @@ def _copy_table(
     pg_conn,
     meta: TableMeta,
     batch_size: int,
-    user_id: Optional[str] = None,
+    user_id: str | None = None,
 ) -> None:
-    column_list = ', '.join([f'"{col}"' for col in meta.columns])
-    select_sql = f'SELECT {column_list} FROM "{meta.source_name}"'
-    select_params: Tuple[Any, ...] = ()
+    sqlite_column_list = ', '.join(_sqlite_quote_identifier(col) for col in meta.columns)
+    sqlite_table_name = _sqlite_quote_identifier(meta.source_name)
+    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'
+    select_params: tuple[Any, ...] = ()
     has_user_id = any(col.lower() == "user_id" for col in meta.columns)
     if user_id and has_user_id:
-        select_sql = f'{select_sql} WHERE "user_id" = ?'
+        select_sql = f'{select_sql} WHERE {_sqlite_quote_identifier("user_id")} = ?'
         select_params = (user_id,)
-    insert_columns = ', '.join(meta.pg_columns)
+    insert_table = _escape_backend_identifier(backend, meta.name)
+    insert_columns = ', '.join(_escape_backend_identifier(backend, col) for col in meta.pg_columns)
     placeholders = ', '.join(['%s'] * len(meta.pg_columns))
     insert_sql = (
-        f'INSERT INTO {meta.name} ({insert_columns}) '
+        f'INSERT INTO {insert_table} ({insert_columns}) '
         f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
     )
 
@@ -360,7 +385,7 @@ def _copy_table(
             for row in pg_columns_info
             if isinstance(row.get('type'), str) and 'bool' in row['type'].lower()
         }
-    except Exception:
+    except _MIGRATION_NONCRITICAL_EXCEPTIONS:
         boolean_columns = set()
 
     cursor = sqlite_conn.execute(select_sql, select_params)
@@ -369,9 +394,9 @@ def _copy_table(
         rows = cursor.fetchmany(batch_size)
         if not rows:
             break
-        converted_params: List[Tuple] = []
+        converted_params: list[tuple] = []
         for row in rows:
-            values: List = []
+            values: list = []
             for col in meta.columns:
                 val = row[col]
                 if col.lower() in boolean_columns and val is not None:
@@ -382,11 +407,11 @@ def _copy_table(
                             coerced = bool(val)
                         elif isinstance(val, str) and val.strip() in {'0', '1', 't', 'f', 'true', 'false'}:
                             low = val.strip().lower()
-                            coerced = True if low in {'1', 't', 'true'} else False
+                            coerced = low in {'1', 't', 'true'}
                         else:
                             coerced = bool(val)
                         values.append(coerced)
-                    except Exception:
+                    except _MIGRATION_NONCRITICAL_EXCEPTIONS:
                         values.append(val)
                 else:
                     values.append(val)
@@ -400,18 +425,22 @@ def _copy_table(
 def _sync_sequences(
     backend: DatabaseBackend,
     pg_conn,
-    tables: Dict[str, TableMeta],
+    tables: dict[str, TableMeta],
 ) -> None:
     for meta in tables.values():
         for column in meta.sequence_columns:
+            table_ident = _escape_backend_identifier(backend, meta.name)
+            column_ident = _escape_backend_identifier(backend, column)
+            serial_table_name = meta.name.replace("'", "''")
+            serial_column_name = column.replace("'", "''")
             sql = (
                 f"SELECT setval("
-                f"pg_get_serial_sequence('{meta.name}', '{column}'), "
-                f"COALESCE((SELECT MAX({column}) FROM {meta.name}), 0) + 1, false)"
+                f"pg_get_serial_sequence('{serial_table_name}', '{serial_column_name}'), "
+                f"COALESCE((SELECT MAX({column_ident}) FROM {table_ident}), 0) + 1, false)"
             )
             try:
                 backend.execute(sql, connection=pg_conn)
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except _MIGRATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
                 logger.warning('Sequence sync failed for %s.%s: %s', meta.name, column, exc)
 
 
@@ -430,7 +459,7 @@ def _build_postgres_config_from_args(args: argparse.Namespace) -> DatabaseConfig
     )
 
 
-def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Path]]:
+def _iter_migration_targets(args: argparse.Namespace) -> Iterator[tuple[str, Path]]:
     if args.content_sqlite:
         yield 'content', Path(args.content_sqlite)
     if args.chacha_sqlite:
@@ -441,7 +470,7 @@ def _iter_migration_targets(args: argparse.Namespace) -> Iterator[Tuple[str, Pat
         yield 'evaluations', Path(args.evaluations_sqlite)
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Migrate SQLite databases to PostgreSQL.')
     parser.add_argument('--content-sqlite', help='Path to Media_DB_v2.db to migrate')
     parser.add_argument('--chacha-sqlite', help='Path to ChaChaNotes.db to migrate (optional)')
@@ -486,11 +515,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             _backend = _Fac.create_backend(config)
             # Instantiate to create tables/indexes; uses provided backend
             _ = _Evals(db_path=':memory:', backend=_backend)
-            try:
+            with contextlib.suppress(_MIGRATION_NONCRITICAL_EXCEPTIONS):
                 _backend.get_pool().close_all()
-            except Exception:
-                pass
-    except Exception as _init_exc:  # pragma: no cover - defensive
+    except _MIGRATION_NONCRITICAL_EXCEPTIONS as _init_exc:  # pragma: no cover - defensive
         logger.warning('Could not pre-initialize PostgreSQL schema: %s', _init_exc)
     for label, path in targets:
         migrate_sqlite_to_postgres(

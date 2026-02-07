@@ -12,9 +12,10 @@ The initial version keeps the surface area intentionally small so existing
 endpoints can migrate incrementally without changing their HTTP contracts.
 """
 
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Callable
 
 from .result_normalization import normalize_process_batch
 
@@ -31,18 +32,18 @@ class ProcessItem:
     input_ref: str
     local_path: Path
     media_type: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 
-BatchProcessor = Callable[[List[ProcessItem]], Awaitable[List[Dict[str, Any]]]]
+BatchProcessor = Callable[[list[ProcessItem]], Awaitable[list[dict[str, Any]]]]
 
 
 async def run_batch_processor(
-    items: List[ProcessItem],
+    items: list[ProcessItem],
     processor: BatchProcessor,
     *,
-    base_batch: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    base_batch: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Execute a type-specific batch processor and wrap the results in a standard batch.
 
@@ -56,7 +57,7 @@ async def run_batch_processor(
         A batch dict compatible with existing process-* responses, with
         `results`, `processed_count`, `errors_count`, and `errors` (warnings count as processed).
     """
-    batch: Dict[str, Any] = base_batch.copy() if base_batch is not None else {}
+    batch: dict[str, Any] = base_batch.copy() if base_batch is not None else {}
     results = await processor(items)
     batch_results = list(batch.get("results") or [])
     batch_results.extend(results)

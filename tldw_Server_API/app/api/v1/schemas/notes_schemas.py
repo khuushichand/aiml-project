@@ -3,10 +3,12 @@
 # Imports
 from __future__ import annotations
 
-from typing import Optional, List, Any, Dict, Union, Literal
 from datetime import datetime
+from typing import Any, Literal
+
 # 3rd-party Libraries
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 #
 # Local Imports
 #
@@ -14,7 +16,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 #
 # Schemas:
 
-def _split_keywords(value: Any) -> Optional[List[str]]:
+def _split_keywords(value: Any) -> list[str] | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -28,21 +30,21 @@ def _split_keywords(value: Any) -> Optional[List[str]]:
 class NoteBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Title of the note")
     content: str = Field(..., min_length=1, max_length=5000000, description="Content of the note (max 5MB)")
-    conversation_id: Optional[str] = Field(None, description="Optional conversation ID backlink")
-    message_id: Optional[str] = Field(None, description="Optional message ID backlink")
+    conversation_id: str | None = Field(None, description="Optional conversation ID backlink")
+    message_id: str | None = Field(None, description="Optional message ID backlink")
 
 
 class NoteCreate(NoteBase):
     # Override to allow optional title when auto_title is used
-    title: Optional[str] = Field(
+    title: str | None = Field(
         None,
         min_length=1,
         max_length=255,
         description="Title of the note. Optional when auto_title=true."
     )
-    id: Optional[str] = Field(None,
+    id: str | None = Field(None,
                               description="Optional client-provided UUID for the note. If None, will be auto-generated.")
-    keywords: Optional[Union[str, List[str]]] = Field(
+    keywords: str | list[str] | None = Field(
         default=None,
         description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
     )
@@ -54,7 +56,7 @@ class NoteCreate(NoteBase):
         description="Strategy for title generation. MVP supports 'heuristic'."
     )
     title_max_len: int = Field(250, ge=1, le=500, description="Max title length when auto-generating.")
-    language: Optional[str] = Field(None, description="Optional language hint for title generation.")
+    language: str | None = Field(None, description="Optional language hint for title generation.")
 
     # Normalize keywords input to a clean list of strings (if provided)
     @field_validator("keywords", mode="before")
@@ -71,13 +73,13 @@ class NoteCreate(NoteBase):
         return value
 
     @property
-    def normalized_keywords(self) -> Optional[List[str]]:
+    def normalized_keywords(self) -> list[str] | None:
         parts = _split_keywords(getattr(self, 'keywords', None))
         if parts is None:
             return None
         # Remove empties and deduplicate while preserving order
         seen = set()
-        result: List[str] = []
+        result: list[str] = []
         for p in parts:
             if not p:
                 continue
@@ -91,11 +93,11 @@ class NoteCreate(NoteBase):
 
 
 class NoteUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=255, description="New title for the note")
-    content: Optional[str] = Field(None, min_length=1, max_length=5000000, description="New content for the note (max 5MB)")
-    conversation_id: Optional[str] = Field(None, description="Optional conversation ID backlink")
-    message_id: Optional[str] = Field(None, description="Optional message ID backlink")
-    keywords: Optional[Union[str, List[str]]] = Field(
+    title: str | None = Field(None, min_length=1, max_length=255, description="New title for the note")
+    content: str | None = Field(None, min_length=1, max_length=5000000, description="New content for the note (max 5MB)")
+    conversation_id: str | None = Field(None, description="Optional conversation ID backlink")
+    message_id: str | None = Field(None, description="Optional message ID backlink")
+    keywords: str | list[str] | None = Field(
         default=None,
         description="Optional keywords to attach to the note. Accepts a list of strings or a comma-separated string."
     )
@@ -116,12 +118,12 @@ class NoteUpdate(BaseModel):
         return value
 
     @property
-    def normalized_keywords(self) -> Optional[List[str]]:
+    def normalized_keywords(self) -> list[str] | None:
         parts = _split_keywords(getattr(self, 'keywords', None))
         if parts is None:
             return None
         seen = set()
-        result: List[str] = []
+        result: list[str] = []
         for p in parts:
             if not p:
                 continue
@@ -140,7 +142,7 @@ class NoteResponse(NoteBase):
     version: int = Field(..., description="Version number for optimistic locking")
     client_id: str = Field(..., description="Client ID that last modified the note")
     deleted: bool = Field(..., description="Whether the note is soft-deleted")
-    keywords: Optional[List[KeywordResponse]] = Field(default=None, description="Keywords linked to this note")
+    keywords: list[KeywordResponse] | None = Field(default=None, description="Keywords linked to this note")
 
     model_config = ConfigDict(from_attributes=True)  # Pydantic V2 (formerly orm_mode)
 
@@ -168,17 +170,17 @@ class KeywordResponse(KeywordBase):
 # --- Linking Schemas ---
 class NoteKeywordLinkResponse(BaseModel):
     success: bool
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class KeywordsForNoteResponse(BaseModel):
     note_id: str
-    keywords: List[KeywordResponse]
+    keywords: list[KeywordResponse]
 
 
 class NotesForKeywordResponse(BaseModel):
     keyword_id: int
-    notes: List[NoteResponse]
+    notes: list[NoteResponse]
 
 
 # --- General API Response Schemas ---
@@ -188,41 +190,41 @@ class DetailResponse(BaseModel):
 
 # --- Bulk Create Schemas ---
 class NoteBulkCreateRequest(BaseModel):
-    notes: List[NoteCreate] = Field(..., min_length=1, max_length=200, description="List of notes to create")
+    notes: list[NoteCreate] = Field(..., min_length=1, max_length=200, description="List of notes to create")
 
 
 class NoteBulkCreateItemResult(BaseModel):
     success: bool
-    note: Optional[NoteResponse] = None
-    error: Optional[str] = None
+    note: NoteResponse | None = None
+    error: str | None = None
 
 
 class NoteBulkCreateResponse(BaseModel):
-    results: List[NoteBulkCreateItemResult]
+    results: list[NoteBulkCreateItemResult]
     created_count: int = 0
     failed_count: int = 0
 
 
 # --- List/Export Response Schemas ---
 class NotesListResponse(BaseModel):
-    notes: List[NoteResponse]
-    items: List[NoteResponse]
-    results: List[NoteResponse]
+    notes: list[NoteResponse]
+    items: list[NoteResponse]
+    results: list[NoteResponse]
     count: int
     limit: int
     offset: int
-    total: Optional[int] = None
+    total: int | None = None
 
 
 class NotesExportResponse(BaseModel):
-    notes: List[NoteResponse]
-    data: List[NoteResponse]
-    items: List[NoteResponse]
-    results: List[NoteResponse]
+    notes: list[NoteResponse]
+    data: list[NoteResponse]
+    items: list[NoteResponse]
+    results: list[NoteResponse]
     count: int
-    total: Optional[int] = None
-    limit: Optional[int] = None
-    offset: Optional[int] = None
+    total: int | None = None
+    limit: int | None = None
+    offset: int | None = None
     exported_at: str
 
 
@@ -234,7 +236,7 @@ class NotesExportRequest(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
 
-    note_ids: List[str] = Field(..., description="List of note IDs to export")
+    note_ids: list[str] = Field(..., description="List of note IDs to export")
     include_keywords: bool = Field(default=False)
     format: Literal['json', 'csv'] = Field(default='json', description="Use /export.csv for CSV exports.")
 
@@ -247,7 +249,7 @@ class TitleSuggestRequest(BaseModel):
         description="Strategy for title generation. MVP supports 'heuristic'."
     )
     title_max_len: int = Field(250, ge=1, le=500, description="Max title length for suggestion.")
-    language: Optional[str] = Field(None, description="Optional language hint.")
+    language: str | None = Field(None, description="Optional language hint.")
 
 
 class TitleSuggestResponse(BaseModel):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
 
 ANSI_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
@@ -26,7 +25,7 @@ def clean_text(text: str | None) -> str:
     return txt
 
 
-def parse_wafw00f_output(stdout: str, stderr: str = "") -> List[Tuple[str, str | None]]:
+def parse_wafw00f_output(stdout: str, stderr: str = "") -> list[tuple[str, str | None]]:
     """
     Parse wafw00f output and return a list of detected WAFs.
     Each item is a tuple of ``(waf_name, manufacturer)``.
@@ -62,7 +61,7 @@ def parse_wafw00f_output(stdout: str, stderr: str = "") -> List[Tuple[str, str |
             return [("Generic WAF", None)]
 
     seen = set()
-    deduped: List[Tuple[str, str | None]] = []
+    deduped: list[tuple[str, str | None]] = []
     for name, manufacturer in filtered_results:
         key = (name.lower(), (manufacturer or "").lower())
         if key not in seen:

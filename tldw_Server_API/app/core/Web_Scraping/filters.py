@@ -1,24 +1,35 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Set, Dict, Tuple
-from urllib.parse import urlparse
 import asyncio
 import time
+from dataclasses import dataclass
+from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
+
 from loguru import logger
 
 try:
     # Local HTTP client used across the project; enforces egress policy internally
     from tldw_Server_API.app.core.http_client import fetch as http_fetch
-except Exception:  # pragma: no cover - defensive import to avoid runtime breakage
+except ImportError:  # pragma: no cover - defensive import to avoid runtime breakage
     http_fetch = None  # type: ignore[assignment]
 
 try:
     # Centralized egress policy evaluator
     from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-except Exception:  # pragma: no cover - defensive import
+except ImportError:  # pragma: no cover - defensive import
     evaluate_url_policy = None  # type: ignore[assignment]
+
+_WEB_FILTER_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class URLFilter:
@@ -31,32 +42,29 @@ class URLFilter:
 class FilterChain:
     """Apply a sequence of filters (AND semantics)."""
 
-    def __init__(self, filters: Optional[List[URLFilter]] = None) -> None:
+    def __init__(self, filters: list[URLFilter] | None = None) -> None:
         self.filters = list(filters or [])
 
-    def add(self, f: URLFilter) -> "FilterChain":
+    def add(self, f: URLFilter) -> FilterChain:
         self.filters.append(f)
         return self
 
     def apply(self, url: str) -> bool:
-        for f in self.filters:
-            if not f.apply(url):
-                return False
-        return True
+        return all(f.apply(url) for f in self.filters)
 
 
 @dataclass
 class DomainFilter(URLFilter):
     """Allow/deny domains (optionally including subdomains)."""
 
-    allowed: Optional[Set[str]] = None
-    blocked: Optional[Set[str]] = None
+    allowed: set[str] | None = None
+    blocked: set[str] | None = None
     include_subdomains: bool = True
 
     def _host(self, url: str) -> str:
         try:
             return urlparse(url).netloc.lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
     def _is_sub(self, host: str, root: str) -> bool:
@@ -76,10 +84,7 @@ class DomainFilter(URLFilter):
         # If no allowed set, pass
         if not self.allowed:
             return True
-        for d in self.allowed:
-            if (self._is_sub(host, d) if self.include_subdomains else host == d):
-                return True
-        return False
+        return any(self._is_sub(host, d) if self.include_subdomains else host == d for d in self.allowed)
 
 
 class ContentTypeFilter(URLFilter):
@@ -122,7 +127,7 @@ class ContentTypeFilter(URLFilter):
                     end = i
                     break
             return path[dot + 1:end].lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
     def apply(self, url: str) -> bool:
@@ -142,8 +147,8 @@ class URLPatternFilter(URLFilter):
     - If `include_patterns` is empty, default allow (subject to excludes).
     """
 
-    include_patterns: Optional[List[str]] = None
-    exclude_patterns: Optional[List[str]] = None
+    include_patterns: list[str] | None = None
+    exclude_patterns: list[str] | None = None
 
     def apply(self, url: str) -> bool:
         s = (url or "").lower()
@@ -154,10 +159,7 @@ class URLPatternFilter(URLFilter):
                     return False
         # Include gating (optional)
         if self.include_patterns:
-            for p in self.include_patterns:
-                if p and p.lower() in s:
-                    return True
-            return False
+            return any(p and p.lower() in s for p in self.include_patterns)
         return True
 
 
@@ -183,9 +185,9 @@ class RobotsFilter:
         self.backend = backend
         self.timeout = float(timeout)
         # host -> (RobotFileParser|None, fetched_at_epoch_seconds)
-        self._cache: Dict[str, Tuple[Optional[RobotFileParser], float]] = {}
+        self._cache: dict[str, tuple[RobotFileParser | None, float]] = {}
         # Lock to avoid stampede on first fetch per host
-        self._locks: Dict[str, asyncio.Lock] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def _robots_url_for(self, target_url: str) -> str:
         p = urlparse(target_url)
@@ -194,10 +196,10 @@ class RobotsFilter:
     def _host(self, url: str) -> str:
         try:
             return urlparse(url).netloc.lower()
-        except Exception:
+        except (TypeError, ValueError):
             return ""
 
-    async def _fetch_parser(self, url: str) -> Optional[RobotFileParser]:
+    async def _fetch_parser(self, url: str) -> RobotFileParser | None:
         host = self._host(url)
         if not host:
             return None
@@ -249,7 +251,7 @@ class RobotsFilter:
                 rp.parse(text.splitlines())
                 self._cache[host] = (rp, time.time())
                 return rp
-            except Exception as e:  # pragma: no cover - network/parse errors fail open
+            except _WEB_FILTER_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - network/parse errors fail open
                 logger.debug(f"Robots fetch failed for host={host}: {e}")
                 self._cache[host] = (None, time.time())
                 return None
@@ -259,13 +261,20 @@ class RobotsFilter:
 
         Skips robots check when egress policy denies the target host.
         """
+        # Always short-circuit on egress denial; do not fetch robots for disallowed hosts.
+        # Import lazily so test monkeypatches on egress.evaluate_url_policy are honored.
+        eval_fn = None
         try:
-            # Always short-circuit on egress denial; do not fetch robots for disallowed hosts
-            if evaluate_url_policy is not None:
-                pol = evaluate_url_policy(url)
+            from tldw_Server_API.app.core.Security import egress as _egress  # local import to honor monkeypatch
+            eval_fn = getattr(_egress, "evaluate_url_policy", None)
+        except ImportError:
+            eval_fn = evaluate_url_policy
+        try:
+            if eval_fn is not None:
+                pol = eval_fn(url)
                 if not getattr(pol, "allowed", False):
                     return False
-        except Exception:
+        except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
             # On egress evaluation error, fail closed for safety at enqueue time
             return False
 
@@ -277,10 +286,10 @@ class RobotsFilter:
                     is_allowed_by_robots_async as _robots_check_async,
                 )
                 return await _robots_check_async(url, self.user_agent, timeout=self.timeout)
-            except Exception:
+            except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
                 # Fail open: treat as allowed when robots is missing/unreadable
                 return True
         try:
             return bool(parser.can_fetch(self.user_agent, url))
-        except Exception:
+        except _WEB_FILTER_NONCRITICAL_EXCEPTIONS:
             return True

@@ -5,12 +5,11 @@ This provides a comprehensive CLI interface for running evaluations
 with support for all configured LLM APIs (commercial and self-hosted).
 """
 
-import sys
 import json
-import os
-from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+import sys
 from collections import defaultdict
+from pathlib import Path
+from typing import Any, Optional
 
 import click
 from loguru import logger
@@ -19,12 +18,12 @@ from tabulate import tabulate
 # Add parent directories to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
-from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
-from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
-from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
+from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     ensure_app_config,
     get_adapter_or_raise,
@@ -33,7 +32,6 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
     resolve_provider_model,
     split_system_message,
 )
-
 
 # Mapping of config keys to friendly API names
 API_CONFIG_MAPPING = {
@@ -66,16 +64,27 @@ API_CATEGORIES = {
     'Custom': ['custom-openai-api', 'custom-openai-api-2']
 }
 
+_EVALS_CLI_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+    ChatConfigurationError,
+)
+
 
 def _call_adapter_text(
     *,
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     temperature: Optional[float] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     timeout: Optional[float] = None,
     **extra_kwargs: Any,
 ) -> str:
@@ -87,7 +96,7 @@ def _call_adapter_text(
     if not resolved_model:
         raise ChatConfigurationError(provider=provider, message="Model is required for provider.")
     system_message, cleaned_messages = split_system_message(messages_payload or [])
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": cleaned_messages,
         "system_message": system_message,
         "model": resolved_model,
@@ -101,7 +110,7 @@ def _call_adapter_text(
     return extract_response_content(response) or str(response)
 
 
-def get_available_apis() -> Dict[str, Dict[str, Any]]:
+def get_available_apis() -> dict[str, dict[str, Any]]:
     """
     Get all available APIs from configuration with their status.
 
@@ -160,7 +169,7 @@ def get_available_apis() -> Dict[str, Dict[str, Any]]:
     return available_apis
 
 
-def validate_api_config(api_name: str) -> Tuple[bool, str]:
+def validate_api_config(api_name: str) -> tuple[bool, str]:
     """
     Validate if an API is properly configured for use.
 
@@ -206,12 +215,12 @@ def get_api_model(api_name: str, model_override: Optional[str] = None) -> str:
 
 
 def run_evaluation_with_llm(
-    samples: List[Dict],
+    samples: list[dict],
     api_name: str,
     model: str,
-    eval_config: Dict[str, Any],
+    eval_config: dict[str, Any],
     progress_callback: Optional[callable] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Run evaluation using actual LLM calls via chat API.
 
@@ -282,7 +291,7 @@ def run_evaluation_with_llm(
                 score_match = re.search(r'([0-9]*\.?[0-9]+)', response_text)
                 score = float(score_match.group(1)) if score_match else 0.5
                 score = max(0.0, min(1.0, score))  # Clamp to [0, 1]
-            except Exception as e:
+            except (AttributeError, TypeError, ValueError) as e:
                 logger.debug(f"Failed to parse score from LLM response; defaulting to 0.5. error={e}")
                 score = 0.5  # Default score if parsing fails
 
@@ -300,7 +309,7 @@ def run_evaluation_with_llm(
             if progress_callback:
                 progress_callback(i + 1, len(samples))
 
-        except Exception as e:
+        except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error evaluating sample {i}: {e}")
             results.append({
                 "sample_id": sample.get("id", i),
@@ -419,7 +428,7 @@ def list_benchmarks(detailed):
 def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
     """Run a benchmark evaluation using specified API."""
     registry = ctx.obj['registry']
-    manager = ctx.obj['manager']
+    ctx.obj['manager']
 
     # Check if benchmark exists
     config = registry.get(benchmark)
@@ -467,7 +476,7 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
     try:
         dataset = load_benchmark_dataset(benchmark, limit=limit)
         click.echo(f"Loaded {len(dataset)} samples")
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error loading dataset: {e}", err=True)
         sys.exit(1)
 
@@ -498,7 +507,7 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
             {"prompt_template": config.get("prompt_template", "Evaluate: {input}")},
             update_progress
         )
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"\nError during evaluation: {e}", err=True)
         sys.exit(1)
 
@@ -513,7 +522,7 @@ def run(ctx, benchmark, limit, api, model, output, parallel, dry_run):
     else:
         avg_score = min_score = max_score = 0.0
 
-    click.echo(f"\n\nResults:")
+    click.echo("\n\nResults:")
     click.echo(f"  Total samples: {len(results)}")
     click.echo(f"  Successful: {len(scores)}")
     click.echo(f"  Errors: {errors}")
@@ -592,10 +601,10 @@ def test_api(api_name, test_prompt, model):
         else:
             response_text = str(response)
 
-        click.echo(f"✓ API responded successfully")
+        click.echo("✓ API responded successfully")
         click.echo(f"Response: {response_text[:200]}..." if len(response_text) > 200 else f"Response: {response_text}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"✗ API test failed: {e}", err=True)
         sys.exit(1)
 
@@ -619,7 +628,7 @@ def register(name, config_file):
         registry.register(config)
         click.echo(f"Registered benchmark: {name}")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error registering benchmark: {e}", err=True)
         sys.exit(1)
 
@@ -665,14 +674,14 @@ def validate(benchmark, samples):
             # Try formatting a sample
             if dataset:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     click.echo("Sample formatted successfully for evaluation")
-                except Exception as e:
+                except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
                     click.echo(f"Warning: Could not format sample: {e}", err=True)
         else:
             click.echo("Warning: Evaluator not available for this type", err=True)
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
@@ -713,7 +722,7 @@ def health():
 
         click.echo("\nSystem health: OK")
 
-    except Exception as e:
+    except _EVALS_CLI_NONCRITICAL_EXCEPTIONS as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 

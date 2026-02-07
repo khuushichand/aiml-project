@@ -23,6 +23,41 @@ export type TtsPlaygroundOverrides = TtsProviderOverrides & {
   splitBy?: string
 }
 
+export type TtsPresetKey = "fast" | "balanced" | "quality"
+
+export const TTS_PRESETS: Record<
+  TtsPresetKey,
+  {
+    label: string
+    speed: number
+    responseFormat: string
+    streaming: boolean
+    splitBy: string
+  }
+> = {
+  fast: {
+    label: "Fast",
+    speed: 1.2,
+    responseFormat: "mp3",
+    streaming: true,
+    splitBy: "punctuation"
+  },
+  balanced: {
+    label: "Balanced",
+    speed: 1.0,
+    responseFormat: "mp3",
+    streaming: false,
+    splitBy: "punctuation"
+  },
+  quality: {
+    label: "Quality",
+    speed: 0.9,
+    responseFormat: "wav",
+    streaming: false,
+    splitBy: "paragraph"
+  }
+}
+
 const createObjectUrl = (
   audio: TtsSynthesisResult
 ): { url: string; blob: Blob; format: string; mimeType: string } => {

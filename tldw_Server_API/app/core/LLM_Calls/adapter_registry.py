@@ -12,9 +12,10 @@ Initial version ships without default adapters; providers can be registered
 by initialization code or tests. Future phases may add defaults.
 """
 
-from typing import Any, Dict, Optional, Type
-from loguru import logger
 import importlib
+from typing import Any
+
+from loguru import logger
 
 from .providers.base import ChatProvider
 
@@ -23,7 +24,7 @@ class ChatProviderRegistry:
     """Registry for Chat (LLM) providers and their adapters."""
 
     # Default adapter mappings (lazy via dotted paths)
-    DEFAULT_ADAPTERS: Dict[str, str] = {
+    DEFAULT_ADAPTERS: dict[str, str] = {
         "openai": "tldw_Server_API.app.core.LLM_Calls.providers.openai_adapter.OpenAIAdapter",
         "anthropic": "tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter.AnthropicAdapter",
         "groq": "tldw_Server_API.app.core.LLM_Calls.providers.groq_adapter.GroqAdapter",
@@ -50,12 +51,12 @@ class ChatProviderRegistry:
         "aphrodite": "tldw_Server_API.app.core.LLM_Calls.providers.local_adapters.AphroditeAdapter",
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         # Keep config available for future adapter initialization needs
         self._config = config or {}
-        self._adapters: Dict[str, ChatProvider] = {}
+        self._adapters: dict[str, ChatProvider] = {}
         # Start with defaults; tests or init code can override/register more
-        self._adapter_specs: Dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
+        self._adapter_specs: dict[str, Any] = self.DEFAULT_ADAPTERS.copy()
 
     def register_adapter(self, name: str, adapter: Any) -> None:
         """Register an adapter class or dotted path for a provider name."""
@@ -66,7 +67,7 @@ class ChatProviderRegistry:
             n = str(adapter)
         logger.info(f"Registered LLM adapter {n} for provider '{name}'")
 
-    def _resolve_adapter_class(self, spec: Any) -> Type[ChatProvider]:
+    def _resolve_adapter_class(self, spec: Any) -> type[ChatProvider]:
         if isinstance(spec, str):
             module_path, _, class_name = spec.rpartition(".")
             if not module_path:
@@ -76,7 +77,7 @@ class ChatProviderRegistry:
             return cls
         return spec
 
-    def get_adapter(self, name: str) -> Optional[ChatProvider]:
+    def get_adapter(self, name: str) -> ChatProvider | None:
         """Return an initialized adapter instance for a provider name, if any."""
         if name in self._adapters:
             return self._adapters[name]
@@ -98,9 +99,9 @@ class ChatProviderRegistry:
             logger.error(f"Failed to initialize adapter for '{name}': {e}")
             return None
 
-    def get_all_capabilities(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_capabilities(self) -> dict[str, dict[str, Any]]:
         """Return capabilities for all registered providers, initializing as needed."""
-        out: Dict[str, Dict[str, Any]] = {}
+        out: dict[str, dict[str, Any]] = {}
         for name in list(self._adapter_specs.keys()):
             adapter = self.get_adapter(name)
             if not adapter:
@@ -116,7 +117,7 @@ class ChatProviderRegistry:
         return sorted(self._adapter_specs.keys())
 
 
-_registry: Optional[ChatProviderRegistry] = None
+_registry: ChatProviderRegistry | None = None
 
 
 def get_registry() -> ChatProviderRegistry:

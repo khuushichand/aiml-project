@@ -30,29 +30,51 @@ Notes:
 from __future__ import annotations
 
 import asyncio
-import os
-import json
+import contextlib
 import inspect
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+import json
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase, SourceRow
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.Collections.embedding_queue import enqueue_embeddings_job_for_item
+from tldw_Server_API.app.core.Collections.utils import hash_text_sha256, truncate_text, word_count
+from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.DB_Management.Watchlists_DB import SourceRow, WatchlistsDatabase
 from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_rss_feed,
     fetch_rss_feed_history,
     fetch_site_article_async,
     fetch_site_items_with_rules,
 )
-from tldw_Server_API.app.core.Watchlists.filters import normalize_filters, evaluate_filters
-from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
+
+_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 def _utcnow_iso() -> str:
@@ -66,14 +88,14 @@ def _forums_enabled() -> bool:
 def _forum_delay_seconds() -> float:
     try:
         delay_ms = int(os.getenv("WATCHLIST_FORUMS_DELAY_MS", "1500") or 1500)
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         delay_ms = 1500
     if delay_ms < 0:
         delay_ms = 0
     return delay_ms / 1000.0
 
 
-def _normalize_tz(tz: Optional[str]) -> str:
+def _normalize_tz(tz: str | None) -> str:
     if not tz or tz.upper() == "UTC":
         return "UTC"
     t = tz.strip().upper()
@@ -83,7 +105,7 @@ def _normalize_tz(tz: Optional[str]) -> str:
             hours = int(t[4:])
             etc_offset = -sign * hours
             return f"Etc/GMT{('+' if etc_offset>0 else '')}{etc_offset}" if etc_offset != 0 else "Etc/GMT"
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             return "UTC"
     return tz
 
@@ -99,7 +121,7 @@ async def _maybe_await(value):
     return value
 
 
-def _compute_next_run(cron: Optional[str], timezone_str: Optional[str]) -> Optional[str]:
+def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
     if not cron:
         return None
     try:
@@ -109,7 +131,7 @@ def _compute_next_run(cron: Optional[str], timezone_str: Optional[str]) -> Optio
         now = datetime.now(trigger.timezone)
         nxt = trigger.get_next_fire_time(None, now)
         return nxt.isoformat() if nxt else None
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -119,8 +141,8 @@ _word_count = word_count
 
 
 def _resolve_collections_origin(
-    source_settings: Optional[Dict[str, Any]],
-    job_output_prefs: Optional[Dict[str, Any]],
+    source_settings: dict[str, Any] | None,
+    job_output_prefs: dict[str, Any] | None,
     *,
     default: str = "watchlist",
 ) -> str:
@@ -142,7 +164,7 @@ def _maybe_promote_feed_schedule(
     *,
     db: WatchlistsDatabase,
     job,
-    job_output_prefs: Dict[str, Any],
+    job_output_prefs: dict[str, Any],
 ) -> None:
     schedule_cfg = job_output_prefs.get("collections_schedule")
     if not isinstance(schedule_cfg, dict):
@@ -156,7 +178,7 @@ def _maybe_promote_feed_schedule(
         return
     try:
         promote_after = int(schedule_cfg.get("promote_after_hours", 24) or 24)
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         promote_after = 24
     if promote_after <= 0:
         promote_after = 24
@@ -167,7 +189,7 @@ def _maybe_promote_feed_schedule(
         created_dt = datetime.fromisoformat(str(created_raw))
         if created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         return
     now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
     if now_utc < created_dt + timedelta(hours=promote_after):
@@ -181,13 +203,13 @@ def _maybe_promote_feed_schedule(
         patch["schedule_expr"] = daily_expr
     try:
         updated = db.update_job(int(job.id), patch)
-    except Exception as exc:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"collections schedule promote failed for job {getattr(job, 'id', '?')}: {exc}")
         return
     try:
         next_run = _compute_next_run(updated.schedule_expr, updated.schedule_timezone)
         db.set_job_history(job_id=int(updated.id), next_run_at=next_run)
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         if updated.wf_schedule_id:
@@ -201,11 +223,11 @@ def _maybe_promote_feed_schedule(
                     "enabled": bool(updated.active),
                 },
             )
-    except Exception as exc:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"collections schedule promote sync failed for job {getattr(job, 'id', '?')}: {exc}")
 
 
-def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> List[SourceRow]:
+def _select_sources_for_scope(db: WatchlistsDatabase, scope: dict[str, Any]) -> list[SourceRow]:
     """Resolve sources given a job scope.
 
     Scope semantics (minimal):
@@ -213,14 +235,14 @@ def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> 
     - tags: list of tag names (AND semantics)
     - groups: list of group IDs (OR semantics across groups)
     """
-    selected: Dict[int, SourceRow] = {}
+    selected: dict[int, SourceRow] = {}
     # Explicit IDs
     for sid in map(int, scope.get("sources", []) or []):
         try:
             r = db.get_source(sid)
             if int(r.active or 0) == 1:
                 selected[int(r.id)] = r
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             continue
     # Tags
     tag_names = scope.get("tags") or []
@@ -237,12 +259,128 @@ def _select_sources_for_scope(db: WatchlistsDatabase, scope: Dict[str, Any]) -> 
             for r in rows:
                 if int(r.active or 0) == 1:
                     selected[int(r.id)] = r
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             pass
     return list(selected.values())
 
 
-async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
+async def _maybe_auto_generate_output(
+    *,
+    db: WatchlistsDatabase,
+    collections_db: CollectionsDatabase,
+    user_id: int,
+    run,
+    job,
+    job_output_prefs: dict[str, Any],
+    stats: dict[str, Any],
+) -> int | None:
+    """Generate a briefing output automatically if configured in job output_prefs.
+
+    Returns the output artifact ID, or None if skipped.
+    """
+    auto_cfg = job_output_prefs.get("auto_output")
+    if not isinstance(auto_cfg, dict) or not auto_cfg.get("enabled"):
+        return None
+    if stats.get("items_ingested", 0) <= 0:
+        return None
+
+    # Lazy imports to avoid circular dependencies
+    from tldw_Server_API.app.core.Watchlists import template_store
+    from tldw_Server_API.app.services.outputs_service import (
+        _build_output_filename,
+        _outputs_dir_for_user,
+        _resolve_output_path_for_user,
+        render_output_template,
+    )
+
+    items_rows, _ = db.list_items(run_id=run.id, status="ingested", limit=1000, offset=0)
+    if not items_rows:
+        return None
+
+    output_type = str(auto_cfg.get("type", "briefing_markdown"))
+    template_name = auto_cfg.get("template_name")
+    if not template_name:
+        template_defaults = job_output_prefs.get("template") or {}
+        template_name = template_defaults.get("default_name")
+
+    # Resolve template content
+    template_content: str | None = None
+    template_format = "md"
+    if template_name:
+        try:
+            tpl = template_store.load_template(str(template_name))
+            template_content = tpl.content
+            template_format = tpl.format or "md"
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+            logger.debug(f"auto-output: template {template_name!r} not found, using default")
+
+    # Build context (simplified version of endpoint's _build_output_context)
+    job_name = getattr(job, "name", None) or f"Job-{getattr(job, 'id', '?')}"
+    title = f"{job_name}-Auto-{run.id}"
+    items_payload: list[dict[str, Any]] = []
+    for itm in items_rows:
+        items_payload.append({
+            "title": getattr(itm, "title", None) or "Untitled",
+            "url": getattr(itm, "url", None) or "",
+            "summary": getattr(itm, "summary", None) or "",
+            "published_at": getattr(itm, "published_at", None) or "",
+            "tags": getattr(itm, "tags_json", None) or "[]",
+        })
+
+    if template_content:
+        context = {
+            "title": title,
+            "generated_at": _utcnow_iso(),
+            "items": items_payload,
+            "item_count": len(items_payload),
+        }
+        rendered = render_output_template(template_content, context)
+    else:
+        # Default markdown briefing
+        lines = [f"# {title}", ""]
+        for idx, itm in enumerate(items_payload, 1):
+            item_title = itm.get("title") or "Untitled"
+            item_url = itm.get("url") or ""
+            item_summary = itm.get("summary") or ""
+            if item_url:
+                lines.append(f"{idx}. [{item_title}]({item_url})")
+            else:
+                lines.append(f"{idx}. {item_title}")
+            if item_summary:
+                lines.append(f"   {item_summary[:200]}")
+            lines.append("")
+        rendered = "\n".join(lines)
+
+    # Write file
+    out_dir = _outputs_dir_for_user(user_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = _build_output_filename(title, "auto", ts, template_format)
+    path = _resolve_output_path_for_user(user_id, filename)
+    path.write_text(rendered, encoding="utf-8")
+
+    # Persist artifact
+    metadata = {
+        "item_count": len(items_payload),
+        "format": template_format,
+        "type": output_type,
+        "origin": "auto_output",
+        "run_id": run.id,
+        "job_id": getattr(job, "id", None),
+    }
+    artifact = collections_db.create_output_artifact(
+        type_=output_type,
+        title=title,
+        format_=template_format,
+        storage_path=filename,
+        metadata_json=json.dumps(metadata),
+        job_id=getattr(job, "id", None),
+        run_id=run.id,
+    )
+    return artifact.id
+
+
+async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
     Returns minimal stats: { run_id, items_found, items_ingested }.
@@ -250,16 +388,16 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     db = WatchlistsDatabase.for_user(user_id)
     collections_db = CollectionsDatabase.for_user(user_id)
     job = db.get_job(job_id)
-    is_first_run = True if not getattr(job, "last_run_at", None) else False
+    is_first_run = bool(not getattr(job, "last_run_at", None))
     run = db.create_run(job_id=job_id, status="running")
 
-    job_output_prefs: Dict[str, Any] = {}
+    job_output_prefs: dict[str, Any] = {}
     try:
         if getattr(job, "output_prefs_json", None):
             job_output_prefs = json.loads(job.output_prefs_json or "{}")
             if not isinstance(job_output_prefs, dict):
                 job_output_prefs = {}
-    except Exception as e:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(
             "Failed to parse job.output_prefs_json; job_id={} job_record_id={} job_repr={} "
             "output_prefs_json={!r} error={}",
@@ -287,25 +425,25 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     scope = {}
     try:
         scope = json.loads(job.scope_json or "{}") if job.scope_json else {}
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         scope = {}
     sources = _select_sources_for_scope(db, scope or {})
 
     items_found = 0
     items_ingested = 0
     # Allow tags on source to flow into ingestion keywords
-    def _keywords_for_source(sr: SourceRow) -> List[str]:
+    def _keywords_for_source(sr: SourceRow) -> list[str]:
         try:
             return [t for t in (sr.tags or []) if t]
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             return []
 
     # TEST_MODE short-circuit for offline tests: do not perform network
     test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
 
     # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
-    job_filters: List[Dict[str, Any]] = []
-    job_require_include: Optional[bool] = None
+    job_filters: list[dict[str, Any]] = []
+    job_require_include: bool | None = None
     try:
         if getattr(job, "job_filters_json", None):
             raw = json.loads(job.job_filters_json or "{}")
@@ -313,9 +451,9 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
             if isinstance(raw, dict) and "require_include" in raw:
                 try:
                     job_require_include = bool(raw.get("require_include"))
-                except Exception:
+                except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                     job_require_include = None
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         job_filters = []
         job_require_include = None
 
@@ -346,13 +484,13 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             flat = meta_dict.get("watchlists_require_include_default")
                             if isinstance(flat, bool):
                                 return flat
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
-        except Exception:
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             return False
 
     include_rules_exist = any((str(f.get("action")) == "include") for f in job_filters)
@@ -361,7 +499,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     include_gating_active = bool(effective_require_include and include_rules_exist)
 
     # Filter evaluation statistics
-    filter_stats: Dict[str, Any] = {
+    filter_stats: dict[str, Any] = {
         "filters_matched": 0,
         "filters_actions": {"include": 0, "exclude": 0, "flag": 0},
         "filter_tallies": {},
@@ -370,7 +508,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     # Bounded debug logging for filter decisions
     try:
         _max_debug = int(os.getenv("WATCHLISTS_FILTER_DEBUG_MAX", "100") or 100)
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         _max_debug = 100
     _debug_count = 0
 
@@ -384,10 +522,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                 src_type = (src.source_type or "").lower()
                 if src_type == "forum":
                     if not _forums_enabled():
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="forum_disabled")
-                        except Exception:
-                            pass
                         continue
                     if not test_mode:
                         await asyncio.sleep(_forum_delay_seconds())
@@ -401,49 +537,47 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             # still deferred
                             continue
                         # past due: clear defer
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.clear_source_defer_until(int(src.id))
-                        except Exception:
-                            pass
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         # if parse fails, continue normal flow
                         pass
 
                 def _record_scraped(
                     *,
                     status: str,
-                    url: Optional[str],
-                    title: Optional[str],
-                    summary: Optional[str],
-                    media_id: Optional[int],
-                    media_uuid: Optional[str],
-                    published_at: Optional[str] = None,
+                    url: str | None,
+                    title: str | None,
+                    summary: str | None,
+                    media_id: int | None,
+                    media_uuid: str | None,
+                    published_at: str | None = None,
+                    _src=src,
                 ) -> None:
                     try:
                         db.record_scraped_item(
                             run_id=run.id,
                             job_id=job_id,
-                            source_id=int(src.id),
+                            source_id=int(_src.id),
                             media_id=media_id,
                             media_uuid=media_uuid,
                             url=url,
                             title=title,
                             summary=_truncate(summary),
                             published_at=published_at,
-                            tags=_keywords_for_source(src),
+                            tags=_keywords_for_source(_src),
                             status=status,
                         )
-                    except Exception as rec_err:
-                        logger.debug(f"record_scraped_item failed (source_id={getattr(src, 'id', '?')}): {rec_err}")
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as rec_err:
+                        logger.debug(f"record_scraped_item failed (source_id={getattr(_src, 'id', '?')}): {rec_err}")
 
                 if src_type == "rss":
-                    urls = [src.url]
-                    rss_items: List[Dict[str, Any]]
+                    rss_items: list[dict[str, Any]]
                     # Per-source settings
                     settings = {}
                     try:
                         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         settings = {}
                     collections_origin = _resolve_collections_origin(settings, job_output_prefs)
                     rss_limit = int(settings.get("limit", 50)) if isinstance(settings.get("limit", 50), int) else 50
@@ -462,18 +596,18 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                     hist_strategy = str(history_cfg.get("strategy", "auto")).lower() if isinstance(history_cfg, dict) else "auto"
                     try:
                         hist_max_pages = int(history_cfg.get("max_pages", 1)) if isinstance(history_cfg, dict) else 1
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         hist_max_pages = 1
                     if hist_max_pages < 1:
                         hist_max_pages = 1
                     hist_on_304 = bool(history_cfg.get("on_304", False)) if isinstance(history_cfg, dict) else False
                     try:
                         hist_per_page = int(history_cfg.get("per_page_limit")) if isinstance(history_cfg.get("per_page_limit"), int) else None
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         hist_per_page = None
                     hist_stop_on_seen = bool(history_cfg.get("stop_on_seen", False)) if isinstance(history_cfg, dict) else False
                     # Load DB seen keys for boundary stop mode
-                    seen_keys: List[str] = []
+                    seen_keys: list[str] = []
                     if hist_stop_on_seen:
                         try:
                             limit_base = rss_limit if rss_limit > 0 else 50
@@ -481,7 +615,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 limit_base = max(limit_base, hist_per_page)
                             limit = limit_base * max(hist_max_pages, 1)
                             seen_keys = db.list_seen_item_keys(int(src.id), limit=limit)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             seen_keys = []
                     if test_mode:
                         res = {"status": 200, "items": [{"title": "Test Item", "url": "https://example.com/x", "summary": "Test"}]}
@@ -516,26 +650,26 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         # Increment consecutive not-modified count and optionally apply adaptive backoff
                         try:
                             curr = int(getattr(src, "consec_not_modified", 0) or 0)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             curr = 0
                         new_count = curr + 1
                         # Adaptive backoff parameters
                         import os as _os
                         try:
                             threshold = int(_os.getenv("WATCHLISTS_304_BACKOFF_THRESHOLD", "3") or 3)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             threshold = 3
                         try:
                             base_sec = int(_os.getenv("WATCHLISTS_304_BACKOFF_BASE_SEC", "3600") or 3600)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             base_sec = 3600
                         try:
                             max_sec = int(_os.getenv("WATCHLISTS_304_BACKOFF_MAX_SEC", "21600") or 21600)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             max_sec = 21600
                         try:
                             jitter_pct = float(_os.getenv("WATCHLISTS_304_BACKOFF_JITTER_PCT", "0.1") or 0.1)
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             jitter_pct = 0.1
 
                         defer_until_val = None
@@ -550,7 +684,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 secs = max(0, secs + _rnd.randint(-j, j))
                             from datetime import timedelta as _td
                             defer_until_val = (datetime.utcnow().replace(tzinfo=timezone.utc) + _td(seconds=secs)).isoformat()
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(
                                 int(src.id),
                                 last_scraped_at=_utcnow_iso(),
@@ -558,8 +692,6 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 defer_until=defer_until_val,
                                 consec_not_modified=new_count,
                             )
-                        except Exception:
-                            pass
                         continue
                     if status == 429:
                         # Defer per Retry-After
@@ -567,25 +699,19 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if isinstance(ra, int) and ra > 0:
                             from datetime import timedelta
                             until = (datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(seconds=ra)).isoformat()
-                            try:
+                            with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                                 db.update_source_scrape_meta(int(src.id), status="deferred", defer_until=until)
-                            except Exception:
-                                pass
                         continue
                     if status // 100 != 2:
                         # error path
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status=f"error:{status}")
-                        except Exception:
-                            pass
                         continue
 
                     # 200 OK
                     if res.get("etag") is not None or res.get("last_modified") is not None:
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), etag=res.get("etag"), last_modified=res.get("last_modified"), consec_not_modified=0)
-                        except Exception:
-                            pass
                     # Accumulate history counters for run stats when applicable
                     try:
                         if isinstance(res.get("pages_fetched"), int):
@@ -593,7 +719,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             history_used = True
                         if bool(res.get("stop_on_seen_triggered")):
                             history_any_stop = True
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         pass
                     rss_items = list(res.get("items") or [])
                     if isinstance(rss_limit, int) and rss_limit > 0:
@@ -621,7 +747,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                         published_at=it.get("published"),
                                     )
                                     continue
-                            except Exception:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                                 pass
 
                         # Evaluate filters before fetching article
@@ -672,7 +798,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 )
                                 continue
                             flagged = (decision == "flag")
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             flagged = False
 
                         # Optional: if feed provides full text, skip article fetch
@@ -680,7 +806,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         prefer_feed = bool(rss_cfg.get("use_feed_content_if_available", False)) if isinstance(rss_cfg, dict) else False
                         try:
                             min_chars = int(rss_cfg.get("feed_content_min_chars", 400)) if isinstance(rss_cfg, dict) else 400
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             min_chars = 400
                         article = None
                         if prefer_feed:
@@ -704,8 +830,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             }
                         if not article:
                             continue
-                        ingested_media_id: Optional[int] = None
-                        ingested_media_uuid: Optional[str] = None
+                        ingested_media_id: int | None = None
+                        ingested_media_uuid: str | None = None
                         summary_text = article.get("content") or it.get("summary") or ""
                         if persist_to_media_db and mdb is not None:
                             try:
@@ -722,7 +848,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     ingested_media_id = int(media_id)
                                     ingested_media_uuid = media_uuid
                                     db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
-                            except Exception as e:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                                 logger.debug(f"Media DB ingestion failed for {link}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
@@ -762,7 +888,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 read_at=None,
                                 tags=tags_for_item,
                             )
-                        except Exception as exc:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug(f"Collections upsert failed (rss) for {link}: {exc}")
                         if item_row:
                             items_ingested += 1
@@ -779,7 +905,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                             "tags": tags_for_item,
                                         },
                                     )
-                                except Exception as exc:
+                                except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
                             try:
                                 db.mark_seen_item(
@@ -788,7 +914,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     etag=None,
                                     last_modified=(it.get("published") or None),
                                 )
-                            except Exception as exc:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                                 logger.debug(
                                     f"watchlists: failed to mark seen item for source {src.id}: {exc}"
                                 )
@@ -814,23 +940,21 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                             continue
 
                     # Update last_scraped_at/status for source
-                        try:
+                        with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                             db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
-                        except Exception:
-                            pass
 
                 elif src_type in {"site", "forum"}:
                     # Determine discovery preferences
                     settings = {}
                     try:
                         settings = json.loads(src.settings_json or "{}") if getattr(src, "settings_json", None) else {}
-                    except Exception:
+                    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                         settings = {}
                     collections_origin = _resolve_collections_origin(settings, job_output_prefs)
 
                     scrape_rules = settings.get("scrape_rules") if isinstance(settings.get("scrape_rules"), dict) else None
-                    prefetched_by_url: Dict[str, Dict[str, Any]] = {}
-                    urls_to_fetch: List[str] = []
+                    prefetched_by_url: dict[str, dict[str, Any]] = {}
+                    urls_to_fetch: list[str] = []
 
                     if scrape_rules:
                         try:
@@ -839,7 +963,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 rules=scrape_rules,
                                 tenant_id="default",
                             )
-                        except Exception as exc:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug(f"Scrape rules fetch failed for source {getattr(src, 'id', '?')}: {exc}")
                             scraped_items = []
                         for entry in scraped_items:
@@ -852,7 +976,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if "top_n" in settings:
                             try:
                                 top_limit = max(0, int(settings.get("top_n", 0)))
-                            except Exception:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                                 top_limit = None
                             if top_limit == 0:
                                 urls_to_fetch = []
@@ -866,7 +990,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         top_n = 1
                         try:
                             top_n = int(settings.get("top_n", 1))
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             top_n = 1
                         if top_n <= 0:
                             top_n = 1
@@ -876,7 +1000,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
 
                                 urls_to_fetch = await fetch_site_top_links(src.url, top_n=top_n, method=discover_method)
-                            except Exception:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                                 urls_to_fetch = [src.url]
                         else:
                             urls_to_fetch = [src.url]
@@ -904,10 +1028,10 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                         published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                                     )
                                     continue
-                            except Exception:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                                 pass
 
-                        article: Optional[Dict[str, Any]] = None
+                        article: dict[str, Any] | None = None
                         if skip_article_fetch and prefetch:
                             article = {
                                 "title": prefetch.get("title") or src.name or "Untitled",
@@ -943,8 +1067,8 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                         if not article.get("title"):
                             article["title"] = prefetch.get("title") if prefetch and prefetch.get("title") else src.name
 
-                        ingested_media_id: Optional[int] = None
-                        ingested_media_uuid: Optional[str] = None
+                        ingested_media_id: int | None = None
+                        ingested_media_uuid: str | None = None
                         summary_text = article.get("content") or ""
                         if not summary_text and prefetch:
                             summary_text = prefetch.get("content") or prefetch.get("summary") or ""
@@ -996,7 +1120,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 )
                                 continue
                             flagged = (decision == "flag")
-                        except Exception:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
                             flagged = False
                         if persist_to_media_db and mdb is not None:
                             try:
@@ -1013,7 +1137,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                     ingested_media_id = int(media_id)
                                     ingested_media_uuid = media_uuid
                                     db.append_run_item(run.id, ingested_media_id, source_id=int(src.id))
-                            except Exception as e:
+                            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                                 logger.debug(f"Media DB ingestion failed for site {page_url}: {e}")
 
                         content_text = article.get("content") or summary_text or ""
@@ -1055,7 +1179,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 read_at=None,
                                 tags=tags_for_item,
                             )
-                        except Exception as exc:
+                        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug(f"Collections upsert failed (site) for {page_url}: {exc}")
                         if item_row:
                             items_ingested += 1
@@ -1072,17 +1196,15 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                             "tags": tags_for_item,
                                         },
                                     )
-                                except Exception as exc:
+                                except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
                                     logger.debug(f"Embedding enqueue failed for watchlist item {item_row.id}: {exc}")
-                            try:
+                            with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                                 db.mark_seen_item(
                                     int(src.id),
                                     item_key,
                                     etag=None,
                                     last_modified=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                                 )
-                            except Exception:
-                                pass
                             _record_scraped(
                                 status="ingested",
                                 url=article.get("url") or page_url,
@@ -1102,19 +1224,15 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                                 media_uuid=ingested_media_uuid,
                                 published_at=(prefetch.get("published") or prefetch.get("published_raw")) if prefetch else None,
                             )
-                    try:
+                    with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                         db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="ok")
-                    except Exception:
-                        pass
                 else:
                     # Unknown type - skip
                     continue
-            except Exception as e:
+            except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Source processing failed (id={getattr(src, 'id', '?')}): {e}")
-                try:
+                with contextlib.suppress(_WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS):
                     db.update_source_scrape_meta(int(src.id), last_scraped_at=_utcnow_iso(), status="error")
-                except Exception:
-                    pass
 
     stats = {"items_found": items_found, "items_ingested": items_ingested}
     try:
@@ -1122,7 +1240,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
             stats["filters_matched"] = int(filter_stats["filters_matched"])  # type: ignore[assignment]
             stats["filters_actions"] = filter_stats["filters_actions"]
             stats["filter_tallies"] = filter_stats["filter_tallies"]
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         pass
     # Attach history/backfill counters when used
     try:
@@ -1131,7 +1249,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
                 "pages_fetched": int(history_pages_total),
                 "stop_on_seen_triggered": bool(history_any_stop),
             }
-    except Exception:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
         pass
     db.update_run(run.id, status="succeeded", finished_at=_utcnow_iso(), stats_json=json.dumps(stats))
 
@@ -1141,6 +1259,23 @@ async def run_watchlist_job(user_id: int, job_id: int) -> Dict[str, Any]:
     try:
         if isinstance(job_output_prefs, dict):
             _maybe_promote_feed_schedule(db=db, job=job, job_output_prefs=job_output_prefs)
-    except Exception as exc:
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"collections schedule auto-promote failed for job {job_id}: {exc}")
+
+    # Auto-generate output if configured
+    try:
+        auto_output_id = await _maybe_auto_generate_output(
+            db=db,
+            collections_db=collections_db,
+            user_id=user_id,
+            run=run,
+            job=job,
+            job_output_prefs=job_output_prefs,
+            stats=stats,
+        )
+        if auto_output_id:
+            stats["auto_output_id"] = auto_output_id
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
+
     return {"run_id": run.id, **stats}

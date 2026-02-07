@@ -7,22 +7,16 @@ without changing the application code.
 """
 
 from .base import (
+    BackendFeatures,
+    ConnectionPool,
     DatabaseBackend,
     DatabaseConfig,
-    ConnectionPool,
-    QueryResult,
-    FTSQuery,
-    BackendFeatures,
     DatabaseError,
-    NotSupportedError
+    FTSQuery,
+    NotSupportedError,
+    QueryResult,
 )
-
-from .factory import (
-    DatabaseBackendFactory,
-    BackendFactory,
-    get_backend,
-    register_backend
-)
+from .factory import BackendFactory, DatabaseBackendFactory, get_backend, register_backend
 
 __all__ = [
     # Base classes

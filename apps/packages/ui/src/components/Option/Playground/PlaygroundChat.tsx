@@ -17,6 +17,7 @@ import { tldwModels } from "@/services/tldw"
 import { applyVariantToMessage } from "@/utils/message-variants"
 import type { Character } from "@/types/character"
 import { useAntdNotification } from "@/hooks/useAntdNotification"
+import { ChatGreetingPicker } from "@/components/Common/ChatGreetingPicker"
 
 type TimelineBlock =
   | { kind: "single"; index: number }
@@ -118,9 +119,15 @@ export const PlaygroundChat = () => {
     isSearchingInternet,
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     ttsEnabled,
     onSubmit,
     actionInfo,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     createChatBranch,
     createCompareBranch,
     temporaryChat,
@@ -338,6 +345,13 @@ export const PlaygroundChat = () => {
             <PlaygroundEmpty />
           </div>
         )}
+        <ChatGreetingPicker
+          selectedCharacter={selectedCharacter}
+          messages={messages}
+          historyId={historyId}
+          serverChatId={serverChatId}
+          className="mb-6 mt-4"
+        />
         {blocks.map((block, blockIndex) => {
           if (block.kind === "single") {
             const message = messages[block.index]
@@ -361,6 +375,9 @@ export const PlaygroundChat = () => {
                 }}
                 onDeleteMessage={() => {
                   deleteMessage(block.index)
+                }}
+                onTogglePinned={() => {
+                  void toggleMessagePinned(block.index)
                 }}
                 onNewBranch={() => {
                   createChatBranch(block.index)
@@ -389,6 +406,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={message.serverMessageId}
                 messageId={message.id}
+                pinned={Boolean(message.pinned)}
                 discoSkillComment={message.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -401,6 +419,11 @@ export const PlaygroundChat = () => {
                 activeVariantIndex={message.activeVariantIndex}
                 onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
                 onSwipeNext={() => handleVariantSwipe(message.id, "next")}
+                messageSteeringMode={messageSteeringMode}
+                onMessageSteeringModeChange={setMessageSteeringMode}
+                messageSteeringForceNarrate={messageSteeringForceNarrate}
+                onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                onClearMessageSteering={clearMessageSteering}
               />
             )
           }
@@ -591,6 +614,9 @@ export const PlaygroundChat = () => {
                 onDeleteMessage={() => {
                   deleteMessage(block.userIndex)
                 }}
+                onTogglePinned={() => {
+                  void toggleMessagePinned(block.userIndex)
+                }}
                 onNewBranch={() => {
                   createChatBranch(block.userIndex)
                 }}
@@ -618,6 +644,7 @@ export const PlaygroundChat = () => {
                 serverChatId={serverChatId}
                 serverMessageId={userMessage.serverMessageId}
                 messageId={userMessage.id}
+                pinned={Boolean(userMessage.pinned)}
                 discoSkillComment={userMessage.discoSkillComment}
                 historyId={stableHistoryId ?? undefined}
                 conversationInstanceId={conversationInstanceId}
@@ -630,6 +657,11 @@ export const PlaygroundChat = () => {
                 activeVariantIndex={userMessage.activeVariantIndex}
                 onSwipePrev={() => handleVariantSwipe(userMessage.id, "prev")}
                 onSwipeNext={() => handleVariantSwipe(userMessage.id, "next")}
+                messageSteeringMode={messageSteeringMode}
+                onMessageSteeringModeChange={setMessageSteeringMode}
+                messageSteeringForceNarrate={messageSteeringForceNarrate}
+                onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                onClearMessageSteering={clearMessageSteering}
               />
               <div className="ml-10 space-y-2 border-l border-dashed border-border pl-4">
                 <div className="mb-1 flex items-center justify-between text-[11px] text-text-muted">
@@ -921,6 +953,9 @@ export const PlaygroundChat = () => {
                         onDeleteMessage={() => {
                           deleteMessage(index)
                         }}
+                        onTogglePinned={() => {
+                          void toggleMessagePinned(index)
+                        }}
                         onNewBranch={() => {
                           createChatBranch(index)
                         }}
@@ -948,6 +983,7 @@ export const PlaygroundChat = () => {
                         serverChatId={serverChatId}
                         serverMessageId={message.serverMessageId}
                         messageId={message.id}
+                        pinned={Boolean(message.pinned)}
                         discoSkillComment={message.discoSkillComment}
                         historyId={stableHistoryId ?? undefined}
                         conversationInstanceId={conversationInstanceId}
@@ -965,6 +1001,11 @@ export const PlaygroundChat = () => {
                         activeVariantIndex={message.activeVariantIndex}
                         onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
                         onSwipeNext={() => handleVariantSwipe(message.id, "next")}
+                        messageSteeringMode={messageSteeringMode}
+                        onMessageSteeringModeChange={setMessageSteeringMode}
+                        messageSteeringForceNarrate={messageSteeringForceNarrate}
+                        onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                        onClearMessageSteering={clearMessageSteering}
                       />
 
                       {threadPreviewItems.length > 1 && (

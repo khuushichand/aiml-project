@@ -12,8 +12,9 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-from typing import Callable, List, Optional
+from typing import Callable
 
 from loguru import logger
 
@@ -21,26 +22,37 @@ from tldw_Server_API.app.core.Claims_Extraction.claims_service import (
     evaluate_claims_alerts_for_scheduler,
     send_claims_alert_email_digest_for_scheduler,
 )
-from tldw_Server_API.app.core.DB_Management.DB_Manager import (
-    create_media_database,
-    content_db_settings,
-)
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import (
+    content_db_settings,
+    create_media_database,
+)
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
-def _is_truthy(value: Optional[str]) -> bool:
+def _is_truthy(value: str | None) -> bool:
     return str(value or "").lower() in {"1", "true", "yes", "on"}
 
 
-def _enumerate_sqlite_user_ids() -> List[int]:
+def _enumerate_sqlite_user_ids() -> list[int]:
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"claims_alerts: failed to resolve user db base dir: {exc}")
         return []
-    user_ids: List[int] = []
+    user_ids: list[int] = []
     for entry in base.iterdir():
         if not entry.is_dir():
             continue
@@ -55,7 +67,7 @@ def _enumerate_sqlite_user_ids() -> List[int]:
     if not user_ids:
         try:
             user_ids = [DatabasePaths.get_single_user_id()]
-        except Exception as exc:
+        except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"claims_alerts: failed to derive single_user_id: {exc}")
             user_ids = []
     return sorted(set(user_ids))
@@ -63,9 +75,9 @@ def _enumerate_sqlite_user_ids() -> List[int]:
 
 async def run_claims_alerts_once(
     *,
-    evaluator: Optional[Callable[..., dict]] = None,
-    window_sec: Optional[int] = None,
-    baseline_sec: Optional[int] = None,
+    evaluator: Callable[..., dict] | None = None,
+    window_sec: int | None = None,
+    baseline_sec: int | None = None,
 ) -> int:
     eval_fn = evaluator or evaluate_claims_alerts_for_scheduler
     window_val = int(window_sec or settings.get("CLAIMS_ALERTS_WINDOW_SEC", 3600))
@@ -74,14 +86,12 @@ async def run_claims_alerts_once(
     if content_db_settings.backend_type == BackendType.POSTGRESQL:
         try:
             db = create_media_database(client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")))
-        except Exception as exc:
+        except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"claims_alerts: failed to create media db: {exc}")
             return 0
         try:
-            try:
+            with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                 db.initialize_db()
-            except Exception:
-                pass
             user_ids = db.list_claims_monitoring_user_ids()
             for user_id in user_ids:
                 try:
@@ -97,13 +107,11 @@ async def run_claims_alerts_once(
                         db=db,
                     )
                     processed += 1
-                except Exception as exc:
+                except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"claims_alerts: evaluation failed for user {user_id}: {exc}")
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                 db.close_connection()
-            except Exception:
-                pass
     else:
         user_ids = _enumerate_sqlite_user_ids()
         for user_id in user_ids:
@@ -112,14 +120,12 @@ async def run_claims_alerts_once(
                     client_id=str(settings.get("SERVER_CLIENT_ID", "SERVER_API_V1")),
                     db_path=str(DatabasePaths.get_media_db_path(int(user_id))),
                 )
-            except Exception as exc:
+            except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"claims_alerts: failed to open user db {user_id}: {exc}")
                 continue
             try:
-                try:
+                with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                     user_db.initialize_db()
-                except Exception:
-                    pass
                 await asyncio.to_thread(
                     eval_fn,
                     target_user_id=str(user_id),
@@ -132,17 +138,15 @@ async def run_claims_alerts_once(
                     db=user_db,
                 )
                 processed += 1
-            except Exception as exc:
+            except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"claims_alerts: evaluation failed for user {user_id}: {exc}")
             finally:
-                try:
+                with contextlib.suppress(_CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS):
                     user_db.close_connection()
-                except Exception:
-                    pass
     return processed
 
 
-async def start_claims_alerts_scheduler() -> Optional[asyncio.Task]:
+async def start_claims_alerts_scheduler() -> asyncio.Task | None:
     enabled = _is_truthy(os.getenv("CLAIMS_ALERTS_SCHEDULER_ENABLED")) or bool(
         settings.get("CLAIMS_ALERTS_SCHEDULER_ENABLED", False)
     )
@@ -151,7 +155,7 @@ async def start_claims_alerts_scheduler() -> Optional[asyncio.Task]:
         return None
     try:
         interval = int(os.getenv("CLAIMS_ALERTS_EVAL_INTERVAL_SEC") or settings.get("CLAIMS_ALERTS_EVAL_INTERVAL_SEC", 300))
-    except Exception:
+    except (TypeError, ValueError):
         interval = 300
 
     async def _runner() -> None:
@@ -159,7 +163,7 @@ async def start_claims_alerts_scheduler() -> Optional[asyncio.Task]:
         while True:
             try:
                 await run_claims_alerts_once()
-            except Exception as exc:
+            except _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Claims alerts scheduler loop error: {exc}")
             await asyncio.sleep(interval)
 

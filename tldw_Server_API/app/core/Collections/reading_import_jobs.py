@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import uuid4
 
 from loguru import logger
@@ -20,7 +20,6 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 
-
 READING_IMPORT_DOMAIN = "reading"
 READING_IMPORT_JOB_TYPE = "reading_import"
 MAX_READING_IMPORT_BYTES = int(os.getenv("READING_IMPORT_MAX_BYTES", str(10 * 1024 * 1024)))
@@ -32,7 +31,7 @@ class ReadingImportJobError(RuntimeError):
         message: str,
         *,
         retryable: bool = False,
-        backoff_seconds: Optional[int] = None,
+        backoff_seconds: int | None = None,
     ) -> None:
         super().__init__(message)
         self.retryable = retryable
@@ -47,7 +46,7 @@ def reading_import_queue() -> str:
 def stage_reading_import_file(
     *,
     user_id: int | str,
-    filename: Optional[str],
+    filename: str | None,
     raw_bytes: bytes,
 ) -> Path:
     imports_dir = DatabasePaths.get_user_reading_imports_dir(user_id)
@@ -103,7 +102,7 @@ def resolve_reading_import_file(user_id: int | str, file_token: str) -> Path:
     return candidate
 
 
-def _parse_payload(payload: Any) -> Dict[str, Any]:
+def _parse_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     if isinstance(payload, str):
@@ -125,14 +124,14 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> int:
+def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:
     owner = job.get("owner_user_id") or payload.get("user_id")
     if owner is None or str(owner).strip() == "":
         return int(DatabasePaths.get_single_user_id())
     return int(owner)
 
 
-async def handle_reading_import_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_reading_import_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = _parse_payload(job.get("payload"))
     user_id = _resolve_user_id(job, payload)
     file_token = payload.get("file_token") or payload.get("file_path")

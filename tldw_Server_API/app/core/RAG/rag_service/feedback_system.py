@@ -6,21 +6,26 @@ This module provides functionality to collect user feedback on search results,
 track relevance scores, and use feedback to improve future searches.
 """
 
+import hashlib
 import json
+import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
-from collections import defaultdict
-import hashlib
-import sqlite3
-import asyncio
-from pathlib import Path
+from typing import Any, Optional
 
-from loguru import logger
 import numpy as np
+from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+
+class InvalidRelevanceScoreError(ValueError):
+    """Raised when a relevance score is out of the 1-5 range."""
+
+    def __init__(self) -> None:
+        super().__init__("Relevance score must be between 1 and 5")
 
 
 class FeedbackType(Enum):
@@ -52,9 +57,9 @@ class FeedbackEntry:
     feedback_type: FeedbackType
     value: Any
     timestamp: datetime = field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "id": self.id,
@@ -163,7 +168,7 @@ class FeedbackStore:
                 conn.commit()
                 return True
 
-        except Exception as e:
+        except (sqlite3.Error, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to store feedback: {e}")
             return False
 
@@ -172,7 +177,7 @@ class FeedbackStore:
         query: str,
         feedback_type: Optional[FeedbackType] = None,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get feedback entries for a specific query."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -204,7 +209,7 @@ class FeedbackStore:
         self,
         document_id: str,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get all feedback for a specific document."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -223,7 +228,7 @@ class FeedbackStore:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get aggregated feedback statistics."""
         with sqlite3.connect(self.db_path) as conn:
             # Build time filter
@@ -299,8 +304,8 @@ class FeedbackAnalyzer:
             store: Feedback storage backend
         """
         self.store = store
-        self.reranking_weights = {}
-        self.document_scores = {}
+        self.reranking_weights: dict[str, float] = {}
+        self.document_scores: dict[str, float] = {}
 
     def calculate_document_score(self, document_id: str) -> float:
         """
@@ -332,14 +337,14 @@ class FeedbackAnalyzer:
                     normalized = (relevance - 1) / 4  # Normalize to 0-1
                     score += normalized * 3.0  # Weight of 3
                     weight_sum += 3.0
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse relevance feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_relevance_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_relevance_failed")
 
             elif feedback_type == "helpful":
@@ -348,14 +353,14 @@ class FeedbackAnalyzer:
                     helpful = json.loads(value) if isinstance(value, str) else value
                     score += (1.0 if helpful else 0.0) * 2.0  # Weight of 2
                     weight_sum += 2.0
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_helpful_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_helpful_failed")
 
             elif feedback_type == "click":
@@ -371,14 +376,14 @@ class FeedbackAnalyzer:
                     normalized = min(dwell / 30.0, 1.0)
                     score += normalized * 1.5  # Weight of 1.5
                     weight_sum += 1.5
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
                     try:
                         get_metrics_registry().increment(
                             "app_warning_events_total",
                             labels={"component": "rag", "event": "feedback_parse_dwell_failed"},
                         )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         logger.debug("metrics increment failed for rag feedback_parse_dwell_failed")
 
         return score / weight_sum if weight_sum > 0 else 0.5
@@ -409,7 +414,7 @@ class FeedbackAnalyzer:
                 try:
                     score = float(json.loads(value) if isinstance(value, str) else value)
                     relevance_scores.append(score)
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse relevance score for query document: error={e}")
 
             elif feedback_type == "helpful":
@@ -419,7 +424,7 @@ class FeedbackAnalyzer:
                         perf.helpful_count += 1
                     else:
                         perf.unhelpful_count += 1
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse helpful feedback value: error={e}")
 
             elif feedback_type == "click":
@@ -429,20 +434,20 @@ class FeedbackAnalyzer:
                 try:
                     dwell = float(json.loads(value) if isinstance(value, str) else value)
                     dwell_times.append(dwell)
-                except Exception as e:
+                except (TypeError, ValueError, json.JSONDecodeError) as e:
                     logger.debug(f"Failed to parse dwell_time feedback value: error={e}")
 
         perf.total_results = len(unique_docs)
-        perf.avg_relevance = np.mean(relevance_scores) if relevance_scores else 0.0
-        perf.avg_dwell_time = np.mean(dwell_times) if dwell_times else 0.0
+        perf.avg_relevance = float(np.mean(relevance_scores)) if relevance_scores else 0.0
+        perf.avg_dwell_time = float(np.mean(dwell_times)) if dwell_times else 0.0
 
         return perf
 
     def get_reranking_weights(
         self,
         query: str,
-        document_ids: List[str]
-    ) -> Dict[str, float]:
+        document_ids: list[str]
+    ) -> dict[str, float]:
         """
         Get reranking weights for documents based on feedback.
 
@@ -464,14 +469,13 @@ class FeedbackAnalyzer:
             query_doc_score = 0.5  # Default
 
             for entry in query_feedback:
-                if entry["document_id"] == doc_id:
-                    if entry["feedback_type"] == "relevance":
-                        try:
-                            score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
-                            query_doc_score = (score - 1) / 4  # Normalize to 0-1
-                            break
-                        except Exception as e:
-                            logger.debug(f"Failed to parse relevance score for query document: error={e}")
+                if entry["document_id"] == doc_id and entry["feedback_type"] == "relevance":
+                    try:
+                        score = float(json.loads(entry["value"]) if isinstance(entry["value"], str) else entry["value"])
+                        query_doc_score = (score - 1) / 4  # Normalize to 0-1
+                        break
+                    except (TypeError, ValueError, json.JSONDecodeError) as e:
+                        logger.debug(f"Failed to parse relevance score for query document: error={e}")
 
             # Combine document and query-specific scores
             combined_score = 0.7 * doc_score + 0.3 * query_doc_score
@@ -485,7 +489,7 @@ class FeedbackAnalyzer:
         self,
         threshold: float = 0.3,
         min_feedback: int = 5
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Identify documents with poor feedback scores.
 
@@ -532,7 +536,7 @@ class FeedbackSystem:
         """
         self.store = FeedbackStore(db_path)
         self.analyzer = FeedbackAnalyzer(self.store)
-        self.active_sessions = {}
+        self.active_sessions: dict[str, Any] = {}
 
     def generate_feedback_id(self, query: str, document_id: str, user_id: str) -> str:
         """Generate unique feedback ID."""
@@ -546,7 +550,7 @@ class FeedbackSystem:
         user_id: str,
         feedback_type: FeedbackType,
         value: Any,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """
         Submit feedback entry.
@@ -580,19 +584,18 @@ class FeedbackSystem:
                     f"Feedback submitted: {feedback_type.value} for doc {document_id} "
                     f"by user {user_id}"
                 )
-
-            return success
-
-        except Exception as e:
+        except (TypeError, ValueError, RuntimeError) as e:
             logger.error(f"Failed to submit feedback: {e}")
             try:
                 get_metrics_registry().increment(
                     "app_exception_events_total",
                     labels={"component": "rag", "event": "feedback_submit_failed"},
                 )
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 logger.debug("metrics increment failed for rag feedback_submit_failed")
-            return False
+        else:
+            return success
+        return False
 
     async def submit_relevance_score(
         self,
@@ -600,11 +603,11 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         score: int,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Submit relevance score (1-5)."""
         if not 1 <= score <= 5:
-            raise ValueError("Relevance score must be between 1 and 5")
+            raise InvalidRelevanceScoreError()
 
         return await self.submit_feedback(
             query=query,
@@ -621,7 +624,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         helpful: bool,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Submit helpful/unhelpful vote."""
         return await self.submit_feedback(
@@ -639,7 +642,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         position: int,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Track document click."""
         meta = metadata or {}
@@ -660,7 +663,7 @@ class FeedbackSystem:
         document_id: str,
         user_id: str,
         dwell_seconds: float,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> bool:
         """Track time spent on document."""
         return await self.submit_feedback(
@@ -676,7 +679,7 @@ class FeedbackSystem:
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get feedback statistics.
 
@@ -713,9 +716,9 @@ class FeedbackSystem:
     def apply_feedback_reranking(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         score_field: str = "score"
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Apply feedback-based reranking to search results.
 

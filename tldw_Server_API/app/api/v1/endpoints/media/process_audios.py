@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -16,30 +16,29 @@ from loguru import logger
 from starlette.responses import JSONResponse
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
+    get_process_audios_form,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
-from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
-    get_process_audios_form,
-)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessAudiosForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Ingestion_Media_Processing.audio_batch import (
     run_audio_batch,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
 )
-
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
-)
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
 
@@ -53,7 +52,7 @@ async def process_audios_endpoint(
     background_tasks: BackgroundTasks,
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessAudiosForm = Depends(get_process_audios_form),
-    files: Optional[List[UploadFile]] = File(
+    files: list[UploadFile] | None = File(
         None,
         description="Audio file uploads",
     ),
@@ -96,7 +95,7 @@ async def process_audios_endpoint(
         raise
 
     # Base batch structure used when we need to return an empty 207.
-    empty_batch: Dict[str, Any] = {
+    empty_batch: dict[str, Any] = {
         "processed_count": 0,
         "errors_count": 0,
         "errors": [],
@@ -104,9 +103,9 @@ async def process_audios_endpoint(
     }
 
     # Map temporary path -> original filename for uploads.
-    temp_path_to_original_name: Dict[str, str] = {}
-    saved_files: List[Dict[str, Any]] = []
-    chunk_options_dict: Optional[Dict[str, Any]] = None
+    temp_path_to_original_name: dict[str, str] = {}
+    saved_files: list[dict[str, Any]] = []
+    chunk_options_dict: dict[str, Any] | None = None
 
     with TempDirManager(cleanup=True, prefix="process_audio_") as temp_dir:
         temp_dir_path = Path(temp_dir)

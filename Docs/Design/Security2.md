@@ -14,6 +14,7 @@ https://github.com/thu-coai/Backdoor-Data-Extraction
 https://github.com/Lu3ky13/Search-for-all-leaked-keys-secrets-using-one-regex-
 https://arxiv.org/abs/2504.05652
 https://arxiv.org/abs/2506.08837
+https://github.com/Shelpuk-AI-Technology-Consulting/lad_mcp_server
 https://www.anthropic.com/research/agentic-misalignment
 https://arxiv.org/abs/2506.09600
 https://simonwillison.net/2025/Jun/13/prompt-injection-design-patterns/
@@ -28,7 +29,7 @@ https://arxiv.org/abs/2507.05093v1
 https://arxiv.org/abs/2402.03299
 
 
-
+https://github.com/dronefreak/PromptScreen
 
 
 

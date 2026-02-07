@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -25,8 +25,8 @@ class AuthnzUsageRepo:
         self,
         *,
         key_id: int,
-        day: Optional[date] = None,
-    ) -> Dict[str, Any]:
+        day: date | None = None,
+    ) -> dict[str, Any]:
         """
         Summarize token and USD usage for a key over a specific UTC day.
 
@@ -98,8 +98,8 @@ class AuthnzUsageRepo:
         self,
         *,
         user_id: int,
-        day: Optional[date] = None,
-    ) -> Dict[str, Any]:
+        day: date | None = None,
+    ) -> dict[str, Any]:
         """
         Summarize token and USD usage for a user over a specific UTC day.
 
@@ -109,10 +109,7 @@ class AuthnzUsageRepo:
         """
         try:
             day_val: date
-            if isinstance(day, date):
-                day_val = day
-            else:
-                day_val = datetime.now(timezone.utc).date()
+            day_val = day if isinstance(day, date) else datetime.now(timezone.utc).date()
 
             if getattr(self.db_pool, "pool", None) is not None:
                 total_tokens = await self.db_pool.fetchval(
@@ -171,7 +168,7 @@ class AuthnzUsageRepo:
         *,
         key_id: int,
         days: int = 30,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Summarize token and USD usage for a key over a rolling UTC window.
 
@@ -321,15 +318,15 @@ class AuthnzUsageRepo:
     async def insert_usage_log(
         self,
         *,
-        user_id: Optional[int],
-        key_id: Optional[int],
+        user_id: int | None,
+        key_id: int | None,
         endpoint: str,
         status: int,
         latency_ms: int,
-        bytes_out: Optional[int],
-        bytes_in: Optional[int],
+        bytes_out: int | None,
+        bytes_in: int | None,
         meta: str,
-        request_id: Optional[str],
+        request_id: str | None,
     ) -> None:
         """
         Insert a single row into ``usage_log``.
@@ -383,8 +380,8 @@ class AuthnzUsageRepo:
     async def insert_llm_usage_log(
         self,
         *,
-        user_id: Optional[int],
-        key_id: Optional[int],
+        user_id: int | None,
+        key_id: int | None,
         endpoint: str,
         operation: str,
         provider: str,
@@ -399,7 +396,7 @@ class AuthnzUsageRepo:
         total_cost_usd: float,
         currency: str = "USD",
         estimated: bool = False,
-        request_id: Optional[str] = None,
+        request_id: str | None = None,
     ) -> None:
         """
         Insert a single row into ``llm_usage_log``.
@@ -442,7 +439,7 @@ class AuthnzUsageRepo:
             logger.error(f"AuthnzUsageRepo.insert_llm_usage_log failed: {exc}")
             raise
 
-    async def aggregate_usage_daily_for_day(self, *, day: Optional[date] = None) -> None:
+    async def aggregate_usage_daily_for_day(self, *, day: date | None = None) -> None:
         """
         Aggregate per-request usage from ``usage_log`` into ``usage_daily`` for a UTC day.
 
@@ -546,7 +543,7 @@ class AuthnzUsageRepo:
             logger.error(f"AuthnzUsageRepo.aggregate_usage_daily_for_day failed: {exc}")
             raise
 
-    async def aggregate_llm_usage_daily_for_day(self, *, day: Optional[date] = None) -> None:
+    async def aggregate_llm_usage_daily_for_day(self, *, day: date | None = None) -> None:
         """
         Aggregate per-request LLM usage from ``llm_usage_log`` into ``llm_usage_daily`` for a UTC day.
 

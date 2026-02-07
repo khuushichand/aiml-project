@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 from uuid import UUID
-from pydantic import BaseModel, Field, AnyUrl, validator
 
+from pydantic import AnyUrl, BaseModel, Field
 
 SourceType = Literal["rss", "site", "forum"]  # forums are feature-flagged for Phase 3
 
@@ -18,14 +18,14 @@ FilterAction = Literal["include", "exclude", "flag"]
 class WatchlistFilter(BaseModel):
     type: FilterType
     action: FilterAction
-    value: Dict[str, Any] = Field(default_factory=dict)
-    priority: Optional[int] = None
+    value: dict[str, Any] = Field(default_factory=dict)
+    priority: int | None = None
     is_active: bool = True
 
 
 class WatchlistFiltersPayload(BaseModel):
-    filters: List[WatchlistFilter] = Field(default_factory=list)
-    require_include: Optional[bool] = Field(
+    filters: list[WatchlistFilter] = Field(default_factory=list)
+    require_include: bool | None = Field(
         default=None,
         description=(
             "Include-only gating toggle. When true and any include rules exist, only include-"
@@ -49,19 +49,19 @@ class SourceCreateRequest(BaseModel):
     url: AnyUrl
     source_type: SourceType
     active: bool = True
-    settings: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = Field(default=None, description="Tag names; server normalizes and resolves to IDs")
-    group_ids: Optional[List[int]] = None
+    settings: dict[str, Any] | None = None
+    tags: list[str] | None = Field(default=None, description="Tag names; server normalizes and resolves to IDs")
+    group_ids: list[int] | None = None
 
 
 class SourceUpdateRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=200)
-    url: Optional[AnyUrl] = None
-    source_type: Optional[SourceType] = None
-    active: Optional[bool] = None
-    settings: Optional[Dict[str, Any]] = None
-    tags: Optional[List[str]] = Field(default=None, description="Replace tags with these names")
-    group_ids: Optional[List[int]] = None
+    name: str | None = Field(None, min_length=1, max_length=200)
+    url: AnyUrl | None = None
+    source_type: SourceType | None = None
+    active: bool | None = None
+    settings: dict[str, Any] | None = None
+    tags: list[str] | None = Field(default=None, description="Replace tags with these names")
+    group_ids: list[int] | None = None
 
 
 class Source(BaseModel):
@@ -70,37 +70,55 @@ class Source(BaseModel):
     url: str
     source_type: SourceType
     active: bool
-    tags: List[str] = []
-    settings: Optional[Dict[str, Any]] = None
-    last_scraped_at: Optional[str] = None
-    status: Optional[str] = None
+    tags: list[str] = []
+    group_ids: list[int] = []
+    settings: dict[str, Any] | None = None
+    last_scraped_at: str | None = None
+    status: str | None = None
     created_at: str
     updated_at: str
 
 
 class SourcesListResponse(BaseModel):
-    items: List[Source]
+    items: list[Source]
     total: int
 
 
+class SourceSeenStats(BaseModel):
+    source_id: int
+    user_id: int
+    seen_count: int = 0
+    latest_seen_at: str | None = None
+    defer_until: str | None = None
+    consec_not_modified: int | None = None
+    recent_keys: list[str] = Field(default_factory=list)
+
+
+class SourceSeenResetResponse(BaseModel):
+    source_id: int
+    user_id: int
+    cleared: int
+    cleared_backoff: bool
+
+
 class SourcesBulkCreateRequest(BaseModel):
-    sources: List[SourceCreateRequest]
+    sources: list[SourceCreateRequest]
 
 
 # --------------------
 # Bulk Sources Response (per-entry status)
 # --------------------
 class SourcesBulkCreateItem(BaseModel):
-    name: Optional[str] = None
+    name: str | None = None
     url: str
-    id: Optional[int] = None
+    id: int | None = None
     status: Literal["created", "error"]
-    error: Optional[str] = None
-    source_type: Optional[SourceType] = None
+    error: str | None = None
+    source_type: SourceType | None = None
 
 
 class SourcesBulkCreateResponse(BaseModel):
-    items: List[SourcesBulkCreateItem]
+    items: list[SourcesBulkCreateItem]
     total: int
     created: int
     errors: int
@@ -108,25 +126,25 @@ class SourcesBulkCreateResponse(BaseModel):
 
 class GroupCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = None
-    parent_group_id: Optional[int] = None
+    description: str | None = None
+    parent_group_id: int | None = None
 
 
 class GroupUpdateRequest(BaseModel):
-    name: Optional[str] = Field(None, min_length=1, max_length=200)
-    description: Optional[str] = None
-    parent_group_id: Optional[int] = None
+    name: str | None = Field(None, min_length=1, max_length=200)
+    description: str | None = None
+    parent_group_id: int | None = None
 
 
 class Group(BaseModel):
     id: int
     name: str
-    description: Optional[str] = None
-    parent_group_id: Optional[int] = None
+    description: str | None = None
+    parent_group_id: int | None = None
 
 
 class GroupsListResponse(BaseModel):
-    items: List[Group]
+    items: list[Group]
     total: int
 
 
@@ -136,47 +154,47 @@ class Tag(BaseModel):
 
 
 class TagsListResponse(BaseModel):
-    items: List[Tag]
+    items: list[Tag]
     total: int
 
 
 class JobCreateRequest(BaseModel):
     name: str
-    description: Optional[str] = None
-    scope: Dict[str, Any] = Field(default_factory=dict, description="Selection: {sources:[], groups:[], tags:[]}")
-    schedule_expr: Optional[str] = Field(None, description="Cron or interval expression; stored as provided")
-    timezone: Optional[str] = Field(None, description="Timezone for schedule; PRD default UTC")
+    description: str | None = None
+    scope: dict[str, Any] = Field(default_factory=dict, description="Selection: {sources:[], groups:[], tags:[]}")
+    schedule_expr: str | None = Field(None, description="Cron or interval expression; stored as provided")
+    timezone: str | None = Field(None, description="Timezone for schedule; PRD default UTC")
     active: bool = True
-    max_concurrency: Optional[int] = None
-    per_host_delay_ms: Optional[int] = None
-    retry_policy: Optional[Dict[str, Any]] = None
-    output_prefs: Optional[Dict[str, Any]] = None
-    ingest_prefs: Optional[WatchlistIngestPrefs] = Field(
+    max_concurrency: int | None = None
+    per_host_delay_ms: int | None = None
+    retry_policy: dict[str, Any] | None = None
+    output_prefs: dict[str, Any] | None = None
+    ingest_prefs: WatchlistIngestPrefs | None = Field(
         default=None,
         description="Optional ingest preferences (e.g., Media DB persistence).",
     )
-    job_filters: Optional[WatchlistFiltersPayload] = Field(
+    job_filters: WatchlistFiltersPayload | None = Field(
         default=None,
         description="Optional job-level filters payload (bridge from SUBS Import Rules)",
     )
 
 
 class JobUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    scope: Optional[Dict[str, Any]] = None
-    schedule_expr: Optional[str] = None
-    timezone: Optional[str] = None
-    active: Optional[bool] = None
-    max_concurrency: Optional[int] = None
-    per_host_delay_ms: Optional[int] = None
-    retry_policy: Optional[Dict[str, Any]] = None
-    output_prefs: Optional[Dict[str, Any]] = None
-    ingest_prefs: Optional[WatchlistIngestPrefs] = Field(
+    name: str | None = None
+    description: str | None = None
+    scope: dict[str, Any] | None = None
+    schedule_expr: str | None = None
+    timezone: str | None = None
+    active: bool | None = None
+    max_concurrency: int | None = None
+    per_host_delay_ms: int | None = None
+    retry_policy: dict[str, Any] | None = None
+    output_prefs: dict[str, Any] | None = None
+    ingest_prefs: WatchlistIngestPrefs | None = Field(
         default=None,
         description="Optional ingest preferences (replace).",
     )
-    job_filters: Optional[WatchlistFiltersPayload] = Field(
+    job_filters: WatchlistFiltersPayload | None = Field(
         default=None,
         description="Optional job-level filters payload (replace)",
     )
@@ -185,26 +203,26 @@ class JobUpdateRequest(BaseModel):
 class Job(BaseModel):
     id: int
     name: str
-    description: Optional[str] = None
-    scope: Dict[str, Any]
-    schedule_expr: Optional[str]
-    timezone: Optional[str]
+    description: str | None = None
+    scope: dict[str, Any]
+    schedule_expr: str | None
+    timezone: str | None
     active: bool
-    max_concurrency: Optional[int] = None
-    per_host_delay_ms: Optional[int] = None
-    retry_policy: Optional[Dict[str, Any]] = None
-    output_prefs: Optional[Dict[str, Any]] = None
-    ingest_prefs: Optional[WatchlistIngestPrefs] = None
-    job_filters: Optional[WatchlistFiltersPayload] = None
+    max_concurrency: int | None = None
+    per_host_delay_ms: int | None = None
+    retry_policy: dict[str, Any] | None = None
+    output_prefs: dict[str, Any] | None = None
+    ingest_prefs: WatchlistIngestPrefs | None = None
+    job_filters: WatchlistFiltersPayload | None = None
     created_at: str
     updated_at: str
-    last_run_at: Optional[str] = None
-    next_run_at: Optional[str] = None
-    wf_schedule_id: Optional[str] = None
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    wf_schedule_id: str | None = None
 
 
 class JobsListResponse(BaseModel):
-    items: List[Job]
+    items: list[Job]
     total: int
 
 
@@ -212,33 +230,35 @@ class Run(BaseModel):
     id: int
     job_id: int
     status: str
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    stats: Optional[Dict[str, Any]] = None
-    error_msg: Optional[str] = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    stats: dict[str, Any] | None = None
+    error_msg: str | None = None
 
 
 class RunsListResponse(BaseModel):
-    items: List[Run]
+    items: list[Run]
     total: int
-    has_more: Optional[bool] = None
+    has_more: bool | None = None
 
 
 class PreviewItem(BaseModel):
     source_id: int
     source_type: SourceType
-    url: Optional[str] = None
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    published_at: Optional[str] = None
+    url: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    published_at: str | None = None
     decision: Literal["ingest", "filtered"]
-    matched_action: Optional[FilterAction] = None
-    matched_filter_key: Optional[str] = None
+    matched_action: FilterAction | None = None
+    matched_filter_key: str | None = None
+    matched_filter_id: int | None = None
+    matched_filter_type: FilterType | None = None
     flagged: bool = False
 
 
 class PreviewResponse(BaseModel):
-    items: List[PreviewItem]
+    items: list[PreviewItem]
     total: int
     ingestable: int
     filtered: int
@@ -248,15 +268,15 @@ class RunDetail(BaseModel):
     id: int
     job_id: int
     status: str
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    stats: Dict[str, int] = Field(default_factory=lambda: {"items_found": 0, "items_ingested": 0})
-    filter_tallies: Optional[Dict[str, int]] = None
-    error_msg: Optional[str] = None
-    log_text: Optional[str] = None
-    log_path: Optional[str] = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    stats: dict[str, int] = Field(default_factory=lambda: {"items_found": 0, "items_ingested": 0})
+    filter_tallies: dict[str, int] | None = None
+    error_msg: str | None = None
+    log_text: str | None = None
+    log_path: str | None = None
     truncated: bool = False
-    filtered_sample: Optional[List[Dict[str, Any]]] = None
+    filtered_sample: list[dict[str, Any]] | None = None
 
 
 class ScrapedItem(BaseModel):
@@ -264,70 +284,75 @@ class ScrapedItem(BaseModel):
     run_id: int
     job_id: int
     source_id: int
-    media_id: Optional[int] = None
-    media_uuid: Optional[UUID] = None
-    url: Optional[str] = None
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    published_at: Optional[str] = None
-    tags: List[str] = []
+    media_id: int | None = None
+    media_uuid: UUID | None = None
+    url: str | None = None
+    title: str | None = None
+    summary: str | None = None
+    published_at: str | None = None
+    tags: list[str] = []
     status: str
     reviewed: bool
     created_at: str
 
 
 class ScrapedItemsListResponse(BaseModel):
-    items: List[ScrapedItem]
+    items: list[ScrapedItem]
     total: int
 
 
 class ScrapedItemUpdateRequest(BaseModel):
-    reviewed: Optional[bool] = None
-    status: Optional[str] = Field(None, description="Optional status override (e.g., reviewed, ignored)")
+    reviewed: bool | None = None
+    status: str | None = Field(None, description="Optional status override (e.g., reviewed, ignored)")
 
 
 class WatchlistOutputEmailDelivery(BaseModel):
     enabled: bool = True
-    recipients: Optional[List[str]] = Field(default=None, description="Explicit recipient emails; defaults to user email when empty")
-    subject: Optional[str] = Field(default=None, description="Overrides default subject (defaults to output title)")
+    recipients: list[str] | None = Field(default=None, description="Explicit recipient emails; defaults to user email when empty")
+    subject: str | None = Field(default=None, description="Overrides default subject (defaults to output title)")
     attach_file: bool = Field(default=True, description="Attach rendered content as a file")
     body_format: Literal["auto", "text", "html"] = Field(default="auto", description="Controls email body format")
 
 
 class WatchlistOutputChatbookDelivery(BaseModel):
     enabled: bool = True
-    title: Optional[str] = Field(default=None, description="Override Chatbook document title")
-    description: Optional[str] = Field(default=None, description="Optional description stored alongside the document")
-    conversation_id: Optional[int] = Field(default=None, description="Optional conversation association")
-    provider: Optional[str] = Field(default="watchlists", description="Provider marker for the generated document")
-    model: Optional[str] = Field(default="watchlists", description="Model marker for the generated document")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata stored with the document")
+    title: str | None = Field(default=None, description="Override Chatbook document title")
+    description: str | None = Field(default=None, description="Optional description stored alongside the document")
+    conversation_id: int | None = Field(default=None, description="Optional conversation association")
+    provider: str | None = Field(default="watchlists", description="Provider marker for the generated document")
+    model: str | None = Field(default="watchlists", description="Model marker for the generated document")
+    metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata stored with the document")
 
 
 class WatchlistOutputDeliveries(BaseModel):
-    email: Optional[WatchlistOutputEmailDelivery] = None
-    chatbook: Optional[WatchlistOutputChatbookDelivery] = None
+    email: WatchlistOutputEmailDelivery | None = None
+    chatbook: WatchlistOutputChatbookDelivery | None = None
 
 
 class WatchlistOutputCreateRequest(BaseModel):
     run_id: int = Field(..., description="Run identifier the output is based on")
-    item_ids: Optional[List[int]] = Field(None, description="Explicit list of scraped item IDs to include")
-    title: Optional[str] = Field(None, description="Optional title to embed in the generated output")
+    item_ids: list[int] | None = Field(None, description="Explicit list of scraped item IDs to include")
+    title: str | None = Field(None, description="Optional title to embed in the generated output")
     type: str = Field("briefing_markdown", description="Output template/type identifier")
-    format: Optional[Literal["md", "html"]] = Field(None, description="Rendered output format (overrides template)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Optional metadata stored alongside the output")
-    template_name: Optional[str] = Field(None, description="Name of a stored template to render with")
+    format: Literal["md", "html"] | None = Field(None, description="Rendered output format (overrides template)")
+    metadata: dict[str, Any] | None = Field(None, description="Optional metadata stored alongside the output")
+    template_name: str | None = Field(None, description="Name of a stored template to render with")
+    template_version: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional version of a watchlists template to render (supports template history).",
+    )
     generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
-    mece_template_name: Optional[str] = Field(default=None, description="Override template name for MECE output")
+    mece_template_name: str | None = Field(default=None, description="Override template name for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")
-    tts_template_name: Optional[str] = Field(default=None, description="Override template name for TTS output")
+    tts_template_name: str | None = Field(default=None, description="Override template name for TTS output")
     ingest_to_media_db: bool = Field(default=False, description="Ingest outputs into Media DB")
-    tts_model: Optional[str] = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
-    tts_voice: Optional[str] = Field(default=None, description="TTS voice id, e.g., 'af_heart'")
-    tts_speed: Optional[float] = Field(default=None, ge=0.25, le=4.0, description="TTS speed override")
-    retention_seconds: Optional[int] = Field(None, ge=0, description="Optional custom retention in seconds (0 = no expiry)")
-    temporary: Optional[bool] = Field(False, description="Whether to use temporary retention defaults")
-    deliveries: Optional[WatchlistOutputDeliveries] = Field(
+    tts_model: str | None = Field(default=None, description="TTS model id, e.g., 'kokoro', 'tts-1'")
+    tts_voice: str | None = Field(default=None, description="TTS voice id, e.g., 'af_heart'")
+    tts_speed: float | None = Field(default=None, ge=0.25, le=4.0, description="TTS speed override")
+    retention_seconds: int | None = Field(None, ge=0, description="Optional custom retention in seconds (0 = no expiry)")
+    temporary: bool | None = Field(False, description="Whether to use temporary retention defaults")
+    deliveries: WatchlistOutputDeliveries | None = Field(
         default=None,
         description="Optional delivery configuration (email, chatbook). Overrides job defaults when provided.",
     )
@@ -339,43 +364,58 @@ class WatchlistOutput(BaseModel):
     job_id: int
     type: str
     format: str
-    title: Optional[str] = None
-    content: Optional[str] = None
-    storage_path: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    media_item_id: Optional[int] = None
-    chatbook_path: Optional[str] = None
+    title: str | None = None
+    content: str | None = None
+    storage_path: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    media_item_id: int | None = None
+    chatbook_path: str | None = None
     version: int
-    expires_at: Optional[str] = None
+    expires_at: str | None = None
     expired: bool = False
     created_at: str
 
 
 class WatchlistOutputsListResponse(BaseModel):
-    items: List[WatchlistOutput]
+    items: list[WatchlistOutput]
     total: int
 
 
 class WatchlistTemplateSummary(BaseModel):
     name: str
     format: Literal["md", "html"]
-    description: Optional[str] = None
+    description: str | None = None
     updated_at: str
+    version: int = 1
+    history_count: int = 0
 
 
 class WatchlistTemplateDetail(WatchlistTemplateSummary):
     content: str
+    available_versions: list[int] = Field(default_factory=list)
+
+
+class WatchlistTemplateVersionSummary(BaseModel):
+    version: int
+    format: Literal["md", "html"]
+    description: str | None = None
+    updated_at: str
+    is_current: bool = False
+
+
+class WatchlistTemplateVersionsResponse(BaseModel):
+    items: list[WatchlistTemplateVersionSummary]
 
 
 class WatchlistTemplateListResponse(BaseModel):
-    items: List[WatchlistTemplateSummary]
+    items: list[WatchlistTemplateSummary]
 
 
 class WatchlistTemplateCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
     format: Literal["md", "html"] = "md"
     content: str = Field(..., description="Template content")
-    description: Optional[str] = Field(None, description="Optional human-readable description")
+    description: str | None = Field(None, description="Optional human-readable description")
     overwrite: bool = Field(False, description="If false, creation fails when template already exists")
 
 
@@ -393,14 +433,14 @@ class WatchlistTemplateValidationErrorResponse(BaseModel):
 # --------------------
 class SourcesImportItem(BaseModel):
     url: str
-    name: Optional[str] = None
-    id: Optional[int] = None
+    name: str | None = None
+    id: int | None = None
     status: Literal["created", "skipped", "error"]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SourcesImportResponse(BaseModel):
-    items: List[SourcesImportItem]
+    items: list[SourcesImportItem]
     total: int
     created: int
     skipped: int

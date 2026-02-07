@@ -11,21 +11,21 @@ Usage:
     python migrate_config.py [--dry-run] [--backup]
 """
 
-import os
-import sys
-import shutil
-import configparser
-import re
-from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Tuple, Optional
 import argparse
+import configparser
+import shutil
+import sys
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from loguru import logger
 
 
 class ConfigMigrator:
     """Handles migration of configuration from config.txt to .env"""
 
-    def __init__(self, config_dir: Path = None):
+    def __init__(self, config_dir: Optional[Path] = None) -> None:
         """Initialize the migrator with config directory path"""
         if config_dir is None:
             # Default to current directory (Config_Files)
@@ -74,7 +74,7 @@ class ConfigMigrator:
         self.extracted_keys = {}
         self.existing_env_keys = {}
 
-    def backup_files(self) -> Tuple[Optional[Path], Optional[Path]]:
+    def backup_files(self) -> tuple[Optional[Path], Optional[Path]]:
         """Create backups of existing config files"""
         self.backup_dir.mkdir(exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -85,19 +85,19 @@ class ConfigMigrator:
         if self.config_file.exists():
             config_backup = self.backup_dir / f"config.txt.backup_{timestamp}"
             shutil.copy2(self.config_file, config_backup)
-            print(f"✓ Backed up config.txt to {config_backup}")
+            logger.success("Backed up config.txt to {}", config_backup)
 
         if self.env_file.exists():
             env_backup = self.backup_dir / f".env.backup_{timestamp}"
             shutil.copy2(self.env_file, env_backup)
-            print(f"✓ Backed up .env to {env_backup}")
+            logger.success("Backed up .env to {}", env_backup)
 
         return config_backup, env_backup
 
-    def extract_keys_from_config(self) -> Dict[str, str]:
+    def extract_keys_from_config(self) -> dict[str, str]:
         """Extract API keys and sensitive data from config.txt"""
         if not self.config_file.exists():
-            print(f"⚠ Config file not found: {self.config_file}")
+            logger.warning("Config file not found: {}", self.config_file)
             return {}
 
         config = configparser.ConfigParser()
@@ -114,7 +114,7 @@ class ConfigMigrator:
                     if value and not value.startswith("<") and not value.endswith(">"):
                         if value != "your_api_key_here" and value != "":
                             extracted[env_key] = value
-                            print(f"  Found {key}: {value[:8]}..." if len(value) > 8 else f"  Found {key}")
+                            logger.info("Found API key for migration: {}", key)
 
         # Process Local-API section
         if config.has_section("Local-API"):
@@ -128,7 +128,7 @@ class ConfigMigrator:
                             continue
                         if value != "":
                             extracted[env_key] = value
-                            print(f"  Found {key}: {value[:20]}..." if len(value) > 20 else f"  Found {key}")
+                            logger.info("Found local API key for migration: {}", key)
 
         # Process Embeddings section
         if config.has_section("Embeddings"):
@@ -136,40 +136,52 @@ class ConfigMigrator:
                 value = config.get("Embeddings", "embedding_api_key")
                 if value and value != "your_api_key_here" and value != "":
                     extracted["EMBEDDING_API_KEY"] = value
-                    print(f"  Found embedding_api_key")
+                    logger.info("Found embedding API key for migration")
 
             if config.has_option("Embeddings", "embedding_api_url"):
                 value = config.get("Embeddings", "embedding_api_url")
                 if value and value != "http://localhost:8080/v1/embeddings":
                     extracted["EMBEDDING_API_URL"] = value
-                    print(f"  Found embedding_api_url: {value}")
+                    logger.info("Found embedding API URL for migration")
 
         self.extracted_keys = extracted
         return extracted
 
-    def read_existing_env(self) -> Dict[str, str]:
+    def read_existing_env(self) -> dict[str, str]:
         """Read existing .env file if it exists"""
         if not self.env_file.exists():
             return {}
 
         existing = {}
-        with open(self.env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    existing[key.strip()] = value.strip()
+        try:
+            with open(self.env_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        existing[key.strip()] = value.strip()
+        except (OSError, UnicodeError) as exc:
+            logger.error("Failed to read .env file: {}", exc)
+            raise
 
         self.existing_env_keys = existing
         return existing
 
-    def write_env_file(self, keys: Dict[str, str], preserve_existing: bool = True):
+    def write_env_file(
+        self,
+        keys: dict[str, str],
+        preserve_existing: bool = True,
+    ) -> None:
         """Write the .env file with migrated keys"""
         # Read template for structure
         template_lines = []
         if self.env_template.exists():
-            with open(self.env_template, 'r') as f:
-                template_lines = f.readlines()
+            try:
+                with open(self.env_template, encoding="utf-8") as f:
+                    template_lines = f.readlines()
+            except (OSError, UnicodeError) as exc:
+                logger.warning("Failed to read .env template, using fallback format: {}", exc)
+                template_lines = []
 
         # Merge with existing keys if preserving
         final_keys = {}
@@ -178,91 +190,102 @@ class ConfigMigrator:
         final_keys.update(keys)
 
         # Write new .env file
-        with open(self.env_file, 'w') as f:
-            if template_lines:
-                # Use template structure
-                for line in template_lines:
-                    if '=' in line and not line.strip().startswith('#'):
-                        key = line.split('=')[0].strip()
-                        if key in final_keys:
-                            # Skip empty values
-                            if final_keys[key]:
-                                f.write(f"{key}={final_keys[key]}\n")
-                                final_keys.pop(key)  # Mark as written
+        try:
+            with open(self.env_file, "w", encoding="utf-8") as f:
+                if template_lines:
+                    # Use template structure
+                    for line in template_lines:
+                        if "=" in line and not line.strip().startswith("#"):
+                            key = line.split("=")[0].strip()
+                            if key in final_keys:
+                                # Skip empty values
+                                if final_keys[key]:
+                                    f.write(f"{key}={final_keys[key]}\n")
+                                    final_keys.pop(key)  # Mark as written
+                                else:
+                                    f.write(line)  # Keep original empty line
                             else:
-                                f.write(line)  # Keep original empty line
+                                f.write(line)
                         else:
                             f.write(line)
-                    else:
-                        f.write(line)
 
-                # Add any keys not in template
-                if final_keys:
-                    f.write("\n# Additional migrated keys\n")
-                    for key, value in final_keys.items():
-                        if value:  # Skip empty values
-                            f.write(f"{key}={value}\n")
-            else:
-                # No template, write simple format
-                f.write("# Migrated configuration\n")
-                f.write(f"# Generated on {datetime.now().isoformat()}\n\n")
+                    # Add any keys not in template
+                    if final_keys:
+                        f.write("\n# Additional migrated keys\n")
+                        for key, value in final_keys.items():
+                            if value:  # Skip empty values
+                                f.write(f"{key}={value}\n")
+                else:
+                    # No template, write simple format
+                    f.write("# Migrated configuration\n")
+                    f.write(f"# Generated on {datetime.now().isoformat()}\n\n")
 
-                # Group by type
-                api_keys = {k: v for k, v in final_keys.items() if "API_KEY" in k}
-                api_ips = {k: v for k, v in final_keys.items() if "API_IP" in k}
-                others = {k: v for k, v in final_keys.items() if k not in api_keys and k not in api_ips}
+                    # Group by type
+                    api_keys = {k: v for k, v in final_keys.items() if "API_KEY" in k}
+                    api_ips = {k: v for k, v in final_keys.items() if "API_IP" in k}
+                    others = {
+                        k: v for k, v in final_keys.items() if k not in api_keys and k not in api_ips
+                    }
 
-                if api_keys:
-                    f.write("# API Keys\n")
-                    for key, value in sorted(api_keys.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
-                    f.write("\n")
+                    if api_keys:
+                        f.write("# API Keys\n")
+                        for key, value in sorted(api_keys.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+                        f.write("\n")
 
-                if api_ips:
-                    f.write("# API Endpoints\n")
-                    for key, value in sorted(api_ips.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
-                    f.write("\n")
+                    if api_ips:
+                        f.write("# API Endpoints\n")
+                        for key, value in sorted(api_ips.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+                        f.write("\n")
 
-                if others:
-                    f.write("# Other Settings\n")
-                    for key, value in sorted(others.items()):
-                        if value:
-                            f.write(f"{key}={value}\n")
+                    if others:
+                        f.write("# Other Settings\n")
+                        for key, value in sorted(others.items()):
+                            if value:
+                                f.write(f"{key}={value}\n")
+        except OSError as exc:
+            logger.error("Failed to write .env file: {}", exc)
+            raise
+
+        try:
+            self.env_file.chmod(0o600)
+        except OSError as exc:
+            logger.warning("Unable to set permissions on .env: {}", exc)
 
     def migrate(self, dry_run: bool = False, backup: bool = True) -> bool:
         """Perform the migration"""
-        print("\n" + "="*60)
-        print("Configuration Migration Tool")
-        print("="*60)
+        logger.info("\n" + "="*60)
+        logger.info("Configuration Migration Tool")
+        logger.info("="*60)
 
         if dry_run:
-            print("\n🔍 DRY RUN MODE - No changes will be made\n")
+            logger.info("\n🔍 DRY RUN MODE - No changes will be made\n")
 
         # Step 1: Backup if requested
         if backup and not dry_run:
-            print("\n📦 Creating backups...")
+            logger.info("\n📦 Creating backups...")
             self.backup_files()
 
         # Step 2: Read existing .env
-        print("\n📖 Reading existing .env file...")
+        logger.info("\n📖 Reading existing .env file...")
         existing_env = self.read_existing_env()
         if existing_env:
-            print(f"  Found {len(existing_env)} existing keys in .env")
+            logger.info("  Found {} existing keys in .env", len(existing_env))
         else:
-            print("  No existing .env file found")
+            logger.info("  No existing .env file found")
 
         # Step 3: Extract keys from config.txt
-        print("\n🔍 Extracting keys from config.txt...")
+        logger.info("\n🔍 Extracting keys from config.txt...")
         extracted = self.extract_keys_from_config()
 
         if not extracted:
-            print("\n✅ No API keys found to migrate")
+            logger.info("\n✅ No API keys found to migrate")
             return True
 
-        print(f"\n📊 Found {len(extracted)} keys to migrate")
+        logger.info("\n📊 Found {} keys to migrate", len(extracted))
 
         # Step 4: Check for conflicts
         conflicts = []
@@ -271,46 +294,48 @@ class ConfigMigrator:
                 conflicts.append(key)
 
         if conflicts:
-            print(f"\n⚠ Warning: {len(conflicts)} keys already exist in .env with different values:")
-            for key in conflicts:
-                print(f"  {key}:")
-                print(f"    Current: {existing_env[key][:20]}..." if len(existing_env[key]) > 20 else f"    Current: {existing_env[key]}")
-                print(f"    New:     {extracted[key][:20]}..." if len(extracted[key]) > 20 else f"    New:     {extracted[key]}")
+            logger.warning(
+                "Warning: {} keys already exist in .env with different values: {}",
+                len(conflicts),
+                ", ".join(sorted(conflicts)),
+            )
 
             if not dry_run:
                 response = input("\nOverwrite existing values? (y/N): ")
-                if response.lower() != 'y':
-                    print("Migration cancelled")
+                if response.lower() != "y":
+                    logger.info("Migration cancelled")
                     return False
 
         # Step 5: Write new .env file
         if not dry_run:
-            print("\n✍ Writing .env file...")
+            logger.info("\n✍ Writing .env file...")
             self.write_env_file(extracted, preserve_existing=True)
-            print(f"✓ Updated .env file with {len(extracted)} keys")
+            logger.info("✓ Updated .env file with {} keys", len(extracted))
         else:
-            print("\n📝 Would write the following keys to .env:")
-            for key, value in extracted.items():
-                print(f"  {key}={value[:20]}..." if len(value) > 20 else f"  {key}={value}")
+            logger.info(
+                "Would write {} keys to .env: {}",
+                len(extracted),
+                ", ".join(sorted(extracted)),
+            )
 
         # Step 6: Summary
-        print("\n" + "="*60)
+        logger.info("\n" + "="*60)
         if dry_run:
-            print("DRY RUN COMPLETE - No changes were made")
-            print("Run without --dry-run to perform actual migration")
+            logger.info("DRY RUN COMPLETE - No changes were made")
+            logger.info("Run without --dry-run to perform actual migration")
         else:
-            print("✅ MIGRATION COMPLETE")
-            print("\nNext steps:")
-            print("1. Review the .env file to ensure all keys are correct")
-            print("2. Test the application to verify it works with new config")
-            print("3. The cleaned config.txt no longer contains API keys")
-            print("\nIMPORTANT: Never commit .env to version control!")
-        print("="*60 + "\n")
+            logger.info("✅ MIGRATION COMPLETE")
+            logger.info("\nNext steps:")
+            logger.info("1. Review the .env file to ensure all keys are correct")
+            logger.info("2. Test the application to verify it works with new config")
+            logger.info("3. The cleaned config.txt no longer contains API keys")
+            logger.info("\nIMPORTANT: Never commit .env to version control!")
+        logger.info("="*60 + "\n")
 
         return True
 
 
-def main():
+def main() -> None:
     """Main entry point"""
     parser = argparse.ArgumentParser(
         description="Migrate API keys from config.txt to .env file"
@@ -321,17 +346,12 @@ def main():
         help="Show what would be migrated without making changes"
     )
     parser.add_argument(
-        "--backup",
-        action="store_true",
-        default=True,
-        help="Create backups before migration (default: True)"
-    )
-    parser.add_argument(
         "--no-backup",
         dest="backup",
         action="store_false",
-        help="Skip creating backups"
+        help="Skip creating backups (backups are created by default)"
     )
+    parser.set_defaults(backup=True)
     parser.add_argument(
         "--config-dir",
         type=str,

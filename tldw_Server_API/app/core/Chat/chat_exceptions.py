@@ -4,10 +4,11 @@
 # Imports
 import traceback
 import uuid
+from contextvars import ContextVar
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Dict, Any
-from contextvars import ContextVar
+from typing import Any, Optional
+
 from loguru import logger
 
 #######################################################################################################################
@@ -97,7 +98,7 @@ class ChatModuleException(Exception):
         self,
         code: ChatErrorCode,
         message: str,
-        details: Optional[Dict[str, Any]] = None,
+        details: Optional[dict[str, Any]] = None,
         cause: Optional[Exception] = None,
         user_message: Optional[str] = None
     ):
@@ -127,7 +128,7 @@ class ChatModuleException(Exception):
 
         super().__init__(message)
 
-    def to_log_dict(self) -> Dict[str, Any]:
+    def to_log_dict(self) -> dict[str, Any]:
         """
         Convert exception to a dictionary for structured logging.
         Includes all internal details for debugging.
@@ -143,7 +144,7 @@ class ChatModuleException(Exception):
             "cause_type": type(self.cause).__name__ if self.cause else None
         }
 
-    def to_response_dict(self) -> Dict[str, Any]:
+    def to_response_dict(self) -> dict[str, Any]:
         """
         Convert exception to a safe dictionary for API responses.
         Excludes sensitive internal details.
@@ -178,7 +179,7 @@ class ChatModuleException(Exception):
 class ChatAuthenticationError(ChatModuleException):
     """Authentication-related errors."""
 
-    def __init__(self, message: str, details: Optional[Dict] = None, cause: Optional[Exception] = None):
+    def __init__(self, message: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
         super().__init__(
             code=ChatErrorCode.AUTH_INVALID_TOKEN,
             message=message,
@@ -190,7 +191,7 @@ class ChatAuthenticationError(ChatModuleException):
 class ChatValidationError(ChatModuleException):
     """Request validation errors."""
 
-    def __init__(self, message: str, details: Optional[Dict] = None, validation_errors: Optional[list] = None):
+    def __init__(self, message: str, details: Optional[dict] = None, validation_errors: Optional[list] = None):
         if details is None:
             details = {}
         if validation_errors:
@@ -206,7 +207,7 @@ class ChatValidationError(ChatModuleException):
 class ChatDatabaseError(ChatModuleException):
     """Database operation errors."""
 
-    def __init__(self, message: str, operation: str, details: Optional[Dict] = None, cause: Optional[Exception] = None):
+    def __init__(self, message: str, operation: str, details: Optional[dict] = None, cause: Optional[Exception] = None):
         if details is None:
             details = {}
         details["operation"] = operation
@@ -233,7 +234,7 @@ class ChatProviderError(ChatModuleException):
             message=message,
             details=details,
             cause=cause,
-            user_message=f"The chat service is temporarily unavailable. Please try again later."
+            user_message="The chat service is temporarily unavailable. Please try again later."
         )
 
 class ChatRateLimitError(ChatModuleException):

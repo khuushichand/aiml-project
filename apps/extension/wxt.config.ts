@@ -33,7 +33,13 @@ export default defineConfig({
         64: "icon/64.png",
         128: "icon/128.png"
       }
-    }
+    },
+    web_accessible_resources: [
+      {
+        resources: ["pdf.worker.min.mjs"],
+        matches: ["<all_urls>"]
+      }
+    ]
   },
   vite: () => ({
     resolve: {

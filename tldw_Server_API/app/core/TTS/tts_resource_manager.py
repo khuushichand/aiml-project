@@ -4,30 +4,53 @@
 # Imports
 import asyncio
 import gc
-import psutil
+import threading
 import time
 import weakref
-from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional, AsyncGenerator, Set, Callable, TYPE_CHECKING
-import threading
+from collections import OrderedDict
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+import psutil
+
 #
 # Third-party Imports
 from loguru import logger
+
 #
 # Local Imports
 from .tts_exceptions import (
-    TTSResourceError,
     TTSInsufficientMemoryError,
-    TTSInsufficientStorageError,
-    TTSModelLoadError,
-    TTSNetworkError
+    TTSNetworkError,
+    TTSResourceError,
 )
+
+_TTS_RESOURCE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    ZeroDivisionError,
+)
+
 #
 # Conditional imports for type checking
 if TYPE_CHECKING:
-    from .adapters.base import TTSAdapter
+    pass
 #
 #######################################################################################################################
 #
@@ -50,12 +73,25 @@ class ResourceMetrics:
     use_count: int = 0
     memory_usage: int = 0  # bytes
     is_active: bool = True
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def update_usage(self):
         """Update usage statistics"""
         self.last_used = time.time()
         self.use_count += 1
+
+
+@dataclass
+class ModelCacheEntry:
+    """Track cached TTS model instances for LRU eviction."""
+    provider: str
+    cache_key: str
+    model_ref: weakref.ReferenceType
+    cleanup_callback: Optional[Callable]
+    created_at: float
+    last_used: float
+    use_count: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class StreamingSession:
@@ -84,7 +120,7 @@ class StreamingSession:
         self.chunks_sent = 0
         self.bytes_sent = 0
         self.error_count = 0
-        self._cleanup_tasks: Set[asyncio.Task] = set()
+        self._cleanup_tasks: set[asyncio.Task] = set()
 
     # Backward-compat properties used by tests
     @property
@@ -141,7 +177,7 @@ class StreamingSession:
                 f"duration={time.time() - self.created_at:.2f}s"
             )
 
-        except Exception as e:
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error closing streaming session {self.session_id}: {e}")
 
     def is_expired(self, timeout: float = 300) -> bool:
@@ -174,13 +210,13 @@ class HTTPConnectionPool:
         self.timeout = timeout
 
         # Connection pools per provider
-        self._pools: Dict[str, Any] = {}
-        self._pool_metrics: Dict[str, ResourceMetrics] = {}
+        self._pools: dict[str, Any] = {}
+        self._pool_metrics: dict[str, ResourceMetrics] = {}
         self._lock = asyncio.Lock()
 
         # Backward-compatibility: tests reference `_clients`; alias to `_pools`.
     @property
-    def _clients(self) -> Dict[str, Any]:
+    def _clients(self) -> dict[str, Any]:
         return self._pools
 
     async def get_client(self, provider: str, base_url: Optional[str] = None) -> Any:
@@ -212,9 +248,9 @@ class HTTPConnectionPool:
                         base_url=base_url,
                         limits=limits,
                     )
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     # If central factory is unavailable, surface an error instead of constructing directly
-                    raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}")
+                    raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}") from e
 
                 self._pools[provider] = client
                 self._pool_metrics[provider] = ResourceMetrics(
@@ -248,7 +284,7 @@ class HTTPConnectionPool:
         """Close all connection pools"""
         async with self._lock:
             tasks = []
-            for provider, client in self._pools.items():
+            for _provider, client in self._pools.items():
                 tasks.append(client.aclose())
 
             if tasks:
@@ -258,7 +294,7 @@ class HTTPConnectionPool:
             self._pool_metrics.clear()
             logger.info("Closed all HTTP connection pools")
 
-    def get_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_stats(self) -> dict[str, dict[str, Any]]:
         """Get connection pool statistics"""
         stats = {}
         for provider, metrics in self._pool_metrics.items():
@@ -307,10 +343,10 @@ class MemoryMonitor:
 
         self._monitoring = False
         self._monitor_task: Optional[asyncio.Task] = None
-        self._model_references: Set[weakref.ReferenceType] = set()
+        self._model_references: set[weakref.ReferenceType] = set()
         self._last_check_time = 0
         self._last_memory_usage = None
-        self._cleanup_callbacks: List[Callable] = []
+        self._cleanup_callbacks: list[Callable] = []
 
         # Get system memory info
         self.total_memory = psutil.virtual_memory().total
@@ -332,7 +368,7 @@ class MemoryMonitor:
 
         logger.debug(f"Registered model for memory monitoring: {type(model_instance).__name__}")
 
-    def get_memory_usage(self) -> Dict[str, Any]:
+    def get_memory_usage(self) -> dict[str, Any]:
         """Get current memory usage statistics (with simple caching and robust fallbacks)"""
         now = time.time()
         if (
@@ -372,7 +408,7 @@ class MemoryMonitor:
         if percent_raw is None and total_raw:
             try:
                 percent_raw = (used_raw / total_raw) * 100
-            except Exception:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
                 percent_raw = 0
 
         total = _as_int(total_raw)
@@ -437,7 +473,7 @@ class MemoryMonitor:
                     await callback()
                 else:
                     callback()
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in cleanup callback: {e}")
 
         # Clean up dead references
@@ -467,10 +503,8 @@ class MemoryMonitor:
         self._monitoring = False
         if self._monitor_task:
             self._monitor_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._monitor_task
-            except asyncio.CancelledError:
-                pass
         logger.info("Memory monitoring stopped")
 
     async def _monitor_loop(self):
@@ -486,7 +520,7 @@ class MemoryMonitor:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in memory monitoring: {e}")
                 await asyncio.sleep(self.check_interval)
 
@@ -494,15 +528,15 @@ class MemoryMonitor:
 class StreamingSessionManager:
     """Manages streaming audio sessions"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         self.config = config or {}
-        self.sessions: Dict[str, StreamingSession] = {}
+        self.sessions: dict[str, StreamingSession] = {}
         self.max_sessions = self.config.get("max_streaming_sessions", 10)
         self._lock = threading.Lock()
 
     # Tests reference `_sessions`; expose alias to `sessions`.
     @property
-    def _sessions(self) -> Dict[str, StreamingSession]:
+    def _sessions(self) -> dict[str, StreamingSession]:
         return self.sessions
 
     async def create_session(self, provider: str, session_id: Optional[str] = None, **kwargs) -> str:
@@ -555,7 +589,7 @@ class StreamingSessionManager:
             return True
         return False
 
-    async def close_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def close_session(self, session_id: str) -> Optional[dict[str, Any]]:
         """Close a streaming session and return stats
 
         Args:
@@ -580,7 +614,7 @@ class StreamingSessionManager:
             "error_count": session.error_count
         }
 
-    def end_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def end_session(self, session_id: str) -> Optional[dict[str, Any]]:
         """End a streaming session and return stats"""
         with self._lock:
             session = self.sessions.pop(session_id, None)
@@ -643,7 +677,7 @@ class StreamingSessionManager:
                     logger.warning(f"Unable to close session {sid} during cleanup")
                     session.is_active = False
 
-    async def get_active_sessions(self) -> List[StreamingSession]:
+    async def get_active_sessions(self) -> list[StreamingSession]:
         """Get list of active session objects"""
         return [s for s in self.sessions.values() if s.is_active]
 
@@ -662,7 +696,7 @@ class StreamingSessionManager:
 class TTSResourceManager:
     """Central resource manager for TTS operations"""
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         """
         Initialize TTS resource manager.
 
@@ -689,18 +723,61 @@ class TTSResourceManager:
 
         # Streaming session management
         self.session_manager = StreamingSessionManager(self.config)
-        self._streaming_sessions: Dict[str, StreamingSession] = {}
+        self._streaming_sessions: dict[str, StreamingSession] = {}
         self._session_cleanup_task: Optional[asyncio.Task] = None
         self._session_timeout = self.config.get("streaming_session_timeout", 300)  # 5 minutes
 
         # Model instance tracking
-        self._model_instances: Dict[str, weakref.ReferenceType] = {}
-        self._registered_models: Dict[str, weakref.ReferenceType] = {}
+        self._model_instances: dict[str, weakref.ReferenceType] = {}
+        self._registered_models: dict[str, dict[str, Any]] = {}
+        self._model_cache: OrderedDict[str, ModelCacheEntry] = OrderedDict()
+        self._model_cache_lock = threading.Lock()
+        self._model_cache_evictions = 0
+        self._model_cache_max_entries = self._coerce_cache_limit(
+            self.config.get("model_cache_max_entries", self.config.get("max_cached_models"))
+        )
 
         # Resource cleanup
-        self._cleanup_handlers: Dict[ResourceType, List[Callable]] = {}
+        self._cleanup_handlers: dict[ResourceType, list[Callable]] = {}
 
         logger.info("TTS Resource Manager initialized")
+
+    @staticmethod
+    def _coerce_cache_limit(raw_value: Any) -> Optional[int]:
+        """Normalize cache size limits; return None when unlimited/disabled."""
+        if raw_value is None:
+            return None
+        try:
+            limit = int(raw_value)
+        except (TypeError, ValueError):
+            return None
+        if limit <= 0:
+            return None
+        return limit
+
+    @staticmethod
+    def _normalize_cache_key(provider: str, model_key: Optional[str] = None) -> str:
+        """Normalize provider/model into a cache key."""
+        provider_key = (provider or "").strip().lower()
+        model_part = (model_key or "").strip().lower()
+        if provider_key and model_part:
+            return f"{provider_key}:{model_part}"
+        if provider_key:
+            return provider_key
+        return model_part
+
+    @staticmethod
+    def _cleanup_device_cache() -> None:
+        """Best-effort device cleanup after model eviction."""
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if hasattr(torch, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
+            pass
 
     async def initialize(self):
         """Initialize resource management"""
@@ -722,10 +799,8 @@ class TTSResourceManager:
         # Stop session cleanup
         if self._session_cleanup_task:
             self._session_cleanup_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._session_cleanup_task
-            except asyncio.CancelledError:
-                pass
 
         # Close all streaming sessions
         sessions = list(self._streaming_sessions.values())
@@ -744,7 +819,7 @@ class TTSResourceManager:
                         await handler()
                     else:
                         handler()
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error in {resource_type} cleanup handler: {e}")
 
         logger.info("TTS Resource Manager shutdown complete")
@@ -774,12 +849,130 @@ class TTSResourceManager:
         """Get HTTP client for provider"""
         return await self.connection_pool.get_client(provider, base_url)
 
-    def register_model(self, provider: str, model_instance: Any, cleanup_callback: Optional[Callable] = None):
-        """Register model instance for resource management"""
-        self._model_instances[provider] = weakref.ref(model_instance)
+    def register_model(
+        self,
+        provider: str,
+        model_instance: Any,
+        cleanup_callback: Optional[Callable] = None,
+        model_key: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        """Register model instance for resource management."""
+        cache_key = self._normalize_cache_key(provider, model_key)
+        now = time.time()
+
+        with self._model_cache_lock:
+            entry = self._model_cache.get(cache_key)
+            if entry is None:
+                entry = ModelCacheEntry(
+                    provider=provider,
+                    cache_key=cache_key,
+                    model_ref=weakref.ref(model_instance),
+                    cleanup_callback=cleanup_callback,
+                    created_at=now,
+                    last_used=now,
+                    use_count=1,
+                    metadata=metadata or {},
+                )
+                self._model_cache[cache_key] = entry
+            else:
+                entry.model_ref = weakref.ref(model_instance)
+                entry.cleanup_callback = cleanup_callback
+                entry.last_used = now
+                entry.use_count += 1
+                if metadata:
+                    entry.metadata.update(metadata)
+                self._model_cache.move_to_end(cache_key)
+
+            # Track explicit registered models as expected by tests
+            self._registered_models[provider] = {"model": model_instance, "cleanup": cleanup_callback}
+            self._model_instances[provider] = weakref.ref(model_instance)
+
         self.memory_monitor.register_model(model_instance, cleanup_callback)
-        # Track explicit registered models as expected by tests
-        self._registered_models[provider] = {"model": model_instance, "cleanup": cleanup_callback}
+
+        eviction_coros = self._evict_models_if_needed(exclude_keys={cache_key})
+        if eviction_coros:
+            async def _run_evictions():
+                for coro in eviction_coros:
+                    await coro
+            return _run_evictions()
+        return None
+
+    def touch_model(self, provider: str, model_key: Optional[str] = None) -> bool:
+        """Mark a cached model as recently used."""
+        cache_key = self._normalize_cache_key(provider, model_key)
+        if not cache_key:
+            return False
+        with self._model_cache_lock:
+            entry = self._model_cache.get(cache_key)
+            if entry is None:
+                return False
+            entry.last_used = time.time()
+            entry.use_count += 1
+            self._model_cache.move_to_end(cache_key)
+        return True
+
+    def _evict_models_if_needed(self, exclude_keys: Optional[set[str]] = None) -> list[Any]:
+        """Evict least-recently-used models when limits are exceeded."""
+        async_cleanups: list[Any] = []
+        exclude_keys = exclude_keys or set()
+        max_entries = self._model_cache_max_entries
+
+        with self._model_cache_lock:
+            while max_entries is not None and len(self._model_cache) > max_entries:
+                evicted = self._evict_one_locked(exclude_keys, async_cleanups, reason="capacity")
+                if not evicted:
+                    break
+
+            if self.memory_monitor.is_memory_critical():
+                # Best-effort eviction if memory is critical
+                self._evict_one_locked(exclude_keys, async_cleanups, reason="memory")
+
+        return async_cleanups
+
+    def _evict_one_locked(self, exclude_keys: set[str], async_cleanups: list[Any], reason: str) -> bool:
+        """Evict a single oldest entry (lock must be held)."""
+        for key, entry in list(self._model_cache.items()):
+            if key in exclude_keys:
+                continue
+            _cleanup = self._evict_entry_locked(key, entry, reason)
+            if _cleanup is not None:
+                async_cleanups.append(_cleanup)
+            return True
+        return False
+
+    def _evict_entry_locked(self, cache_key: str, entry: ModelCacheEntry, reason: str) -> Optional[Any]:
+        """Remove cache entry and run cleanup (lock must be held)."""
+        self._model_cache.pop(cache_key, None)
+        self._model_cache_evictions += 1
+
+        provider = entry.provider
+        self._model_instances.pop(provider, None)
+        self._registered_models.pop(provider, None)
+
+        cleanup_cb = entry.cleanup_callback
+        logger.info(f"Evicting TTS model cache entry '{cache_key}' (reason={reason})")
+
+        if cleanup_cb is None:
+            self._cleanup_device_cache()
+            return None
+
+        if asyncio.iscoroutinefunction(cleanup_cb):
+            async def _wrapped():
+                try:
+                    await cleanup_cb()
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
+                    logger.error(f"Error cleaning model for {cache_key}: {e}")
+                finally:
+                    self._cleanup_device_cache()
+            return _wrapped()
+
+        try:
+            cleanup_cb()
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
+            logger.error(f"Error cleaning model for {cache_key}: {e}")
+        self._cleanup_device_cache()
+        return None
 
     def register_cleanup_handler(self, resource_type: ResourceType, handler: Callable):
         """Register cleanup handler for resource type"""
@@ -791,7 +984,7 @@ class TTSResourceManager:
         """Cleanup expired streaming sessions"""
         while True:
             try:
-                current_time = time.time()
+                time.time()
                 expired_sessions = []
 
                 for session_id, session in self._streaming_sessions.items():
@@ -809,7 +1002,7 @@ class TTSResourceManager:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in session cleanup: {e}")
                 await asyncio.sleep(60)
 
@@ -824,9 +1017,18 @@ class TTSResourceManager:
                         await cleanup_cb()
                     else:
                         cleanup_cb()
-                except Exception as e:
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Error in model cleanup for {provider}: {e}")
             logger.debug(f"Unregistered model for provider: {provider}")
+        # Drop any cached entries for this provider
+        with self._model_cache_lock:
+            keys_to_drop = [
+                key for key, cache_entry in self._model_cache.items()
+                if cache_entry.provider == provider
+            ]
+            for key in keys_to_drop:
+                self._model_cache.pop(key, None)
+        self._model_instances.pop(provider, None)
 
     async def create_streaming_session(self, provider: str) -> str:
         """Create a new streaming session
@@ -839,7 +1041,7 @@ class TTSResourceManager:
         """
         return await self.session_manager.create_session(provider)
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get comprehensive resource statistics in test-expected shape"""
         mem = self.memory_monitor.get_memory_usage()
         connections = {
@@ -847,7 +1049,10 @@ class TTSResourceManager:
             "providers": list(self.connection_pool._clients.keys())
         }
         models = {
-            "registered": list(self._registered_models.keys())
+            "registered": list(self._registered_models.keys()),
+            "cache_size": len(self._model_cache),
+            "cache_max_entries": self._model_cache_max_entries,
+            "cache_evictions": self._model_cache_evictions,
         }
         sessions = {
             "active": len(self.session_manager._sessions),
@@ -867,20 +1072,20 @@ class TTSResourceManager:
         for provider in list(self._registered_models.keys()):
             try:
                 await self.unregister_model(provider)
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error cleaning model {provider}: {e}")
 
         # Close all sessions managed by the session manager
         for sid in list(self.session_manager._sessions.keys()):
             try:
                 await self.session_manager.close_session(sid)
-            except Exception as e:
+            except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error closing session {sid}: {e}")
 
         # Close all HTTP clients
         await self.connection_pool.close_all()
 
-    def get_resource_stats(self) -> Dict[str, Any]:
+    def get_resource_stats(self) -> dict[str, Any]:
         """Get resource usage statistics"""
         return {
             "http_connections": self.connection_pool.get_stats(),
@@ -910,7 +1115,7 @@ _resource_manager: Optional[TTSResourceManager] = None
 _manager_lock = asyncio.Lock()
 
 
-async def get_resource_manager(config: Optional[Dict[str, Any]] = None) -> TTSResourceManager:
+async def get_resource_manager(config: Optional[dict[str, Any]] = None) -> TTSResourceManager:
     """
     Get or create the global TTS resource manager.
 
@@ -921,6 +1126,47 @@ async def get_resource_manager(config: Optional[Dict[str, Any]] = None) -> TTSRe
         TTSResourceManager instance
     """
     global _resource_manager
+
+    def _auto_model_cache_limit() -> int:
+        """Best-effort default cache size for mixed hardware deployments."""
+        try:
+            import torch
+        except ImportError:
+            return 1
+        try:
+            if hasattr(torch, "backends") and torch.backends.mps.is_available():
+                return 1
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
+            pass
+        try:
+            if torch.cuda.is_available():
+                try:
+                    props = torch.cuda.get_device_properties(0)
+                    total_gb = float(getattr(props, "total_memory", 0)) / (1024 ** 3)
+                    return 2 if total_gb >= 16.0 else 1
+                except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
+                    return 1
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
+            return 1
+        return 1
+
+    if config is None:
+        try:
+            from .tts_config import get_tts_config
+            tts_cfg = get_tts_config()
+            perf = tts_cfg.performance
+            cache_limit = getattr(perf, "model_cache_max_entries", None)
+            if cache_limit is None:
+                cache_limit = _auto_model_cache_limit()
+            config = {
+                "memory_warning_threshold": perf.memory_warning_threshold,
+                "memory_critical_threshold": perf.memory_critical_threshold,
+                "max_connections": perf.max_connections_per_provider,
+                "connection_timeout": perf.connection_timeout,
+                "model_cache_max_entries": cache_limit,
+            }
+        except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS:
+            config = None
 
     if _resource_manager is None:
         async with _manager_lock:
@@ -948,7 +1194,7 @@ reset_resource_manager = close_resource_manager
 
 # Context manager for resource management
 @asynccontextmanager
-async def managed_resources(config: Optional[Dict[str, Any]] = None):
+async def managed_resources(config: Optional[dict[str, Any]] = None):
     """Context manager for TTS resource management"""
     manager = await get_resource_manager(config)
     try:

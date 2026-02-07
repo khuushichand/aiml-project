@@ -2,38 +2,34 @@
 # Description: Higgs Audio V2 TTS adapter implementation
 #
 # Imports
-import os
 import asyncio
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List
+import contextlib
+import os
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
+import numpy as np
+
 #
 # Third-party Imports
 import torch
-import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
+
 from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSModelLoadError,
-    TTSGenerationError,
-    TTSResourceError,
+    TTSGPUError,
     TTSInsufficientMemoryError,
-    TTSGPUError
+    TTSModelLoadError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
 )
+from ..tts_resource_manager import get_resource_manager
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
-from ..tts_resource_manager import get_resource_manager
+
+#
+# Local Imports
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -83,7 +79,7 @@ class HiggsAdapter(TTSAdapter):
         )
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Model configuration
@@ -154,7 +150,7 @@ class HiggsAdapter(TTSAdapter):
             # Check if boson_multimodal library is available
             try:
                 from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
-            except ImportError as e:
+            except ImportError:
                 logger.error(f"{self.provider_name}: boson_multimodal library not installed")
                 logger.info("Install Higgs Audio dependencies from: https://github.com/boson-ai/higgs-audio")
                 # Gracefully indicate not configured rather than raising for integration environments
@@ -218,7 +214,8 @@ class HiggsAdapter(TTSAdapter):
                 register_result = resource_manager.register_model(
                     provider=self.provider_name.lower(),
                     model_instance=self.serve_engine,
-                    cleanup_callback=self._cleanup_resources
+                    cleanup_callback=self._cleanup_resources,
+                    model_key=str(self.model_path),
                 )
                 if asyncio.iscoroutine(register_result):
                     await register_result
@@ -238,7 +235,7 @@ class HiggsAdapter(TTSAdapter):
                     f"GPU error initializing {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "device": self.device}
-                )
+                ) from e
             raise
         except Exception as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
@@ -247,7 +244,7 @@ class HiggsAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Higgs Audio V2 capabilities"""
@@ -346,10 +343,8 @@ class HiggsAdapter(TTSAdapter):
 
         # Import required modules (torchaudio optional; avoid hard dependency)
         from boson_multimodal.serve.serve_engine import HiggsAudioResponse
-        from tldw_Server_API.app.core.TTS.streaming_audio_writer import (
-            StreamingAudioWriter,
-            AudioNormalizer
-        )
+
+        from tldw_Server_API.app.core.TTS.streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 
         normalizer = AudioNormalizer()
         writer = StreamingAudioWriter(
@@ -364,14 +359,21 @@ class HiggsAdapter(TTSAdapter):
 
             # Generate with HiggsAudioServeEngine
             logger.info(f"{self.provider_name}: Starting generation...")
-            output: HiggsAudioResponse = self.serve_engine.generate(
-                chat_ml_sample=chat_ml_sample,
-                max_new_tokens=1024,
-                temperature=request.extra_params.get("temperature", 1.0),
-                top_p=request.extra_params.get("top_p", 0.95),
-                top_k=request.extra_params.get("top_k", 50),
-                stop_strings=["<|end_of_text|>", "<|eot_id|>"]
-            )
+            extras = request.extra_params or {}
+            if not isinstance(extras, dict):
+                extras = {}
+            gen_kwargs = {
+                "chat_ml_sample": chat_ml_sample,
+                "max_new_tokens": int(extras.get("max_new_tokens", 1024)),
+                "temperature": extras.get("temperature", 1.0),
+                "top_p": extras.get("top_p", 0.95),
+                "top_k": extras.get("top_k", 50),
+                "stop_strings": ["<|end_of_text|>", "<|eot_id|>"],
+            }
+            if extras.get("min_new_tokens") is not None:
+                with contextlib.suppress(Exception):
+                    gen_kwargs["min_new_tokens"] = int(extras.get("min_new_tokens"))
+            output: HiggsAudioResponse = self.serve_engine.generate(**gen_kwargs)
 
             # Convert numpy audio to tensor and back to numpy for processing
             audio_array = output.audio
@@ -428,7 +430,7 @@ class HiggsAdapter(TTSAdapter):
         self,
         request: TTSRequest,
         voice_reference_path: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Prepare ChatML format input for Higgs.
         Higgs uses a specific format for generation.
@@ -436,17 +438,15 @@ class HiggsAdapter(TTSAdapter):
         # We construct HuggingFace-like ChatML using the official boson_multimodal dataclasses
         # while keeping a dict payload to satisfy existing unit tests.
         try:
-            from boson_multimodal.data_types import ChatMLSample, Message, TextContent, AudioContent
+            from boson_multimodal.data_types import AudioContent, Message
             use_dataclasses = True
         except Exception:
             # Fallback to plain dicts if library is not available (e.g., unit tests without deps)
-            ChatMLSample = None  # type: ignore
             Message = None       # type: ignore
-            TextContent = None   # type: ignore
             AudioContent = None  # type: ignore
             use_dataclasses = False
 
-        messages: List[Any] = []
+        messages: list[Any] = []
 
         # Optional system prompt
         system_prompt = request.extra_params.get("system_prompt")
@@ -499,7 +499,7 @@ class HiggsAdapter(TTSAdapter):
             messages.append({"role": "user", "content": user_content})
 
         # Return a dict payload compatible with both unit tests and the serve engine
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "messages": messages,
             # The following fields are not used by the official serve engine, but are
             # kept to satisfy existing unit tests and potential higher-level consumers.
@@ -529,7 +529,7 @@ class HiggsAdapter(TTSAdapter):
         """
         try:
             import tempfile
-            from pathlib import Path
+
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
 
             # Process voice reference for Higgs requirements

@@ -5,14 +5,15 @@ standardized return signatures expected by the API layer.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+import contextlib
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.crossref.org"
 
 
-def _join_authors(authors: Any) -> Optional[str]:
+def _join_authors(authors: Any) -> str | None:
     try:
         names = []
         for a in authors or []:
@@ -29,13 +30,13 @@ def _join_authors(authors: Any) -> Optional[str]:
         return None
 
 
-def _first(lst: Any) -> Optional[str]:
+def _first(lst: Any) -> str | None:
     if isinstance(lst, list) and lst:
         return str(lst[0])
     return None
 
 
-def _date_from_message(msg: Dict[str, Any]) -> Optional[str]:
+def _date_from_message(msg: dict[str, Any]) -> str | None:
     for key in ("published-online", "published-print", "issued"):
         parts = (((msg.get(key) or {}).get("date-parts") or []) or [])
         if parts and isinstance(parts[0], list) and parts[0]:
@@ -50,15 +51,14 @@ def _date_from_message(msg: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _pdf_link(msg: Dict[str, Any]) -> Optional[str]:
+def _pdf_link(msg: dict[str, Any]) -> str | None:
     for lk in (msg.get("link") or []):
-        if (lk.get("content-type") or "").lower() == "application/pdf":
-            if lk.get("URL"):
-                return lk.get("URL")
+        if (lk.get("content-type") or "").lower() == "application/pdf" and lk.get("URL"):
+            return lk.get("URL")
     return None
 
 
-def _normalize_item(msg: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(msg: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": msg.get("DOI"),
         "title": _first(msg.get("title")) or "",
@@ -74,16 +74,16 @@ def _normalize_item(msg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_crossref(
-    q: Optional[str],
+    q: str | None,
     offset: int,
     limit: int,
-    filter_venue: Optional[str] = None,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
-) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
+    filter_venue: str | None = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
+) -> tuple[list[dict] | None, int, str | None]:
     try:
         url = f"{BASE_URL}/works"
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "rows": limit,
             "offset": offset,
         }
@@ -110,16 +110,14 @@ def search_crossref(
         return None, 0, f"Crossref error: {str(e)}"
 
 
-def get_crossref_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_crossref_by_doi(doi: str) -> tuple[dict | None, str | None]:
     try:
         doi_clean = doi.strip()
         url = f"{BASE_URL}/works/{doi_clean}"
         r = fetch(method="GET", url=url, timeout=20)
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json() or {}
         msg = (data.get("message") or {})

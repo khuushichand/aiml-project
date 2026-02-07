@@ -2,11 +2,13 @@
 Backend factory for automatic detection and instantiation.
 """
 
+import importlib
 from typing import Optional
+
 from loguru import logger
 
-from ..base.queue_backend import QueueBackend
 from ..base.exceptions import BackendError
+from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig, get_config
 
 
@@ -31,7 +33,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
         config = get_config()
 
     # Detect backend type from URL
-    url = config.database_url.lower()
+    config.database_url.lower()
 
     if config.is_memory:
         # In-memory backend for testing
@@ -45,12 +47,12 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
 
         # Check if asyncpg is available
         try:
-            import asyncpg
+            importlib.import_module("asyncpg")
         except ImportError:
             raise BackendError(
                 "PostgreSQL backend requires asyncpg. "
                 "Install with: pip install asyncpg"
-            )
+            ) from None
 
         from .postgresql_backend import PostgreSQLBackend
         return PostgreSQLBackend(config)
@@ -61,12 +63,12 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
 
         # Check if aiosqlite is available
         try:
-            import aiosqlite
+            importlib.import_module("aiosqlite")
         except ImportError:
             raise BackendError(
                 "SQLite backend requires aiosqlite. "
                 "Install with: pip install aiosqlite"
-            )
+            ) from None
 
         from .sqlite_backend import SQLiteBackend
         return SQLiteBackend(config)

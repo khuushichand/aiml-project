@@ -15,11 +15,12 @@ attempt to use the local Nemo-based `transcribe_with_parakeet` function.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import binascii
 import time
 from dataclasses import dataclass
-import asyncio
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable
 
 import numpy as np
 from loguru import logger
@@ -27,11 +28,24 @@ from loguru import logger
 from .buffer import AudioBuffer
 from .config import StreamingConfig
 
-
 DecodeFn = Callable[[np.ndarray, int], str]
+_PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    LookupError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    binascii.Error,
+)
 
 
-def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
+def _variant_decode_fn(model: str, variant: str) -> DecodeFn | None:
     """Build a decode function for the requested model/variant.
 
     This core supports only Parakeet variants. For:
@@ -63,7 +77,7 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_onnx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import ONNX backend: {}", e)
             return None
     elif v == "mlx":
@@ -82,7 +96,7 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_mlx(audio_np, sample_rate=sr)
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import MLX backend: {}", e)
             return None
     else:
@@ -106,7 +120,7 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
                 return _tx_nemo(audio_np, sample_rate=sr, variant="standard")
 
             return _fn
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("Failed to import standard Parakeet backend: {}", e)
             return None
 
@@ -114,7 +128,7 @@ def _variant_decode_fn(model: str, variant: str) -> Optional[DecodeFn]:
 @dataclass
 class ParakeetCoreTranscriber:
     config: StreamingConfig
-    decode_fn: Optional[DecodeFn] = None
+    decode_fn: DecodeFn | None = None
 
     def __post_init__(self) -> None:
         """
@@ -152,7 +166,7 @@ class ParakeetCoreTranscriber:
         """
         return " ".join(self._history)
 
-    async def process_audio_chunk(self, audio: Union[bytes, str, np.ndarray]) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio: bytes | str | np.ndarray) -> dict[str, Any] | None:
         """
         Process an incoming audio chunk and emit a partial or final transcription frame when available.
 
@@ -196,7 +210,7 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception as e:
+                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self._last_partial_time = now
                 if text:
@@ -222,7 +236,7 @@ class ParakeetCoreTranscriber:
                             postprocess_text_if_enabled as _cv_post,
                         )
                         text = _cv_post(text) or text
-                    except Exception as e:
+                    except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug("Custom vocabulary post-processing failed: {}", e)
                 self.buffer.consume(self.config.chunk_duration, self.config.overlap_duration)
                 if text:
@@ -241,7 +255,7 @@ class ParakeetCoreTranscriber:
 
         return None
 
-    async def flush(self) -> Optional[Dict[str, Any]]:
+    async def flush(self) -> dict[str, Any] | None:
         """
         Emit any remaining buffered audio as a final transcription frame, clear the buffer, and append the transcript to history.
 
@@ -266,7 +280,7 @@ class ParakeetCoreTranscriber:
                     postprocess_text_if_enabled as _cv_post,
                 )
                 text = _cv_post(text) or text
-            except Exception as e:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug("Custom vocabulary post-processing failed: {}", e)
         if text:
             self._history.append(text)
@@ -285,7 +299,7 @@ class ParakeetCoreTranscriber:
         return None
 
     # --- Internals ---
-    def _coerce_to_np(self, audio: Union[bytes, str, np.ndarray]) -> Optional[np.ndarray]:
+    def _coerce_to_np(self, audio: bytes | str | np.ndarray) -> np.ndarray | None:
         """
         Convert an audio input into a mono float32 NumPy array suitable for decoding.
 
@@ -310,7 +324,7 @@ class ParakeetCoreTranscriber:
                 if pad_len:
                     s = s + ("=" * pad_len)
                 raw = base64.b64decode(s, validate=True)
-            except Exception:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
                 return None
             # align to float32 sample size
             if (len(raw) % 4) != 0:
@@ -327,7 +341,7 @@ class ParakeetCoreTranscriber:
                     candidate = candidate + (b"=" * pad_len)
                 decoded = base64.b64decode(candidate, validate=True)
                 raw = decoded
-            except Exception:
+            except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS:
                 # Not valid base64: proceed with raw bytes
                 pass
             if (len(raw) % 4) != 0:
@@ -360,7 +374,7 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(self.decode_fn(audio_np, int(self.config.sample_rate)))
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.opt(exception=True).warning("Decode failed: {}", e)
             return ""
 
@@ -380,11 +394,11 @@ class ParakeetCoreTranscriber:
             return ""
         try:
             return str(await asyncio.to_thread(self.decode_fn, audio_np, int(self.config.sample_rate)))
-        except Exception as e:
+        except _PARAKEET_TRANSCRIBER_NONCRITICAL_EXCEPTIONS as e:
             logger.opt(exception=True).warning("Decode failed (async): {}", e)
             return ""
 
-    def _prepare_partial_metadata(self, buffer_duration: float) -> Dict[str, float]:
+    def _prepare_partial_metadata(self, buffer_duration: float) -> dict[str, float]:
         """
         Compute metadata for a partial transcription frame based on the current buffered audio.
 
@@ -408,7 +422,7 @@ class ParakeetCoreTranscriber:
             "cumulative_audio": float(self._total_processed_seconds),
         }
 
-    def _prepare_final_metadata(self, chunk_duration: float) -> Dict[str, float]:
+    def _prepare_final_metadata(self, chunk_duration: float) -> dict[str, float]:
         """
         Compute metadata for a finalized audio segment including timing, overlap, and cumulative totals.
 
@@ -429,10 +443,7 @@ class ParakeetCoreTranscriber:
         """
         chunk_duration = max(float(chunk_duration), 0.0)
         overlap_cfg = max(float(self.config.overlap_duration or 0.0), 0.0)
-        if self._segment_index == 0:
-            overlap_used = 0.0
-        else:
-            overlap_used = min(overlap_cfg, chunk_duration)
+        overlap_used = 0.0 if self._segment_index == 0 else min(overlap_cfg, chunk_duration)
 
         new_audio_duration = chunk_duration - overlap_used
         if self._segment_index == 0:

@@ -15,52 +15,52 @@ from __future__ import annotations
 
 import asyncio
 import configparser
-from datetime import datetime, timezone
+import contextlib
 import os
-from typing import Dict, Optional, Tuple, List
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 try:
     from redis import asyncio as redis_async  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     redis_async = None  # type: ignore
 
 try:
-    from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry, MetricDefinition, MetricType
-except Exception:  # pragma: no cover
+    from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType, get_metrics_registry
+except ImportError:  # pragma: no cover
     get_metrics_registry = None  # type: ignore
     MetricDefinition = None  # type: ignore
     MetricType = None  # type: ignore
 
 try:
     # Resource Governor (optional, guarded by global RG_ENABLED/config)
+    from tldw_Server_API.app.core.config import (
+        rg_backend,
+        rg_enabled,
+        rg_policy_path,
+        rg_policy_reload_enabled,
+        rg_policy_reload_interval_sec,
+        rg_policy_store,
+    )
     from tldw_Server_API.app.core.Resource_Governance import (
-        RGRequest,
         MemoryResourceGovernor,
         RedisResourceGovernor,
+        RGRequest,
+    )
+    from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
+        AuthNZPolicyStore,
     )
     from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
         PolicyLoader,
         PolicyReloadConfig,
         db_policy_loader,
     )
-    from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
-        AuthNZPolicyStore,
-    )
-    from tldw_Server_API.app.core.config import (
-        rg_enabled,
-        rg_policy_store,
-        rg_policy_reload_enabled,
-        rg_policy_reload_interval_sec,
-        rg_policy_path,
-        rg_backend,
-    )
-except Exception:  # pragma: no cover - RG is optional for audio quotas
+except ImportError:  # pragma: no cover - RG is optional for audio quotas
     RGRequest = None  # type: ignore
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
@@ -78,12 +78,33 @@ except Exception:  # pragma: no cover - RG is optional for audio quotas
 try:
     # Generic daily ledger (canonical store for daily minutes when available)
     from tldw_Server_API.app.core.DB_Management.Resource_Daily_Ledger import (
-        ResourceDailyLedger,
         LedgerEntry,
+        ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     ResourceDailyLedger = None  # type: ignore
     LedgerEntry = None  # type: ignore
+
+_AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    configparser.Error,
+)
 
 
 # Default tier limits (can be extended later via configuration or DB)
@@ -109,8 +130,8 @@ TIER_LIMITS = {
 }
 
 
-_active_streams: Dict[int, int] = {}
-_active_jobs: Dict[int, int] = {}
+_active_streams: dict[int, int] = {}
+_active_jobs: dict[int, int] = {}
 _lock = asyncio.Lock()
 
 _redis_client = None
@@ -128,7 +149,7 @@ def _rg_audio_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -136,11 +157,11 @@ def _rg_audio_enabled() -> bool:
 _rg_audio_governor = None
 _rg_audio_loader = None
 _rg_audio_lock = asyncio.Lock()
-_rg_stream_handles: Dict[int, List[str]] = {}
-_rg_job_handles: Dict[int, List[str]] = {}
-_rg_job_handle_locks: Dict[int, asyncio.Lock] = {}
+_rg_stream_handles: dict[int, list[str]] = {}
+_rg_job_handles: dict[int, list[str]] = {}
+_rg_job_handle_locks: dict[int, asyncio.Lock] = {}
 _rg_job_handle_locks_lock = asyncio.Lock()
-_rg_audio_init_error: Optional[str] = None
+_rg_audio_init_error: str | None = None
 _rg_audio_init_error_logged = False
 _rg_audio_fallback_logged = False
 
@@ -156,7 +177,7 @@ def _safe_config_or_env(name: str, config_fn, env_key: str, default: str = "") -
         return os.getenv(env_key, default)
 
 
-def _rg_audio_context() -> Dict[str, str]:
+def _rg_audio_context() -> dict[str, str]:
     backend = _safe_config_or_env("backend", rg_backend, "RG_BACKEND", "memory")  # type: ignore[arg-type]
     store = _safe_config_or_env("policy_store", rg_policy_store, "RG_POLICY_STORE", "")  # type: ignore[arg-type]
     policy_path = _safe_config_or_env(
@@ -267,13 +288,13 @@ async def _get_audio_rg_governor():
         return None
     if _rg_audio_governor is not None:
         return _rg_audio_governor
-    init_error: Optional[Exception] = None
+    init_error: Exception | None = None
     async with _rg_audio_lock:
         if _rg_audio_governor is not None:
             return _rg_audio_governor
         try:
             store_mode = rg_policy_store()  # type: ignore[operator]
-        except Exception:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
             store_mode = "file"
         try:
             if store_mode == "db" and AuthNZPolicyStore is not None and db_policy_loader is not None:
@@ -290,7 +311,7 @@ async def _get_audio_rg_governor():
             _rg_audio_loader = loader
             try:
                 backend = rg_backend() if rg_backend else "memory"  # type: ignore[operator]
-            except Exception:
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
                 backend = "memory"
             if backend == "redis" and RedisResourceGovernor is not None:
                 gov = RedisResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
@@ -298,7 +319,7 @@ async def _get_audio_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_audio_governor = gov
             return gov
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             init_error = e
             _rg_audio_governor = None
             _rg_audio_loader = None
@@ -385,7 +406,7 @@ def clear_stream_ttl_cache() -> None:
     """
     try:
         _get_stream_ttl_seconds.cache_clear()  # type: ignore[attr-defined]
-    except Exception:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         # If decoration is missing for any reason, ignore
         pass
 
@@ -405,10 +426,8 @@ def _use_redis() -> bool:
         s = get_settings()
         if not getattr(s, "REDIS_URL", None):
             return False
-        if os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() in {"0", "false", "no", "off"}:
-            return False
-        return True
-    except Exception:
+        return os.getenv("AUDIO_QUOTA_USE_REDIS", "true").lower() not in {"0", "false", "no", "off"}
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -423,13 +442,13 @@ async def _get_redis():
         _redis_client = redis_async.from_url(s.REDIS_URL)  # type: ignore[attr-defined]
         await _redis_client.ping()
         return _redis_client
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Redis unavailable for audio quotas: {e}")
         _redis_client = None
         return None
 
 
-def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
+def _metrics_set_gauge(name: str, value: float, labels: dict[str, str]) -> None:
     """
     Register and update a gauge metric under both underscore and dot-name variants and set its value with provided labels.
 
@@ -444,7 +463,7 @@ def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
         # Backward-compat alias with dots
         alias = name.replace('_', '.') if '_' in name else name
         for metric_name in (canonical, alias):
-            try:
+            with contextlib.suppress(_AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS):
                 reg.register_metric(
                     MetricDefinition(
                         name=metric_name,
@@ -453,14 +472,12 @@ def _metrics_set_gauge(name: str, value: float, labels: Dict[str, str]) -> None:
                         labels=list(labels.keys()),
                     )
                 )
-            except Exception:
-                pass
             reg.set_gauge(metric_name, float(value), labels)
-    except Exception:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         pass
 
 
-def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
+def _metrics_increment(name: str, labels: dict[str, str]) -> None:
     """
     Increment a counter metric in the metrics registry for a given metric name and label set.
 
@@ -477,7 +494,7 @@ def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
         canonical = name
         alias = name.replace('_', '.') if '_' in name else name
         for metric_name in (canonical, alias):
-            try:
+            with contextlib.suppress(_AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS):
                 reg.register_metric(
                     MetricDefinition(
                         name=metric_name,
@@ -486,10 +503,8 @@ def _metrics_increment(name: str, labels: Dict[str, str]) -> None:
                         labels=list(labels.keys()),
                     )
                 )
-            except Exception:
-                pass
             reg.increment(metric_name, 1, labels)
-    except Exception:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -537,7 +552,7 @@ async def _ensure_tables(pool: DatabasePool) -> None:
                 )
                 """
             )
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"audio_usage_daily ensure failed: {e}")
 
 
@@ -551,7 +566,7 @@ async def get_user_tier(user_id: int) -> str:
         if row and row.get("tier"):
             return str(row["tier"]).strip()
         return "free"
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"get_user_tier failed: {e}")
         return "free"
 
@@ -573,12 +588,12 @@ async def set_user_tier(user_id: int, tier: str) -> None:
                 int(user_id),
                 tier,
             )
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"set_user_tier failed for user_id={user_id}, tier={tier}: {e}")
         raise
 
 
-async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
+async def get_limits_for_user(user_id: int) -> dict[str, float | None]:
     tier = await get_user_tier(user_id)
     limits = TIER_LIMITS.get(tier, TIER_LIMITS["free"]).copy()
     overrides = await _get_user_override_limits(user_id)
@@ -588,7 +603,7 @@ async def get_limits_for_user(user_id: int) -> Dict[str, Optional[float]]:
     return limits
 
 
-async def _get_user_override_limits(user_id: int) -> Dict[str, Optional[float]]:
+async def _get_user_override_limits(user_id: int) -> dict[str, float | None]:
     try:
         from tldw_Server_API.app.core.UserProfiles.overrides_repo import UserProfileOverridesRepo
 
@@ -596,7 +611,7 @@ async def _get_user_override_limits(user_id: int) -> Dict[str, Optional[float]]:
         repo = UserProfileOverridesRepo(pool)
         await repo.ensure_tables()
         rows = await repo.list_overrides_for_user(int(user_id))
-        overrides: Dict[str, Optional[float]] = {}
+        overrides: dict[str, float | None] = {}
         for row in rows:
             key = str(row.get("key") or "")
             value = row.get("value")
@@ -607,7 +622,7 @@ async def _get_user_override_limits(user_id: int) -> Dict[str, Optional[float]]:
             elif key == "limits.audio_concurrent_jobs":
                 overrides["concurrent_jobs"] = int(value)
         return overrides
-    except Exception as exc:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Audio quota overrides unavailable for user {}: {}", user_id, exc)
         return {}
 
@@ -631,19 +646,19 @@ async def get_daily_minutes_used(user_id: int) -> float:
                 day,
             )
             return float(rows[0][0]) if rows else 0.0
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"get_daily_minutes_used failed: {e}")
         return 0.0
 
 
-_daily_ledger: Optional[ResourceDailyLedger] = None  # type: ignore[assignment]
+_daily_ledger: ResourceDailyLedger | None = None  # type: ignore[assignment]
 _daily_ledger_lock = asyncio.Lock()
 # Tracks whether we have attempted to backfill legacy audio_usage_daily rows
 # into the shared ResourceDailyLedger for the current process.
 _audio_minutes_legacy_backfill_done = False
 
 
-async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
+async def _get_daily_ledger() -> ResourceDailyLedger | None:
     """
     Lazily initialize the shared ResourceDailyLedger for audio minutes.
 
@@ -673,13 +688,13 @@ async def _get_daily_ledger() -> Optional[ResourceDailyLedger]:
                 # accurate immediately after deploy. This runs once per process
                 # and is idempotent via LedgerEntry.op_id.
                 await _backfill_audio_usage_daily_to_ledger(ledger)
-            except Exception as backfill_exc:  # pragma: no cover - defensive
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as backfill_exc:  # pragma: no cover - defensive
                 logger.debug(
                     f"Audio quotas: legacy audio_usage_daily backfill failed; continuing without backfill: {backfill_exc}"
                 )
             _daily_ledger = ledger
             return ledger
-        except Exception as e:  # pragma: no cover - best-effort shadow path
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:  # pragma: no cover - best-effort shadow path
             logger.debug(f"Audio quotas: ResourceDailyLedger init failed; continuing without ledger: {e}")
             _daily_ledger = None
             return None
@@ -710,7 +725,7 @@ async def _backfill_audio_usage_daily_to_ledger(ledger: ResourceDailyLedger) -> 
                     day,
                 )
                 iterable = [(int(r["user_id"]), float(r["minutes_used"])) for r in rows or []]
-            except Exception as e:
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Audio quotas: legacy backfill query (Postgres) failed: {e}")
                 iterable = []
         else:
@@ -720,7 +735,7 @@ async def _backfill_audio_usage_daily_to_ledger(ledger: ResourceDailyLedger) -> 
                     day,
                 )
                 iterable = [(int(r[0]), float(r[1])) for r in rows or []]
-            except Exception as e:
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Audio quotas: legacy backfill query (SQLite) failed: {e}")
                 iterable = []
 
@@ -738,12 +753,12 @@ async def _backfill_audio_usage_daily_to_ledger(ledger: ResourceDailyLedger) -> 
             )
             try:
                 await ledger.add(entry)
-            except Exception as le:
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as le:
                 logger.debug(
                     f"Audio quotas: ResourceDailyLedger legacy backfill add failed for user_id={user_id}: {le}"
                 )
         _audio_minutes_legacy_backfill_done = True
-    except Exception as exc:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             f"Audio quotas: legacy audio_usage_daily backfill to ResourceDailyLedger failed; continuing without backfill: {exc}"
         )
@@ -772,16 +787,16 @@ async def add_daily_minutes(user_id: int, minutes: float) -> None:
             )
             try:
                 await ledger.add(entry)
-            except Exception as le:
+            except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as le:
                 logger.debug(f"Audio quotas: ResourceDailyLedger add failed; shadow-only: {le}")
-    except Exception as outer:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as outer:
         logger.debug(f"Audio quotas: ResourceDailyLedger shadow path failed; ignoring: {outer}")
 
     # Legacy audio_usage_daily writes have been removed; usage is tracked
     # solely via ResourceDailyLedger for new events.
 
 
-async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) -> Optional[float]:
+async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) -> float | None:
     """
     Compute remaining minutes using the ResourceDailyLedger when available.
 
@@ -800,7 +815,7 @@ async def _ledger_remaining_minutes(user_id: int, daily_limit_minutes: float) ->
             daily_cap=cap_units,
         )
         return float(remaining_units) / 60.0
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Audio quotas: ledger remaining check failed; fallback to legacy: {e}")
         return None
 
@@ -830,11 +845,11 @@ async def increment_jobs_started(user_id: int) -> None:
                 user_id,
                 day,
             )
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"increment_jobs_started failed: {e}")
 
 
-async def can_start_job(user_id: int) -> Tuple[bool, str]:
+async def can_start_job(user_id: int) -> tuple[bool, str]:
     """
     Determine whether a new concurrent audio job may be started for the given user and, if allowed, increment the active-job counter.
 
@@ -874,7 +889,7 @@ async def can_start_job(user_id: int) -> Tuple[bool, str]:
             return True, "OK"
         # Fail-open is intentional: if RG is temporarily unavailable, don't deny audio jobs.
         # Operators control overall service availability via infrastructure decisions, not exceptions here.
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RG reserve failed for jobs, failing open: {e}")
             await _log_rg_audio_fallback("rg_reserve_failed_jobs")
             return True, "OK"
@@ -910,7 +925,7 @@ async def finish_job(user_id: int) -> None:
                     handle_id = handles.pop()
                     try:
                         await gov.release(handle_id)
-                    except Exception as e:
+                    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"RG finish_job release failed: {e}")
                 remaining_handles = _rg_job_handles.get(user_key)
                 remaining = len(remaining_handles or [])
@@ -923,13 +938,13 @@ async def finish_job(user_id: int) -> None:
             # Even when RG is in use, do not touch Redis/in-process counters here
             # to avoid double-decrement; legacy state is not used when RG is active.
             return
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RG error in finish_job: {e}")
             return
     return
 
 
-async def can_start_stream(user_id: int) -> Tuple[bool, str]:
+async def can_start_stream(user_id: int) -> tuple[bool, str]:
     """
     Determines whether the user may start a new concurrent audio stream and reserves a slot if allowed.
 
@@ -959,7 +974,7 @@ async def can_start_stream(user_id: int) -> Tuple[bool, str]:
             handles.append(handle_id)
             _metrics_set_gauge("audio_streaming_active", float(len(handles)), {"user_id": str(int(user_id))})
             return True, "OK"
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RG reserve failed for streams, failing open: {e}")
             await _log_rg_audio_fallback("rg_reserve_failed_streams")
             return True, "OK"
@@ -988,20 +1003,20 @@ async def finish_stream(user_id: int) -> None:
                 handle_id = handles.pop()
                 try:
                     await gov.release(handle_id)
-                except Exception as e:
+                except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"RG finish_stream release failed: {e}")
             remaining = len(_rg_stream_handles.get(int(user_id)) or [])
             if remaining == 0:
                 await _cleanup_stream_handles(int(user_id))
             _metrics_set_gauge("audio_streaming_active", float(remaining), {"user_id": str(int(user_id))})
             return
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RG error in finish_stream: {e}")
             return
     return
 
 
-async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> Tuple[bool, Optional[float]]:
+async def check_daily_minutes_allow(user_id: int, minutes_requested: float) -> tuple[bool, float | None]:
     """
     Check whether the requested daily transcription minutes can be consumed and report the remaining minutes.
 
@@ -1073,9 +1088,9 @@ async def heartbeat_stream(user_id: int) -> None:
             for handle_id in list(_rg_stream_handles.get(int(user_id)) or []):
                 try:
                     await gov.renew(handle_id, ttl_s=ttl)
-                except Exception as e:
+                except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"RG heartbeat_stream renew failed for handle {handle_id}: {e}")
-        except Exception as e:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RG error in heartbeat_stream: {e}")
     return
 
@@ -1133,9 +1148,9 @@ async def heartbeat_jobs(user_id: int) -> None:
             for handle_id in list(_rg_job_handles.get(int(user_id)) or []):
                 try:
                     await gov.renew(handle_id, ttl_s=ttl)
-                except Exception as e:
+                except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"RG heartbeat_jobs renew failed for handle {handle_id}: {e}")
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"RG error in heartbeat_jobs: {e}")
 
 
@@ -1155,12 +1170,12 @@ async def active_streams_count(user_id: int) -> int:
     if gov is not None:
         try:
             return len(_rg_stream_handles.get(int(user_id)) or [])
-        except Exception:
+        except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS:
             return 0
     return 0
 
 
-def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Dict[str, Optional[float]]]:
+def _apply_tier_overrides_from_config(base: dict[str, dict[str, float | None]]) -> dict[str, dict[str, float | None]]:
     """
     Merge a base per-tier limits mapping with overrides from the environment and configuration.
 
@@ -1189,7 +1204,7 @@ def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]
                 for tier, vals in data.items():
                     if tier in merged and isinstance(vals, dict):
                         merged[tier].update(vals)
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"AUDIO_TIER_LIMITS_JSON parse failed: {e}")
     # Config file overrides
     try:
@@ -1211,7 +1226,7 @@ def _apply_tier_overrides_from_config(base: Dict[str, Dict[str, Optional[float]]
                                 logger.debug(
                                     f"Audio-Quota override parse failed for {tier}.{key}={val!r}: {exc}"
                                 )
-    except Exception as e:
+    except _AUDIO_QUOTA_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Audio-Quota config overrides failed: {e}")
     return merged
 

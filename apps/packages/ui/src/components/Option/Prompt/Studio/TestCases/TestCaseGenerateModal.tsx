@@ -91,7 +91,7 @@ export const TestCaseGenerateModal: React.FC<TestCaseGenerateModalProps> = ({
         </span>
       }
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="mt-4 space-y-4">
         <Alert

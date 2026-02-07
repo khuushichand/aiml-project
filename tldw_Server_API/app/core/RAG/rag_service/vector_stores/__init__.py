@@ -5,12 +5,7 @@ This package provides a unified interface for different vector databases,
 allowing easy switching between ChromaDB, Pinecone, Weaviate, and others.
 """
 
-from .base import (
-    VectorStoreAdapter,
-    VectorStoreConfig,
-    VectorSearchResult,
-    VectorStoreType
-)
+from .base import VectorSearchResult, VectorStoreAdapter, VectorStoreConfig, VectorStoreType
 from .chromadb_adapter import ChromaDBAdapter
 from .factory import VectorStoreFactory, create_from_settings_for_user
 

@@ -1,24 +1,28 @@
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     rbac_rate_limit,
-    require_token_scope,
     require_permissions,
+    require_token_scope,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.notes_graph import (
+    GraphLimits,
     NoteGraphRequest,
     NoteGraphResponse,
     NoteLinkCreate,
-    GraphLimits,
 )
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, ConflictError, InputError, CharactersRAGDBError
 from tldw_Server_API.app.core.AuthNZ.permissions import NOTES_GRAPH_READ, NOTES_GRAPH_WRITE
-
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
 router = APIRouter()
 
@@ -162,7 +166,7 @@ async def get_notes_graph(
         raise
     except Exception as e:
         logger.error(f"notes.graph.read stub failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
 
 
 @router.get(
@@ -195,7 +199,7 @@ async def get_note_neighbors(
     """
     Stub neighbors endpoint; enforces RBAC and token scope.
     """
-    normalized_note_id = _normalize_note_id(note_id)
+    _normalize_note_id(note_id)
     # TODO: use normalized_note_id for neighbor lookup
     limits = GraphLimits(max_nodes=300, max_edges=1200, max_degree=40)
     return NoteGraphResponse(
@@ -252,7 +256,7 @@ async def create_manual_link(
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Create a manual link in the user's ChaChaNotes DB. Populates created_by.
     """
@@ -272,12 +276,12 @@ async def create_manual_link(
         )
         return {"status": "created", "edge": edge}
     except ConflictError:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate manual link")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate manual link") from None
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create manual note link: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link creation failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link creation failed") from e
 
 
 @router.delete(
@@ -315,7 +319,7 @@ async def delete_manual_link(
     _: None = Depends(rbac_rate_limit("notes.graph.write")),
     __: None = Depends(require_permissions(NOTES_GRAPH_WRITE)),
     ___: None = Depends(require_token_scope("notes", require_if_present=True, endpoint_id="notes.graph.write")),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Delete a manual link by id for the current user.
     """
@@ -324,7 +328,7 @@ async def delete_manual_link(
         deleted = db.delete_manual_note_edge(user_id=str(current_user.id_str), edge_id=normalized_edge_id)
         return {"deleted": bool(deleted), "edge_id": normalized_edge_id}
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete manual note link: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link deletion failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link deletion failed") from e

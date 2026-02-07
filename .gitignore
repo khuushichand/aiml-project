@@ -276,6 +276,7 @@ desktop.ini
 # macOS
 .DS_Store
 *.DS_Store
+__MACOSX/
 
 # User Registration System
 .jwt_secret
@@ -308,6 +309,12 @@ uv.lock
 !/models/Whisper/
 !/models/Whisper/.gitkeep
 !/models/Whisper/.gitignore
+!/models/flashrank/
+!/models/flashrank/.gitkeep
+!/models/flashrank/.gitignore
+!/models/flashrank/README.md
+!/models/flashrank/**
+models/flashrank/__MACOSX/
 /cache
 /.tmp
 /tldw_Server_API/Test_Cache

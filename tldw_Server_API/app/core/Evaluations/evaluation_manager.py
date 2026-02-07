@@ -10,22 +10,24 @@ Handles:
 - Statistical analysis
 """
 
+import asyncio
+import contextlib
 import json
-import uuid
+import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
-import asyncio
-from loguru import logger
-import numpy as np
-from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database
+from typing import Any, Optional, Union
 
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+import numpy as np
+from loguru import logger
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
-import os
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.migrations import migrate_evaluations_database
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 
 
 class EvaluationManager:
@@ -183,10 +185,8 @@ class EvaluationManager:
                 "CREATE INDEX IF NOT EXISTS idx_metric ON evaluation_metrics(metric_name)",
                 "CREATE INDEX IF NOT EXISTS idx_metric_created ON evaluation_metrics(created_at)"
             ]:
-                try:
+                with contextlib.suppress(sqlite3.OperationalError):
                     conn.execute(index_sql)
-                except sqlite3.OperationalError:
-                    pass
 
             # Create webhook registrations table (needed for webhook tests)
             conn.execute("""
@@ -252,9 +252,9 @@ class EvaluationManager:
     async def store_evaluation(
         self,
         evaluation_type: str,
-        input_data: Dict[str, Any],
-        results: Dict[str, Any],
-        metadata: Optional[Dict[str, Any]] = None
+        input_data: dict[str, Any],
+        results: dict[str, Any],
+        metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """Store evaluation results"""
         import uuid
@@ -292,10 +292,8 @@ class EvaluationManager:
 
         logger.info(f"Stored evaluation {evaluation_id} of type {evaluation_type}")
         # Track recent creations for this manager instance
-        try:
+        with contextlib.suppress(Exception):
             self._recent_created_ids.append(evaluation_id)
-        except Exception:
-            pass
         return evaluation_id
 
     async def get_history(
@@ -305,7 +303,7 @@ class EvaluationManager:
         end_date: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Retrieve evaluation history with filtering"""
         base_query = "FROM internal_evaluations WHERE 1=1"
         filter_params: list[Any] = []
@@ -387,9 +385,9 @@ class EvaluationManager:
 
     async def compare_evaluations(
         self,
-        evaluation_ids: List[str],
-        metrics_to_compare: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
+        evaluation_ids: list[str],
+        metrics_to_compare: Optional[list[str]] = None
+    ) -> dict[str, Any]:
         """Compare multiple evaluations"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -471,10 +469,10 @@ class EvaluationManager:
         metric_name: str,
         description: str,
         evaluation_prompt: str,
-        input_data: Dict[str, Any],
-        scoring_criteria: Dict[str, Any],
+        input_data: dict[str, Any],
+        scoring_criteria: dict[str, Any],
         api_name: str = "openai"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Evaluate using custom metric definition"""
         # Format the evaluation prompt with input data
         formatted_prompt = evaluation_prompt
@@ -498,8 +496,8 @@ class EvaluationManager:
             )
 
             # Parse response with strict validation
-            import re
             import json as json_module
+            import re
 
             # Try to parse as JSON first (most reliable)
             score = None
@@ -565,7 +563,7 @@ class EvaluationManager:
                 "raw_output": None
             }
 
-    def _calculate_trends(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_trends(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """Calculate metric trends over time"""
         trends = {}
 
@@ -604,7 +602,7 @@ class EvaluationManager:
 
         return trends
 
-    def _perform_statistical_analysis(self, metric_comparisons: Dict[str, List[float]]) -> Dict[str, Any]:
+    def _perform_statistical_analysis(self, metric_comparisons: dict[str, list[float]]) -> dict[str, Any]:
         """Perform statistical analysis on comparison data"""
         analysis = {}
 
@@ -622,7 +620,7 @@ class EvaluationManager:
         return analysis
 
     # --- Compatibility helpers for tests expecting simple retrieval APIs ---
-    async def get_evaluation(self, evaluation_id: str) -> Optional[Dict[str, Any]]:
+    async def get_evaluation(self, evaluation_id: str) -> Optional[dict[str, Any]]:
         """Retrieve a single evaluation by ID from internal storage.
 
         Returns a dict with columns from internal_evaluations or None if not found.
@@ -641,7 +639,7 @@ class EvaluationManager:
             logger.error(f"get_evaluation failed: {e}")
             return None
 
-    async def list_evaluations(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+    async def list_evaluations(self, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         """List evaluations created in this manager session (ordered by created_at desc).
 
         To ensure isolation for property-based tests that reuse the same fixture

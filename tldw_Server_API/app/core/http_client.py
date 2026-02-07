@@ -13,63 +13,81 @@ Implements:
 - Structured logging and metrics hooks; optional trace header injection
 """
 
-import asyncio
-import json
-import os
-import time
-import random
-import hashlib
-import ssl
-import socket
-import threading
-from dataclasses import dataclass
-from contextlib import asynccontextmanager
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Optional, Dict, Any, TypedDict, AsyncIterator, Tuple, Callable, Union, Iterable, Protocol
-from urllib.parse import urlparse, urljoin
-import re
+import asyncio  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import random  # noqa: E402
+import re  # noqa: E402
+import socket  # noqa: E402
+import ssl  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from collections.abc import AsyncIterator, Iterable  # noqa: E402
+from contextlib import asynccontextmanager, suppress  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+from pathlib import Path  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from typing import Any, Protocol, TypedDict  # noqa: E402
+from urllib.parse import urljoin, urlparse  # noqa: E402
 
-try:
-    # Python 3.8+/backport safe import
-    from importlib import metadata as _importlib_metadata  # type: ignore
-except Exception:  # pragma: no cover
-    _importlib_metadata = None  # type: ignore
-
-from loguru import logger
+from loguru import logger  # noqa: E402
 
 try:
     import httpx
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     httpx = None  # type: ignore
 
 try:
     import aiohttp
-except Exception:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     aiohttp = None  # type: ignore
 
 try:  # Optional OpenTelemetry traceparent injection
     from opentelemetry import trace as _otel_trace  # type: ignore
     _OTEL_AVAILABLE = True
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     _OTEL_AVAILABLE = False
     _otel_trace = None  # type: ignore
 
-from tldw_Server_API.app.core.exceptions import (
+from tldw_Server_API.app.core.exceptions import (  # noqa: E402
+    DownloadError,
     EgressPolicyError,
+    JSONDecodeError,
     NetworkError,
     RetryExhaustedError,
-    JSONDecodeError,
     StreamingProtocolError,
-    DownloadError,
 )
-
-from tldw_Server_API.app.core.Metrics import (
-    get_metrics_registry,
+from tldw_Server_API.app.core.Metrics import (  # noqa: E402
     MetricDefinition,
     MetricType,
+    get_metrics_registry,
 )
-from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager
+from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager  # noqa: E402
+
+_HTTPCLIENT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    DownloadError,
+    EgressPolicyError,
+    JSONDecodeError,
+    NetworkError,
+    RetryExhaustedError,
+    StreamingProtocolError,
+    TimeoutError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+try:
+    # Python 3.8+/backport safe import
+    from importlib import metadata as _importlib_metadata  # type: ignore
+except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
+    _importlib_metadata = None  # type: ignore
 
 
 def _resolve_httpx():
@@ -80,7 +98,7 @@ def _resolve_httpx():
     try:
         import importlib
         return importlib.import_module("httpx")
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return httpx  # type: ignore
 
 
@@ -90,7 +108,7 @@ def _resolve_curl_session():
         import importlib
         mod = importlib.import_module("curl_cffi.requests")
         return getattr(mod, "Session", None)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -118,7 +136,7 @@ ENFORCE_TLS_MIN = (str(ENFORCE_TLS_MIN).lower() in {"1", "true", "yes", "on"})
 TLS_MIN_VERSION = (os.getenv("HTTP_TLS_MIN_VERSION") or os.getenv("TLS_MIN_VERSION") or "1.2").strip()
 
 
-def _httpx_timeout_from_defaults() -> "httpx.Timeout":
+def _httpx_timeout_from_defaults() -> httpx.Timeout:
     return httpx.Timeout(
         connect=DEFAULT_CONNECT_TIMEOUT,
         read=DEFAULT_READ_TIMEOUT,
@@ -129,15 +147,15 @@ def _httpx_timeout_from_defaults() -> "httpx.Timeout":
 
 def build_limits(
     *,
-    max_connections: Optional[int] = None,
-    max_keepalive_connections: Optional[int] = None,
-    keepalive_expiry: Optional[float] = None,
-) -> Optional["httpx.Limits"]:
+    max_connections: int | None = None,
+    max_keepalive_connections: int | None = None,
+    keepalive_expiry: float | None = None,
+) -> httpx.Limits | None:
     """Create an httpx.Limits instance when httpx is available."""
     _hx = _resolve_httpx()
     if _hx is None or not hasattr(_hx, "Limits"):
         return None
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     if max_connections is not None:
         kwargs["max_connections"] = max_connections
     if max_keepalive_connections is not None:
@@ -148,11 +166,11 @@ def build_limits(
         return None
     try:
         return _hx.Limits(**kwargs)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
-_CACHED_VERSION: Optional[str] = None
+_CACHED_VERSION: str | None = None
 
 
 def _get_project_version() -> str:
@@ -170,7 +188,7 @@ def _get_project_version() -> str:
             _CACHED_VERSION = _importlib_metadata.version("tldw-server")  # type: ignore[attr-defined]
             if _CACHED_VERSION:
                 return _CACHED_VERSION
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     # 3) Fallback: parse pyproject.toml in repo root
     try:
@@ -182,31 +200,29 @@ def _get_project_version() -> str:
             if m:
                 _CACHED_VERSION = m.group(1).strip()
                 return _CACHED_VERSION
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     _CACHED_VERSION = "0.0.0"
     return _CACHED_VERSION
 
 
-def _capture_error_body_hook(response: "httpx.Response") -> None:
+def _capture_error_body_hook(response: httpx.Response) -> None:
     try:
         if response.status_code >= 400:
             response.read()
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
 
 
-async def _capture_error_body_hook_async(response: "httpx.Response") -> None:
+async def _capture_error_body_hook_async(response: httpx.Response) -> None:
     try:
         if response.status_code >= 400:
             try:
                 await response.aread()
-            except Exception:
-                try:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     response.read()
-                except Exception:
-                    pass
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -219,10 +235,10 @@ def _register_http_client_metrics_once() -> None:
         return
     try:
         reg = get_metrics_registry()
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return
     # Register http-client-specific metrics if not present
-    try:
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
         reg.register_metric(
             MetricDefinition(
                 name="http_client_requests_total",
@@ -231,9 +247,7 @@ def _register_http_client_metrics_once() -> None:
                 labels=["method", "host", "status"],
             )
         )
-    except Exception:
-        pass
-    try:
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
         reg.register_metric(
             MetricDefinition(
                 name="http_client_request_duration_seconds",
@@ -244,9 +258,7 @@ def _register_http_client_metrics_once() -> None:
                 buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
             )
         )
-    except Exception:
-        pass
-    try:
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
         reg.register_metric(
             MetricDefinition(
                 name="http_client_retries_total",
@@ -255,9 +267,7 @@ def _register_http_client_metrics_once() -> None:
                 labels=["reason"],
             )
         )
-    except Exception:
-        pass
-    try:
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
         reg.register_metric(
             MetricDefinition(
                 name="http_client_egress_denials_total",
@@ -266,15 +276,11 @@ def _register_http_client_metrics_once() -> None:
                 labels=["reason"],
             )
         )
-    except Exception:
-        pass
     _HTTP_CLIENT_METRICS_REGISTERED = True
 
 # Ensure metrics are registered on import
-try:
+with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
     _register_http_client_metrics_once()
-except Exception:
-    pass
 
 
 # --------------------------------------------------------------------------------------
@@ -283,7 +289,7 @@ except Exception:
 
 class HttpResponse(TypedDict):
     status: int
-    headers: Dict[str, str]
+    headers: dict[str, str]
     text: str
     url: str
     backend: str  # 'curl' or 'httpx'
@@ -294,8 +300,8 @@ class RetryPolicy:
     attempts: int = DEFAULT_ATTEMPTS
     backoff_base_ms: int = DEFAULT_BACKOFF_BASE_MS
     backoff_cap_s: int = DEFAULT_BACKOFF_CAP_S
-    retry_on_status: Tuple[int, ...] = (408, 429, 500, 502, 503, 504)
-    retry_on_methods: Tuple[str, ...] = ("GET", "HEAD", "OPTIONS")
+    retry_on_status: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
+    retry_on_methods: tuple[str, ...] = ("GET", "HEAD", "OPTIONS")
     respect_retry_after: bool = True
     retry_on_unsafe: bool = False
 
@@ -308,8 +314,8 @@ class RetryPolicy:
 class SSEEvent:
     event: str = "message"
     data: str = ""
-    id: Optional[str] = None
-    retry: Optional[int] = None
+    id: str | None = None
+    retry: int | None = None
 
 
 class _AiohttpResponse:
@@ -322,11 +328,11 @@ class _AiohttpResponse:
         self._body = body or b""
         try:
             encoding = getattr(response, "charset", None) or "utf-8"
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             encoding = "utf-8"
         try:
             self._text = self._body.decode(encoding, errors="replace")
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             self._text = self._body.decode("utf-8", errors="replace")
 
     @property
@@ -346,16 +352,16 @@ class _AiohttpResponse:
         if httpx is not None:
             try:
                 req = httpx.Request("GET", self.url)
-                raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=req, response=self)  # type: ignore[arg-type]
-            except Exception:
-                raise NetworkError(f"HTTP {self.status_code}")
-        raise NetworkError(f"HTTP {self.status_code}")
+                raise httpx.HTTPStatusError(f"HTTP {self.status_code}", request=req, response=self)  # type: ignore[arg-type]  # noqa: TRY003
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+                raise NetworkError(f"HTTP {self.status_code}")  # noqa: B904, TRY003
+        raise NetworkError(f"HTTP {self.status_code}")  # noqa: TRY003
 
     async def aclose(self) -> None:
         try:
             if self._response is not None:
                 self._response.release()
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
 
     async def aiter_bytes(self, chunk_size: int = 65536) -> AsyncIterator[bytes]:
@@ -371,7 +377,7 @@ class _AiohttpResponse:
 
 class SyncResponseLike(Protocol):
     status_code: int
-    headers: Dict[str, Any]
+    headers: dict[str, Any]
     url: str
     text: str
 
@@ -382,7 +388,7 @@ class SyncResponseLike(Protocol):
 
 class AsyncResponseLike(Protocol):
     status_code: int
-    headers: Dict[str, Any]
+    headers: dict[str, Any]
     url: str
     text: str
 
@@ -399,18 +405,18 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> SyncResponseLike: ...
 
     async def arequest(
@@ -418,19 +424,19 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: bool | str | ssl.SSLContext | None = None,
     ) -> AsyncResponseLike: ...
 
     async def stream_bytes(
@@ -438,16 +444,16 @@ class TransportAdapter(Protocol):
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
+        proxies: str | dict[str, str] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]: ...
 
     async def stream_sse(
@@ -455,16 +461,16 @@ class TransportAdapter(Protocol):
         *,
         url: str,
         method: str = "GET",
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-    ) -> AsyncIterator["SSEEvent"]: ...
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: Any | None = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+    ) -> AsyncIterator[SSEEvent]: ...
 
 
 class HttpxAdapter:
@@ -475,19 +481,19 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.Client"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+        client: httpx.Client | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: float | httpx.Timeout | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-    ) -> "httpx.Response":
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+    ) -> httpx.Response:
         return _fetch_httpx_response(
             method=method,
             url=url,
@@ -510,20 +516,20 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+        client: httpx.AsyncClient | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: float | httpx.Timeout | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-    ) -> "httpx.Response":
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: bool | str | ssl.SSLContext | None = None,
+    ) -> httpx.Response:
         return await _afetch_httpx(
             method=method,
             url=url,
@@ -547,16 +553,16 @@ class HttpxAdapter:
         *,
         method: str,
         url: str,
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: httpx.AsyncClient | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        proxies: str | dict[str, str] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
         async for chunk in _astream_bytes_httpx(
             method=method,
@@ -579,16 +585,16 @@ class HttpxAdapter:
         *,
         url: str,
         method: str = "GET",
-        client: Optional["httpx.AsyncClient"] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-    ) -> AsyncIterator["SSEEvent"]:
+        client: httpx.AsyncClient | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+    ) -> AsyncIterator[SSEEvent]:
         async for event in _astream_sse_httpx(
             url=url,
             method=method,
@@ -616,19 +622,19 @@ class AiohttpAdapter:
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        cookies: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
         allow_redirects: bool = True,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-        verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+        verify: bool | str | ssl.SSLContext | None = None,
     ) -> AsyncResponseLike:
         return await _afetch_aiohttp(
             method=method,
@@ -653,16 +659,16 @@ class AiohttpAdapter:
         *,
         method: str,
         url: str,
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        timeout: Any | None = None,
+        proxies: str | dict[str, str] | None = None,
         chunk_size: int = 65536,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
+        cert_pinning: dict[str, set[str]] | None = None,
     ) -> AsyncIterator[bytes]:
         async for chunk in _astream_bytes_aiohttp(
             method=method,
@@ -685,16 +691,16 @@ class AiohttpAdapter:
         *,
         url: str,
         method: str = "GET",
-        client: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Any] = None,
-        data: Optional[Any] = None,
-        timeout: Optional[Any] = None,
-        proxies: Optional[Union[str, Dict[str, str]]] = None,
-        retry: Optional["RetryPolicy"] = None,
-        cert_pinning: Optional[Dict[str, set[str]]] = None,
-    ) -> AsyncIterator["SSEEvent"]:
+        client: Any | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: Any | None = None,
+        data: Any | None = None,
+        timeout: Any | None = None,
+        proxies: str | dict[str, str] | None = None,
+        retry: RetryPolicy | None = None,
+        cert_pinning: dict[str, set[str]] | None = None,
+    ) -> AsyncIterator[SSEEvent]:
         async for event in _astream_sse_aiohttp(
             url=url,
             method=method,
@@ -737,8 +743,8 @@ _SENSITIVE_HEADER_KEYS = {
 }
 
 
-def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
-    safe: Dict[str, str] = {}
+def _redact_headers(h: dict[str, str] | None) -> dict[str, str]:
+    safe: dict[str, str] = {}
     if not h:
         return safe
     for k, v in h.items():
@@ -749,7 +755,7 @@ def _redact_headers(h: Optional[Dict[str, str]]) -> Dict[str, str]:
     return safe
 
 
-def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], backend: str) -> Dict[str, str]:
+def _sanitize_accept_encoding_for_backend(headers: dict[str, str] | None, backend: str) -> dict[str, str]:
     """Return a copy of headers with backend-specific Accept-Encoding tweaks.
 
     - Case-insensitively reads/removes existing Accept-Encoding headers.
@@ -758,13 +764,13 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
     - Writes back a single canonical 'Accept-Encoding' header if tokens remain; otherwise removes it.
     - Best-effort: on any parsing error, leaves headers unchanged.
     """
-    hdrs: Dict[str, str] = dict(headers or {})
+    hdrs: dict[str, str] = dict(headers or {})
     backend_norm = str(backend).lower()
     if backend_norm not in {"httpx", "aiohttp", "requests", "urllib3"}:
         return hdrs
     try:
         # Find all Accept-Encoding header keys regardless of case
-        ae_keys = [k for k in hdrs.keys() if k.lower() == "accept-encoding"]
+        ae_keys = [k for k in hdrs if k.lower() == "accept-encoding"]
         if not ae_keys:
             return hdrs
 
@@ -799,32 +805,32 @@ def _sanitize_accept_encoding_for_backend(headers: Optional[Dict[str, str]], bac
         if filtered:
             hdrs["Accept-Encoding"] = ", ".join(filtered)
         # else: if nothing remains, header stays removed
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         # Best-effort: return original headers unchanged
         return dict(headers or {})
     return hdrs
 
 
-def _url_parts(u: Union[str, Any]) -> Tuple[str, str, str]:
+def _url_parts(u: str | Any) -> tuple[str, str, str]:
     """Return (scheme, host, path) for logging; redacts query by omission."""
     try:
         s = str(u)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         s = ""
     try:
         p = urlparse(s)
         scheme = (p.scheme or "").lower()
         host = (p.hostname or "").lower()
         path = p.path or "/"
-        return scheme, host, path
-    except Exception:
+        return scheme, host, path  # noqa: TRY300
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return "", "", ""
 
 
 def _log_outbound_request(
     *,
     method: str,
-    url: Union[str, Any],
+    url: str | Any,
     status_code: int,
     start_time: float,
     attempt: int,
@@ -852,18 +858,18 @@ def _log_outbound_request(
             retry_delay_ms=retry_delay_ms,
             exception_class=exception_class,
         ).log(lvl, "http.client outbound")
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         # Never raise on logging failures
         pass
 
 def _parse_host_from_url(url: str) -> str:
     try:
         return (urlparse(url).hostname or "").lower()
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return ""
 
 
-def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _inject_trace_headers(headers: dict[str, str] | None) -> dict[str, str]:
     out = dict(headers or {})
     if _OTEL_AVAILABLE:
         try:  # best-effort injection
@@ -874,7 +880,7 @@ def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
                     trace_id = format(ctx.trace_id, "032x")
                     span_id = format(ctx.span_id, "016x")
                     out.setdefault("traceparent", f"00-{trace_id}-{span_id}-01")
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
     # Also propagate X-Request-Id from tracing baggage when available
     try:
@@ -882,25 +888,26 @@ def _inject_trace_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
         req_id = tm.get_baggage("request_id")
         if req_id:
             out.setdefault("X-Request-Id", str(req_id))
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return out
 
 
 def _validate_egress_or_raise(url: str) -> None:
     from urllib.parse import urlparse as _urlparse
+
     from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
 
     # In test environments, avoid DNS-based private IP checks for hostnames
     # (they can hang or be environment-dependent). For literal IPs we still
     # enforce the default private IP policy so security-focused tests remain
     # accurate.
-    block_override: Optional[bool] = None
+    block_override: bool | None = None
     if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
         try:
             parsed = _urlparse(url)
             host = (parsed.hostname or "").strip()
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             host = ""
         is_ip = False
         if host:
@@ -908,7 +915,7 @@ def _validate_egress_or_raise(url: str) -> None:
                 import ipaddress as _ipaddr
                 _ipaddr.ip_address(host)
                 is_ip = True
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 is_ip = False
         if not is_ip:
             block_override = False
@@ -917,12 +924,10 @@ def _validate_egress_or_raise(url: str) -> None:
     if not getattr(res, "allowed", False):
         reason = res.reason or "URL not allowed by egress policy"
         # metrics
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             get_metrics_registry().increment(
                 "http_client_egress_denials_total", 1, labels={"reason": (reason or "denied")}
             )
-        except Exception:
-            pass
         raise EgressPolicyError(reason)
 
 
@@ -935,13 +940,13 @@ def _is_url_allowed(url: str) -> bool:
         from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
         res = evaluate_url_policy(url)
         return bool(getattr(res, "allowed", False))
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         # Fail closed in strict paths; the simple path's callers expect explicit
         # ValueError on denial and do not rely on exceptions from here.
         return False
 
 
-def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) -> None:
+def _validate_proxies_or_raise(proxies: str | dict[str, str] | None) -> None:
     if not proxies:
         return
     hosts: set[str] = set()
@@ -952,37 +957,37 @@ def _validate_proxies_or_raise(proxies: Optional[Union[str, Dict[str, str]]]) ->
             hosts.add(_parse_host_from_url(v))
     # Deny by default: if allowlist is empty, proxies are disabled
     if not PROXY_ALLOWLIST:
-        raise EgressPolicyError("Proxies not allowed (no allowlist configured)")
+        raise EgressPolicyError("Proxies not allowed (no allowlist configured)")  # noqa: TRY003
     for h in hosts:
         if not h:
             continue
         if h not in PROXY_ALLOWLIST:
-            raise EgressPolicyError(f"Proxy host not in allowlist: {h}")
+            raise EgressPolicyError(f"Proxy host not in allowlist: {h}")  # noqa: TRY003
 
 
-def _resolve_proxy_for_url(url: str, proxies: Optional[Union[str, Dict[str, str]]]) -> Optional[str]:
+def _resolve_proxy_for_url(url: str, proxies: str | dict[str, str] | None) -> str | None:
     if not proxies:
         return None
     if isinstance(proxies, str):
         return proxies
     try:
         scheme = (urlparse(url).scheme or "").lower()
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         scheme = ""
     if scheme and scheme in proxies:
         return proxies.get(scheme)
     return proxies.get("http") or proxies.get("https")
 
 
-def _resolve_redirect_url(base_url: str, location: str) -> Optional[str]:
+def _resolve_redirect_url(base_url: str, location: str) -> str | None:
     try:
         if httpx is not None:
             try:
                 return str(httpx.URL(base_url).join(httpx.URL(location)))
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 return str(httpx.URL(location))
         return str(urljoin(base_url, location))
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -992,13 +997,13 @@ def _get_response_url(resp: Any, fallback: str) -> str:
         url = getattr(req, "url", None)
         if url:
             return str(url)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         url = getattr(resp, "url", None)
         if url:
             return str(url)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return str(fallback)
 
@@ -1013,7 +1018,7 @@ def _is_dns_resolution_error(exc: Exception) -> bool:
     try:
         if getattr(exc, "_tldw_dns_resolution", False):
             return True
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         import socket as _socket
@@ -1026,7 +1031,7 @@ def _is_dns_resolution_error(exc: Exception) -> bool:
             "DNSResolutionError",
         )
         seen_ids: set[int] = set()
-        cur: Optional[BaseException] = exc
+        cur: BaseException | None = exc
         while cur is not None and id(cur) not in seen_ids:
             seen_ids.add(id(cur))
             if isinstance(cur, _socket.gaierror):
@@ -1038,7 +1043,7 @@ def _is_dns_resolution_error(exc: Exception) -> bool:
             if not isinstance(next_exc, BaseException):
                 break
             cur = next_exc
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return False
     return False
 
@@ -1048,11 +1053,11 @@ def _is_aiohttp_client(client: Any) -> bool:
         return False
     try:
         return isinstance(client, aiohttp.ClientSession)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return False
 
 
-def _aiohttp_timeout_from_defaults() -> "aiohttp.ClientTimeout":
+def _aiohttp_timeout_from_defaults() -> aiohttp.ClientTimeout:
     return aiohttp.ClientTimeout(
         total=None,
         connect=DEFAULT_CONNECT_TIMEOUT,
@@ -1061,7 +1066,7 @@ def _aiohttp_timeout_from_defaults() -> "aiohttp.ClientTimeout":
     )
 
 
-def _aiohttp_timeout_from_value(timeout: Optional[Any]) -> Optional["aiohttp.ClientTimeout"]:
+def _aiohttp_timeout_from_value(timeout: Any | None) -> aiohttp.ClientTimeout | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if timeout is None:
@@ -1081,7 +1086,7 @@ def _aiohttp_timeout_from_value(timeout: Optional[Any]) -> Optional["aiohttp.Cli
     )
 
 
-def _aiohttp_ssl_from_verify(verify: Optional[Any]) -> Optional[Any]:
+def _aiohttp_ssl_from_verify(verify: Any | None) -> Any | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if verify is None or verify is True:
@@ -1094,20 +1099,18 @@ def _aiohttp_ssl_from_verify(verify: Optional[Any]) -> Optional[Any]:
         try:
             ctx = ssl.create_default_context(cafile=verify)
             if ENFORCE_TLS_MIN:
-                try:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     ctx.minimum_version = _tls_min_version_from_str(TLS_MIN_VERSION)
-                except Exception:
-                    pass
-            return ctx
-        except Exception:
+            return ctx  # noqa: TRY300
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             return _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
     return _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
 
 
-_AIOHTTP_SESSION_CACHE: Dict[int, Any] = {}
+_AIOHTTP_SESSION_CACHE: dict[int, Any] = {}
 _AIOHTTP_SESSION_LOCK = threading.Lock()
-_HTTPX_ASYNC_CLIENT_CACHE: Dict[Tuple[int, Any], Any] = {}
-_HTTPX_CLIENT_CACHE: Dict[Any, Any] = {}
+_HTTPX_ASYNC_CLIENT_CACHE: dict[tuple[int, Any], Any] = {}
+_HTTPX_CLIENT_CACHE: dict[Any, Any] = {}
 _HTTPX_CLIENT_LOCK = threading.Lock()
 
 
@@ -1117,7 +1120,7 @@ def _normalize_httpx_cache_value(value: Any) -> Any:
     if isinstance(value, dict):
         try:
             return tuple(sorted((str(k), str(v)) for k, v in value.items()))
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             return repr(value)
     if isinstance(value, ssl.SSLContext):
         return ("sslcontext", id(value))
@@ -1125,16 +1128,16 @@ def _normalize_httpx_cache_value(value: Any) -> Any:
 
 
 def _httpx_cache_key(
-    proxies: Optional[Any],
-    verify: Optional[Any],
+    proxies: Any | None,
+    verify: Any | None,
     *,
-    factory: Optional[Any] = None,
-) -> Tuple[Any, Any, Any]:
+    factory: Any | None = None,
+) -> tuple[Any, Any, Any]:
     factory_key: Any = factory
     if factory is not None:
         try:
             hash(factory)
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             factory_key = id(factory)
     return (
         _normalize_httpx_cache_value(proxies),
@@ -1145,11 +1148,11 @@ def _httpx_cache_key(
 
 def _get_httpx_async_client(
     *,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.AsyncClient":
+    proxies: str | dict[str, str] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.AsyncClient:
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     loop = asyncio.get_running_loop()
     key = (id(loop), _httpx_cache_key(proxies, verify, factory=create_async_client))
     with _HTTPX_CLIENT_LOCK:
@@ -1163,11 +1166,11 @@ def _get_httpx_async_client(
 
 def _get_httpx_client(
     *,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.Client":
+    proxies: str | dict[str, str] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.Client:
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     key = _httpx_cache_key(proxies, verify, factory=create_client)
     with _HTTPX_CLIENT_LOCK:
         client = _HTTPX_CLIENT_CACHE.get(key)
@@ -1178,9 +1181,9 @@ def _get_httpx_client(
         return client
 
 
-def _get_aiohttp_session() -> "aiohttp.ClientSession":
+def _get_aiohttp_session() -> aiohttp.ClientSession:
     if aiohttp is None:  # pragma: no cover
-        raise RuntimeError("aiohttp is not available")
+        raise RuntimeError("aiohttp is not available")  # noqa: TRY003
     loop = asyncio.get_running_loop()
     key = id(loop)
     with _AIOHTTP_SESSION_LOCK:
@@ -1195,7 +1198,7 @@ def _get_aiohttp_session() -> "aiohttp.ClientSession":
                 limit_per_host=int(os.getenv("HTTP_MAX_KEEPALIVE_CONNECTIONS", "20")),
                 ssl=ssl_ctx,
             )
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             connector = None
         session = aiohttp.ClientSession(
             connector=connector,
@@ -1206,8 +1209,8 @@ def _get_aiohttp_session() -> "aiohttp.ClientSession":
         try:
             env_pins = _parse_pins_from_env()
             if env_pins:
-                setattr(session, "_tldw_cert_pinning", env_pins)
-        except Exception:
+                session._tldw_cert_pinning = env_pins
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
         _AIOHTTP_SESSION_CACHE[key] = session
         return session
@@ -1222,10 +1225,8 @@ async def shutdown_http_client() -> None:
             sessions = list(_AIOHTTP_SESSION_CACHE.values())
             _AIOHTTP_SESSION_CACHE.clear()
     for session in sessions:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             await session.close()
-        except Exception:
-            pass
     async_clients: list[Any] = []
     sync_clients: list[Any] = []
     with _HTTPX_CLIENT_LOCK:
@@ -1234,18 +1235,14 @@ async def shutdown_http_client() -> None:
         sync_clients = list(_HTTPX_CLIENT_CACHE.values())
         _HTTPX_CLIENT_CACHE.clear()
     for client in async_clients:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             await client.aclose()
-        except Exception:
-            pass
     for client in sync_clients:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             client.close()
-        except Exception:
-            pass
 
 
-def _iter_file_items(files: Any) -> Iterable[Tuple[str, Any]]:
+def _iter_file_items(files: Any) -> Iterable[tuple[str, Any]]:
     if files is None:
         return []
     if isinstance(files, dict):
@@ -1256,42 +1253,36 @@ def _iter_file_items(files: Any) -> Iterable[Tuple[str, Any]]:
 def _rewind_files(files: Any) -> None:
     for _, spec in _iter_file_items(files):
         try:
-            if isinstance(spec, (tuple, list)) and len(spec) >= 2:
-                file_obj = spec[1]
-            else:
-                file_obj = spec
+            file_obj = spec[1] if isinstance(spec, (tuple, list)) and len(spec) >= 2 else spec
             if hasattr(file_obj, "seek"):
                 file_obj.seek(0)
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             continue
 
 
-def _validate_retry_files_seekable(files: Any, retry: Optional["RetryPolicy"]) -> None:
+def _validate_retry_files_seekable(files: Any, retry: RetryPolicy | None) -> None:
     if files is None or retry is None:
         return
     if not retry.enabled:
         return
     for _, spec in _iter_file_items(files):
-        if isinstance(spec, (tuple, list)) and len(spec) >= 2:
-            file_obj = spec[1]
-        else:
-            file_obj = spec
+        file_obj = spec[1] if isinstance(spec, (tuple, list)) and len(spec) >= 2 else spec
         if hasattr(file_obj, "seekable"):
             try:
                 is_seekable = file_obj.seekable()
-            except Exception as exc:
-                raise ValueError(
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as exc:
+                raise ValueError(  # noqa: TRY003
                     "File-like object must be seekable when retries are enabled. "
                     "Either disable retries or use a seekable stream."
                 ) from exc
             if is_seekable is False:
-                raise ValueError(
+                raise ValueError(  # noqa: TRY003
                     "File-like object must be seekable when retries are enabled. "
                     "Either disable retries or use a seekable stream."
                 )
 
 
-def _build_aiohttp_form(data: Optional[Any], files: Optional[Any]) -> Optional["aiohttp.FormData"]:
+def _build_aiohttp_form(data: Any | None, files: Any | None) -> aiohttp.FormData | None:
     if aiohttp is None:  # pragma: no cover
         return None
     if files is None:
@@ -1332,39 +1323,32 @@ def _build_aiohttp_form(data: Optional[Any], files: Optional[Any]) -> Optional["
 def _decorrelated_jitter_sleep(prev: float, base_ms: int, cap_s: int) -> float:
     base = max(0.001, base_ms / 1000.0)
     cap = max(base, float(cap_s))
-    if prev <= 0:
-        sleep = base
-    else:
-        sleep = min(cap, random.uniform(base, prev * 3))
+    sleep = base if prev <= 0 else min(cap, random.uniform(base, prev * 3))
     return sleep
 
 
-def _should_retry(method: str, status: Optional[int], exc: Optional[Exception], policy: RetryPolicy) -> Tuple[bool, str]:
+def _should_retry(method: str, status: int | None, exc: Exception | None, policy: RetryPolicy) -> tuple[bool, str]:
     m = method.upper()
     if exc is not None:
         # Treat DNS resolution / unknown-host failures as permanent.
         try:
             if _is_dns_resolution_error(exc):
                 return False, exc.__class__.__name__
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
         # Other network-level exceptions remain retriable.
         return True, exc.__class__.__name__
     if status is None:
         return False, "no_status"
-    if status in policy.retry_on_status:
-        if m in policy.retry_on_methods or policy.retry_on_unsafe:
-            return True, f"{status}"
+    if status in policy.retry_on_status and (m in policy.retry_on_methods or policy.retry_on_unsafe):
+        return True, f"{status}"
     return False, "status_not_retriable"
 
 
-def _build_default_headers(component: Optional[str] = None) -> Dict[str, str]:
+def _build_default_headers(component: str | None = None) -> dict[str, str]:
     # Standardize UA: tldw_server/<version> (<component>)
     version = _get_project_version()
-    if component:
-        ua = f"tldw_server/{version} ({component})"
-    else:
-        ua = f"tldw_server/{version}"
+    ua = f"tldw_server/{version} ({component})" if component else f"tldw_server/{version}"
     # Allow env to override completely if provided
     if os.getenv("HTTP_DEFAULT_USER_AGENT"):
         ua = os.getenv("HTTP_DEFAULT_USER_AGENT") or ua
@@ -1384,46 +1368,46 @@ def _httpx_limits_default():  # Optional["httpx.Limits"]
                 max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "100")),
                 max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE_CONNECTIONS", "20")),
             )
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return None
 
 
-def _tls_min_version_from_str(ver: Optional[str]) -> ssl.TLSVersion:
+def _tls_min_version_from_str(ver: str | None) -> ssl.TLSVersion:
     try:
         v = (ver or "1.2").strip().lower()
         if v in {"1.3", "tls1.3", "tlsv1.3"}:
             return ssl.TLSVersion.TLSv1_3
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return ssl.TLSVersion.TLSv1_2
 
 
-def _build_ssl_context(enforce_min: bool, min_ver: Optional[str]) -> Optional[ssl.SSLContext]:
+def _build_ssl_context(enforce_min: bool, min_ver: str | None) -> ssl.SSLContext | None:
     if not enforce_min:
         return None
     ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
     try:
         ctx.minimum_version = _tls_min_version_from_str(min_ver)
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     return ctx
 
 
-def _get_client_cert_pins(client: Any) -> Optional[Dict[str, set[str]]]:
+def _get_client_cert_pins(client: Any) -> dict[str, set[str]] | None:
     try:
         pins = getattr(client, "_tldw_cert_pinning", None)
         if pins is None:
             return None
-        out: Dict[str, set[str]] = {}
+        out: dict[str, set[str]] = {}
         for host, vals in pins.items():
             out[str(host).lower()] = {str(v).lower() for v in (vals or set())}
-        return out
-    except Exception:
+        return out  # noqa: TRY300
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
-def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
+def _parse_pins_from_env() -> dict[str, set[str]] | None:
     """Parse env-driven certificate pins: HTTP_CERT_PINS="hostA=pinA|pinB,hostB=pinC".
 
     Returns a mapping host -> set of lowercase sha256 hex pins.
@@ -1431,7 +1415,7 @@ def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
     raw = os.getenv("HTTP_CERT_PINS", "").strip()
     if not raw:
         return None
-    out: Dict[str, set[str]] = {}
+    out: dict[str, set[str]] = {}
     try:
         parts = [p for p in re.split(r"[,;]", raw) if p]
         for part in parts:
@@ -1442,12 +1426,12 @@ def _parse_pins_from_env() -> Optional[Dict[str, set[str]]]:
             pins = {p.strip().lower() for p in pins_str.split("|") if p.strip()}
             if host and pins:
                 out[host] = pins
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         return None
     return out or None
 
 
-def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[str]) -> None:
+def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: str | None) -> None:
     if not host or not pins:
         return
     try:
@@ -1461,33 +1445,33 @@ def _check_cert_pinning(host: str, port: int, pins: set[str], min_ver: Optional[
             _validate_egress_or_raise(url)
         except EgressPolicyError:
             raise
-        except Exception as e:
-            raise EgressPolicyError(f"TLS pinning egress check failed: {e}")
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+            raise EgressPolicyError(f"TLS pinning egress check failed: {e}")  # noqa: B904, TRY003
 
         ctx = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
         try:
             ctx.minimum_version = _tls_min_version_from_str(min_ver)
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        with socket.create_connection((host, port), timeout=DEFAULT_CONNECT_TIMEOUT) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                der = ssock.getpeercert(binary_form=True)
+        with socket.create_connection((host, port), timeout=DEFAULT_CONNECT_TIMEOUT) as sock, \
+             ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            der = ssock.getpeercert(binary_form=True)
         if not der:
-            raise EgressPolicyError("TLS pinning: no certificate presented")
+            raise EgressPolicyError("TLS pinning: no certificate presented")  # noqa: TRY003, TRY301
         fp = hashlib.sha256(der).hexdigest().lower()
         if fp not in pins:
-            raise EgressPolicyError("TLS pinning mismatch for host")
+            raise EgressPolicyError("TLS pinning mismatch for host")  # noqa: TRY003, TRY301
     except EgressPolicyError:
         raise
-    except Exception as e:
-        raise EgressPolicyError(f"TLS pinning verification failed: {e}")
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+        raise EgressPolicyError(f"TLS pinning verification failed: {e}")  # noqa: B904, TRY003
 
 
 # --------------------------------------------------------------------------------------
 # Client factories
 # --------------------------------------------------------------------------------------
 
-def _instantiate_client(factory, kwargs: Dict[str, Any]):  # type: ignore[no-untyped-def]
+def _instantiate_client(factory, kwargs: dict[str, Any]):  # type: ignore[no-untyped-def]
     """Instantiate httpx client tolerating version differences in kwargs.
 
     On TypeError mentioning an unexpected keyword argument, remove that kwarg
@@ -1525,23 +1509,23 @@ def _instantiate_client(factory, kwargs: Dict[str, Any]):  # type: ignore[no-unt
 
 def create_async_client(
     *,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    limits: Optional["httpx.Limits"] = None,
-    base_url: Optional[str] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    timeout: float | httpx.Timeout | None = None,
+    limits: httpx.Limits | None = None,
+    base_url: str | None = None,
+    proxies: str | dict[str, str] | None = None,
     trust_env: bool = DEFAULT_TRUST_ENV,
     http2: bool = True,
     http3: bool = False,  # placeholder for future
-    headers: Optional[Dict[str, str]] = None,
-    transport: Optional["httpx.BaseTransport"] = None,
+    headers: dict[str, str] | None = None,
+    transport: httpx.BaseTransport | None = None,
     enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
     tls_min_version: str = TLS_MIN_VERSION,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.AsyncClient":
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.AsyncClient:
     _hx = _resolve_httpx()
     if _hx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     _validate_proxies_or_raise(proxies)
     # Build a timeout value tolerant of stubbed httpx without Timeout class
     if hasattr(_hx, "Timeout"):
@@ -1551,12 +1535,12 @@ def create_async_client(
                 if isinstance(timeout, _hx.Timeout)
                 else (timeout if timeout is not None else _httpx_timeout_from_defaults())
             )
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             to = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
         if not isinstance(to, getattr(_hx, "Timeout", object)):
             try:
                 to = _hx.Timeout(float(to))
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
     else:
         to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
@@ -1564,14 +1548,14 @@ def create_async_client(
     if headers:
         hdrs.update(headers)
     verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
-    kwargs: Dict[str, Any] = dict(
-        timeout=to,
-        trust_env=trust_env,
-        http2=http2,
-        proxies=proxies,
-        headers=hdrs,
-        transport=transport,
-    )
+    kwargs: dict[str, Any] = {
+        "timeout": to,
+        "trust_env": trust_env,
+        "http2": http2,
+        "proxies": proxies,
+        "headers": hdrs,
+        "transport": transport,
+    }
     kwargs["event_hooks"] = {"response": [_capture_error_body_hook_async]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
@@ -1585,35 +1569,35 @@ def create_async_client(
     client = _instantiate_client(getattr(_hx, "AsyncClient", object), kwargs)
     try:
         if cert_pinning:
-            setattr(client, "_tldw_cert_pinning", cert_pinning)
+            client._tldw_cert_pinning = cert_pinning
         else:
             env_pins = _parse_pins_from_env()
             if env_pins:
-                setattr(client, "_tldw_cert_pinning", env_pins)
-    except Exception:
+                client._tldw_cert_pinning = env_pins
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return client
 
 
 def create_client(
     *,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    limits: Optional["httpx.Limits"] = None,
-    base_url: Optional[str] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    timeout: float | httpx.Timeout | None = None,
+    limits: httpx.Limits | None = None,
+    base_url: str | None = None,
+    proxies: str | dict[str, str] | None = None,
     trust_env: bool = DEFAULT_TRUST_ENV,
     http2: bool = True,
     http3: bool = False,  # placeholder for future
-    headers: Optional[Dict[str, str]] = None,
-    transport: Optional["httpx.BaseTransport"] = None,
+    headers: dict[str, str] | None = None,
+    transport: httpx.BaseTransport | None = None,
     enforce_tls_min_version: bool = ENFORCE_TLS_MIN,
     tls_min_version: str = TLS_MIN_VERSION,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.Client":
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.Client:
     _hx = _resolve_httpx()
     if _hx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     _validate_proxies_or_raise(proxies)
     # Build a timeout value tolerant of stubbed httpx without Timeout class
     if hasattr(_hx, "Timeout"):
@@ -1623,12 +1607,12 @@ def create_client(
                 if isinstance(timeout, _hx.Timeout)
                 else (timeout if timeout is not None else _httpx_timeout_from_defaults())
             )
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             to = timeout if timeout is not None else DEFAULT_READ_TIMEOUT
         if not isinstance(to, getattr(_hx, "Timeout", object)):
             try:
                 to = _hx.Timeout(float(to))
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
     else:
         to = float(timeout) if timeout is not None else DEFAULT_READ_TIMEOUT
@@ -1636,14 +1620,14 @@ def create_client(
     if headers:
         hdrs.update(headers)
     verify_ctx = _build_ssl_context(enforce_tls_min_version, tls_min_version)
-    kwargs: Dict[str, Any] = dict(
-        timeout=to,
-        trust_env=trust_env,
-        http2=http2,
-        proxies=proxies,
-        headers=hdrs,
-        transport=transport,
-    )
+    kwargs: dict[str, Any] = {
+        "timeout": to,
+        "trust_env": trust_env,
+        "http2": http2,
+        "proxies": proxies,
+        "headers": hdrs,
+        "transport": transport,
+    }
     kwargs["event_hooks"] = {"response": [_capture_error_body_hook]}
     lim = limits or _httpx_limits_default()
     if lim is not None:
@@ -1658,17 +1642,17 @@ def create_client(
     try:
         from loguru import logger as _logger  # local import to avoid global cost
         _logger.debug("http_client.create_client: httpx.Client factory={} kwargs_keys={}", getattr(_hx, "Client", None), list(kwargs.keys()))
-    except Exception:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     client = _instantiate_client(getattr(_hx, "Client", object), kwargs)
     try:
         if cert_pinning:
-            setattr(client, "_tldw_cert_pinning", cert_pinning)
+            client._tldw_cert_pinning = cert_pinning
         else:
             env_pins = _parse_pins_from_env()
             if env_pins:
-                setattr(client, "_tldw_cert_pinning", env_pins)
-    except Exception:
+                client._tldw_cert_pinning = env_pins
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
         pass
     return client
 
@@ -1679,18 +1663,18 @@ def create_client(
 
 def _httpx_request_io(
     *,
-    client: "httpx.Client",
+    client: httpx.Client,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
     follow_redirects: bool = False,
-) -> "httpx.Response":
+) -> httpx.Response:
     method_upper = str(method).upper()
     if method_upper == "POST" and hasattr(client, "post"):
         return client.post(
@@ -1713,40 +1697,38 @@ def _httpx_request_io(
             timeout=timeout,
             follow_redirects=follow_redirects,
         )
-    req_kwargs: Dict[str, Any] = dict(
-        headers=headers,
-        cookies=cookies,
-        params=params,
-        json=json,
-        data=data,
-        files=files,
-        timeout=timeout,
-        follow_redirects=follow_redirects,
-    )
+    req_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "cookies": cookies,
+        "params": params,
+        "json": json,
+        "data": data,
+        "files": files,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+    }
     return client.request(method_upper, url, **req_kwargs)
 
 
 async def _httpx_arequest_io(
     *,
-    client: "httpx.AsyncClient",
+    client: httpx.AsyncClient,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
     follow_redirects: bool = False,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.Response":
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.Response:
     method_upper = str(method).upper()
     if method_upper == "POST" and hasattr(client, "post") and verify is None:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             logger.debug("afetch io: using AsyncClient.post")
-        except Exception:
-            pass
         return await client.post(
             url,
             headers=headers,
@@ -1759,10 +1741,8 @@ async def _httpx_arequest_io(
             follow_redirects=follow_redirects,
         )
     if method_upper == "GET" and hasattr(client, "get") and verify is None:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             logger.debug("afetch io: using AsyncClient.get")
-        except Exception:
-            pass
         return await client.get(
             url,
             headers=headers,
@@ -1771,47 +1751,45 @@ async def _httpx_arequest_io(
             timeout=timeout,
             follow_redirects=follow_redirects,
         )
-    try:
+    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
         logger.debug("afetch io: using AsyncClient.request")
-    except Exception:
-        pass
-    req_kwargs: Dict[str, Any] = dict(
-        headers=headers,
-        cookies=cookies,
-        params=params,
-        json=json,
-        data=data,
-        files=files,
-        timeout=timeout,
-        follow_redirects=follow_redirects,
-    )
+    req_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "cookies": cookies,
+        "params": params,
+        "json": json,
+        "data": data,
+        "files": files,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+    }
     return await client.request(method_upper, url, **req_kwargs)
 
 
 async def _aiohttp_request_io(
     *,
-    session: "aiohttp.ClientSession",
+    session: aiohttp.ClientSession,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    ssl_override: Optional[Any] = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
+    ssl_override: Any | None = None,
 ) -> _AiohttpResponse:
     req_timeout = _aiohttp_timeout_from_value(timeout)
     proxy = _resolve_proxy_for_url(url, proxies)
-    req_kwargs: Dict[str, Any] = dict(
-        headers=headers,
-        cookies=cookies,
-        params=params,
-        timeout=req_timeout,
-        allow_redirects=False,
-    )
+    req_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "cookies": cookies,
+        "params": params,
+        "timeout": req_timeout,
+        "allow_redirects": False,
+    }
     if proxy:
         req_kwargs["proxy"] = proxy
     if ssl_override is not None:
@@ -1832,17 +1810,17 @@ async def _aiohttp_request_io(
 @asynccontextmanager
 async def _httpx_stream_io(
     *,
-    client: "httpx.AsyncClient",
+    client: httpx.AsyncClient,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    chunk_size: Optional[int] = None,
-) -> AsyncIterator[Tuple["httpx.Response", AsyncIterator[bytes]]]:
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    chunk_size: int | None = None,
+) -> AsyncIterator[tuple[httpx.Response, AsyncIterator[bytes]]]:
     async with client.stream(
         str(method).upper(),
         url,
@@ -1863,27 +1841,27 @@ async def _httpx_stream_io(
 @asynccontextmanager
 async def _aiohttp_stream_io(
     *,
-    session: "aiohttp.ClientSession",
+    session: aiohttp.ClientSession,
     method: str,
     url: str,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    ssl_override: Optional[Any] = None,
-    chunk_size: Optional[int] = None,
-) -> AsyncIterator[Tuple[Any, AsyncIterator[bytes]]]:
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
+    ssl_override: Any | None = None,
+    chunk_size: int | None = None,
+) -> AsyncIterator[tuple[Any, AsyncIterator[bytes]]]:
     req_timeout = _aiohttp_timeout_from_value(timeout)
     proxy = _resolve_proxy_for_url(url, proxies)
-    req_kwargs: Dict[str, Any] = dict(
-        headers=headers,
-        params=params,
-        timeout=req_timeout,
-        allow_redirects=False,
-    )
+    req_kwargs: dict[str, Any] = {
+        "headers": headers,
+        "params": params,
+        "timeout": req_timeout,
+        "allow_redirects": False,
+    }
     if proxy:
         req_kwargs["proxy"] = proxy
     if ssl_override is not None:
@@ -1910,8 +1888,8 @@ async def _iter_sse_events_from_bytes(byte_iter: AsyncIterator[bytes]) -> AsyncI
             continue
         try:
             text = chunk.decode("utf-8", errors="replace")
-        except Exception as e:
-            raise StreamingProtocolError(f"Failed to decode SSE chunk: {e}")
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+            raise StreamingProtocolError(f"Failed to decode SSE chunk: {e}")  # noqa: B904, TRY003
         buffer += text
         while "\n\n" in buffer or "\r\n\r\n" in buffer:
             if "\r\n\r\n" in buffer and ("\n\n" not in buffer or buffer.index("\r\n\r\n") < buffer.index("\n\n")):
@@ -1923,7 +1901,7 @@ async def _iter_sse_events_from_bytes(byte_iter: AsyncIterator[bytes]) -> AsyncI
                 yield event
 
 
-def _stream_timeout_values(timeout: Optional[Any]) -> Tuple[float, float]:
+def _stream_timeout_values(timeout: Any | None) -> tuple[float, float]:
     first_byte_timeout = DEFAULT_CONNECT_TIMEOUT
     idle_timeout = DEFAULT_READ_TIMEOUT
     if timeout is None:
@@ -1938,21 +1916,17 @@ def _stream_timeout_values(timeout: Optional[Any]) -> Tuple[float, float]:
     if read is None:
         read = getattr(timeout, "sock_read", None)
     if connect is not None:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             first_byte_timeout = float(connect)
-        except Exception:
-            pass
     if read is not None:
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             idle_timeout = float(read)
-        except Exception:
-            pass
     return first_byte_timeout, idle_timeout
 
 
 async def _iter_bytes_with_timeouts(
     byte_iter: AsyncIterator[bytes],
-    timeout: Optional[Any],
+    timeout: Any | None,
 ) -> AsyncIterator[bytes]:
     first_timeout, idle_timeout = _stream_timeout_values(timeout)
     first_timeout = max(0.001, float(first_timeout))
@@ -1979,20 +1953,20 @@ async def _afetch_httpx(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
-) -> "httpx.Response":
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
+) -> httpx.Response:
     """Async httpx request with retries and egress enforcement.
 
     Raises ValueError when retries are enabled and a file-like object in `files`
@@ -2000,7 +1974,7 @@ async def _afetch_httpx(
     Either disable retries or use a seekable stream."
     """
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
@@ -2009,23 +1983,21 @@ async def _afetch_httpx(
     attempts = max(1, retry.attempts)
     sleep_s = 0.0
     t0 = time.time()
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
     method_upper = str(method).upper()
     _head_disable_h2_tried = False
     _head_get_range_tried = False
 
-    async def _do_once(ac: "httpx.AsyncClient", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
+    async def _do_once(ac: httpx.AsyncClient, target_url: str) -> tuple[httpx.Response | None, str]:
         req_headers = _inject_trace_headers(headers)
         # Parity with other paths: drop 'zstd' from Accept-Encoding for httpx
         try:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"afetch _do_once: method={method_upper} url={target_url}")
-            except Exception:
-                pass
             req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             # Optional cert pinning per host
@@ -2037,7 +2009,7 @@ async def _afetch_httpx(
                         host = (u.host or "").lower()
                         if host in pins_map:
                             _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-            except Exception as e:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                 return None, e.__class__.__name__
             r = await _httpx_arequest_io(
                 client=ac,
@@ -2053,20 +2025,18 @@ async def _afetch_httpx(
                 follow_redirects=False,
                 verify=verify,
             )
-            return r, "ok"
-        except Exception as e:
+            return r, "ok"  # noqa: TRY300
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
             # Let callers see HTTPStatusError directly so that adapters/tests
             # can distinguish 4xx/5xx responses from transport failures. All
             # other exceptions are normalized into a NetworkError reason.
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 logger.debug(f"afetch _do_once: caught exception {e!r}")
-            except Exception:
-                pass
             try:
                 _hx = _resolve_httpx()
                 if _hx is not None and isinstance(e, getattr(_hx, "HTTPStatusError", Exception)):
                     raise
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 # If httpx cannot be resolved for some reason, fall back to
                 # treating the error as a generic network failure.
                 pass
@@ -2074,12 +2044,10 @@ async def _afetch_httpx(
             # can treat them as permanent failures.
             try:
                 if _is_dns_resolution_error(e):
-                    try:
-                        setattr(e, "_tldw_dns_resolution", True)
-                    except Exception:
-                        pass
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                        e._tldw_dns_resolution = True
                     return None, "DNSResolutionError"
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 pass
             return None, e.__class__.__name__
 
@@ -2115,29 +2083,25 @@ async def _afetch_httpx(
                                 _head_disable_h2_tried = True
                                 try:
                                     if need_close:
-                                        try:
+                                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                             await ac.aclose()
-                                        except Exception:
-                                            pass
                                     ac = create_async_client(proxies=proxies, http2=False)
                                     need_close = True
                                     # Retry immediately inside same attempt
                                     continue
-                                except Exception:
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     pass
                             if not _head_get_range_tried:
                                 _head_get_range_tried = True
                                 try:
                                     req_headers = _inject_trace_headers(headers)
-                                    try:
+                                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                         req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
-                                    except Exception:
-                                        pass
                                     req_headers.setdefault("Range", "bytes=0-0")
                                     # Use a small per-request timeout specifically for this fallback
                                     try:
                                         _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
-                                    except Exception:
+                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                         _head_fb_to = 5.0
                                     r2 = await _httpx_arequest_io(
                                         client=ac,
@@ -2153,10 +2117,8 @@ async def _afetch_httpx(
                                         follow_redirects=False,
                                         verify=verify,
                                     )
-                                    try:
+                                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                         tm.set_attributes({"http.status_code": int(r2.status_code)})
-                                    except Exception:
-                                        pass
                                     _log_outbound_request(
                                         method="GET",
                                         url=r2.request.url if hasattr(r2.request, "url") else cur_url,
@@ -2165,15 +2127,15 @@ async def _afetch_httpx(
                                         attempt=attempt,
                                         last_retry_delay_s=sleep_s,
                                     )
-                                    return r2
-                                except Exception:
+                                    return r2  # noqa: TRY300
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     pass
                         # network exception occurred (no HEAD fallback succeeded)
                         last_exc = NetworkError(reason)
                         try:
                             if reason == "DNSResolutionError":
-                                setattr(last_exc, "_tldw_dns_resolution", True)
-                        except Exception:
+                                last_exc._tldw_dns_resolution = True
+                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Exit redirect loop; retry/backoff handled after loop
                         break
@@ -2181,20 +2143,18 @@ async def _afetch_httpx(
                         # Handle redirects explicitly to enforce per-hop egress
                         if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
                             location = resp.headers.get("location")
-                            try:
+                            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                 await resp.aclose()
-                            except Exception:
-                                pass
                             if not location:
                                 last_exc = NetworkError("Redirect without Location header")
                                 break
                             else:
                                 try:
                                     next_url = str(resp.request.url.join(httpx.URL(location)))
-                                except Exception:
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     try:
                                         next_url = str(httpx.URL(location))
-                                    except Exception:
+                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                         last_exc = NetworkError("Invalid redirect Location header")
                                         break
                                 redirects += 1
@@ -2218,12 +2178,10 @@ async def _afetch_httpx(
                                         time.time() - t0,
                                         labels={"method": method.upper(), "host": host},
                                     )
-                                except Exception:
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     pass
-                                try:
+                                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                     tm.set_attributes({"http.status_code": int(resp.status_code)})
-                                except Exception:
-                                    pass
                                 _log_outbound_request(
                                     method=method,
                                     url=resp.request.url,
@@ -2249,7 +2207,7 @@ async def _afetch_httpx(
                             try:
                                 host = _parse_host_from_url(str(resp.request.url))
                                 get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": reason})
-                            except Exception:
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                 pass
                             # Honor Retry-After
                             delay = 0.0
@@ -2258,17 +2216,15 @@ async def _afetch_httpx(
                                 if ra:
                                     try:
                                         delay = float(ra)
-                                    except Exception:
+                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                         delay = 0.0
                             if delay <= 0:
                                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             logger.debug(
                                 f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s url={cur_url}"
                             )
-                            try:
+                            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                 tm.add_event("http.retry", {"attempt": attempt, "reason": reason})
-                            except Exception:
-                                pass
                             await asyncio.sleep(delay)
                             sleep_s = delay
                             # Restart outer attempt
@@ -2288,18 +2244,14 @@ async def _afetch_httpx(
                             exception_class=last_exc.__class__.__name__,
                         )
                         raise last_exc
-                    try:
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                    except Exception:
-                        pass
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
                         f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
                     )
-                    try:
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
-                    except Exception:
-                        pass
                     await asyncio.sleep(delay)
                     sleep_s = delay
                     continue
@@ -2314,32 +2266,30 @@ async def _afetch_httpx(
             last_retry_delay_s=sleep_s,
             exception_class="RetryExhaustedError",
         )
-        raise RetryExhaustedError("All retry attempts exhausted")
+        raise RetryExhaustedError("All retry attempts exhausted")  # noqa: TRY003
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 await ac.aclose()
-            except Exception:
-                pass
 
 
 async def _afetch_aiohttp(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Any] = None,
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: Any | None = None,
 ) -> _AiohttpResponse:
     """Async aiohttp request with retries and egress enforcement.
 
@@ -2348,7 +2298,7 @@ async def _afetch_aiohttp(
     Either disable retries or use a seekable stream."
     """
     if aiohttp is None:  # pragma: no cover
-        raise RuntimeError("aiohttp is not available")
+        raise RuntimeError("aiohttp is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
@@ -2357,7 +2307,7 @@ async def _afetch_aiohttp(
     attempts = max(1, retry.attempts)
     sleep_s = 0.0
     t0 = time.time()
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     tm = get_tracing_manager()
     host_attr = _parse_host_from_url(url)
     method_upper = str(method).upper()
@@ -2365,12 +2315,10 @@ async def _afetch_aiohttp(
 
     ssl_override = _aiohttp_ssl_from_verify(verify)
 
-    async def _do_once(session: "aiohttp.ClientSession", target_url: str) -> Tuple[Optional[_AiohttpResponse], str]:
+    async def _do_once(session: aiohttp.ClientSession, target_url: str) -> tuple[_AiohttpResponse | None, str]:
         req_headers = _inject_trace_headers(headers)
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             req_headers = _sanitize_accept_encoding_for_backend(req_headers, "aiohttp")
-        except Exception:
-            pass
         try:
             # Optional cert pinning per host
             try:
@@ -2386,7 +2334,7 @@ async def _afetch_aiohttp(
                         port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
                     if host in pins_map:
                         _check_cert_pinning(host, port, pins_map[host], TLS_MIN_VERSION)
-            except Exception as e:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                 return None, e.__class__.__name__
             resp = await _aiohttp_request_io(
                 session=session,
@@ -2402,16 +2350,14 @@ async def _afetch_aiohttp(
                 proxies=proxies,
                 ssl_override=ssl_override,
             )
-            return resp, "ok"
-        except Exception as e:
+            return resp, "ok"  # noqa: TRY300
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
             try:
                 if _is_dns_resolution_error(e):
-                    try:
-                        setattr(e, "_tldw_dns_resolution", True)
-                    except Exception:
-                        pass
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
+                        e._tldw_dns_resolution = True
                     return None, "DNSResolutionError"
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 pass
             return None, e.__class__.__name__
 
@@ -2441,7 +2387,7 @@ async def _afetch_aiohttp(
                             req_headers.setdefault("Range", "bytes=0-0")
                             try:
                                 _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
-                            except Exception:
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                 _head_fb_to = 5.0
                             r2_wrap = await _aiohttp_request_io(
                                 session=session,
@@ -2454,10 +2400,8 @@ async def _afetch_aiohttp(
                                 proxies=proxies,
                                 ssl_override=ssl_override,
                             )
-                            try:
+                            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                 tm.set_attributes({"http.status_code": int(r2_wrap.status_code)})
-                            except Exception:
-                                pass
                             _log_outbound_request(
                                 method="GET",
                                 url=_get_response_url(r2_wrap, cur_url),
@@ -2466,14 +2410,14 @@ async def _afetch_aiohttp(
                                 attempt=attempt,
                                 last_retry_delay_s=sleep_s,
                             )
-                            return r2_wrap
-                        except Exception:
+                            return r2_wrap  # noqa: TRY300
+                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                             pass
                     last_exc = NetworkError(reason)
                     try:
                         if reason == "DNSResolutionError":
-                            setattr(last_exc, "_tldw_dns_resolution", True)
-                    except Exception:
+                            last_exc._tldw_dns_resolution = True
+                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                         pass
                     break
 
@@ -2508,12 +2452,10 @@ async def _afetch_aiohttp(
                             time.time() - t0,
                             labels={"method": method.upper(), "host": host},
                         )
-                    except Exception:
+                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                         pass
-                    try:
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         tm.set_attributes({"http.status_code": int(resp.status_code)})
-                    except Exception:
-                        pass
                     _log_outbound_request(
                         method=method,
                         url=_get_response_url(resp, cur_url),
@@ -2539,7 +2481,7 @@ async def _afetch_aiohttp(
                 try:
                     host = _parse_host_from_url(_get_response_url(resp, cur_url))
                     get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": reason})
-                except Exception:
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                     pass
                 delay = 0.0
                 if retry.respect_retry_after:
@@ -2547,17 +2489,15 @@ async def _afetch_aiohttp(
                     if ra:
                         try:
                             delay = float(ra)
-                        except Exception:
+                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                             delay = 0.0
                 if delay <= 0:
                     delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
                     f"afetch retry attempt={attempt} reason={reason} delay={delay:.3f}s url={cur_url}"
                 )
-                try:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     tm.add_event("http.retry", {"attempt": attempt, "reason": reason})
-                except Exception:
-                    pass
                 await asyncio.sleep(delay)
                 sleep_s = delay
                 break
@@ -2575,18 +2515,14 @@ async def _afetch_aiohttp(
                         exception_class=last_exc.__class__.__name__,
                     )
                     raise last_exc
-                try:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                except Exception:
-                    pass
                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
                     f"afetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
                 )
-                try:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
-                except Exception:
-                    pass
                 await asyncio.sleep(delay)
                 sleep_s = delay
                 continue
@@ -2600,26 +2536,26 @@ async def _afetch_aiohttp(
         last_retry_delay_s=sleep_s,
         exception_class="RetryExhaustedError",
     )
-    raise RetryExhaustedError("All retry attempts exhausted")
+    raise RetryExhaustedError("All retry attempts exhausted")  # noqa: TRY003
 
 
 async def afetch(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    verify: Optional[Union[bool, str, ssl.SSLContext]] = None,
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    verify: bool | str | ssl.SSLContext | None = None,
 ) -> Any:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -2648,15 +2584,15 @@ async def afetch(
 async def apost(
     *,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-) -> "httpx.Response":
+    client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    proxies: str | dict[str, str] | None = None,
+) -> httpx.Response:
     """
     Minimal async POST helper that enforces egress policy.
 
@@ -2665,7 +2601,7 @@ async def apost(
     to intercept calls while centralizing the egress check.
     """
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -2688,29 +2624,27 @@ async def apost(
         return resp
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 await ac.aclose()
-            except Exception:
-                pass
 
 
 def _fetch_httpx_response(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.Client"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    cookies: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
+    client: httpx.Client | None = None,
+    headers: dict[str, str] | None = None,
+    cookies: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
     allow_redirects: bool = True,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-) -> "httpx.Response":
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+) -> httpx.Response:
     """Sync httpx request with retries and egress enforcement.
 
     Raises ValueError when retries are enabled and a file-like object in `files`
@@ -2718,7 +2652,7 @@ def _fetch_httpx_response(
     Either disable retries or use a seekable stream."
     """
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     retry = retry or RetryPolicy()
     _validate_retry_files_seekable(files, retry)
     _validate_egress_or_raise(url)
@@ -2733,14 +2667,11 @@ def _fetch_httpx_response(
     _head_disable_h2_tried = False
     _head_get_range_tried = False
 
-    def _do_once(sc: "httpx.Client", target_url: str) -> Tuple[Optional["httpx.Response"], str]:
+    def _do_once(sc: httpx.Client, target_url: str) -> tuple[httpx.Response | None, str]:
         req_headers = _inject_trace_headers(headers)
         # Parity with simple fetch: drop 'zstd' from Accept-Encoding for httpx
-        try:
+        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
             req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
-        except Exception:
-            # Best-effort only; ignore sanitizer errors
-            pass
         try:
             # Optional cert pinning per host
             try:
@@ -2751,7 +2682,7 @@ def _fetch_httpx_response(
                         host = (u.host or "").lower()
                         if host in pins_map:
                             _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-            except Exception as e:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                 return None, e.__class__.__name__
             r = _httpx_request_io(
                 client=sc,
@@ -2766,14 +2697,14 @@ def _fetch_httpx_response(
                 timeout=timeout,
                 follow_redirects=False,
             )
-            return r, "ok"
-        except Exception as e:
+            return r, "ok"  # noqa: TRY300
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
             # Classify DNS resolution errors explicitly so that retry logic
             # can treat them as permanent failures.
             try:
                 if _is_dns_resolution_error(e):
                     return None, "DNSResolutionError"
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 pass
             return None, e.__class__.__name__
 
@@ -2804,29 +2735,25 @@ def _fetch_httpx_response(
                                 _head_disable_h2_tried = True
                                 try:
                                     if need_close:
-                                        try:
+                                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                             sc.close()
-                                        except Exception:
-                                            pass
                                     sc = create_client(proxies=proxies, http2=False)
                                     need_close = True
                                     # Retry immediately within same attempt
                                     continue
-                                except Exception:
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     pass
                             if not _head_get_range_tried:
                                 _head_get_range_tried = True
                                 try:
                                     req_headers = _inject_trace_headers(headers)
-                                    try:
+                                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                         req_headers = _sanitize_accept_encoding_for_backend(req_headers, "httpx")
-                                    except Exception:
-                                        pass
                                     req_headers.setdefault("Range", "bytes=0-0")
                                     # Use a small per-request timeout specifically for this fallback
                                     try:
                                         _head_fb_to = float(os.getenv("HTTP_HEAD_RANGE_FALLBACK_TIMEOUT", "5"))
-                                    except Exception:
+                                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                         _head_fb_to = 5.0
                                     r2 = _httpx_request_io(
                                         client=sc,
@@ -2841,10 +2768,8 @@ def _fetch_httpx_response(
                                         timeout=_head_fb_to,
                                         follow_redirects=False,
                                     )
-                                    try:
+                                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                                         tm.set_attributes({"http.status_code": int(r2.status_code)})
-                                    except Exception:
-                                        pass
                                     _log_outbound_request(
                                         method="GET",
                                         url=r2.request.url if hasattr(r2.request, "url") else cur_url,
@@ -2853,16 +2778,14 @@ def _fetch_httpx_response(
                                         attempt=attempt,
                                         last_retry_delay_s=sleep_s,
                                     )
-                                    return r2
-                                except Exception:
+                                    return r2  # noqa: TRY300
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                     pass
                         should, rsn = _should_retry(method, None, NetworkError(reason), retry)
                         if not should or attempt == attempts:
                             raise NetworkError(reason)
-                        try:
+                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                             get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                        except Exception:
-                            pass
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                         logger.debug(
                             f"fetch network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
@@ -2873,27 +2796,25 @@ def _fetch_httpx_response(
                     # redirect handling
                     if allow_redirects and resp.status_code in (301, 302, 303, 307, 308):
                         location = resp.headers.get("location")
-                        try:
+                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                             resp.close()
-                        except Exception:
-                            pass
                         if not location:
                             if attempt == attempts:
-                                raise NetworkError("Redirect without Location header")
+                                raise NetworkError("Redirect without Location header")  # noqa: TRY003
                             delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             time.sleep(delay)
                             sleep_s = delay
                             break
                         try:
                             next_url = str(resp.request.url.join(httpx.URL(location)))
-                        except Exception:
+                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                             try:
                                 next_url = str(httpx.URL(location))
-                            except Exception:
-                                raise NetworkError("Invalid redirect Location header")
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+                                raise NetworkError("Invalid redirect Location header")  # noqa: B904, TRY003
                         redirects += 1
                         if redirects > DEFAULT_MAX_REDIRECTS:
-                            raise NetworkError("Too many redirects")
+                            raise NetworkError("Too many redirects")  # noqa: TRY003
                         cur_url = next_url
                         continue
                     if resp.status_code < 400:
@@ -2907,12 +2828,10 @@ def _fetch_httpx_response(
                                 time.time() - t0,
                                 labels={"method": method.upper(), "host": host},
                             )
-                        except Exception:
+                        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                             pass
-                        try:
+                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                             tm.set_attributes({"http.status_code": int(resp.status_code)})
-                        except Exception:
-                            pass
                         _log_outbound_request(
                             method=method,
                             url=resp.request.url,
@@ -2933,27 +2852,23 @@ def _fetch_httpx_response(
                             last_retry_delay_s=sleep_s,
                         )
                         return resp
-                    try:
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                    except Exception:
-                        pass
                     delay = 0.0
                     if retry.respect_retry_after:
                         ra = resp.headers.get("retry-after")
                         if ra:
                             try:
                                 delay = float(ra)
-                            except Exception:
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                 delay = 0.0
                     if delay <= 0:
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                     logger.debug(
                         f"fetch retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={cur_url}"
                     )
-                    try:
+                    with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                         tm.add_event("http.retry", {"attempt": attempt, "reason": rsn})
-                    except Exception:
-                        pass
                     time.sleep(delay)
                     sleep_s = delay
                     break
@@ -2966,32 +2881,30 @@ def _fetch_httpx_response(
             last_retry_delay_s=sleep_s,
             exception_class="RetryExhaustedError",
         )
-        raise RetryExhaustedError("All retry attempts exhausted")
+        raise RetryExhaustedError("All retry attempts exhausted")  # noqa: TRY003
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 sc.close()
-            except Exception:
-                pass
 
 
 def _fetch_curl_simple(
     *,
     url: str,
-    headers: Dict[str, str],
-    cookies: Optional[Dict[str, str]],
-    timeout: Optional[float],
-    impersonate: Optional[str],
-    proxies: Optional[Dict[str, str]],
+    headers: dict[str, str],
+    cookies: dict[str, str] | None,
+    timeout: float | None,
+    impersonate: str | None,
+    proxies: dict[str, str] | None,
     allow_redirects: bool,
-) -> "HttpResponse":
+) -> HttpResponse:
     CurlSession = _resolve_curl_session()
     if CurlSession is None:
-        raise RuntimeError("curl_cffi is not installed")
+        raise RuntimeError("curl_cffi is not installed")  # noqa: TRY003
     if proxies:
         _validate_proxies_or_raise(proxies)
 
-    req_kwargs: Dict[str, Any] = {
+    req_kwargs: dict[str, Any] = {
         "headers": headers,
         "cookies": cookies,
         "allow_redirects": allow_redirects,
@@ -3033,22 +2946,22 @@ def fetch(*args, **kwargs):
         return adapter.request(**kwargs)
     # Simple path (tests: Web_Scraping/test_http_client_fetch.py)
     if not args and "url" not in kwargs:
-        raise TypeError("fetch() missing required argument: 'url'")
+        raise TypeError("fetch() missing required argument: 'url'")  # noqa: TRY003
     url = str(args[0] if args else kwargs.get("url"))
     backend = str(kwargs.get("backend", "httpx"))
     headers = kwargs.get("headers") or {}
     cookies = kwargs.get("cookies")
     impersonate = kwargs.get("impersonate")
-    follow_redirects_cfg = kwargs.get("follow_redirects", None)
-    trust_env = kwargs.get("trust_env", None)
-    proxies = kwargs.get("proxies", None)
-    timeout = kwargs.get("timeout", None)
+    follow_redirects_cfg = kwargs.get("follow_redirects")
+    trust_env = kwargs.get("trust_env")
+    proxies = kwargs.get("proxies")
+    timeout = kwargs.get("timeout")
 
     # Enforce egress via stubbed policy helper (tests monkeypatch this).
     # This remains intentionally lightweight so tests can override without
     # triggering full DNS lookups in the central policy during unit runs.
     if not _is_url_allowed(url):
-        raise ValueError("Egress denied for URL")
+        raise ValueError("Egress denied for URL")  # noqa: TRY003
 
     # Validate proxies against allowlist even in simple mode
     _validate_proxies_or_raise(proxies)
@@ -3058,7 +2971,7 @@ def fetch(*args, **kwargs):
         backend_norm = "curl" if _resolve_curl_session() is not None else "httpx"
     _hx = _resolve_httpx()
     if _hx is None and backend_norm != "curl":  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
 
     # Sanitize Accept-Encoding as per backend expectations
     req_headers = _sanitize_accept_encoding_for_backend(headers, backend_norm)
@@ -3091,7 +3004,7 @@ def fetch(*args, **kwargs):
         try:
             pu = httpx.URL(prev)
             nu = httpx.URL(nxt)
-        except Exception:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
             return False
         # Disallow scheme downgrade unless explicitly allowed
         if not allow_downgrade and (pu.scheme or "").lower() == "https" and (nu.scheme or "").lower() == "http":
@@ -3102,7 +3015,7 @@ def fetch(*args, **kwargs):
         # Cross-host redirects configurable (default disabled)
         return bool(allow_cross_host)
 
-    client_kwargs: Dict[str, Any] = {}
+    client_kwargs: dict[str, Any] = {}
     if timeout is not None:
         client_kwargs["timeout"] = timeout
     if trust_env is not None:
@@ -3131,7 +3044,7 @@ def fetch(*args, **kwargs):
         while True:
             # Re-enforce lightweight egress guard on each hop
             if not _is_url_allowed(cur_url):
-                raise ValueError("Egress denied for URL")
+                raise ValueError("Egress denied for URL")  # noqa: TRY003
 
             r = sc.request("GET", cur_url, headers=req_headers, cookies=cookies, follow_redirects=False)
             status = int(getattr(r, "status_code", 0))
@@ -3147,10 +3060,10 @@ def fetch(*args, **kwargs):
             try:
                 base_url = str(getattr(r, "url", cur_url))
                 next_url = str(httpx.URL(base_url).join(httpx.URL(location)))
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 try:
                     next_url = str(httpx.URL(location))
-                except Exception:
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                     break
 
             if not _redirect_allowed(cur_url, next_url):
@@ -3179,26 +3092,26 @@ async def afetch_json(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
+    client: httpx.AsyncClient | None = None,
     require_json_ct: bool = True,
-    max_bytes: Optional[int] = None,
+    max_bytes: int | None = None,
     **kwargs: Any,
 ) -> Any:
     r = await afetch(method=method, url=url, client=client, **kwargs)
     ctype = r.headers.get("content-type", "").lower()
     if require_json_ct and "application/json" not in ctype:
         await r.aclose()
-        raise JSONDecodeError("Response is not application/json")
+        raise JSONDecodeError("Response is not application/json")  # noqa: TRY003
     if max_bytes is not None:
         clen = r.headers.get("content-length")
         if clen and int(clen) > max_bytes:
             await r.aclose()
-            raise JSONDecodeError("Response exceeds max_bytes limit")
+            raise JSONDecodeError("Response exceeds max_bytes limit")  # noqa: TRY003
     try:
         data = r.json()
-    except Exception as e:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
         await r.aclose()
-        raise JSONDecodeError(str(e))
+        raise JSONDecodeError(str(e))  # noqa: B904
     return data
 
 
@@ -3206,26 +3119,26 @@ def fetch_json(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.Client"] = None,
+    client: httpx.Client | None = None,
     require_json_ct: bool = True,
-    max_bytes: Optional[int] = None,
+    max_bytes: int | None = None,
     **kwargs: Any,
 ) -> Any:
     r = fetch(method=method, url=url, client=client, **kwargs)
     ctype = r.headers.get("content-type", "").lower()
     if require_json_ct and "application/json" not in ctype:
         r.close()
-        raise JSONDecodeError("Response is not application/json")
+        raise JSONDecodeError("Response is not application/json")  # noqa: TRY003
     if max_bytes is not None:
         clen = r.headers.get("content-length")
         if clen and int(clen) > max_bytes:
             r.close()
-            raise JSONDecodeError("Response exceeds max_bytes limit")
+            raise JSONDecodeError("Response exceeds max_bytes limit")  # noqa: TRY003
     try:
         data = r.json()
-    except Exception as e:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
         r.close()
-        raise JSONDecodeError(str(e))
+        raise JSONDecodeError(str(e))  # noqa: B904
     return data
 
 
@@ -3237,19 +3150,19 @@ async def _astream_bytes_httpx(
     *,
     method: str,
     url: str,
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    proxies: str | dict[str, str] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -3271,7 +3184,7 @@ async def _astream_bytes_httpx(
                     host = (u.host or "").lower()
                     if host in pins_map:
                         _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-        except Exception as e:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
             raise NetworkError(e.__class__.__name__) from e
         async with _httpx_stream_io(
             client=ac,
@@ -3336,29 +3249,27 @@ async def _astream_bytes_httpx(
         raise
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 await ac.aclose()
-            except Exception:
-                pass
 
 
 async def _astream_bytes_aiohttp(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if aiohttp is None:  # pragma: no cover
-        raise RuntimeError("aiohttp is not available")
+        raise RuntimeError("aiohttp is not available")  # noqa: TRY003
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
 
@@ -3380,7 +3291,7 @@ async def _astream_bytes_aiohttp(
                     port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
                 if host in pins_map:
                     _check_cert_pinning(host, port, pins_map[host], TLS_MIN_VERSION)
-        except Exception as e:
+        except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
             raise NetworkError(e.__class__.__name__) from e
         ssl_ctx = _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
         async with _aiohttp_stream_io(
@@ -3399,7 +3310,7 @@ async def _astream_bytes_aiohttp(
         ) as (resp, byte_iter):
             if resp.status >= 400:
                 await resp.read()
-                raise NetworkError(f"HTTP {resp.status}")
+                raise NetworkError(f"HTTP {resp.status}")  # noqa: TRY003, TRY301
             timed_iter = _iter_bytes_with_timeouts(byte_iter, timeout)
             async for chunk in timed_iter:
                 if not chunk:
@@ -3426,7 +3337,7 @@ async def _astream_bytes_aiohttp(
             exception_class=e.__class__.__name__,
         )
         raise
-    except Exception as e:
+    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
         _log_outbound_request(
             method=method,
             url=url,
@@ -3443,16 +3354,16 @@ async def astream_bytes(
     *,
     method: str,
     url: str,
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
     chunk_size: int = 65536,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[bytes]:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -3480,15 +3391,15 @@ async def _astream_sse_httpx(
     *,
     url: str,
     method: str = "GET",
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     hdrs = {"Accept": "text/event-stream"}
     if headers:
@@ -3524,7 +3435,7 @@ async def _astream_sse_httpx(
                                 host = (u.host or "").lower()
                                 if host in pins_map:
                                     _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-                    except Exception as e:
+                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                         raise NetworkError(e.__class__.__name__) from e
 
                     async with _httpx_stream_io(
@@ -3541,17 +3452,17 @@ async def _astream_sse_httpx(
                         # Handle redirect response codes before reading any bytes
                         if resp.status_code in (301, 302, 303, 307, 308):
                             if redirects >= DEFAULT_MAX_REDIRECTS:
-                                raise NetworkError("Too many redirects")
+                                raise NetworkError("Too many redirects")  # noqa: TRY003
                             location = resp.headers.get("location")
                             if not location:
-                                raise NetworkError("Redirect without Location header")
+                                raise NetworkError("Redirect without Location header")  # noqa: TRY003
                             try:
                                 next_url = str(resp.request.url.join(httpx.URL(location)))
-                            except Exception:
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                 try:
                                     next_url = str(httpx.URL(location))
-                                except Exception:
-                                    raise NetworkError("Invalid redirect Location header")
+                                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
+                                    raise NetworkError("Invalid redirect Location header")  # noqa: B904, TRY003
                             redirects += 1
                             cur_url = next_url
                             continue  # loop to re-validate egress and attempt again
@@ -3560,7 +3471,7 @@ async def _astream_sse_httpx(
                             should, rsn = _should_retry(method, resp.status_code, None, retry)
                             if not should or attempt == attempts:
                                 # escalate as NetworkError; caller handles as appropriate
-                                raise NetworkError(f"HTTP {resp.status_code}")
+                                raise NetworkError(f"HTTP {resp.status_code}")  # noqa: TRY003
                             # retry with backoff
                             delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                             await asyncio.sleep(delay)
@@ -3583,7 +3494,7 @@ async def _astream_sse_httpx(
                         return  # finished streaming without error
                 except asyncio.CancelledError:
                     raise
-                except Exception as e:
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                     # network or early error before bytes consumed
                     should, rsn = _should_retry(method, None, NetworkError(str(e)), retry)
                     if not should or attempt == attempts:
@@ -3602,32 +3513,30 @@ async def _astream_sse_httpx(
             last_retry_delay_s=sleep_s,
             exception_class="RetryExhaustedError",
         )
-        raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")
+        raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")  # noqa: TRY003
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 await ac.aclose()
-            except Exception:
-                pass
 
 
 async def _astream_sse_aiohttp(
     *,
     url: str,
     method: str = "GET",
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    files: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    files: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     if aiohttp is None:  # pragma: no cover
-        raise RuntimeError("aiohttp is not available")
+        raise RuntimeError("aiohttp is not available")  # noqa: TRY003
     hdrs = {"Accept": "text/event-stream"}
     if headers:
         hdrs.update(headers)
@@ -3660,7 +3569,7 @@ async def _astream_sse_aiohttp(
                             port = parsed.port or (443 if (parsed.scheme or "").lower() == "https" else 80)
                         if host in pins_map:
                             _check_cert_pinning(host, port, pins_map[host], TLS_MIN_VERSION)
-                except Exception as e:
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                     raise NetworkError(e.__class__.__name__) from e
 
                 ssl_ctx = _build_ssl_context(ENFORCE_TLS_MIN, TLS_MIN_VERSION)
@@ -3680,13 +3589,13 @@ async def _astream_sse_aiohttp(
                 ) as (resp, byte_iter):
                     if resp.status in (301, 302, 303, 307, 308):
                         if redirects >= DEFAULT_MAX_REDIRECTS:
-                            raise NetworkError("Too many redirects")
+                            raise NetworkError("Too many redirects")  # noqa: TRY003
                         location = resp.headers.get("location")
                         if not location:
-                            raise NetworkError("Redirect without Location header")
+                            raise NetworkError("Redirect without Location header")  # noqa: TRY003
                         next_url = _resolve_redirect_url(str(resp.url), location)
                         if not next_url:
-                            raise NetworkError("Invalid redirect Location header")
+                            raise NetworkError("Invalid redirect Location header")  # noqa: TRY003
                         redirects += 1
                         cur_url = next_url
                         continue
@@ -3694,7 +3603,7 @@ async def _astream_sse_aiohttp(
                     if resp.status >= 400:
                         should, rsn = _should_retry(method, resp.status, None, retry)
                         if not should or attempt == attempts:
-                            raise NetworkError(f"HTTP {resp.status}")
+                            raise NetworkError(f"HTTP {resp.status}")  # noqa: TRY003
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                         await asyncio.sleep(delay)
                         sleep_s = delay
@@ -3714,7 +3623,7 @@ async def _astream_sse_aiohttp(
                     return
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                 should, rsn = _should_retry(method, None, NetworkError(str(e)), retry)
                 if not should or attempt == attempts:
                     raise
@@ -3732,22 +3641,22 @@ async def _astream_sse_aiohttp(
         last_retry_delay_s=sleep_s,
         exception_class="RetryExhaustedError",
     )
-    raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")
+    raise RetryExhaustedError("All retry attempts exhausted (astream_sse)")  # noqa: TRY003
 
 
 async def astream_sse(
     *,
     url: str,
     method: str = "GET",
-    client: Optional[Any] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    json: Optional[Any] = None,
-    data: Optional[Any] = None,
-    timeout: Optional[Any] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    client: Any | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    json: Any | None = None,
+    data: Any | None = None,
+    timeout: Any | None = None,
+    proxies: str | dict[str, str] | None = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
 ) -> AsyncIterator[SSEEvent]:
     if client is not None:
         adapter_name = "aiohttp" if _is_aiohttp_client(client) else "httpx"
@@ -3770,7 +3679,7 @@ async def astream_sse(
         yield event
 
 
-def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
+def _parse_sse_event(raw: str) -> SSEEvent | None:
     event = SSEEvent()
     data_lines: list[str] = []
     saw_event = False
@@ -3796,7 +3705,7 @@ def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
             try:
                 event.retry = int(val)
                 saw_retry = True
-            except Exception:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                 pass
     event.data = "\n".join(data_lines)
     if not data_lines and not saw_event and not saw_id and not saw_retry:
@@ -3811,23 +3720,23 @@ def _parse_sse_event(raw: str) -> Optional[SSEEvent]:
 def download(
     *,
     url: str,
-    dest: Union[str, Path],
-    client: Optional["httpx.Client"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    checksum: Optional[str] = None,
+    dest: str | Path,
+    client: httpx.Client | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    proxies: str | dict[str, str] | None = None,
+    checksum: str | None = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
     # Optional safety checks
-    max_bytes_total: Optional[int] = None,
-    require_content_type: Optional[str] = None,
+    max_bytes_total: int | None = None,
+    require_content_type: str | None = None,
 ) -> Path:
     if httpx is None:  # pragma: no cover
-        raise RuntimeError("httpx is not available")
+        raise RuntimeError("httpx is not available")  # noqa: TRY003
     _validate_egress_or_raise(url)
     _validate_proxies_or_raise(proxies)
     t0 = time.time()
@@ -3854,16 +3763,16 @@ def download(
             if resume and tmp_path.exists():
                 try:
                     existing = tmp_path.stat().st_size
-                except Exception:
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                     existing = 0
                 if existing > 0:
                     req_headers = dict(req_headers)
                     req_headers["Range"] = f"bytes={existing}-"
             # Enforce disk quota if resuming
             if max_bytes_total is not None and existing > max_bytes_total:
-                raise DownloadError("Disk quota exceeded before download")
+                raise DownloadError("Disk quota exceeded before download")  # noqa: TRY003
 
-            last_exc: Optional[Exception] = None
+            last_exc: Exception | None = None
             try:
                 # Optional cert pinning
                 try:
@@ -3874,15 +3783,15 @@ def download(
                             host = (u.host or "").lower()
                             if host in pins_map:
                                 _check_cert_pinning(host, int(u.port or 443), pins_map[host], TLS_MIN_VERSION)
-                except Exception as e:
-                    raise DownloadError(str(e))
+                except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
+                    raise DownloadError(str(e))  # noqa: B904
                 with sc.stream("GET", url, headers=req_headers, params=params, timeout=timeout) as resp:
                     if resp.status_code in (200, 206):
                         # Optional content-type enforcement
                         if require_content_type:
                             ctype = (resp.headers.get("content-type") or "").lower()
                             if require_content_type.lower() not in ctype:
-                                raise DownloadError("Unexpected Content-Type")
+                                raise DownloadError("Unexpected Content-Type")  # noqa: TRY003
                         hasher = hashlib.new(checksum_alg) if checksum else None
                         mode = "ab" if (resume and existing > 0 and resp.status_code == 206) else "wb"
                         with open(tmp_path, mode) as f:
@@ -3890,9 +3799,8 @@ def download(
                             for chunk in resp.iter_bytes():
                                 if not chunk:
                                     continue
-                                if max_bytes_total is not None:
-                                    if written + len(chunk) > max_bytes_total:
-                                        raise DownloadError("Disk quota exceeded")
+                                if max_bytes_total is not None and written + len(chunk) > max_bytes_total:
+                                    raise DownloadError("Disk quota exceeded")  # noqa: TRY003
                                 f.write(chunk)
                                 if hasher is not None:
                                     hasher.update(chunk)
@@ -3901,14 +3809,14 @@ def download(
                         if checksum and hasher is not None:
                             hex_val = hasher.hexdigest()
                             if hex_val.lower() != checksum.lower():
-                                raise DownloadError("Checksum validation failed")
+                                raise DownloadError("Checksum validation failed")  # noqa: TRY003
                         # Validate content-length if present (when not resuming)
                         clen = resp.headers.get("content-length")
                         if clen and not resume:
                             try:
                                 if tmp_path.stat().st_size != int(clen):
-                                    raise DownloadError("Content-Length mismatch")
-                            except Exception:
+                                    raise DownloadError("Content-Length mismatch")  # noqa: TRY003
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:  # noqa: TRY203
                                 raise
                         tmp_path.replace(dest_path)
                         # per-request structured log
@@ -3933,11 +3841,9 @@ def download(
                                 attempt=attempt,
                                 last_retry_delay_s=sleep_s,
                             )
-                            raise DownloadError(f"Download failed with status {resp.status_code}")
-                        try:
+                            raise DownloadError(f"Download failed with status {resp.status_code}")  # noqa: TRY003
+                        with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                             get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                        except Exception:
-                            pass
                         delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                         logger.debug(
                             f"download retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
@@ -3948,10 +3854,10 @@ def download(
                             try:
                                 if tmp_path.exists():
                                     tmp_path.unlink()
-                            except Exception:
+                            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                                 pass
                         continue
-            except Exception as e:
+            except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS as e:
                 last_exc = e
 
             if last_exc is not None:
@@ -3960,7 +3866,7 @@ def download(
                     try:
                         if tmp_path.exists() and (not resume or attempt == attempts):
                             tmp_path.unlink()
-                    except Exception:
+                    except _HTTPCLIENT_NONCRITICAL_EXCEPTIONS:
                         pass
                     # terminal network error
                     _log_outbound_request(
@@ -3975,10 +3881,8 @@ def download(
                     if isinstance(last_exc, DownloadError):
                         raise last_exc
                     raise DownloadError(str(last_exc))
-                try:
+                with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                     get_metrics_registry().increment("http_client_retries_total", 1, labels={"reason": rsn})
-                except Exception:
-                    pass
                 delay = _decorrelated_jitter_sleep(sleep_s, retry.backoff_base_ms, retry.backoff_cap_s)
                 logger.debug(
                     f"download network retry attempt={attempt} reason={rsn} delay={delay:.3f}s url={url}"
@@ -3995,31 +3899,29 @@ def download(
             last_retry_delay_s=sleep_s,
             exception_class="RetryExhaustedError",
         )
-        raise RetryExhaustedError("All retry attempts exhausted (download)")
+        raise RetryExhaustedError("All retry attempts exhausted (download)")  # noqa: TRY003
     finally:
         if need_close:
-            try:
+            with suppress(_HTTPCLIENT_NONCRITICAL_EXCEPTIONS):
                 sc.close()
-            except Exception:
-                pass
 
 
 async def adownload(
     *,
     url: str,
-    dest: Union[str, Path],
-    client: Optional["httpx.AsyncClient"] = None,
-    headers: Optional[Dict[str, str]] = None,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, "httpx.Timeout"]] = None,
-    proxies: Optional[Union[str, Dict[str, str]]] = None,
-    checksum: Optional[str] = None,
+    dest: str | Path,
+    client: httpx.AsyncClient | None = None,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    proxies: str | dict[str, str] | None = None,
+    checksum: str | None = None,
     checksum_alg: str = "sha256",
     resume: bool = False,
-    retry: Optional[RetryPolicy] = None,
-    cert_pinning: Optional[Dict[str, set[str]]] = None,
-    max_bytes_total: Optional[int] = None,
-    require_content_type: Optional[str] = None,
+    retry: RetryPolicy | None = None,
+    cert_pinning: dict[str, set[str]] | None = None,
+    max_bytes_total: int | None = None,
+    require_content_type: str | None = None,
 ) -> Path:
     # Reuse sync downloader in a thread to avoid blocking event loop on file I/O
     return await asyncio.to_thread(

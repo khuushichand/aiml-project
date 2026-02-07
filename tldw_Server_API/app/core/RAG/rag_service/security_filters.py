@@ -6,16 +6,17 @@ This module provides PII detection, content filtering, access control,
 and audit logging for sensitive data handling.
 """
 
-import re
-import json
 import hashlib
+import json
+import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Pattern
-import sqlite3
 from pathlib import Path
+from re import Pattern
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -53,7 +54,7 @@ class PIIMatch:
     end: int
     confidence: float = 1.0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "type": self.pii_type.value,
@@ -73,11 +74,11 @@ class SecurityAuditEntry:
     action: str
     resource: str
     sensitivity: SensitivityLevel
-    pii_detected: List[PIIType]
+    pii_detected: list[PIIType]
     access_granted: bool
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "id": self.id,
@@ -97,7 +98,7 @@ class PIIDetector:
 
     def __init__(self):
         """Initialize PII detector with patterns."""
-        self.patterns: Dict[PIIType, List[Pattern]] = {
+        self.patterns: dict[PIIType, list[Pattern]] = {
             PIIType.EMAIL: [
                 re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'),
             ],
@@ -132,7 +133,7 @@ class PIIDetector:
             "Jr.", "Sr.", "III", "IV"
         ]
 
-    def detect_pii(self, text: str) -> List[PIIMatch]:
+    def detect_pii(self, text: str) -> list[PIIMatch]:
         """
         Detect PII in text.
 
@@ -142,7 +143,7 @@ class PIIDetector:
         Returns:
             List of PII matches
         """
-        matches = []
+        matches: list[PIIMatch] = []
 
         for pii_type, patterns in self.patterns.items():
             for pattern in patterns:
@@ -161,13 +162,13 @@ class PIIDetector:
         matches.extend(self._detect_names(text))
 
         # Remove duplicates
-        unique_matches = []
-        seen = set()
-        for match in matches:
-            key = (match.pii_type, match.start, match.end)
+        unique_matches: list[PIIMatch] = []
+        seen: set[tuple[PIIType, int, int]] = set()
+        for pii_match in matches:
+            key = (pii_match.pii_type, pii_match.start, pii_match.end)
             if key not in seen:
                 seen.add(key)
-                unique_matches.append(match)
+                unique_matches.append(pii_match)
 
         return unique_matches
 
@@ -222,9 +223,9 @@ class PIIDetector:
         else:
             return 0.7
 
-    def _detect_names(self, text: str) -> List[PIIMatch]:
+    def _detect_names(self, text: str) -> list[PIIMatch]:
         """Detect potential person names (simplified)."""
-        matches = []
+        matches: list[PIIMatch] = []
 
         # Look for name indicators
         for indicator in self.name_indicators:
@@ -250,7 +251,7 @@ class PIIDetector:
 
         return matches
 
-    def mask_pii(self, text: str, matches: List[PIIMatch]) -> str:
+    def mask_pii(self, text: str, matches: list[PIIMatch]) -> str:
         """
         Mask PII in text.
 
@@ -352,7 +353,7 @@ class ContentFilter:
 
         # Check content categories
         category_matches = 0
-        for category, keywords in self.content_categories.items():
+        for _category, keywords in self.content_categories.items():
             if any(keyword in text_lower for keyword in keywords):
                 category_matches += 1
 
@@ -365,9 +366,9 @@ class ContentFilter:
 
     def filter_by_sensitivity(
         self,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         max_sensitivity: SensitivityLevel
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Filter documents by sensitivity level.
 
@@ -423,7 +424,7 @@ class AccessController:
             raise ValueError(f"Invalid role: {role}")
         self.user_permissions[user_id] = {"role": role}
 
-    def set_document_acl(self, document_id: str, allowed_users: List[str], allowed_roles: List[str]):
+    def set_document_acl(self, document_id: str, allowed_users: list[str], allowed_roles: list[str]):
         """Set document access control list."""
         self.document_acls[document_id] = {
             "users": set(allowed_users),
@@ -465,7 +466,7 @@ class AccessController:
                 return True
 
             # Check role-based access
-            if user_role in acl["roles"]:
+            if user_role in acl["roles"]:  # noqa: SIM103
                 return True
 
             # If ACL exists but user not in it, deny
@@ -477,8 +478,8 @@ class AccessController:
     def filter_by_access(
         self,
         user_id: str,
-        documents: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        documents: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Filter documents by user access.
 
@@ -566,9 +567,9 @@ class SecurityAuditor:
         action: str,
         resource: str,
         sensitivity: SensitivityLevel,
-        pii_detected: List[PIIType],
+        pii_detected: list[PIIType],
         access_granted: bool,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """Log security event."""
         entry = SecurityAuditEntry(
@@ -616,7 +617,7 @@ class SecurityAuditor:
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get audit trail."""
         # Check for rotation before querying
         self._check_rotation()
@@ -625,7 +626,7 @@ class SecurityAuditor:
             conn.row_factory = sqlite3.Row
 
             query = "SELECT * FROM audit_log WHERE 1=1"
-            params = []
+            params: list[Any] = []
 
             if user_id:
                 query += " AND user_id = ?"
@@ -712,9 +713,8 @@ class SecurityAuditor:
                 import gzip
                 import shutil
 
-                with open(archive_path, 'rb') as f_in:
-                    with gzip.open(f"{archive_path}.gz", 'wb') as f_out:
-                        shutil.copyfileobj(f_in, f_out)
+                with open(archive_path, 'rb') as f_in, gzip.open(f"{archive_path}.gz", 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
 
                 # Remove uncompressed archive
                 Path(archive_path).unlink()
@@ -777,7 +777,7 @@ class SecurityFilters:
         query: str,
         user_id: str = "anonymous",
         mask_pii: bool = True
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Process query through security filters.
 
@@ -789,19 +789,22 @@ class SecurityFilters:
         Returns:
             Tuple of (processed_query, security_metadata)
         """
-        metadata = {
+        metadata: dict[str, Any] = {
             "original_query": query,
             "user_id": user_id,
             "pii_detected": [],
             "sensitivity": None
         }
+        pii_detected: list[dict[str, Any]] = []
+        sensitivity: SensitivityLevel = SensitivityLevel.PUBLIC
 
         processed_query = query
 
         # Detect PII
         if self.pii_detector:
             pii_matches = self.pii_detector.detect_pii(query)
-            metadata["pii_detected"] = [match.to_dict() for match in pii_matches]
+            pii_detected = [match.to_dict() for match in pii_matches]
+            metadata["pii_detected"] = pii_detected
 
             if mask_pii and pii_matches:
                 processed_query = self.pii_detector.mask_pii(query, pii_matches)
@@ -817,8 +820,8 @@ class SecurityFilters:
                 user_id=user_id,
                 action="query",
                 resource="search",
-                sensitivity=sensitivity if self.content_filter else SensitivityLevel.PUBLIC,
-                pii_detected=[PIIType(m["type"]) for m in metadata["pii_detected"]],
+                sensitivity=sensitivity,
+                pii_detected=[PIIType(m["type"]) for m in pii_detected],
                 access_granted=True,
                 metadata=metadata
             )
@@ -827,11 +830,11 @@ class SecurityFilters:
 
     def filter_documents(
         self,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         user_id: str = "anonymous",
         max_sensitivity: Optional[SensitivityLevel] = None,
         mask_pii: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Filter documents through security filters.
 
@@ -863,7 +866,7 @@ class SecurityFilters:
                 if pii_matches:
                     doc["content"] = self.pii_detector.mask_pii(content, pii_matches)
                     doc["pii_masked"] = True
-                    doc["pii_types"] = list(set(m.pii_type.value for m in pii_matches))
+                    doc["pii_types"] = list({m.pii_type.value for m in pii_matches})
 
         # Log access
         if self.auditor:

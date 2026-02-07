@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef } from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Spin } from "antd"
+import { Button } from "antd"
 import { FileText, AlertCircle } from "lucide-react"
 import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
@@ -12,11 +12,36 @@ import type { DocumentType } from "../types"
 
 interface DocumentViewerProps {
   className?: string
+  onOpenLibrary?: () => void
+  onOpenUpload?: () => void
+  onReloadDocument?: (mediaId: number, docTypeHint?: DocumentType | null) => Promise<void> | void
 }
 
-export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => {
+const shouldRetryBlobLoad = (error: Error, url?: string): boolean => {
+  if (!url || !url.startsWith("blob:")) return false
+  const message = String(error?.message || "")
+  const status = (error as Error & { status?: number })?.status
+  if (status === 0) return true
+  if ((error as Error & { name?: string })?.name === "UnexpectedResponseException") return true
+  return [
+    "Unexpected server response",
+    "ERR_FILE_NOT_FOUND",
+    "Failed to fetch",
+    "NetworkError",
+    "Invalid name"
+  ].some((needle) => message.includes(needle))
+}
+
+export const DocumentViewer: React.FC<DocumentViewerProps> = ({
+  className,
+  onOpenLibrary,
+  onOpenUpload,
+  onReloadDocument
+}) => {
   const { t } = useTranslation(["option", "common"])
   const pdfDocumentRef = useRef<PdfDocumentProxy | null>(null)
+  const reloadAttemptsRef = useRef<Map<number, number>>(new Map())
+  const reloadInFlightRef = useRef<Set<number>>(new Set())
 
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const activeDocumentType = useDocumentWorkspaceStore(
@@ -98,13 +123,44 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => 
   const handleLoadSuccess = useCallback(
     (numPages: number) => {
       setTotalPages(numPages)
+      if (activeDocumentId !== null) {
+        reloadAttemptsRef.current.delete(activeDocumentId)
+      }
     },
-    [setTotalPages]
+    [activeDocumentId, setTotalPages]
   )
 
-  const handleLoadError = useCallback((error: Error) => {
-    console.error("Failed to load document:", error)
-  }, [])
+  const handleLoadError = useCallback(
+    (error: Error) => {
+      console.error("Failed to load document:", error)
+      if (!onReloadDocument) return
+      if (activeDocumentType !== "pdf") return
+      if (activeDocumentId === null) return
+      if (!activeDocument) return
+      const { url, type } = activeDocument
+      if (!url) return
+      if (!shouldRetryBlobLoad(error, url)) return
+      const attempts = reloadAttemptsRef.current.get(activeDocumentId) ?? 0
+      if (attempts >= 1) return
+      if (reloadInFlightRef.current.has(activeDocumentId)) return
+      reloadAttemptsRef.current.set(activeDocumentId, attempts + 1)
+      reloadInFlightRef.current.add(activeDocumentId)
+      Promise.resolve(onReloadDocument(activeDocumentId, type))
+        .catch((reloadError) => {
+          console.error("Failed to reload document:", reloadError)
+          const prevAttempts = reloadAttemptsRef.current.get(activeDocumentId) ?? 0
+          if (prevAttempts <= 1) {
+            reloadAttemptsRef.current.delete(activeDocumentId)
+          } else {
+            reloadAttemptsRef.current.set(activeDocumentId, prevAttempts - 1)
+          }
+        })
+        .finally(() => {
+          reloadInFlightRef.current.delete(activeDocumentId)
+        })
+    },
+    [activeDocument, activeDocumentId, activeDocumentType, onReloadDocument]
+  )
 
   if (!activeDocumentId || !activeDocument) {
     return (
@@ -123,6 +179,20 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => 
             )}
           </p>
         </div>
+        {(onOpenLibrary || onOpenUpload) && (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {onOpenUpload && (
+              <Button type="primary" onClick={onOpenUpload}>
+                {t("option:documentWorkspace.upload", "Upload")}
+              </Button>
+            )}
+            {onOpenLibrary && (
+              <Button onClick={onOpenLibrary}>
+                {t("option:documentWorkspace.openDocument", "Open document")}
+              </Button>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -165,7 +235,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => 
   }
 
   return (
-    <div className={`flex h-full flex-col ${className || ""}`}>
+    <div className={`flex h-full min-h-0 flex-col ${className || ""}`}>
       <ViewerToolbar
         currentPage={currentPage}
         totalPages={totalPages}
@@ -179,7 +249,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ className }) => 
         onPreviousPage={goToPreviousPage}
         onNextPage={goToNextPage}
       />
-      <div className="relative min-h-0 flex-1 overflow-auto bg-neutral-200 dark:bg-neutral-800">
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-neutral-200 dark:bg-neutral-800">
         {activeDocumentType === "pdf" && (
           <PdfSearch pdfDocumentRef={pdfDocumentRef} />
         )}

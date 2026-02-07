@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 from pydantic import ValidationError
 
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.Slides_DB_Deps import get_slides_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
 from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     ExportFormat,
     GenerateFromChatRequest,
@@ -26,28 +28,27 @@ from tldw_Server_API.app.api.v1.schemas.slides_schemas import (
     GenerateFromPromptRequest,
     GenerateFromRagRequest,
     PresentationCreateRequest,
-    PresentationUpdateRequest,
+    PresentationListResponse,
     PresentationPatchRequest,
     PresentationReorderRequest,
     PresentationResponse,
+    PresentationSearchResponse,
     PresentationSummary,
-    PresentationListResponse,
-    SlidesTemplateListResponse,
-    SlidesTemplateResponse,
+    PresentationUpdateRequest,
     PresentationVersionListResponse,
     PresentationVersionSummary,
-    PresentationSearchResponse,
     Slide,
     SlidesHealthResponse,
+    SlidesTemplateListResponse,
+    SlidesTemplateResponse,
 )
-from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
-from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_READ, MEDIA_UPDATE, MEDIA_DELETE
+from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE, MEDIA_DELETE, MEDIA_READ, MEDIA_UPDATE
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
 from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
-from tldw_Server_API.app.core.Slides.slides_db import SlidesDatabase, ConflictError, InputError
+from tldw_Server_API.app.core.Slides.slides_db import ConflictError, InputError, SlidesDatabase
 from tldw_Server_API.app.core.Slides.slides_export import (
     SlidesAssetsMissingError,
     SlidesExportError,
@@ -70,13 +71,12 @@ from tldw_Server_API.app.core.Slides.slides_images import (
     validate_images_payload,
 )
 from tldw_Server_API.app.core.Slides.slides_templates import (
+    SlidesTemplate,
     SlidesTemplateInvalidError,
     SlidesTemplateNotFoundError,
-    SlidesTemplate,
     get_slide_template,
     list_slide_templates,
 )
-
 
 router = APIRouter(prefix="/slides", tags=["slides"])
 
@@ -95,7 +95,7 @@ _ALLOWED_THEMES = {
     "dracula",
 }
 
-_SETTINGS_ALLOWLIST: Dict[str, Tuple[type, ...]] = {
+_SETTINGS_ALLOWLIST: dict[str, tuple[type, ...]] = {
     "transition": (str,),
     "backgroundTransition": (str,),
     "slideNumber": (bool,),
@@ -119,8 +119,23 @@ _SETTINGS_ALLOWLIST: Dict[str, Tuple[type, ...]] = {
 _ETAG_RE = re.compile(r'^(W/)?"v(?P<version>\d+)"$')
 _MARP_THEME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+_SLIDES_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
-def _parse_etag(raw: Optional[str]) -> int:
+
+def _parse_etag(raw: str | None) -> int:
     if not raw:
         raise HTTPException(status_code=428, detail="if_match_required")
     match = _ETAG_RE.match(raw.strip())
@@ -150,7 +165,7 @@ def _slide_from_obj(obj: Any) -> Slide:
     return Slide.parse_obj(obj)
 
 
-def _normalize_slides(slides: List[Slide]) -> List[Slide]:
+def _normalize_slides(slides: list[Slide]) -> list[Slide]:
     orders = [slide.order for slide in slides]
     if any(order < 0 for order in orders):
         raise HTTPException(status_code=422, detail="slide_order_negative")
@@ -167,7 +182,7 @@ def _normalize_slides(slides: List[Slide]) -> List[Slide]:
     return ordered
 
 
-def _validate_slide_images(metadata: Dict[str, Any]) -> None:
+def _validate_slide_images(metadata: dict[str, Any]) -> None:
     images = metadata.get("images")
     if images is None:
         return
@@ -178,8 +193,8 @@ def _validate_slide_images(metadata: Dict[str, Any]) -> None:
     metadata["images"] = normalized
 
 
-def _flatten_slides_text(slides: List[Slide]) -> str:
-    parts: List[str] = []
+def _flatten_slides_text(slides: list[Slide]) -> str:
+    parts: list[str] = []
     for slide in slides:
         if slide.title:
             parts.append(slide.title)
@@ -199,7 +214,7 @@ def _validate_theme(theme: str) -> None:
         raise HTTPException(status_code=422, detail="invalid_theme")
 
 
-def _validate_marp_theme(marp_theme: Optional[str]) -> Optional[str]:
+def _validate_marp_theme(marp_theme: str | None) -> str | None:
     if marp_theme is None:
         return None
     if not isinstance(marp_theme, str) or not marp_theme.strip():
@@ -209,12 +224,12 @@ def _validate_marp_theme(marp_theme: Optional[str]) -> Optional[str]:
     return marp_theme
 
 
-def _validate_settings(settings: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _validate_settings(settings: dict[str, Any] | None) -> dict[str, Any] | None:
     if settings is None:
         return None
     if not isinstance(settings, dict):
         raise HTTPException(status_code=422, detail="invalid_settings")
-    unknown = [key for key in settings.keys() if key not in _SETTINGS_ALLOWLIST]
+    unknown = [key for key in settings if key not in _SETTINGS_ALLOWLIST]
     if unknown:
         raise HTTPException(status_code=422, detail=f"invalid_settings: unknown keys {unknown}")
     for key, value in settings.items():
@@ -226,13 +241,13 @@ def _validate_settings(settings: Optional[Dict[str, Any]]) -> Optional[Dict[str,
     return settings
 
 
-def _serialize_settings(settings: Optional[Dict[str, Any]]) -> Optional[str]:
+def _serialize_settings(settings: dict[str, Any] | None) -> str | None:
     if settings is None:
         return None
     return json.dumps(settings)
 
 
-def _deserialize_settings(value: Optional[str]) -> Optional[Dict[str, Any]]:
+def _deserialize_settings(value: str | None) -> dict[str, Any] | None:
     if not value:
         return None
     try:
@@ -242,7 +257,7 @@ def _deserialize_settings(value: Optional[str]) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _deserialize_source_ref(value: Optional[str]) -> Optional[Any]:
+def _deserialize_source_ref(value: str | None) -> Any | None:
     if value is None:
         return None
     try:
@@ -251,7 +266,7 @@ def _deserialize_source_ref(value: Optional[str]) -> Optional[Any]:
         return value
 
 
-def _serialize_source_ref(value: Optional[Any]) -> Optional[str]:
+def _serialize_source_ref(value: Any | None) -> str | None:
     if value is None:
         return None
     if isinstance(value, (list, dict)):
@@ -266,7 +281,7 @@ def _field_was_set(model: Any, field_name: str) -> bool:
     return field_name in getattr(model, "__fields_set__", set())
 
 
-def _resolve_template(template_id: Optional[str]) -> Optional[SlidesTemplate]:
+def _resolve_template(template_id: str | None) -> SlidesTemplate | None:
     if not template_id:
         return None
     try:
@@ -280,8 +295,8 @@ def _resolve_template(template_id: Optional[str]) -> Optional[SlidesTemplate]:
 def _apply_template_defaults(
     *,
     request: Any,
-    template: Optional[SlidesTemplate],
-) -> Tuple[str, Optional[str], Optional[Dict[str, Any]], Optional[str]]:
+    template: SlidesTemplate | None,
+) -> tuple[str, str | None, dict[str, Any] | None, str | None]:
     theme = request.theme if _field_was_set(request, "theme") else None
     marp_theme = request.marp_theme if _field_was_set(request, "marp_theme") else None
     settings = request.settings if _field_was_set(request, "settings") else None
@@ -304,7 +319,7 @@ def _apply_template_defaults(
 
 def _template_to_response(template: SlidesTemplate) -> SlidesTemplateResponse:
     slides_payload = template.default_slides
-    slides: Optional[List[Slide]] = None
+    slides: list[Slide] | None = None
     if slides_payload:
         try:
             slides = _normalize_slides([_slide_from_obj(item) for item in slides_payload])
@@ -321,14 +336,14 @@ def _template_to_response(template: SlidesTemplate) -> SlidesTemplateResponse:
     )
 
 
-def _normalize_template_slides(slides_payload: List[Any]) -> List[Slide]:
+def _normalize_template_slides(slides_payload: list[Any]) -> list[Slide]:
     try:
         return _normalize_slides([_slide_from_obj(item) for item in slides_payload])
     except HTTPException as exc:
         raise HTTPException(status_code=500, detail="template_slides_invalid") from exc
 
 
-def _load_version_payload(payload_json: str) -> Dict[str, Any]:
+def _load_version_payload(payload_json: str) -> dict[str, Any]:
     try:
         payload = json.loads(payload_json)
     except json.JSONDecodeError as exc:
@@ -338,7 +353,7 @@ def _load_version_payload(payload_json: str) -> Dict[str, Any]:
     return payload
 
 
-def _payload_to_presentation(payload: Dict[str, Any]) -> PresentationResponse:
+def _payload_to_presentation(payload: dict[str, Any]) -> PresentationResponse:
     slides_raw = payload.get("slides") or []
     if isinstance(slides_raw, str):
         try:
@@ -391,7 +406,7 @@ def _version_summary_from_payload(
     presentation_id: str,
     version: int,
     created_at: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
 ) -> PresentationVersionSummary:
     title = payload.get("title")
     deleted_val = payload.get("deleted")
@@ -443,7 +458,7 @@ def _build_summary(row) -> PresentationSummary:
     )
 
 
-def _parse_sort(sort: Optional[str]) -> Tuple[str, str]:
+def _parse_sort(sort: str | None) -> tuple[str, str]:
     if not sort:
         return "created_at", "DESC"
     parts = sort.strip().split()
@@ -456,13 +471,13 @@ def _parse_sort(sort: Optional[str]) -> Tuple[str, str]:
     return col, direction.upper()
 
 
-def _resolve_provider(request_provider: Optional[str]) -> str:
+def _resolve_provider(request_provider: str | None) -> str:
     provider = (request_provider or DEFAULT_LLM_PROVIDER or "openai").strip()
     return provider.lower() if provider else "openai"
 
 
-def _format_chat_messages(messages: List[Dict[str, Any]]) -> str:
-    lines: List[str] = []
+def _format_chat_messages(messages: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
     for msg in messages:
         sender = msg.get("sender") or msg.get("role") or "unknown"
         content = msg.get("content") or ""
@@ -471,8 +486,8 @@ def _format_chat_messages(messages: List[Dict[str, Any]]) -> str:
     return "\n".join(lines).strip()
 
 
-def _format_notes(notes: List[Dict[str, Any]]) -> str:
-    parts: List[str] = []
+def _format_notes(notes: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
     for note in notes:
         title = note.get("title") or ""
         content = note.get("content") or ""
@@ -483,8 +498,8 @@ def _format_notes(notes: List[Dict[str, Any]]) -> str:
     return "\n\n".join(parts).strip()
 
 
-def _format_rag_documents(documents: List[Any]) -> str:
-    parts: List[str] = []
+def _format_rag_documents(documents: list[Any]) -> str:
+    parts: list[str] = []
     for doc in documents:
         metadata = getattr(doc, "metadata", {}) or {}
         title = metadata.get("title") or metadata.get("source_title") or getattr(doc, "id", "source")
@@ -503,8 +518,8 @@ def _generate_presentation(
     request: Any,
     source_text: str,
     source_type: str,
-    source_ref: Optional[Any],
-    source_query: Optional[str],
+    source_ref: Any | None,
+    source_query: str | None,
 ) -> PresentationResponse:
     template = _resolve_template(getattr(request, "template_id", None))
     theme, marp_theme, settings, custom_css = _apply_template_defaults(request=request, template=template)
@@ -515,7 +530,7 @@ def _generate_presentation(
     generator = SlidesGenerator()
     try:
         metrics = get_metrics_registry()
-    except Exception:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to get metrics registry, metrics disabled")
         metrics = None
     started_at = time.perf_counter()
@@ -528,7 +543,7 @@ def _generate_presentation(
                 "slides_generation_errors_total",
                 labels={"source_type": source_type, "error": error_type},
             )
-        except Exception as exc:
+        except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to record generation error metric: {}", exc)
 
     try:
@@ -596,7 +611,7 @@ def _generate_presentation(
                 time.perf_counter() - started_at,
                 labels={"source_type": source_type},
             )
-        except Exception as exc:
+        except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to record generation latency metric: {}", exc)
     response.headers["ETag"] = _format_etag(row.version)
     response.headers["Last-Modified"] = row.last_modified
@@ -657,7 +672,7 @@ async def create_presentation(
 async def list_presentations(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    sort: Optional[str] = Query(None, description="Sort by created_at/last_modified/title, e.g. 'created_at desc'"),
+    sort: str | None = Query(None, description="Sort by created_at/last_modified/title, e.g. 'created_at desc'"),
     include_deleted: bool = Query(False),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationListResponse:
@@ -730,7 +745,7 @@ async def update_presentation(
     presentation_id: str,
     request: PresentationUpdateRequest,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
@@ -784,11 +799,11 @@ async def patch_presentation(
     presentation_id: str,
     request: PresentationPatchRequest,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
-    update_fields: Dict[str, Any] = {}
+    update_fields: dict[str, Any] = {}
     if request.title is not None:
         title = request.title.strip()
         if not title:
@@ -842,7 +857,7 @@ async def reorder_presentation(
     presentation_id: str,
     request: PresentationReorderRequest,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
@@ -895,7 +910,7 @@ async def reorder_presentation(
 async def delete_presentation(
     presentation_id: str,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
@@ -921,7 +936,7 @@ async def delete_presentation(
 async def restore_presentation(
     presentation_id: str,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
@@ -985,7 +1000,7 @@ async def list_presentation_versions(
     except KeyError:
         raise HTTPException(status_code=404, detail="presentation_not_found") from None
     rows, total = db.list_presentation_versions(presentation_id=presentation_id, limit=limit, offset=offset)
-    versions: List[PresentationVersionSummary] = []
+    versions: list[PresentationVersionSummary] = []
     for row in rows:
         payload = _load_version_payload(row.payload_json)
         versions.append(
@@ -1028,7 +1043,7 @@ async def restore_presentation_version(
     presentation_id: str,
     version: int,
     response: Response,
-    if_match: Optional[str] = Header(None, alias="If-Match"),
+    if_match: str | None = Header(None, alias="If-Match"),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> PresentationResponse:
     expected_version = _parse_etag(if_match)
@@ -1186,8 +1201,8 @@ async def generate_from_notes(
 ) -> PresentationResponse:
     if not request.note_ids:
         raise HTTPException(status_code=422, detail="note_ids_required")
-    notes: List[Dict[str, Any]] = []
-    missing: List[str] = []
+    notes: list[dict[str, Any]] = []
+    missing: list[str] = []
     for note_id in request.note_ids:
         note = notes_db.get_note_by_id(note_id)
         if not note:
@@ -1261,14 +1276,14 @@ async def generate_from_rag(
 async def export_presentation(
     presentation_id: str,
     format: ExportFormat = Query(ExportFormat.REVEAL),
-    pdf_format: Optional[str] = Query(None),
-    pdf_width: Optional[str] = Query(None),
-    pdf_height: Optional[str] = Query(None),
-    pdf_landscape: Optional[bool] = Query(None),
-    pdf_margin_top: Optional[str] = Query(None),
-    pdf_margin_bottom: Optional[str] = Query(None),
-    pdf_margin_left: Optional[str] = Query(None),
-    pdf_margin_right: Optional[str] = Query(None),
+    pdf_format: str | None = Query(None),
+    pdf_width: str | None = Query(None),
+    pdf_height: str | None = Query(None),
+    pdf_landscape: bool | None = Query(None),
+    pdf_margin_top: str | None = Query(None),
+    pdf_margin_bottom: str | None = Query(None),
+    pdf_margin_left: str | None = Query(None),
+    pdf_margin_right: str | None = Query(None),
     db: SlidesDatabase = Depends(get_slides_db_for_user),
 ) -> Response:
     try:
@@ -1282,7 +1297,7 @@ async def export_presentation(
     settings = _deserialize_settings(row.settings)
     try:
         metrics = get_metrics_registry()
-    except Exception:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS:
         metrics = None
     started_at = time.perf_counter()
 
@@ -1301,23 +1316,19 @@ async def export_presentation(
             ).encode("utf-8")
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.md"
         media_type = "text/markdown"
@@ -1346,23 +1357,19 @@ async def export_presentation(
             )
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.pdf"
         media_type = "application/pdf"
@@ -1377,56 +1384,46 @@ async def export_presentation(
             )
         except SlidesAssetsMissingError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "assets_missing"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=500, detail="slides_assets_missing") from exc
         except SlidesExportInputError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "input_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except SlidesExportError as exc:
             if metrics is not None:
-                try:
+                with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                     metrics.increment(
                         "slides_export_errors_total",
                         labels={"format": format.value, "error": "export_error"},
                     )
-                except Exception:
-                    pass
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         filename = f"presentation_{presentation_id}.zip"
         media_type = "application/zip"
     else:
         if metrics is not None:
-            try:
+            with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
                 metrics.increment(
                     "slides_export_errors_total",
                     labels={"format": str(format), "error": "invalid_format"},
                 )
-            except Exception:
-                pass
         raise HTTPException(status_code=400, detail="invalid_export_format")
 
     if metrics is not None:
-        try:
+        with contextlib.suppress(_SLIDES_NONCRITICAL_EXCEPTIONS):
             metrics.observe(
                 "slides_export_latency_seconds",
                 time.perf_counter() - started_at,
                 labels={"format": format.value},
             )
-        except Exception:
-            pass
 
     headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
     return Response(content=body, media_type=media_type, headers=headers)
@@ -1441,7 +1438,7 @@ async def export_presentation(
 async def slides_health(db: SlidesDatabase = Depends(get_slides_db_for_user)) -> SlidesHealthResponse:
     try:
         _ = db.list_presentations(limit=1, offset=0, include_deleted=True, sort_column="created_at", sort_direction="DESC")
-    except Exception as exc:
+    except _SLIDES_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning("slides health check failed: {}", exc)
         raise HTTPException(status_code=500, detail="slides_db_unavailable") from exc
     return SlidesHealthResponse(service="slides", status="ok")

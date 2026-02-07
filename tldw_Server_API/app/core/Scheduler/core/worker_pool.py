@@ -4,16 +4,17 @@ Handles dynamic scaling, health checks, and graceful shutdown.
 """
 
 import asyncio
+import contextlib
 import uuid
-from typing import Optional, Dict, Any, List, Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 from ..base import Task, TaskStatus
 from ..base.queue_backend import QueueBackend
 from ..base.registry import TaskRegistry
-from ..base.exceptions import WorkerError
 from ..config import SchedulerConfig
 from ..services.lease_service import LeaseService
 
@@ -91,18 +92,14 @@ class Worker:
             except asyncio.TimeoutError:
                 logger.warning(f"Worker {self.worker_id} stop timeout, cancelling")
                 self._task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-                except asyncio.CancelledError:
-                    pass
 
         # Cancel lease renewal if active
         if self._lease_task:
             self._lease_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._lease_task
-            except asyncio.CancelledError:
-                pass
 
         self.state = WorkerState.STOPPED
         logger.info(f"Worker {self.worker_id} stopped")
@@ -197,7 +194,7 @@ class Worker:
             self._lease_task = lease_task
 
             # Get handler
-            handler = self.registry.get_handler(task.handler)
+            self.registry.get_handler(task.handler)
 
             # Set timeout
             timeout = task.timeout or self.config.default_task_timeout
@@ -229,13 +226,11 @@ class Worker:
             # CRITICAL FIX: Always stop lease renewal, even if lease_task creation failed
             if lease_task:
                 lease_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await lease_task
-                except asyncio.CancelledError:
-                    pass
             self._lease_task = None
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get worker status."""
         uptime = (datetime.now(timezone.utc).replace(tzinfo=None) - self.started_at).total_seconds()
 
@@ -272,8 +267,8 @@ class WorkerPool:
         self.registry = registry
         self.config = config
 
-        self.workers: Dict[str, Worker] = {}
-        self.queue_workers: Dict[str, List[str]] = {}
+        self.workers: dict[str, Worker] = {}
+        self.queue_workers: dict[str, list[str]] = {}
 
         self._scaling_task: Optional[asyncio.Task] = None
         self._monitor_task: Optional[asyncio.Task] = None
@@ -307,10 +302,8 @@ class WorkerPool:
         for task in [self._monitor_task, self._scaling_task]:
             if task:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
 
         # Stop all workers
         stop_tasks = []
@@ -458,7 +451,7 @@ class WorkerPool:
             except Exception as e:
                 logger.error(f"Scaling loop error: {e}")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get pool status."""
         return {
             'total_workers': len(self.workers),
@@ -470,7 +463,7 @@ class WorkerPool:
             'total_tasks_failed': sum(w.tasks_failed for w in self.workers.values())
         }
 
-    def _get_workers_by_state(self) -> Dict[str, int]:
+    def _get_workers_by_state(self) -> dict[str, int]:
         """Get worker count by state."""
         state_counts = {}
         for worker in self.workers.values():

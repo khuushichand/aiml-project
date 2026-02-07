@@ -1,7 +1,9 @@
 import sys
 import types
 
-from tldw_Server_API.app.core.Chunking import Chunker
+import pytest
+
+from tldw_Server_API.app.core.Chunking import Chunker, ChunkingError
 from tldw_Server_API.app.core.Chunking.base import ChunkerConfig, ChunkingMethod
 from tldw_Server_API.app.core.Chunking.strategies.words import WordChunkingStrategy
 
@@ -131,3 +133,31 @@ def test_token_chunk_decode_failure_falls_back():
     assert chunks
     reconstructed = " ".join(chunks).split()
     assert reconstructed == text.split()
+
+
+@pytest.mark.unit
+def test_process_text_multi_level_fallback_offsets_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fallback offsets should remain within paragraph bounds even on mismatched chunks."""
+    chunker = Chunker()
+    text = "short paragraph"
+
+    def _raise_chunking_error(*_args, **_kwargs):
+        raise ChunkingError("forced failure")
+
+    def _fake_chunk_text(*_args, **_kwargs):
+        return ["this chunk is intentionally longer than the paragraph"]
+
+    monkeypatch.setattr(chunker, "chunk_text_with_metadata", _raise_chunking_error)
+    monkeypatch.setattr(chunker, "chunk_text", _fake_chunk_text)
+
+    rows = chunker.process_text(
+        text,
+        options={"method": "words", "max_size": 2, "overlap": 0, "multi_level": True},
+    )
+    assert rows
+    for row in rows:
+        md = row.get("metadata", {})
+        start = md.get("start_offset")
+        end = md.get("end_offset")
+        assert isinstance(start, int) and isinstance(end, int)
+        assert 0 <= start <= end <= len(text)

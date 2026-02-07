@@ -15,14 +15,13 @@
 #
 ####################
 
-import os
 import json
-from loguru import logger
-import tempfile
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Callable, Dict, Any
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
 import soundfile as sf
+from loguru import logger
 
 try:
     import onnxruntime as ort
@@ -37,7 +36,7 @@ except ImportError:
     logger.warning("huggingface_hub not installed. Install with: pip install huggingface_hub")
 
 # Global cache for model and tokenizer
-_onnx_model_cache: Dict[str, Any] = {}
+_onnx_model_cache: dict[str, Any] = {}
 
 logger = logger
 
@@ -45,10 +44,10 @@ logger = logger
 class ParakeetONNXTokenizer:
     """Simple tokenizer for Parakeet ONNX models."""
 
-    def __init__(self, vocab_path: Union[Path, Dict[str, int]]):
+    def __init__(self, vocab_path: Union[Path, dict[str, int]]):
         """Load vocabulary from file or use provided mapping."""
-        self.vocab: Dict[str, int] = {}
-        self.inv_vocab: Dict[int, str] = {}
+        self.vocab: dict[str, int] = {}
+        self.inv_vocab: dict[int, str] = {}
 
         # If a dict is provided directly, use it
         if isinstance(vocab_path, dict):
@@ -56,7 +55,7 @@ class ParakeetONNXTokenizer:
                 self.vocab = {str(k): int(v) for k, v in vocab_path.items()}
                 self.inv_vocab = {v: k for k, v in self.vocab.items()}
                 return
-            except Exception as e:
+            except (AttributeError, TypeError, ValueError) as e:
                 logger.warning(f"Invalid vocab dict provided to tokenizer: {e}; falling back to default vocab")
                 self._create_default_vocab()
                 return
@@ -64,11 +63,11 @@ class ParakeetONNXTokenizer:
         # Try to load vocabulary from a file path
         if vocab_path.exists():
             try:
-                with open(vocab_path, 'r', encoding='utf-8') as f:
+                with open(vocab_path, encoding='utf-8') as f:
                     # Try JSON first, but tolerate simple line-based formats from tests
                     try:
                         vocab_data = json.load(f)
-                    except Exception:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         f.seek(0)
                         lines = [ln.strip() for ln in f.readlines() if ln.strip()]
                         # Accept formats like "token idx" or pure token per line
@@ -87,7 +86,7 @@ class ParakeetONNXTokenizer:
                         self.vocab = {token: idx for idx, token in enumerate(vocab_data)}
                     # Create inverse vocabulary
                     self.inv_vocab = {v: k for k, v in self.vocab.items()}
-            except Exception as e:
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as e:
                 logger.warning(f"Failed to load tokenizer vocab from {vocab_path}: {e}; using default vocab")
                 self._create_default_vocab()
         else:
@@ -131,7 +130,7 @@ class ParakeetONNXTokenizer:
         self.inv_vocab = {v: k for k, v in self.vocab.items()}
         logger.info(f"Created default vocabulary with {len(self.vocab)} tokens")
 
-    def decode(self, token_ids: List[int]) -> str:
+    def decode(self, token_ids: list[int]) -> str:
         """Decode token IDs to text."""
         tokens = []
         for token_id in token_ids:
@@ -255,11 +254,11 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         try:
             import onnxruntime as _ort
             ort = _ort
-        except Exception:
+        except ImportError:
             try:
                 import sys as _sys
                 ort = _sys.modules.get('onnxruntime', None)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 ort = None
     if ort is None or not hasattr(ort, 'InferenceSession'):
         logger.error("ONNX Runtime not available")
@@ -314,7 +313,7 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         try:
             import importlib as _importlib
             _runtime = _importlib.import_module('onnxruntime')
-        except Exception:
+        except (ImportError, ModuleNotFoundError, RuntimeError):
             _runtime = ort
 
         session_options = _runtime.SessionOptions()
@@ -339,8 +338,8 @@ def load_parakeet_onnx_model(model_path: Optional[str] = None, device: str = 'cp
         logger.info(f"Successfully loaded ONNX model with {len(session.get_inputs())} inputs")
         return session, tokenizer
 
-    except Exception as e:
-        logger.error(f"Failed to load ONNX model: {e}")
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+        logger.exception(f"Failed to load ONNX model: {e}")
         return None, None
 
 
@@ -373,7 +372,7 @@ def transcribe_with_parakeet_onnx(
     # Load model
     try:
         session, tokenizer = load_parakeet_onnx_model(model_path, device)
-    except Exception as e:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
         return f"[Error: {str(e)}]"
     if session is None or tokenizer is None:
         return "[Error: Failed to load ONNX model]"
@@ -390,8 +389,8 @@ def transcribe_with_parakeet_onnx(
                     orig_sr=file_sr,
                     target_sr=sample_rate
                 )
-        except Exception as e:
-            logger.error(f"Failed to load audio file: {e}")
+        except (ImportError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.exception(f"Failed to load audio file: {e}")
             return f"[Error: Failed to load audio: {e}]"
 
     # Ensure numpy array
@@ -470,8 +469,8 @@ def transcribe_with_parakeet_onnx(
 
         return "[Error: No output from model]"
 
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+        logger.exception(f"Transcription error: {e}")
         return f"[Error: Transcription failed: {e}]"
 
 
@@ -574,8 +573,8 @@ def transcribe_chunked_onnx(
 
                     transcripts.append(text)
 
-        except Exception as e:
-            logger.error(f"Error processing chunk {i+1}/{num_chunks}: {e}")
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.exception(f"Error processing chunk {i+1}/{num_chunks}: {e}")
 
         # Progress callback
         if chunk_callback:
@@ -595,7 +594,7 @@ def transcribe_chunked_onnx(
     return result.strip() if result else "[No speech detected]"
 
 
-def merge_with_overlap_removal(transcripts: List[str]) -> str:
+def merge_with_overlap_removal(transcripts: list[str]) -> str:
     """
     Merge transcripts by removing duplicate words at boundaries.
 

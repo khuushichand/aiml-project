@@ -7,12 +7,14 @@ and resource management for handling multiple queries simultaneously.
 """
 
 import asyncio
+import contextlib
 import time
+import uuid
+from collections import deque
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Callable, AsyncIterator
-from collections import deque
-import uuid
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
@@ -40,7 +42,7 @@ class BatchQuery:
     """A single query in a batch."""
     id: str
     query: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     priority: PriorityLevel = PriorityLevel.NORMAL
     status: BatchStatus = BatchStatus.PENDING
     result: Optional[Any] = None
@@ -53,13 +55,13 @@ class BatchQuery:
 class BatchJob:
     """A batch processing job."""
     id: str
-    queries: List[BatchQuery]
+    queries: list[BatchQuery]
     status: BatchStatus = BatchStatus.PENDING
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
-    config: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     progress: float = 0.0
 
     @property
@@ -112,7 +114,7 @@ class BatchProcessor:
         self.batch_timeout = batch_timeout
 
         # Job tracking
-        self.jobs: Dict[str, BatchJob] = {}
+        self.jobs: dict[str, BatchJob] = {}
         self.active_jobs: set = set()
 
         # Resource management
@@ -123,9 +125,9 @@ class BatchProcessor:
 
     async def process_batch(
         self,
-        queries: List[str],
+        queries: list[str],
         process_func: Callable,
-        config: Optional[Dict[str, Any]] = None,
+        config: Optional[dict[str, Any]] = None,
         priority: PriorityLevel = PriorityLevel.NORMAL
     ) -> BatchJob:
         """
@@ -240,7 +242,7 @@ class BatchProcessor:
         self,
         query: BatchQuery,
         process_func: Callable,
-        config: Dict[str, Any]
+        config: dict[str, Any]
     ) -> None:
         """Process a single query with retry logic."""
         async with self.semaphore:
@@ -282,7 +284,7 @@ class BatchProcessor:
         query_stream: AsyncIterator[str],
         process_func: Callable,
         batch_size: int = 10,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[dict[str, Any]] = None
     ) -> AsyncIterator[BatchJob]:
         """
         Process a stream of queries in batches.
@@ -312,7 +314,7 @@ class BatchProcessor:
             job = await self.process_batch(batch, process_func, config)
             yield job
 
-    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job_status(self, job_id: str) -> Optional[dict[str, Any]]:
         """Get status of a batch job."""
         job = self.jobs.get(job_id)
 
@@ -351,7 +353,7 @@ class BatchProcessor:
         logger.info(f"Cancelled batch job {job_id}")
         return True
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get batch processing statistics."""
         return self.stats.get_summary()
 
@@ -367,7 +369,7 @@ class BatchQueue:
             max_size: Maximum queue size
         """
         self.max_size = max_size
-        self.queues = {
+        self.queues: dict[PriorityLevel, deque[dict[str, Any]]] = {
             priority: deque()
             for priority in PriorityLevel
         }
@@ -376,9 +378,9 @@ class BatchQueue:
 
     async def add(
         self,
-        queries: List[str],
+        queries: list[str],
         priority: PriorityLevel = PriorityLevel.NORMAL,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> str:
         """
         Add queries to queue.
@@ -412,7 +414,7 @@ class BatchQueue:
 
             return batch_id
 
-    async def get_next(self) -> Optional[Dict[str, Any]]:
+    async def get_next(self) -> Optional[dict[str, Any]]:
         """Get next batch from queue (highest priority first)."""
         async with self.lock:
             # Check queues in priority order
@@ -447,7 +449,7 @@ class BatchProcessingStats:
     successful_queries: int = 0
     failed_queries: int = 0
     total_processing_time: float = 0.0
-    query_times: List[float] = field(default_factory=list)
+    query_times: list[float] = field(default_factory=list)
 
     def record_job(self, job: BatchJob):
         """Record job statistics."""
@@ -479,7 +481,7 @@ class BatchProcessingStats:
         """Record failed query."""
         pass  # Counted in record_job
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> dict[str, Any]:
         """Get statistics summary."""
         avg_query_time = (
             sum(self.query_times) / len(self.query_times)
@@ -527,7 +529,7 @@ class BatchScheduler:
         self.queue = queue
         self.process_func = process_func
         self.running = False
-        self.scheduler_task = None
+        self.scheduler_task: Optional[asyncio.Task[None]] = None
 
     async def start(self):
         """Start batch scheduler."""
@@ -542,10 +544,8 @@ class BatchScheduler:
             self.running = False
             if self.scheduler_task:
                 self.scheduler_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self.scheduler_task
-                except asyncio.CancelledError:
-                    pass
             logger.info("Batch scheduler stopped")
 
     async def _scheduler_loop(self):
@@ -568,7 +568,7 @@ class BatchScheduler:
                 logger.error(f"Error in scheduler loop: {e}")
                 await asyncio.sleep(1)
 
-    async def _process_batch(self, batch: Dict[str, Any]):
+    async def _process_batch(self, batch: dict[str, Any]):
         """Process a batch from queue."""
         try:
             await self.processor.process_batch(
@@ -584,11 +584,11 @@ class BatchScheduler:
 # Pipeline integration functions
 
 async def batch_process_queries(
-    queries: List[str],
+    queries: list[str],
     pipeline_func: Callable,
-    config: Optional[Dict[str, Any]] = None,
+    config: Optional[dict[str, Any]] = None,
     max_concurrent: int = 10
-) -> List[Any]:
+) -> list[Any]:
     """
     Process multiple queries through pipeline in batch.
 
@@ -604,7 +604,7 @@ async def batch_process_queries(
     processor = BatchProcessor(max_concurrent=max_concurrent)
 
     # Create wrapper for pipeline function that avoids deprecated context
-    async def process_query(query: str, config: Dict[str, Any]) -> Any:
+    async def process_query(query: str, config: dict[str, Any]) -> Any:
         cfg = config or {}
         result = await pipeline_func(query, cfg)
         return result.documents if hasattr(result, 'documents') else result
@@ -635,8 +635,8 @@ async def stream_process_queries(
     query_stream: AsyncIterator[str],
     pipeline_func: Callable,
     batch_size: int = 10,
-    config: Optional[Dict[str, Any]] = None
-) -> AsyncIterator[List[Any]]:
+    config: Optional[dict[str, Any]] = None
+) -> AsyncIterator[list[Any]]:
     """
     Process stream of queries in batches.
 
@@ -652,7 +652,7 @@ async def stream_process_queries(
     processor = BatchProcessor()
 
     # Create wrapper that avoids deprecated context
-    async def process_query(query: str, config: Dict[str, Any]) -> Any:
+    async def process_query(query: str, config: dict[str, Any]) -> Any:
         cfg = config or {}
         result = await pipeline_func(query, cfg)
         return result

@@ -10,13 +10,15 @@ app/core/RAG/rag_service/claims.py and is designed to be extended.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     ClaimsJobContext,
@@ -37,13 +39,13 @@ from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 # Prefer importing Document and verification types from RAG types for consistency
 try:
     from tldw_Server_API.app.core.RAG.rag_service.types import (
-        Document,
         ClaimType,
-        VerificationStatus,
+        Document,
         MatchLevel,
         SourceAuthority,
+        VerificationStatus,
     )
-except Exception:
+except ImportError:
     # Lightweight fallback types for non-RAG usage
     from enum import Enum
 
@@ -84,8 +86,30 @@ except Exception:
     class Document:  # type: ignore
         id: str
         content: str
-        metadata: Dict[str, Any] = field(default_factory=dict)
+        metadata: dict[str, Any] = field(default_factory=dict)
         score: float = 0.0
+
+
+_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 # --------------------------- Data Models ---------------------------
@@ -95,9 +119,9 @@ class Claim:
     """A factual claim extracted from generated text."""
     id: str
     text: str
-    span: Optional[Tuple[int, int]] = None
+    span: tuple[int, int] | None = None
     claim_type: ClaimType = ClaimType.GENERAL
-    extracted_values: Dict[str, Any] = field(default_factory=dict)
+    extracted_values: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -115,9 +139,9 @@ class ClaimVerification:
     claim: Claim
     status: VerificationStatus = VerificationStatus.UNVERIFIED
     confidence: float = 0.0
-    evidence: List[Evidence] = field(default_factory=list)
-    citations: List[Dict[str, Any]] = field(default_factory=list)
-    rationale: Optional[str] = None
+    evidence: list[Evidence] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
+    rationale: str | None = None
     match_level: MatchLevel = MatchLevel.INTERPRETATION
     source_authority: SourceAuthority = SourceAuthority.SECONDARY
     requires_external_knowledge: bool = False
@@ -134,6 +158,7 @@ class ClaimVerification:
             VerificationStatus.HALLUCINATION: "refuted",
             VerificationStatus.UNVERIFIED: "nei",
             VerificationStatus.NUMERICAL_ERROR: "refuted",
+            VerificationStatus.CONTESTED: "contested",
         }
         return status_to_label.get(self.status, "nei")
 
@@ -141,7 +166,7 @@ class ClaimVerification:
 @dataclass
 class ExtractionResult:
     """Result from claim extraction phase."""
-    claims: List[Claim]
+    claims: list[Claim]
     extractor_mode: str
     extraction_time_s: float = 0.0
     total_input_chars: int = 0
@@ -150,9 +175,9 @@ class ExtractionResult:
 @dataclass
 class VerificationResult:
     """Result from claim verification phase."""
-    verifications: List[ClaimVerification]
+    verifications: list[ClaimVerification]
     verification_time_s: float = 0.0
-    summary: Dict[str, Any] = field(default_factory=dict)
+    summary: dict[str, Any] = field(default_factory=dict)
 
 
 # --------------------------- Interfaces ---------------------------
@@ -163,9 +188,9 @@ class ClaimExtractor(Protocol):
         answer: str,
         max_claims: int = 25,
         *,
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
-    ) -> List[Claim]:
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
+    ) -> list[Claim]:
         ...
 
 
@@ -174,13 +199,13 @@ class ClaimVerifier(Protocol):
         self,
         claim: Claim,
         query: str,
-        base_documents: List[Document],
-        retrieve_fn: Optional[Any] = None,
+        base_documents: list[Document],
+        retrieve_fn: Any | None = None,
         top_k: int = 5,
         conf_threshold: float = 0.7,
         mode: str = "hybrid",
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
     ) -> ClaimVerification:
         ...
 
@@ -237,13 +262,13 @@ _PRIMARY_PATTERNS = re.compile(r"original\s+(?:research|study|data)|primary\s+so
 _INDUSTRY_PATTERNS = re.compile(r"whitepaper|industry\s+report|market\s+(?:research|analysis)", re.IGNORECASE)
 
 
-def _extract_numbers_and_dates(text: str) -> Dict[str, List[str]]:
+def _extract_numbers_and_dates(text: str) -> dict[str, list[str]]:
     nums = [m.group(0) for m in _NUMERIC_RE.finditer(text or "")]
     dates = [m.group(0) for m in _DATE_RE.finditer(text or "")]
     return {"numbers": nums, "dates": dates}
 
 
-def classify_claim_type(claim_text: str) -> Tuple[ClaimType, Dict[str, Any]]:
+def classify_claim_type(claim_text: str) -> tuple[ClaimType, dict[str, Any]]:
     """
     Classify a claim into its type based on pattern matching.
 
@@ -251,12 +276,12 @@ def classify_claim_type(claim_text: str) -> Tuple[ClaimType, Dict[str, Any]]:
         Tuple of (ClaimType, extracted_values dict)
     """
     text = (claim_text or "").strip()
-    extracted: Dict[str, Any] = {}
+    extracted: dict[str, Any] = {}
 
     # Check for quotes first (highest priority)
     if _QUOTE_PATTERNS.search(text):
         quotes = _QUOTE_PATTERNS.findall(text)
-        extracted["quotes"] = [q.strip('""\u201c\u201d') for q in quotes]
+        extracted["quotes"] = [q.strip('""\u201c\u201d') for q in quotes]  # noqa: B005
         return ClaimType.QUOTE, extracted
 
     # Check for statistics (numbers with context)
@@ -329,7 +354,7 @@ def classify_match_confidence(
     claim_text: str,
     evidence_text: str,
     semantic_score: float = 0.0
-) -> Tuple[MatchLevel, float]:
+) -> tuple[MatchLevel, float]:
     """
     Classify the match level between a claim and evidence.
 
@@ -373,13 +398,13 @@ def classify_match_confidence(
 
 def determine_verification_status(
     claim: Claim,
-    evidence_snippets: List[Evidence],
-    nli_label: Optional[str] = None,
+    evidence_snippets: list[Evidence],
+    nli_label: str | None = None,
     nli_confidence: float = 0.0,
-    numeric_match: Optional[bool] = None,
-    quote_match: Optional[bool] = None,
+    numeric_match: bool | None = None,
+    quote_match: bool | None = None,
     doc_only_mode: bool = False,
-) -> Tuple[VerificationStatus, float, str]:
+) -> tuple[VerificationStatus, float, str]:
     """
     Decision tree for determining verification status.
 
@@ -455,13 +480,13 @@ def determine_verification_status(
     return VerificationStatus.UNVERIFIED, max_score, "Insufficient evidence"
 
 
-def _contains_any(hay: str, needles: List[str]) -> bool:
+def _contains_any(hay: str, needles: list[str]) -> bool:
     hay_l = (hay or "").lower()
     return any(n.lower() in hay_l for n in needles if n)
 
 
-def _first_n_snippets(docs: List[Document], n: int = 3, snippet_len: int = 480) -> List[Evidence]:
-    out: List[Evidence] = []
+def _first_n_snippets(docs: list[Document], n: int = 3, snippet_len: int = 480) -> list[Evidence]:
+    out: list[Evidence] = []
     for d in docs[:n]:
         txt = d.content or ""
         snip = txt[:snippet_len] + ("..." if len(txt) > snippet_len else "")
@@ -475,7 +500,7 @@ def _first_n_snippets(docs: List[Document], n: int = 3, snippet_len: int = 480) 
     return out
 
 
-def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> Tuple[int, int]:
+def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> tuple[int, int]:
     """Best-effort exact offsets into the full document.
 
     Strategy:
@@ -500,10 +525,10 @@ def _find_offsets(doc_text: str, claim_text: str, snippet: str) -> Tuple[int, in
     return (0, min(len(doc_text), max(len(ct), len(snip))))
 
 
-def _resolve_claims_llm_config() -> Tuple[str, Optional[str], float]:
+def _resolve_claims_llm_config() -> tuple[str, str | None, float]:
     try:
         from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         _settings = {}
 
     provider = None
@@ -511,33 +536,33 @@ def _resolve_claims_llm_config() -> Tuple[str, Optional[str], float]:
     temperature = 0.1
     try:
         provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         provider = None
     try:
         model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         model_override = None
     try:
         temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.1))
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         temperature = 0.1
 
     if provider is None:
         try:
             rag_cfg = _settings.get("RAG", {}) or {}
             provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             provider = None
     if provider is None:
         try:
             provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             provider = "openai"
     if model_override is None:
         try:
             rag_cfg = _settings.get("RAG", {}) or {}
             model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             model_override = None
 
     return provider or "openai", model_override, temperature
@@ -545,7 +570,7 @@ def _resolve_claims_llm_config() -> Tuple[str, Optional[str], float]:
 
 async def _log_claims_llm_usage(
     *,
-    job_context: Optional[ClaimsJobContext],
+    job_context: ClaimsJobContext | None,
     operation: str,
     provider: str,
     model: str,
@@ -557,24 +582,24 @@ async def _log_claims_llm_usage(
 ) -> None:
     try:
         from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         return
     try:
         user_id = job_context.user_id if job_context else None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         user_id = None
     try:
         api_key_id = job_context.api_key_id if job_context else None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         api_key_id = None
     try:
         request_id = job_context.request_id if job_context else None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         request_id = None
     endpoint = None
     try:
         endpoint = job_context.endpoint if job_context else None
-    except Exception:
+    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
         endpoint = None
     await log_llm_usage(
         user_id=user_id,
@@ -596,12 +621,12 @@ async def _log_claims_llm_usage(
 # --------------------------- Extractors ---------------------------
 
 class HeuristicSentenceExtractor:
-    async def extract(self, answer: str, max_claims: int = 25) -> List[Claim]:
+    async def extract(self, answer: str, max_claims: int = 25) -> list[Claim]:
         if not answer or not isinstance(answer, str):
             return []
         # naive sentence split; keep manageable count
         parts = re.split(r"(?<=[\.!?])\s+", answer.strip())
-        claims: List[Claim] = []
+        claims: list[Claim] = []
         for i, p in enumerate(parts):
             t = p.strip()
             if not t:
@@ -626,9 +651,9 @@ class LLMBasedClaimExtractor:
         answer: str,
         max_claims: int = 25,
         *,
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
-    ) -> List[Claim]:
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
+    ) -> list[Claim]:
         if not answer:
             return []
         system = load_prompt("ingestion", "claims_extractor_system") or (
@@ -642,7 +667,7 @@ class LLMBasedClaimExtractor:
         # Safely format template that may contain JSON braces
         try:
             prompt = base.format(max_claims=max_claims, answer=answer)
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             # Escape all braces then restore placeholders
             _tmpl = base.replace('{', '{{').replace('}', '}}')
             _tmpl = _tmpl.replace('{{max_claims}}', '{max_claims}').replace('{{answer}}', '{answer}')
@@ -707,7 +732,7 @@ class LLMBasedClaimExtractor:
             text = raw if isinstance(raw, str) else str(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_extract",
@@ -719,8 +744,6 @@ class LLMBasedClaimExtractor:
                     status=200,
                     estimated=True,
                 )
-            except Exception:
-                pass
             # find JSON block (support fenced blocks)
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -729,13 +752,13 @@ class LLMBasedClaimExtractor:
                     _ = json.loads(block)
                     jtxt = block
                     break
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     continue
             if jtxt is None:
                 m = re.search(r"\{[\s\S]*\}\s*$", text)
                 jtxt = m.group(0) if m else text
             data = json.loads(jtxt)
-            out: List[Claim] = []
+            out: list[Claim] = []
             for i, c in enumerate((data.get("claims") or [])[:max_claims]):
                 t = (c or {}).get("text")
                 if isinstance(t, str) and len(t.strip()) > 0:
@@ -744,7 +767,7 @@ class LLMBasedClaimExtractor:
                 logger.debug("LLM extractor returned no claims; falling back to heuristics")
                 return await HeuristicSentenceExtractor().extract(answer, max_claims)
             return out
-        except Exception as e:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             record_claims_provider_request(
                 provider=provider or "openai",
                 model=model_override or "",
@@ -753,7 +776,7 @@ class LLMBasedClaimExtractor:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_extract",
@@ -765,8 +788,6 @@ class LLMBasedClaimExtractor:
                     status=500,
                     estimated=True,
                 )
-            except Exception:
-                pass
             logger.warning(f"Claim extraction via LLM failed: {e}")
             return await HeuristicSentenceExtractor().extract(answer, max_claims)
 
@@ -776,24 +797,25 @@ class LLMBasedClaimExtractor:
 class HybridClaimVerifier:
     """Verify with numeric/date checks, retrieve evidence, then LLM-judge entailment."""
 
-    def __init__(self, analyze_fn: Any, nli_model: Optional[str] = None):
+    def __init__(self, analyze_fn: Any, nli_model: str | None = None):
         self._analyze = analyze_fn
         self._nli = None
         self._nli_lock = asyncio.Lock()
         # Try to initialize local NLI model if available
         try:
-            from transformers import pipeline  # type: ignore
             import os
+
+            from transformers import pipeline  # type: ignore
             model_name = nli_model or os.environ.get("RAG_NLI_MODEL") or os.environ.get("RAG_NLI_MODEL_PATH") or "roberta-large-mnli"
             def _load():
                 try:
                     return pipeline("text-classification", model=model_name, return_all_scores=True)
-                except Exception as e:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"NLI model load failed ({model_name}): {e}.")
                     return None
             loop = asyncio.get_event_loop()
             self._nli = loop.run_in_executor(None, _load)
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             self._nli = None
 
     async def _get_nli(self):
@@ -801,12 +823,12 @@ class HybridClaimVerifier:
             if asyncio.isfuture(self._nli) or hasattr(self._nli, "__await__"):
                 try:
                     self._nli = await self._nli  # type: ignore
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     self._nli = None
             return self._nli
 
     @staticmethod
-    def _nli_best_label(nli_scores: List[Dict[str, Any]]) -> Tuple[str, float]:
+    def _nli_best_label(nli_scores: list[dict[str, Any]]) -> tuple[str, float]:
         label_map = {"entailment": "supported", "contradiction": "refuted", "neutral": "nei"}
         best = max(nli_scores, key=lambda x: x.get("score", 0.0))
         lab = label_map.get(str(best.get("label", "")).lower(), "nei")
@@ -816,13 +838,13 @@ class HybridClaimVerifier:
         self,
         claim: Claim,
         query: str,
-        base_documents: List[Document],
-        retrieve_fn: Optional[Any] = None,
+        base_documents: list[Document],
+        retrieve_fn: Any | None = None,
         top_k: int = 5,
         conf_threshold: float = 0.7,
         mode: str = "hybrid",
-        budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
         doc_only_mode: bool = False,
         numeric_precision_mode: str = "standard",
     ) -> ClaimVerification:
@@ -833,13 +855,13 @@ class HybridClaimVerifier:
         if claim.claim_type == ClaimType.GENERAL:
             claim.claim_type, claim.extracted_values = classify_claim_type(claim_text)
 
-        candidate_docs: List[Document] = []
+        candidate_docs: list[Document] = []
         try:
             if retrieve_fn is not None:
                 candidate_docs = await retrieve_fn(claim_text, top_k=top_k)
             else:
                 candidate_docs = base_documents[:top_k] if base_documents else []
-        except Exception as e:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Claim-level retrieval failed, using base docs: {e}")
             candidate_docs = base_documents[:top_k] if base_documents else []
 
@@ -856,18 +878,18 @@ class HybridClaimVerifier:
         evidence_snips = _first_n_snippets(candidate_docs, n=min(3, top_k))
         evidence_text = "\n\n".join([f"[doc:{e.doc_id}] {e.snippet}" for e in evidence_snips])
         # Map doc_id -> full text for citation offsets
-        _doc_map: Dict[str, str] = {}
+        _doc_map: dict[str, str] = {}
         try:
             for d in candidate_docs:
                 _doc_map[str(getattr(d, "id", ""))] = getattr(d, "content", "") or ""
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             _doc_map = {}
 
         # NLI verification path (optional depending on mode)
         nli = None
         if mode in ("hybrid", "nli"):
             nli = await self._get_nli()
-            nli_decision: Optional[Tuple[str, float, int]] = None
+            nli_decision: tuple[str, float, int] | None = None
             if nli is not None:
                 try:
                     best_tuple = ("nei", 0.0, -1)
@@ -879,7 +901,7 @@ class HybridClaimVerifier:
                                 best_tuple = (lab, sc, i)
                     if best_tuple[1] >= conf_threshold:
                         # Populate citations only for supported/refuted with best-effort exact offsets
-                        cit: List[Dict[str, Any]] = []
+                        cit: list[dict[str, Any]] = []
                         nli_status = VerificationStatus.VERIFIED if best_tuple[0] == "supported" else VerificationStatus.REFUTED
                         if best_tuple[0] in {"supported", "refuted"}:
                             for ev in evidence_snips:
@@ -902,7 +924,7 @@ class HybridClaimVerifier:
                         )
                     else:
                         nli_decision = best_tuple
-                except Exception as e:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                     if mode == "hybrid":
                         logger.warning(f"NLI verification failed; falling back to LLM judge: {e}")
                     else:
@@ -998,7 +1020,7 @@ class HybridClaimVerifier:
             text = raw if isinstance(raw, str) else str(raw)
             if budget is not None:
                 budget.add_usage(tokens=estimate_claims_tokens(text))
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_verify",
@@ -1010,8 +1032,6 @@ class HybridClaimVerifier:
                     status=200,
                     estimated=True,
                 )
-            except Exception:
-                pass
             # Parse fenced JSON if present
             jtxt = None
             fence_json = re.findall(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
@@ -1020,7 +1040,7 @@ class HybridClaimVerifier:
                     _ = json.loads(block)
                     jtxt = block
                     break
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     continue
             if jtxt is None:
                 m = re.search(r"\{[\s\S]*\}\s*$", text)
@@ -1031,7 +1051,7 @@ class HybridClaimVerifier:
                 label = lab
             confidence = float(data.get("confidence", confidence))
             rationale = data.get("rationale")
-        except Exception as e:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
             record_claims_provider_request(
                 provider=provider or "openai",
                 model=model_override or "",
@@ -1040,7 +1060,7 @@ class HybridClaimVerifier:
                 error=str(e),
                 estimated_cost=cost_estimate,
             )
-            try:
+            with contextlib.suppress(_CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS):
                 await _log_claims_llm_usage(
                     job_context=job_context,
                     operation="claims_verify",
@@ -1052,11 +1072,9 @@ class HybridClaimVerifier:
                     status=500,
                     estimated=True,
                 )
-            except Exception:
-                pass
             logger.warning(f"LLM judge failed; defaulting to NEI: {e}")
         # Check numeric precision for statistic claims
-        numeric_match: Optional[bool] = None
+        numeric_match: bool | None = None
         if claim.claim_type == ClaimType.STATISTIC and claim.extracted_values.get("numbers"):
             try:
                 from tldw_Server_API.app.core.RAG.rag_service.guardrails import check_numeric_precision
@@ -1066,11 +1084,11 @@ class HybridClaimVerifier:
                     mode=numeric_precision_mode,
                 )
                 numeric_match = num_result.all_within_tolerance
-            except Exception:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Check quote match for quote claims
-        quote_match: Optional[bool] = None
+        quote_match: bool | None = None
         if claim.claim_type == ClaimType.QUOTE:
             quotes = claim.extracted_values.get("quotes", [])
             if quotes:
@@ -1094,15 +1112,12 @@ class HybridClaimVerifier:
 
         # Override with LLM-based result if it's more confident
         if label in {"supported", "refuted"} and confidence > decision_conf:
-            if label == "supported":
-                status = VerificationStatus.VERIFIED
-            else:
-                status = VerificationStatus.REFUTED
+            status = VerificationStatus.VERIFIED if label == "supported" else VerificationStatus.REFUTED
             decision_rationale = rationale or decision_rationale
             decision_conf = confidence
 
         # Construct citations for traceability (doc IDs with snippet offsets)
-        citations: List[Dict[str, Any]] = []
+        citations: list[dict[str, Any]] = []
         if status in {VerificationStatus.VERIFIED, VerificationStatus.REFUTED, VerificationStatus.MISQUOTED, VerificationStatus.NUMERICAL_ERROR}:
             for ev in evidence_snips:
                 full = _doc_map.get(ev.doc_id, "")
@@ -1147,18 +1162,18 @@ class ClaimsEngine:
         self,
         answer: str,
         query: str,
-        documents: List[Document],
+        documents: list[Document],
         claim_extractor: str = "auto",
         claim_verifier: str = "hybrid",
         claims_top_k: int = 5,
         claims_conf_threshold: float = 0.7,
         claims_max: int = 25,
-        retrieve_fn: Optional[Any] = None,
-        nli_model: Optional[str] = None,
+        retrieve_fn: Any | None = None,
+        nli_model: str | None = None,
         claims_concurrency: int = 8,
-        job_budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
-    ) -> Dict[str, Any]:
+        job_budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
+    ) -> dict[str, Any]:
         if not answer or not isinstance(answer, str):
             return {"claims": [], "summary": {}}
 
@@ -1166,12 +1181,12 @@ class ClaimsEngine:
         if budget is None:
             try:
                 from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-            except Exception:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                 _settings = {}
             budget = resolve_claims_job_budget(settings=_settings)
 
         # choose extractor
-        claims: List[Claim] = []
+        claims: list[Claim] = []
         extractor_mode = (claim_extractor or "auto").strip().lower()
 
         if extractor_mode == "ner":
@@ -1180,23 +1195,23 @@ class ClaimsEngine:
                 import spacy  # type: ignore
                 try:
                     from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     _settings = {}
                 model_name = None
                 try:
                     model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     model_name = "en_core_web_sm"
 
                 try:
                     nlp = spacy.load(model_name)
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     nlp = spacy.blank("en")
                     if not nlp.has_pipe("sentencizer"):
                         nlp.add_pipe("sentencizer")
 
                 doc = nlp(answer)
-                sents_text: List[str] = []
+                sents_text: list[str] = []
                 for sent in getattr(doc, "sents", [doc]):
                     has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
                     if has_ent:
@@ -1214,7 +1229,7 @@ class ClaimsEngine:
                         budget=budget,
                         job_context=job_context,
                     )
-            except Exception as e:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"NER extractor unavailable/failed: {e}; falling back to LLM extractor")
                 claims = await self.extractor_llm.extract(
                     answer,
@@ -1233,7 +1248,7 @@ class ClaimsEngine:
                 # Load provider/model/temp from config.txt with sensible fallbacks
                 try:
                     from tldw_Server_API.app.core.config import settings as _settings  # type: ignore
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     _settings = {}
 
                 provider = None
@@ -1241,15 +1256,15 @@ class ClaimsEngine:
                 temperature = 0.2
                 try:
                     provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or None
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     provider = None
                 try:
                     model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     model_override = None
                 try:
                     temperature = float(_settings.get("CLAIMS_LLM_TEMPERATURE", 0.2))
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     temperature = 0.2
 
                 # Fallbacks to RAG defaults then global default_api
@@ -1257,18 +1272,18 @@ class ClaimsEngine:
                     try:
                         rag_cfg = _settings.get("RAG", {}) or {}
                         provider = str(rag_cfg.get("default_llm_provider", "")).strip() or None
-                    except Exception:
+                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                         provider = None
                 if provider is None:
                     try:
                         provider = str(_settings.get("default_api", "openai")).strip() or "openai"
-                    except Exception:
+                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                         provider = "openai"
                 if model_override is None:
                     try:
                         rag_cfg = _settings.get("RAG", {}) or {}
                         model_override = str(rag_cfg.get("default_llm_model", "")).strip() or None
-                    except Exception:
+                    except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                         model_override = None
 
                 strategy = PropositionChunkingStrategy(
@@ -1292,7 +1307,7 @@ class ClaimsEngine:
                 for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
                     if isinstance(ptxt, str) and ptxt.strip():
                         claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
-            except Exception as e:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"APS extractor failed, falling back to LLM extractor: {e}")
                 claims = await self.extractor_llm.extract(
                     answer,
@@ -1308,7 +1323,7 @@ class ClaimsEngine:
                 budget=budget,
                 job_context=job_context,
             )
-        verifications: List[ClaimVerification] = []
+        verifications: list[ClaimVerification] = []
 
         # Initialize verifier once if a specific NLI model is requested
         if nli_model:
@@ -1330,7 +1345,7 @@ class ClaimsEngine:
         # Concurrency cap to avoid over-parallelization of verifications
         try:
             max_conc = int(claims_concurrency)
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             max_conc = 8
         max_conc = max(1, min(32, max_conc))
         try:
@@ -1342,7 +1357,7 @@ class ClaimsEngine:
                 requested=max_conc,
                 budget_ratio=budget_ratio,
             )
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             pass
         sem = asyncio.Semaphore(max_conc)
 
@@ -1363,13 +1378,13 @@ class ClaimsEngine:
 
         # Count by new status values
         verified_count = sum(1 for v in verifications if v.status == VerificationStatus.VERIFIED)
-        refuted_count = sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
+        sum(1 for v in verifications if v.status == VerificationStatus.REFUTED)
         hallucination_count = sum(1 for v in verifications if v.status == VerificationStatus.HALLUCINATION)
         numerical_error_count = sum(1 for v in verifications if v.status == VerificationStatus.NUMERICAL_ERROR)
         misquoted_count = sum(1 for v in verifications if v.status == VerificationStatus.MISQUOTED)
         unverified_count = sum(1 for v in verifications if v.status == VerificationStatus.UNVERIFIED)
 
-        claims_out: List[Dict[str, Any]] = []
+        claims_out: list[dict[str, Any]] = []
         for v in verifications:
             claims_out.append(
                 {
@@ -1423,8 +1438,8 @@ class ClaimsEngine:
         answer: str,
         claim_extractor: str = "auto",
         claims_max: int = 25,
-        job_budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        job_budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
     ) -> ExtractionResult:
         """
         Extract claims from text without verification (first pass of two-pass architecture).
@@ -1453,11 +1468,11 @@ class ClaimsEngine:
         if budget is None:
             try:
                 from tldw_Server_API.app.core.config import settings as _settings
-            except Exception:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                 _settings = {}
             budget = resolve_claims_job_budget(settings=_settings)
 
-        claims: List[Claim] = []
+        claims: list[Claim] = []
         extractor_mode = (claim_extractor or "auto").strip().lower()
 
         # Use existing extraction logic based on mode
@@ -1466,17 +1481,17 @@ class ClaimsEngine:
                 import spacy
                 try:
                     from tldw_Server_API.app.core.config import settings as _settings
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     _settings = {}
                 model_name = str(_settings.get("CLAIMS_LOCAL_NER_MODEL", "en_core_web_sm") or "en_core_web_sm")
                 try:
                     nlp = spacy.load(model_name)
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     nlp = spacy.blank("en")
                     if not nlp.has_pipe("sentencizer"):
                         nlp.add_pipe("sentencizer")
                 doc = nlp(answer)
-                sents_text: List[str] = []
+                sents_text: list[str] = []
                 for sent in getattr(doc, "sents", [doc]):
                     has_ent = any(getattr(ent, "label_", "") for ent in getattr(sent, "ents", []))
                     if has_ent:
@@ -1488,7 +1503,7 @@ class ClaimsEngine:
                 claims = [Claim(id=f"c{i+1}", text=t) for i, t in enumerate(sents_text[:claims_max])]
                 if not claims:
                     claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
-            except Exception as e:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"NER extractor failed: {e}")
                 claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
         elif extractor_mode == "aps":
@@ -1496,7 +1511,7 @@ class ClaimsEngine:
                 from tldw_Server_API.app.core.Chunking.strategies.propositions import PropositionChunkingStrategy
                 try:
                     from tldw_Server_API.app.core.config import settings as _settings
-                except Exception:
+                except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                     _settings = {}
                 provider = str(_settings.get("CLAIMS_LLM_PROVIDER", "")).strip() or str(_settings.get("default_api", "openai")).strip()
                 model_override = str(_settings.get("CLAIMS_LLM_MODEL", "")).strip() or None
@@ -1510,7 +1525,7 @@ class ClaimsEngine:
                 for i, ptxt in enumerate((prop_chunks or [])[:claims_max]):
                     if isinstance(ptxt, str) and ptxt.strip():
                         claims.append(Claim(id=f"c{i+1}", text=ptxt.strip()))
-            except Exception as e:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"APS extractor failed: {e}")
                 claims = await self.extractor_llm.extract(answer, max_claims=claims_max, budget=budget, job_context=job_context)
         else:
@@ -1530,17 +1545,17 @@ class ClaimsEngine:
 
     async def verify_claims_only(
         self,
-        claims: List[Claim],
+        claims: list[Claim],
         query: str,
-        documents: List[Document],
+        documents: list[Document],
         claim_verifier: str = "hybrid",
         claims_top_k: int = 5,
         claims_conf_threshold: float = 0.7,
         claims_concurrency: int = 8,
-        retrieve_fn: Optional[Any] = None,
-        nli_model: Optional[str] = None,
-        job_budget: Optional[ClaimsJobBudget] = None,
-        job_context: Optional[ClaimsJobContext] = None,
+        retrieve_fn: Any | None = None,
+        nli_model: str | None = None,
+        job_budget: ClaimsJobBudget | None = None,
+        job_context: ClaimsJobContext | None = None,
         doc_only_mode: bool = False,
         numeric_precision_mode: str = "standard",
     ) -> VerificationResult:
@@ -1578,7 +1593,7 @@ class ClaimsEngine:
         if budget is None:
             try:
                 from tldw_Server_API.app.core.config import settings as _settings
-            except Exception:
+            except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
                 _settings = {}
             budget = resolve_claims_job_budget(settings=_settings)
 
@@ -1605,7 +1620,7 @@ class ClaimsEngine:
             provider, model_override, _ = _resolve_claims_llm_config()
             budget_ratio = budget.remaining_ratio() if budget is not None else None
             max_conc = suggest_claims_concurrency(provider=provider, model=model_override or "", requested=max_conc, budget_ratio=budget_ratio)
-        except Exception:
+        except _CLAIMS_ENGINE_NONCRITICAL_EXCEPTIONS:
             pass
 
         sem = asyncio.Semaphore(max_conc)

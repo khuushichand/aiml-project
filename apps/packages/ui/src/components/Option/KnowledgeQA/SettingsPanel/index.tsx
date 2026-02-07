@@ -210,7 +210,7 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
             </div>
             <p className="text-xs text-text-muted mt-2">
               {expertMode
-                ? "Full access to 150+ RAG options"
+                ? "Full access to 150+ RAG options, including a complete key-level editor"
                 : "Common options for quick configuration"}
             </p>
 
@@ -222,8 +222,8 @@ export function SettingsPanel({ open, onClose, className }: SettingsPanelProps) 
                   <div>
                     <p className="text-sm font-medium text-primary">Welcome to Expert Mode</p>
                     <p className="text-xs text-text-muted mt-1">
-                      You now have access to 150+ advanced RAG options organized into sections.
-                      Start with presets and expand sections to fine-tune specific settings.
+                      You now have access to advanced RAG controls by section, plus an All Options
+                      editor for complete key-level access.
                     </p>
                     <button
                       onClick={() => setShowExpertModeHint(false)}

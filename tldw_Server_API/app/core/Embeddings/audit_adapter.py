@@ -10,25 +10,27 @@ until completion to enforce mandatory auditing.
 from __future__ import annotations
 
 import asyncio
-import threading
-from typing import Any, Dict, Optional
-import os
 import atexit
-import warnings
+import contextlib
+import os
 import sys
+import threading
+import warnings
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
-    AuditEventType as UEvent,
-    AuditContext,
-)
 from tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps import (
     get_or_create_audit_service_for_user_id_optional,
     shutdown_all_audit_services,
 )
-
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    UnifiedAuditService,
+)
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditEventType as UEvent,
+)
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
 
@@ -37,7 +39,7 @@ def _parse_cache_size(env_key: str, default: int) -> int:
     raw = os.getenv(env_key, str(default))
     try:
         value = int(str(raw).strip())
-    except Exception:
+    except (TypeError, ValueError):
         logger.warning(f"Invalid {env_key}={raw!r}; using default {default}")
         return default
     if value < 1:
@@ -46,8 +48,8 @@ def _parse_cache_size(env_key: str, default: int) -> int:
     return value
 
 
-_SYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
-_SYNC_LOOP_THREAD: Optional[threading.Thread] = None
+_SYNC_LOOP: asyncio.AbstractEventLoop | None = None
+_SYNC_LOOP_THREAD: threading.Thread | None = None
 _SYNC_LOOP_LOCK = threading.Lock()
 _SYNC_LOOP_READY = threading.Event()
 _MANDATORY_TIMEOUT_S = 5.0
@@ -67,7 +69,7 @@ def _in_test_mode() -> bool:
     return _env_truthy("TEST_MODE") or _env_truthy("TLDW_TEST_MODE")
 
 
-def _ensure_sync_loop() -> Optional[asyncio.AbstractEventLoop]:
+def _ensure_sync_loop() -> asyncio.AbstractEventLoop | None:
     """Ensure a background event loop exists for sync/threadpool calls."""
     global _SYNC_LOOP, _SYNC_LOOP_THREAD
     with _SYNC_LOOP_LOCK:
@@ -110,10 +112,8 @@ def _stop_sync_loop() -> None:
     thread = _SYNC_LOOP_THREAD
 
     if loop and loop.is_running():
-        try:
+        with contextlib.suppress(RuntimeError, TypeError, ValueError):
             loop.call_soon_threadsafe(loop.stop)
-        except Exception:
-            pass
 
     if thread and thread.is_alive() and threading.current_thread() is not thread:
         thread.join(timeout=2.0)
@@ -123,23 +123,23 @@ def _stop_sync_loop() -> None:
     _SYNC_LOOP_READY.clear()
 
 
-async def _get_service_for_user(user_id: Optional[str]) -> UnifiedAuditService:
+async def _get_service_for_user(user_id: str | None) -> UnifiedAuditService:
     """Resolve the shared audit service via the central cache."""
     return await get_or_create_audit_service_for_user_id_optional(user_id)
 
 
 async def _emit(
-    user_id: Optional[str],
+    user_id: str | None,
     event_type: UEvent,
     *,
-    action: Optional[str] = None,
-    resource_type: Optional[str] = None,
-    resource_id: Optional[str] = None,
+    action: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
     result: str = "success",
-    metadata: Optional[Dict[str, Any]] = None,
-    ip_address: Optional[str] = None,
-    endpoint: Optional[str] = None,
-    method: Optional[str] = None,
+    metadata: dict[str, Any] | None = None,
+    ip_address: str | None = None,
+    endpoint: str | None = None,
+    method: str | None = None,
 ) -> None:
     svc = await _get_service_for_user(user_id)
     ctx = AuditContext(
@@ -169,7 +169,7 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
         raise RuntimeError("Embeddings audit adapter unavailable: no event loop")
 
@@ -180,7 +180,7 @@ def _schedule(coro) -> None:
             warnings.filterwarnings("ignore", message="coroutine.*was never awaited")
             try:
                 coro.close()  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 pass
         raise RuntimeError("Embeddings audit adapter failed to schedule") from exc
 
@@ -192,20 +192,20 @@ def _schedule(coro) -> None:
 
 
 def log_security_violation(
-    *, user_id: Optional[str], action: str, metadata: Optional[Dict[str, Any]] = None, ip_address: Optional[str] = None
+    *, user_id: str | None, action: str, metadata: dict[str, Any] | None = None, ip_address: str | None = None
 ) -> None:
     """Log a security violation (sync wrapper)."""
     _schedule(_emit(user_id, UEvent.SECURITY_VIOLATION, action=action, result="failure", metadata=metadata, ip_address=ip_address))
 
 
-def log_model_evicted(*, model_id: str, memory_usage_gb: Optional[float] = None, reason: Optional[str] = None) -> None:
+def log_model_evicted(*, model_id: str, memory_usage_gb: float | None = None, reason: str | None = None) -> None:
     """Log a model eviction as a data deletion event."""
     meta = {"memory_usage_gb": memory_usage_gb, "reason": reason}
     _schedule(_emit(None, UEvent.DATA_DELETE, action="model_evicted", resource_type="embedding_model", resource_id=model_id, metadata=meta))
 
 
 def log_memory_limit_exceeded(
-    *, model_id: str, memory_usage_gb: Optional[float], current_usage_gb: Optional[float], limit_gb: Optional[float]
+    *, model_id: str, memory_usage_gb: float | None, current_usage_gb: float | None, limit_gb: float | None
 ) -> None:
     """Log memory limit exceeded as a system error event."""
     meta = {
@@ -217,16 +217,16 @@ def log_memory_limit_exceeded(
 
 
 # Async variants (use when already in an async context)
-async def emit_security_violation_async(user_id: Optional[str], action: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+async def emit_security_violation_async(user_id: str | None, action: str, metadata: dict[str, Any] | None = None) -> None:
     await _emit(user_id, UEvent.SECURITY_VIOLATION, action=action, result="failure", metadata=metadata)
 
 
-async def emit_model_evicted_async(model_id: str, memory_usage_gb: Optional[float] = None, reason: Optional[str] = None) -> None:
+async def emit_model_evicted_async(model_id: str, memory_usage_gb: float | None = None, reason: str | None = None) -> None:
     await _emit(None, UEvent.DATA_DELETE, action="model_evicted", resource_type="embedding_model", resource_id=model_id, metadata={"memory_usage_gb": memory_usage_gb, "reason": reason})
 
 
 async def emit_memory_limit_exceeded_async(
-    model_id: str, memory_usage_gb: Optional[float], current_usage_gb: Optional[float], limit_gb: Optional[float]
+    model_id: str, memory_usage_gb: float | None, current_usage_gb: float | None, limit_gb: float | None
 ) -> None:
     await _emit(None, UEvent.SYSTEM_ERROR, action="embeddings_memory_limit_exceeded", resource_type="embedding_model", resource_id=model_id, result="failure", metadata={"memory_usage_gb": memory_usage_gb, "current_usage_gb": current_usage_gb, "limit_gb": limit_gb})
 
@@ -248,22 +248,18 @@ def _shutdown_on_exit() -> None:
             else:
                 logger.disable("tldw_Server_API.app.api.v1.API_Deps.Audit_DB_Deps")
                 logger.disable("tldw_Server_API.app.core.Embeddings.audit_adapter")
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         # Prefer running in a fresh loop if no loop is running
         try:
             loop = asyncio.get_running_loop()
             # Schedule but do not await; at exit there may be no time to run
-            try:
+            with contextlib.suppress(RuntimeError, TypeError, ValueError):
                 loop.create_task(shutdown_audit_adapter_services())
-            except Exception:
-                pass
         except RuntimeError:
-            try:
+            with contextlib.suppress(RuntimeError, TypeError, ValueError):
                 asyncio.run(shutdown_audit_adapter_services())
-            except Exception:
-                pass
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         pass
 
 

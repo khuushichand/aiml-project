@@ -9,7 +9,7 @@ Provides comprehensive exception hierarchy for proper error handling
 and context preservation in the Chatbook module.
 """
 
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
 
 class ChatbookException(Exception):
@@ -19,7 +19,7 @@ class ChatbookException(Exception):
         self,
         message: str,
         error_code: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None,
+        context: Optional[dict[str, Any]] = None,
         cause: Optional[Exception] = None
     ):
         """
@@ -37,7 +37,7 @@ class ChatbookException(Exception):
         self.context = context or {}
         self.cause = cause
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for logging/API responses."""
         return {
             "error": self.__class__.__name__,

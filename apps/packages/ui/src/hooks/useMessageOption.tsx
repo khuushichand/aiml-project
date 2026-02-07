@@ -25,6 +25,28 @@ import { CONTEXT_FILE_SIZE_MB_SETTING } from "@/services/settings/ui-settings"
 export const useMessageOption = (
   opts: { forceCompareEnabled?: boolean } = {}
 ) => {
+  const e2eDebugEnabled =
+    typeof window !== "undefined" && (window as any).__tldw_e2e_debug
+  const e2eDebugCounts = React.useRef({
+    syncSystem: 0,
+    syncQuick: 0,
+    storeSystem: 0,
+    storeQuick: 0
+  })
+  const logE2EDebug = (
+    key: keyof typeof e2eDebugCounts.current,
+    payload: Record<string, unknown>
+  ) => {
+    if (!e2eDebugEnabled) return
+    const counts = e2eDebugCounts.current
+    counts[key] += 1
+    if (counts[key] <= 10 || counts[key] % 50 === 0) {
+      console.log(`[E2E_DEBUG] ${key}`, {
+        count: counts[key],
+        ...payload
+      })
+    }
+  }
   // Controllers come from Context (for aborting streaming requests)
   const {
     controller: abortController,
@@ -118,6 +140,11 @@ export const useMessageOption = (
     setServerChatSource,
     serverChatExternalRef,
     setServerChatExternalRef,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     replyTarget,
     clearReplyTarget
   } = useStoreMessageOption()
@@ -253,6 +280,10 @@ export const useMessageOption = (
 
   React.useEffect(() => {
     if (storedSystemPrompt && storedSystemPrompt !== selectedSystemPrompt) {
+      logE2EDebug("syncSystem", {
+        storedSystemPrompt,
+        selectedSystemPrompt
+      })
       storedSystemPromptRef.current = storedSystemPrompt
       setSelectedSystemPrompt(storedSystemPrompt)
     }
@@ -260,6 +291,10 @@ export const useMessageOption = (
 
   React.useEffect(() => {
     if (storedQuickPrompt && storedQuickPrompt !== selectedQuickPrompt) {
+      logE2EDebug("syncQuick", {
+        storedQuickPrompt,
+        selectedQuickPrompt
+      })
       storedQuickPromptRef.current = storedQuickPrompt
       setSelectedQuickPrompt(storedQuickPrompt)
     }
@@ -270,6 +305,10 @@ export const useMessageOption = (
     if (nextValue === storedSystemPromptRef.current) {
       return
     }
+    logE2EDebug("storeSystem", {
+      nextValue,
+      storedSystemPromptRef: storedSystemPromptRef.current
+    })
     storedSystemPromptRef.current = nextValue
     setStoredSystemPrompt(nextValue)
   }, [selectedSystemPrompt, setStoredSystemPrompt])
@@ -279,6 +318,10 @@ export const useMessageOption = (
     if (nextValue === storedQuickPromptRef.current) {
       return
     }
+    logE2EDebug("storeQuick", {
+      nextValue,
+      storedQuickPromptRef: storedQuickPromptRef.current
+    })
     storedQuickPromptRef.current = nextValue
     setStoredQuickPrompt(nextValue)
   }, [selectedQuickPrompt, setStoredQuickPrompt])
@@ -355,6 +398,7 @@ export const useMessageOption = (
     stopStreamingRequest,
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     createChatBranch,
     createCompareBranch
   } = useChatActions({
@@ -417,6 +461,9 @@ export const useMessageOption = (
     compareMaxModels,
     compareFeatureEnabled,
     markCompareHistoryCreated,
+    messageSteeringMode,
+    messageSteeringForceNarrate,
+    clearMessageSteering,
     replyTarget,
     clearReplyTarget,
     setSelectedSystemPrompt,
@@ -427,6 +474,7 @@ export const useMessageOption = (
   return {
     editMessage,
     deleteMessage,
+    toggleMessagePinned,
     messages,
     setMessages,
     onSubmit,
@@ -462,6 +510,11 @@ export const useMessageOption = (
     setSelectedQuickPrompt,
     selectedSystemPrompt,
     setSelectedSystemPrompt,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     textareaRef,
     selectedKnowledge,
     setSelectedKnowledge,

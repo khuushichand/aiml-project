@@ -13,13 +13,15 @@ Notes:
 
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
-from loguru import logger
 import base64
+from typing import Any
 
-from ..base import BaseModule, ModuleConfig
-from ....Sandbox.models import RuntimeType as SbxRuntimeType, RunSpec
+from loguru import logger
+
+from ....Sandbox.models import RunSpec
+from ....Sandbox.models import RuntimeType as SbxRuntimeType
 from ....Sandbox.service import SandboxService
+from ..base import BaseModule
 
 
 class SandboxModule(BaseModule):
@@ -30,12 +32,12 @@ class SandboxModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Sandbox module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": hasattr(self, "_svc") and self._svc is not None}
         # Minimal health: service scaffold exists
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         # Return explicit schema with oneOf to reflect PRD (session vs one-shot)
         return [
             {
@@ -75,7 +77,7 @@ class SandboxModule(BaseModule):
             }
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         if tool_name != "sandbox.run":
             raise ValueError(f"Unknown tool: {tool_name}")
@@ -84,7 +86,7 @@ class SandboxModule(BaseModule):
 
         # Prepare RunSpec
         runtime_raw = (args.get("runtime") or "").strip().lower()
-        runtime: Optional[SbxRuntimeType] = None
+        runtime: SbxRuntimeType | None = None
         if runtime_raw in ("docker", "firecracker"):
             runtime = SbxRuntimeType(runtime_raw)
         # files (inline)
@@ -136,7 +138,7 @@ class SandboxModule(BaseModule):
                 raw_body=args,
             )
         except Exception as e:
-            raise RuntimeError(f"Sandbox execution failed: {e}")
+            raise RuntimeError(f"Sandbox execution failed: {e}") from e
 
         # Return a compact result for MCP
         def _iso(dt):
@@ -180,7 +182,7 @@ class SandboxModule(BaseModule):
             return [self.sanitize_input(v, _depth + 1) for v in input_data]
         return input_data
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         # Enforce PRD oneOf and types
         cmd = arguments.get("command")
         sess = arguments.get("session_id")
@@ -200,7 +202,7 @@ class SandboxModule(BaseModule):
                 if ts <= 0:
                     raise ValueError
             except Exception:
-                raise ValueError("timeout_sec must be a positive integer")
+                raise ValueError("timeout_sec must be a positive integer") from None
         files = arguments.get("files")
         if files is not None:
             if not isinstance(files, list):

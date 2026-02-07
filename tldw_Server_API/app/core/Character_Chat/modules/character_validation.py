@@ -5,13 +5,30 @@ This module contains functions for validating and parsing different character ca
 """
 
 import hashlib
-import json
-from typing import Dict, List, Optional, Tuple, Any, Set, Union
+from typing import Any, Optional, Union
 
 from loguru import logger
 
+MAX_V2_TEXT_FIELD_LENGTHS: dict[str, int] = {
+    "name": 500,
+    "description": 50_000,
+    "personality": 50_000,
+    "scenario": 50_000,
+    "first_mes": 50_000,
+    "mes_example": 100_000,
+    "creator_notes": 50_000,
+    "system_prompt": 100_000,
+    "post_history_instructions": 100_000,
+    "creator": 500,
+    "character_version": 100,
+}
 
-def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
+MAX_V2_ALTERNATE_GREETINGS = 200
+MAX_V2_TAGS = 500
+MAX_V2_TAG_LENGTH = 500
+
+
+def parse_character_book(book_data: dict[str, Any]) -> dict[str, Any]:
     """Parses character book data from a V2 character card structure.
 
     This function processes the 'character_book' section of a character card,
@@ -45,7 +62,7 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
     raw_entries = book_data.get('entries', [])
     total_entries = len(raw_entries)
     skipped_count = 0
-    skip_reasons: List[str] = []
+    skip_reasons: list[str] = []
 
     for idx, entry_raw in enumerate(raw_entries):
         if not isinstance(entry_raw, dict):
@@ -110,7 +127,7 @@ def parse_character_book(book_data: Dict[str, Any]) -> Dict[str, Any]:
     return parsed_book
 
 
-def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_v2_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parses a V2 character card (spec_version '2.0') JSON data.
 
     This function takes a dictionary representing a V2 character card,
@@ -195,7 +212,7 @@ def parse_v2_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_v1_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parses a V1 character card (flat JSON) into a V2-like structure.
 
     This function converts a V1 character card, which has a flat JSON structure,
@@ -261,7 +278,7 @@ def parse_v1_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_pygmalion_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse Pygmalion format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -304,7 +321,7 @@ def parse_pygmalion_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, A
         return None
 
 
-def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_textgen_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse TextGen format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -346,7 +363,7 @@ def parse_textgen_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
 
 
-def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def parse_alpaca_card(card_data_json: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Parse Alpaca format character card."""
     try:
         # Create a copy to avoid mutating the input
@@ -403,7 +420,7 @@ def parse_alpaca_card(card_data_json: Dict[str, Any]) -> Optional[Dict[str, Any]
         return None
 
 
-def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+def validate_character_book(book_data: dict[str, Any]) -> tuple[bool, list[str]]:
     """Validates the structure and content of a 'character_book' dictionary.
 
     Checks for required fields, correct data types, and valid values within
@@ -449,7 +466,7 @@ def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]
 
     # Validate each entry in 'entries'
     entries = book_data.get('entries', [])
-    entry_ids: Set[Union[int, float]] = set()  # Store IDs to check for uniqueness
+    entry_ids: set[Union[int, float]] = set()  # Store IDs to check for uniqueness
     for idx, entry in enumerate(entries):
         if not isinstance(entry, dict):
             validation_messages.append(f"Entry {idx} in 'character_book.entries' is not a dictionary.")
@@ -462,8 +479,8 @@ def validate_character_book(book_data: Dict[str, Any]) -> Tuple[bool, List[str]]
     return is_valid, validation_messages
 
 
-def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Set[Union[int, float]]) -> Tuple[
-    bool, List[str]]:
+def validate_character_book_entry(entry: dict[str, Any], idx: int, entry_ids: set[Union[int, float]]) -> tuple[
+    bool, list[str]]:
     """Validates a single entry within a character book.
 
     Checks for required fields, correct data types, and valid values for
@@ -551,10 +568,10 @@ def validate_character_book_entry(entry: Dict[str, Any], idx: int, entry_ids: Se
 
 
 def validate_v2_card(
-    card_data: Dict[str, Any],
+    card_data: dict[str, Any],
     *,
     strict_spec: bool = True,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Validates a V2 character card structure and content.
 
     Performs comprehensive validation of a V2 character card, checking for
@@ -628,6 +645,9 @@ def validate_v2_card(
             validation_messages.append(
                 f"Field '{field}' must be of type '{expected_type.__name__}'.")
 
+    if isinstance(data_node.get("name"), str) and not data_node["name"].strip():
+        validation_messages.append("Field 'name' cannot be blank.")
+
     # Optional fields with expected types
     optional_fields = {
         'creator_notes': str,
@@ -650,6 +670,49 @@ def validate_v2_card(
         logger.warning("V2 card validation: 'mes_example' field missing; proceeding with empty fallback.")
     elif not isinstance(mes_example_value, str):
         validation_messages.append("Field 'mes_example' must be of type 'str'.")
+
+    # Enforce bounded field lengths for deterministic storage behavior
+    for field_name, max_len in MAX_V2_TEXT_FIELD_LENGTHS.items():
+        field_value = data_node.get(field_name)
+        if isinstance(field_value, str) and len(field_value) > max_len:
+            validation_messages.append(
+                f"Field '{field_name}' exceeds max length of {max_len} characters."
+            )
+
+    alternate_greetings = data_node.get("alternate_greetings")
+    if isinstance(alternate_greetings, list):
+        if len(alternate_greetings) > MAX_V2_ALTERNATE_GREETINGS:
+            validation_messages.append(
+                f"Field 'alternate_greetings' exceeds max entries of {MAX_V2_ALTERNATE_GREETINGS}."
+            )
+        for idx, greeting in enumerate(alternate_greetings):
+            if not isinstance(greeting, str):
+                validation_messages.append(
+                    f"Field 'alternate_greetings[{idx}]' must be of type 'str'."
+                )
+                continue
+            if len(greeting) > MAX_V2_TEXT_FIELD_LENGTHS["first_mes"]:
+                validation_messages.append(
+                    f"Field 'alternate_greetings[{idx}]' exceeds max length of "
+                    f"{MAX_V2_TEXT_FIELD_LENGTHS['first_mes']} characters."
+                )
+
+    tags_value = data_node.get("tags")
+    if isinstance(tags_value, list):
+        if len(tags_value) > MAX_V2_TAGS:
+            validation_messages.append(
+                f"Field 'tags' exceeds max entries of {MAX_V2_TAGS}."
+            )
+        for idx, tag in enumerate(tags_value):
+            if not isinstance(tag, str):
+                validation_messages.append(
+                    f"Field 'tags[{idx}]' must be of type 'str'."
+                )
+                continue
+            if len(tag) > MAX_V2_TAG_LENGTH:
+                validation_messages.append(
+                    f"Field 'tags[{idx}]' exceeds max length of {MAX_V2_TAG_LENGTH} characters."
+                )
 
     # Validate character_book if present
     if 'character_book' in data_node:

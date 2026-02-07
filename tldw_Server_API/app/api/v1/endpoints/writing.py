@@ -8,14 +8,14 @@ import json
 import os
 import re
 from collections import Counter
-from typing import Any, Dict, List, NoReturn, Optional, Tuple
+from typing import Any, NoReturn
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
-from loguru import logger
 from fastapi.responses import JSONResponse
+from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep, rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.endpoints.llm_providers import get_configured_providers_async
 from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingCapabilitiesResponse,
@@ -38,20 +38,20 @@ from tldw_Server_API.app.api.v1.schemas.writing_schemas import (
     WritingThemeUpdate,
     WritingTokenCountRequest,
     WritingTokenCountResponse,
+    WritingTokenizeMeta,
     WritingTokenizeRequest,
     WritingTokenizeResponse,
-    WritingTokenizeMeta,
     WritingTokenizerSupport,
+    WritingVersionResponse,
     WritingWordcloudMeta,
     WritingWordcloudOptions,
     WritingWordcloudRequest,
     WritingWordcloudResponse,
     WritingWordcloudResult,
     WritingWordcloudWord,
-    WritingVersionResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
@@ -61,15 +61,37 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
 from tldw_Server_API.app.core.exceptions import TokenizerUnavailable
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import get_allowed_fields
 
-
 router = APIRouter()
+
+_WRITING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    CharactersRAGDBError,
+    ConflictError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TokenizerUnavailable,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 async def _enforce_rate_limit(rate_limiter: RateLimiter, user_id: int, scope: str) -> None:
     """Enforce a rate limit for the given user and scope."""
     try:
         allowed, meta = await rate_limiter.check_user_rate_limit(int(user_id), scope)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         retry_after = 60
         logger.exception(
             "Rate limiter check failed for user_id={} scope={}",
@@ -122,7 +144,7 @@ def _resolve_tiktoken_encoding(model: str) -> Any:
     """Resolve a tiktoken encoding for the given model name."""
     try:
         import tiktoken  # type: ignore
-    except Exception as exc:  # pragma: no cover - dependency missing
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - dependency missing
         raise TokenizerUnavailable("Tokenizer library unavailable") from exc
     try:
         return tiktoken.encoding_for_model(model)
@@ -130,7 +152,7 @@ def _resolve_tiktoken_encoding(model: str) -> Any:
         raise TokenizerUnavailable("Tokenizer not available for provider/model") from exc
 
 
-def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
+def _resolve_tokenizer(provider: str, model: str) -> tuple[Any, str]:
     """Resolve a tokenizer using tiktoken (OpenAI-style model mappings only).
 
     Provider is validated but not used for resolution; non-OpenAI models may be unavailable.
@@ -144,7 +166,7 @@ def _resolve_tokenizer(provider: str, model: str) -> Tuple[Any, str]:
     return encoding, f"tiktoken:{tokenizer_name}"
 
 
-def _provider_features(provider: str) -> Dict[str, bool]:
+def _provider_features(provider: str) -> dict[str, bool]:
     """Build a provider feature map from allowed capability fields."""
     fields = get_allowed_fields(provider)
     return {
@@ -163,7 +185,7 @@ def _provider_features(provider: str) -> Dict[str, bool]:
     }
 
 
-def _coerce_model_name(model: Any) -> Optional[str]:
+def _coerce_model_name(model: Any) -> str | None:
     """Coerce a provider model payload into a normalized model name."""
     if isinstance(model, str):
         return model.strip() or None
@@ -175,7 +197,7 @@ def _coerce_model_name(model: Any) -> Optional[str]:
     return None
 
 
-def _normalize_theme_response(theme: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_theme_response(theme: dict[str, Any]) -> dict[str, Any]:
     """Normalize DB theme dict to API response format."""
     theme["order"] = theme.pop("order_index", 0)
     return theme
@@ -329,11 +351,11 @@ def _is_test_mode() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TEST_MODE", "").lower() == "true")
 
 
-def _normalize_wordcloud_options(options: Optional[WritingWordcloudOptions]) -> WritingWordcloudOptions:
+def _normalize_wordcloud_options(options: WritingWordcloudOptions | None) -> WritingWordcloudOptions:
     return options or WritingWordcloudOptions()
 
 
-def _wordcloud_options_payload(options: WritingWordcloudOptions) -> Dict[str, Any]:
+def _wordcloud_options_payload(options: WritingWordcloudOptions) -> dict[str, Any]:
     payload = options.model_dump() if hasattr(options, "model_dump") else options.dict()
     payload["algo_version"] = WORDCLOUD_ALGO_VERSION
     return payload
@@ -346,7 +368,7 @@ def _resolve_stopwords(options: WritingWordcloudOptions) -> set[str]:
     return custom
 
 
-def _hash_wordcloud_input(text: str, options_payload: Dict[str, Any]) -> Tuple[str, str]:
+def _hash_wordcloud_input(text: str, options_payload: dict[str, Any]) -> tuple[str, str]:
     options_json = json.dumps(options_payload, sort_keys=True, ensure_ascii=True)
     digest = hashlib.sha256()
     digest.update(text.encode("utf-8"))
@@ -355,7 +377,7 @@ def _hash_wordcloud_input(text: str, options_payload: Dict[str, Any]) -> Tuple[s
     return digest.hexdigest(), options_json
 
 
-def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> Tuple[List[WritingWordcloudWord], WritingWordcloudMeta]:
+def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> tuple[list[WritingWordcloudWord], WritingWordcloudMeta]:
     normalized = text.casefold()
     tokens = WORDCLOUD_TOKEN_RE.findall(normalized)
     stopwords = _resolve_stopwords(options)
@@ -381,7 +403,7 @@ def _compute_wordcloud(text: str, options: WritingWordcloudOptions) -> Tuple[Lis
     return words, meta
 
 
-def _model_dump(obj: Any) -> Dict[str, Any]:
+def _model_dump(obj: Any) -> dict[str, Any]:
     dump = getattr(obj, "model_dump", None)
     if callable(dump):
         return dump()
@@ -409,7 +431,7 @@ def _run_wordcloud_job(
             meta=meta_payload,
             error=None,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception("Wordcloud job failed for {}: {}", wordcloud_id, exc)
         try:
             db.set_writing_wordcloud_result(
@@ -417,11 +439,11 @@ def _run_wordcloud_job(
                 status=WORDCLOUD_STATUS_FAILED,
                 error=str(exc),
             )
-        except Exception:
+        except _WRITING_NONCRITICAL_EXCEPTIONS:
             logger.exception("Failed to persist wordcloud failure for {}", wordcloud_id)
 
 
-def _build_wordcloud_response_from_row(row: Dict[str, Any], *, cached: bool) -> WritingWordcloudResponse:
+def _build_wordcloud_response_from_row(row: dict[str, Any], *, cached: bool) -> WritingWordcloudResponse:
     status_value = row.get("status") or WORDCLOUD_STATUS_QUEUED
     result = None
     words_payload = row.get("words")
@@ -462,8 +484,8 @@ async def get_writing_version(
     tags=["writing"],
 )
 async def get_writing_capabilities(
-    provider: Optional[str] = Query(None, description="Optional provider to resolve"),
-    model: Optional[str] = Query(None, description="Optional model to resolve"),
+    provider: str | None = Query(None, description="Optional provider to resolve"),
+    model: str | None = Query(None, description="Optional model to resolve"),
     include_providers: bool = Query(True, description="Include configured providers list"),
     include_deprecated: bool = Query(False, description="Include deprecated models"),
     rate_limiter: RateLimiter = Depends(get_rate_limiter_dep),
@@ -482,7 +504,7 @@ async def get_writing_capabilities(
         wordclouds=True,
     )
 
-    providers_payload: Optional[List[WritingProviderCapabilities]] = None
+    providers_payload: list[WritingProviderCapabilities] | None = None
     default_provider = None
     if include_providers:
         providers_info = await get_configured_providers_async(include_deprecated=include_deprecated)
@@ -491,7 +513,7 @@ async def get_writing_capabilities(
         for provider_info in providers_info.get("providers", []):
             name = provider_info.get("name") or "unknown"
             raw_models = provider_info.get("models") or []
-            models: List[str] = []
+            models: list[str] = []
             for raw_model in raw_models:
                 model_name = _coerce_model_name(raw_model)
                 if model_name:
@@ -512,7 +534,7 @@ async def get_writing_capabilities(
                 )
             )
 
-    requested: Optional[WritingRequestedCapabilities] = None
+    requested: WritingRequestedCapabilities | None = None
     if provider or model:
         provider_name = (provider or "").strip()
         model_name = (model or "").strip() or None
@@ -567,7 +589,7 @@ async def list_writing_sessions(
         total = db.count_writing_sessions()
         items = [WritingSessionListItem(**item) for item in sessions]
         return WritingSessionListResponse(sessions=items, total=total)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing sessions")
 
 
@@ -603,7 +625,7 @@ async def create_writing_session(
             raise CharactersRAGDBError("Session created but could not be retrieved")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -628,7 +650,7 @@ async def get_writing_session(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -649,7 +671,7 @@ async def update_writing_session(
 ) -> WritingSessionResponse:
     """Update a writing session with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.sessions.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:
@@ -669,7 +691,7 @@ async def update_writing_session(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
         session["payload"] = session.get("payload") or {}
         return WritingSessionResponse(**session)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -692,7 +714,7 @@ async def delete_writing_session(
     try:
         db.soft_delete_writing_session(session_id, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -716,7 +738,7 @@ async def clone_writing_session(
         cloned = db.clone_writing_session(session_id, name=payload.name)
         cloned["payload"] = cloned.get("payload") or {}
         return WritingSessionResponse(**cloned)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing session")
 
 
@@ -745,7 +767,7 @@ async def list_writing_templates(
             templates=[WritingTemplateResponse(**tmpl) for tmpl in templates],
             total=total,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing templates")
 
 
@@ -781,7 +803,7 @@ async def create_writing_template(
             raise CharactersRAGDBError("Template created but could not be retrieved")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -806,7 +828,7 @@ async def get_writing_template(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -827,7 +849,7 @@ async def update_writing_template(
 ) -> WritingTemplateResponse:
     """Update a writing template with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.templates.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:
@@ -850,7 +872,7 @@ async def update_writing_template(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
         template["payload"] = template.get("payload") or {}
         return WritingTemplateResponse(**template)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -873,7 +895,7 @@ async def delete_writing_template(
     try:
         db.soft_delete_writing_template(name, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing template")
 
 
@@ -902,7 +924,7 @@ async def list_writing_themes(
             themes=[WritingThemeResponse(**theme) for theme in themes],
             total=total,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing themes")
 
 
@@ -940,7 +962,7 @@ async def create_writing_theme(
             raise CharactersRAGDBError("Theme created but could not be retrieved")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -965,7 +987,7 @@ async def get_writing_theme(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -986,7 +1008,7 @@ async def update_writing_theme(
 ) -> WritingThemeResponse:
     """Update a writing theme with optimistic locking."""
     await _enforce_rate_limit(rate_limiter, int(current_user.id), "writing.themes.update")
-    update_data: Dict[str, Any] = {}
+    update_data: dict[str, Any] = {}
     if payload.name is not None:
         update_data["name"] = payload.name.strip()
         if not update_data["name"]:
@@ -1013,7 +1035,7 @@ async def update_writing_theme(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Theme not found")
         _normalize_theme_response(theme)
         return WritingThemeResponse(**theme)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -1036,7 +1058,7 @@ async def delete_writing_theme(
     try:
         db.soft_delete_writing_theme(name, expected_version)
         return None
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing theme")
 
 
@@ -1134,7 +1156,7 @@ async def create_wordcloud(
 
     try:
         existing = db.get_writing_wordcloud(cache_key)
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")
 
     if existing:
@@ -1155,7 +1177,7 @@ async def create_wordcloud(
             input_chars=len(text),
             status=WORDCLOUD_STATUS_QUEUED,
         )
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")
 
     if _is_test_mode():
@@ -1164,7 +1186,7 @@ async def create_wordcloud(
             refreshed = db.get_writing_wordcloud(cache_key)
             if refreshed:
                 return _build_wordcloud_response_from_row(refreshed, cached=False)
-        except Exception as exc:
+        except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
             _handle_db_errors(exc, "writing wordcloud")
         return WritingWordcloudResponse(id=cache_key, status=WORDCLOUD_STATUS_FAILED, error="Wordcloud job failed")
 
@@ -1195,5 +1217,5 @@ async def get_wordcloud(
         return _build_wordcloud_response_from_row(existing, cached=False)
     except HTTPException:
         raise
-    except Exception as exc:
+    except _WRITING_NONCRITICAL_EXCEPTIONS as exc:
         _handle_db_errors(exc, "writing wordcloud")

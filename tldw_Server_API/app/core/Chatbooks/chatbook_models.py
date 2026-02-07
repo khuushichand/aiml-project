@@ -18,9 +18,8 @@ Key Adaptations from Single-User:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any, Set
 from enum import Enum
-import json
+from typing import Any, Optional
 
 
 def _utc_now() -> datetime:
@@ -96,10 +95,10 @@ class ImportStatusData:
     successful_items: int = 0
     failed_items: int = 0
     skipped_items: int = 0
-    conflicts: List[Dict[str, Any]] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "total_items": self.total_items,
@@ -120,8 +119,8 @@ class ContentItem:
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    tags: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
     file_path: Optional[str] = None  # Relative path within chatbook
     checksum: Optional[str] = None  # For integrity verification
 
@@ -163,7 +162,7 @@ class Relationship:
     source_id: str
     target_id: str
     relationship_type: str  # e.g., "references", "parent_of", "requires", "uses_character"
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -199,10 +198,10 @@ class ChatbookManifest:
     user_id: Optional[str] = None  # User who created the export
 
     # Content summary
-    content_items: List[ContentItem] = field(default_factory=list)
-    relationships: List[Relationship] = field(default_factory=list)
-    content_summary: Optional[Dict[str, int]] = field(default_factory=dict)  # For compatibility
-    metadata: Optional[Dict[str, Any]] = field(default_factory=dict)  # For compatibility
+    content_items: list[ContentItem] = field(default_factory=list)
+    relationships: list[Relationship] = field(default_factory=list)
+    content_summary: Optional[dict[str, int]] = field(default_factory=dict)  # For compatibility
+    metadata: Optional[dict[str, Any]] = field(default_factory=dict)  # For compatibility
 
     # Configuration
     include_media: bool = False
@@ -225,16 +224,16 @@ class ChatbookManifest:
     total_size_bytes: int = 0
 
     # Metadata
-    tags: List[str] = field(default_factory=list)
-    categories: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
-    binary_limits: Dict[str, int] = field(default_factory=dict)
-    truncation: Dict[str, Any] = field(default_factory=dict)
+    binary_limits: dict[str, int] = field(default_factory=dict)
+    truncation: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Convert manifest to dictionary for JSON serialization."""
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, Any] = {
             "tags": self.tags,
             "categories": self.categories,
             "language": self.language,
@@ -341,18 +340,18 @@ class ChatbookManifest:
 @dataclass
 class ChatbookContent:
     """Container for all content in a chatbook."""
-    conversations: Dict[str, Any] = field(default_factory=dict)
-    notes: Dict[str, Any] = field(default_factory=dict)
-    characters: Dict[str, Any] = field(default_factory=dict)
-    media: Dict[str, Any] = field(default_factory=dict)
-    embeddings: Dict[str, Any] = field(default_factory=dict)
-    prompts: Dict[str, Any] = field(default_factory=dict)
-    evaluations: Dict[str, Any] = field(default_factory=dict)
-    world_books: Dict[str, Any] = field(default_factory=dict)
-    dictionaries: Dict[str, Any] = field(default_factory=dict)
-    generated_documents: Dict[str, Any] = field(default_factory=dict)
+    conversations: dict[str, Any] = field(default_factory=dict)
+    notes: dict[str, Any] = field(default_factory=dict)
+    characters: dict[str, Any] = field(default_factory=dict)
+    media: dict[str, Any] = field(default_factory=dict)
+    embeddings: dict[str, Any] = field(default_factory=dict)
+    prompts: dict[str, Any] = field(default_factory=dict)
+    evaluations: dict[str, Any] = field(default_factory=dict)
+    world_books: dict[str, Any] = field(default_factory=dict)
+    dictionaries: dict[str, Any] = field(default_factory=dict)
+    generated_documents: dict[str, Any] = field(default_factory=dict)
 
-    def get_all_ids(self) -> Set[str]:
+    def get_all_ids(self) -> set[str]:
         """Get all content IDs."""
         all_ids = set()
         for content_dict in [
@@ -383,7 +382,7 @@ class ExportJob:
     file_size_bytes: Optional[int] = None
     download_url: Optional[str] = None
     expires_at: Optional[datetime] = None
-    metadata: Optional[Dict[str, Any]] = field(default_factory=dict)  # For storing additional data
+    metadata: Optional[dict[str, Any]] = field(default_factory=dict)  # For storing additional data
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -435,8 +434,8 @@ class ImportJob:
     successful_items: int = 0
     failed_items: int = 0
     skipped_items: int = 0
-    conflicts: List[Dict[str, Any]] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""

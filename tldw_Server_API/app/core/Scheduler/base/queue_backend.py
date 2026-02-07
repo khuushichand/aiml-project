@@ -4,9 +4,9 @@ Defines the interface that all backends must implement.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Dict, Any, AsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
-from contextlib import asynccontextmanager
+from typing import Any, Optional
 
 from .task import Task
 
@@ -51,7 +51,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
+    async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """
         Add multiple tasks to the queue in a single operation.
 
@@ -162,7 +162,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
         Get IDs of tasks that are ready to run (dependencies satisfied).
 
@@ -188,7 +188,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def get_dead_letter_queue(self) -> List[Task]:
+    async def get_dead_letter_queue(self) -> list[Task]:
         """
         Get tasks in the dead letter queue.
 
@@ -258,7 +258,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+    async def get_expired_leases(self) -> list[dict[str, Any]]:
         """
         Get all expired leases.
 
@@ -271,7 +271,7 @@ class QueueBackend(ABC):
 
     @abstractmethod
     @asynccontextmanager
-    async def transaction(self) -> AsyncContextManager:
+    async def transaction(self) -> AbstractAsyncContextManager:
         """
         Create a database transaction context.
 
@@ -300,7 +300,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+    async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
         """
         Execute a query and fetch results.
 
@@ -328,7 +328,7 @@ class QueueBackend(ABC):
         pass
 
     @abstractmethod
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """
         Execute a query and fetch a single row.
 

@@ -5,33 +5,49 @@ with the existing tldw_server API structure.
 """
 
 import asyncio
+import json
 import time
 import uuid
-from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
-import json
 from pathlib import Path
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from loguru import logger
-from tldw_Server_API.app.core.Metrics import get_metrics_registry
+
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import ContentMetadataHandler, is_content_page
 
 # Import the enhanced scraper
 from tldw_Server_API.app.core.Web_Scraping.enhanced_web_scraping import (
-    EnhancedWebScraper, ScrapingJob, JobPriority, JobStatus,
-    create_enhanced_scraper
+    EnhancedWebScraper,
+    JobPriority,
+    JobStatus,
+    ScrapingJob,
+    create_enhanced_scraper,
 )
 
 # Import existing components
 from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.Chunking.chunker import Chunker
-from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-    is_content_page, ContentMetadataHandler
+
+_WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS = (TypeError, ValueError)
+_WEB_SCRAPE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
 )
 
 
@@ -41,7 +57,7 @@ class WebScrapingService:
     def __init__(self):
         self.scraper: Optional[EnhancedWebScraper] = None
         self._initialized = False
-        self._active_jobs: Dict[str, ScrapingJob] = {}
+        self._active_jobs: dict[str, ScrapingJob] = {}
 
     async def initialize(self):
         """Initialize the scraping service"""
@@ -82,17 +98,17 @@ class WebScrapingService:
         custom_titles: Optional[str] = None,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        custom_cookies: Optional[List[Dict[str, Any]]] = None,
+        custom_cookies: Optional[list[dict[str, Any]]] = None,
         mode: str = "persist",
         priority: str = "normal",
         user_id: Optional[int] = None,
         user_agent: Optional[str] = None,
-        custom_headers: Optional[Dict[str, str]] = None,
+        custom_headers: Optional[dict[str, str]] = None,
         # Crawl overrides from UI/clients
         crawl_strategy: Optional[str] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Process web scraping task with enhanced features.
 
@@ -114,20 +130,22 @@ class WebScrapingService:
             def _as_bool(v: Any, d: bool) -> bool:
                 try:
                     s = str(v).strip().lower()
-                    if s in {"1", "true", "yes", "on", "y"}: return True
-                    if s in {"0", "false", "no", "off", "n"}: return False
-                except Exception:
+                    if s in {"1", "true", "yes", "on", "y"}:
+                        return True
+                    if s in {"0", "false", "no", "off", "n"}:
+                        return False
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     pass
                 return d
             def _as_int(v: Any, d: int) -> int:
                 try:
                     return int(v)
-                except Exception:
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     return d
             def _as_float(v: Any, d: float) -> float:
                 try:
                     return float(v)
-                except Exception:
+                except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     return d
 
             crawl_strategy_cfg: str = str(wc.get('web_crawl_strategy', 'default'))
@@ -228,22 +246,22 @@ class WebScrapingService:
                     stored["task_id"] = task_id
             return stored
 
-        except Exception as e:
+        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Web scraping task failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     async def _scrape_individual_urls(
         self, url_input: str, custom_titles: Optional[str],
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
+        temperature: float, custom_cookies: Optional[list[dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape individual URLs with enhanced features"""
         # Parse URLs and titles
         urls = [url.strip() for url in url_input.split('\n') if url.strip()]
@@ -299,13 +317,13 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, priority: JobPriority,
-        custom_cookies: Optional[List[Dict[str, Any]]],
+        custom_cookies: Optional[list[dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape from sitemap with filtering"""
         # Check if scraper is available
         if self.scraper is None:
@@ -349,16 +367,16 @@ class WebScrapingService:
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
         temperature: float, priority: JobPriority,
-        custom_cookies: Optional[List[Dict[str, Any]]],
+        custom_cookies: Optional[list[dict[str, Any]]],
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Scrape by URL level"""
         # Define URL level filter
         def url_level_filter(url: str) -> bool:
@@ -406,17 +424,17 @@ class WebScrapingService:
         summarize: bool, custom_prompt: Optional[str],
         api_name: Optional[str], api_key: Optional[str],
         keywords: str, system_prompt: Optional[str],
-        temperature: float, custom_cookies: Optional[List[Dict[str, Any]]],
+        temperature: float, custom_cookies: Optional[list[dict[str, Any]]],
         priority: JobPriority,
         user_agent: Optional[str],
-        custom_headers: Optional[Dict[str, str]],
+        custom_headers: Optional[dict[str, str]],
         *,
         user_id: Optional[int] = None,
         include_external: Optional[bool] = None,
         score_threshold: Optional[float] = None,
         crawl_strategy: Optional[str] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Recursive scraping with progress tracking"""
         # Create progress file for resumability
         progress_file = Path(f"./scrape_progress_{uuid.uuid4().hex[:8]}.json")
@@ -462,7 +480,7 @@ class WebScrapingService:
                 "progress_file": str(progress_file)
             }
 
-        except Exception as e:
+        except Exception:
             # Save progress on error for resumability
             await self.scraper.save_progress(progress_key, progress_file)
             raise
@@ -486,13 +504,13 @@ class WebScrapingService:
                 system_message=system_prompt
             )
             return summary
-        except Exception as e:
+        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Summarization failed: {e}")
             return "Summary generation failed"
 
     async def _store_ephemeral(
-        self, result: Dict[str, Any], task_id: str, user_id: Optional[int]
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], task_id: str, user_id: Optional[int]
+    ) -> dict[str, Any]:
         """Store results in ephemeral storage"""
         ephemeral_data = {
             "task_id": task_id,
@@ -516,8 +534,8 @@ class WebScrapingService:
         }
 
     async def _store_persistent(
-        self, result: Dict[str, Any], keywords: str, user_id: Optional[int]
-    ) -> Dict[str, Any]:
+        self, result: dict[str, Any], keywords: str, user_id: Optional[int]
+    ) -> dict[str, Any]:
         """Store results in database"""
         media_ids = []
         errors = []
@@ -538,7 +556,7 @@ class WebScrapingService:
             try:
                 reg = get_metrics_registry()
                 reg.set_gauge("webscraping.persist.last_batch_articles", float(len(result.get("articles", []))), {"method": str(result.get("method", "unknown"))})
-            except Exception:
+            except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
                 reg = None
             _batch_t0 = time.perf_counter()
             for article in result.get("articles", []):
@@ -552,7 +570,7 @@ class WebScrapingService:
 
                 try:
                     # Prepare data for database
-                    info_dict = {
+                    {
                         "title": article.get("title", "Untitled"),
                         "author": article.get("author", "Unknown"),
                         "source": article.get("url", ""),
@@ -582,10 +600,9 @@ class WebScrapingService:
                     )
 
                     # Prepare segments
-                    segments = [{"Text": content_with_metadata}]
 
                     # Use summary if available
-                    summary = article.get("summary", "No summary available")
+                    article.get("summary", "No summary available")
 
                     # Add to database using the instance method
                     # Build safe metadata
@@ -606,7 +623,7 @@ class WebScrapingService:
                     try:
                         # Chunk in a worker thread to avoid blocking the event loop for long documents
                         flat = await asyncio.to_thread(
-                            lambda: Chunker().chunk_text_hierarchical_flat(content_with_metadata, method='sentences')
+                            lambda _cwm=content_with_metadata: Chunker().chunk_text_hierarchical_flat(_cwm, method='sentences')
                         )
                         kind_map = {
                             'paragraph': 'text',
@@ -633,12 +650,12 @@ class WebScrapingService:
                                 'chunk_type': ctype,
                                 'metadata': small,
                             })
-                    except Exception as e:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"webscraping.persist: chunking failed; storing without chunks: {e}")
                         try:
                             if reg:
                                 reg.increment("app_warning_events_total", 1, {"component": "webscraping", "event": "chunking_failed"})
-                        except Exception:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS:
                             logger.debug("metrics increment failed for webscraping chunking_failed")
                         chunks_for_sql = []
 
@@ -664,7 +681,7 @@ class WebScrapingService:
                     try:
                         if reg:
                             reg.observe("webscraping.persist.article_duration_seconds", _dt, {"method": str(result.get("method", "unknown"))})
-                    except Exception as me:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                         logger.debug(f"webscraping.persist: metric observe failed: {me}")
 
                     if media_id:
@@ -673,30 +690,30 @@ class WebScrapingService:
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.stored_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception as me:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                             logger.debug(f"webscraping.persist: metric increment failed: {me}")
                     else:
                         logger.warning(f"Failed to get media_id for article: {article.get('url')}")
                         try:
                             if reg:
                                 reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                        except Exception as me:
+                        except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                             logger.debug(f"webscraping.persist: metric increment failed: {me}")
 
-                except Exception as e:
+                except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to store article: {e}")
                     errors.append(f"Storage failed for {article.get('url')}: {str(e)}")
                     try:
                         if reg:
                             reg.increment("webscraping.persist.failed_total", 1, {"method": str(result.get("method", "unknown"))})
-                    except Exception as me:
+                    except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                         logger.debug(f"webscraping.persist: metric increment failed: {me}")
 
             try:
                 if reg:
                     _batch_dt = max(0.0, time.perf_counter() - _batch_t0)
                     reg.observe("webscraping.persist.batch_duration_seconds", _batch_dt, {"method": str(result.get("method", "unknown"))})
-            except Exception as me:
+            except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as me:
                 logger.debug(f"webscraping.persist: batch metric observe failed: {me}")
         finally:
             # Close database connection
@@ -726,7 +743,7 @@ class WebScrapingService:
             return False
         return job.user_id is not None and str(job.user_id) == str(user_id)
 
-    async def get_job_status(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+    async def get_job_status(self, job_id: str, current_user: Any) -> dict[str, Any]:
         """Get status of a scraping job (scoped to the requesting user)."""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -743,7 +760,7 @@ class WebScrapingService:
 
         return job.to_dict()
 
-    async def cancel_job(self, job_id: str, current_user: Any) -> Dict[str, Any]:
+    async def cancel_job(self, job_id: str, current_user: Any) -> dict[str, Any]:
         """Cancel a scraping job (best-effort, scoped to the requesting user)."""
         if not self._initialized:
             raise HTTPException(status_code=503, detail="Service not initialized")
@@ -769,7 +786,7 @@ class WebScrapingService:
             "message": "Job cancellation requested" if cancelled.status != JobStatus.CANCELLED else "Job cancelled",
         }
 
-    def get_service_status(self) -> Dict[str, Any]:
+    def get_service_status(self) -> dict[str, Any]:
         """Get service status and statistics"""
         if not self._initialized:
             return {
@@ -805,7 +822,7 @@ def get_web_scraping_service() -> WebScrapingService:
 
 
 # Integration with existing API
-async def process_web_scraping_task(**kwargs) -> Dict[str, Any]:
+async def process_web_scraping_task(**kwargs) -> dict[str, Any]:
     """
     Process web scraping task - drop-in replacement for the placeholder function.
 

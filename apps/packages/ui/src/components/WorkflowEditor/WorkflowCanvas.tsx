@@ -26,7 +26,7 @@ import "@xyflow/react/dist/style.css"
 
 import type { WorkflowStepType, WorkflowNode, WorkflowNodeData } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
-import { workflowNodeTypes } from "./nodes/WorkflowNode"
+import { buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 import { getStepMetadata } from "./step-registry"
 
 interface WorkflowCanvasProps {
@@ -42,6 +42,7 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const edges = useWorkflowEditorStore((s) => s.edges)
   const isMiniMapVisible = useWorkflowEditorStore((s) => s.isMiniMapVisible)
   const isGridVisible = useWorkflowEditorStore((s) => s.isGridVisible)
+  const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
 
   // Store actions
   const onNodesChange = useWorkflowEditorStore((s) => s.onNodesChange)
@@ -52,6 +53,13 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   const setSelectedEdges = useWorkflowEditorStore((s) => s.setSelectedEdges)
   const setZoom = useWorkflowEditorStore((s) => s.setZoom)
   const setPanPosition = useWorkflowEditorStore((s) => s.setPanPosition)
+
+  const nodeTypes = useMemo(() => {
+    const registryTypes = Object.keys(stepRegistry || {})
+    const nodeTypesFromNodes = nodes.map((node) => String(node.type || ""))
+    const allTypes = Array.from(new Set([...registryTypes, ...nodeTypesFromNodes]))
+    return buildWorkflowNodeTypes(allTypes)
+  }, [stepRegistry, nodes])
 
   // Handle selection changes
   const handleSelectionChange: OnSelectionChangeFunc = useCallback(
@@ -154,7 +162,7 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
   // Node colors for minimap
   const nodeColor = useCallback((node: Node) => {
     const data = node.data as WorkflowNodeData
-    const meta = getStepMetadata(data.stepType)
+    const meta = getStepMetadata(data.stepType, stepRegistry)
     const categoryColors: Record<string, string> = {
       ai: "#a855f7",
       data: "#3b82f6",
@@ -163,7 +171,7 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
       utility: "#6b7280"
     }
     return categoryColors[meta?.category || "utility"] || "#6b7280"
-  }, [])
+  }, [stepRegistry])
 
   return (
     <div className={`h-full w-full ${className}`}>
@@ -180,7 +188,7 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
         onInit={(instance) => {
           reactFlowInstance.current = instance
         }}
-        nodeTypes={workflowNodeTypes}
+        nodeTypes={nodeTypes}
         selectionMode={SelectionMode.Partial}
         selectNodesOnDrag={false}
         panOnScroll

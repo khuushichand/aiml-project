@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
+import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -17,15 +19,15 @@ from fastapi import (
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.schemas.media_response_models import (
-    MediaDetailResponse,
-    VersionDetailResponse,
-)
 from tldw_Server_API.app.api.v1.schemas.media_request_models import (
     AdvancedVersionUpsertRequest,
     MetadataPatchRequest,
     VersionCreateRequest,
     VersionRollbackRequest,
+)
+from tldw_Server_API.app.api.v1.schemas.media_response_models import (
+    MediaDetailResponse,
+    VersionDetailResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
@@ -47,8 +49,29 @@ from tldw_Server_API.app.core.Utils.metadata_utils import (
     update_version_safe_metadata_in_transaction,
 )
 
-
 router = APIRouter(tags=["Media Versioning"])
+
+_MEDIA_VERSIONS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _is_test_mode() -> bool:
@@ -56,14 +79,14 @@ def _is_test_mode() -> bool:
         from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode_impl
 
         return bool(_is_test_mode_impl())
-    except Exception:
+    except _MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS:
         return False
 
 
 @router.get(
     "/{media_id:int}/versions",
     summary="List Media Versions",
-    response_model=List[VersionDetailResponse],
+    response_model=list[VersionDetailResponse],
     response_model_exclude_none=True,
 )
 async def list_versions(
@@ -84,7 +107,7 @@ async def list_versions(
         description="Page number",
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
-) -> List[VersionDetailResponse]:
+) -> list[VersionDetailResponse]:
     """
     List active versions for an active media item.
     """
@@ -137,23 +160,21 @@ async def list_versions(
         cursor = db.execute_query(query, params)
         raw_rows = [dict(row) for row in cursor.fetchall()]
 
-        versions: List[VersionDetailResponse] = []
+        versions: list[VersionDetailResponse] = []
         for rv in raw_rows:
-            created_at_dt: Optional[datetime] = rv.get("created_at")
+            created_at_dt: datetime | None = rv.get("created_at")
             if isinstance(created_at_dt, str):
-                try:
+                with contextlib.suppress(_MEDIA_VERSIONS_COERCE_EXCEPTIONS):
                     created_at_dt = datetime.fromisoformat(
                         created_at_dt.replace("Z", "+00:00")
                     )
-                except Exception:
-                    pass
             safe_md = rv.get("safe_metadata")
             if isinstance(safe_md, str):
                 import json as _json
 
                 try:
                     safe_md = _json.loads(safe_md)
-                except Exception:
+                except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                     safe_md = None
             versions.append(
                 VersionDetailResponse(
@@ -240,19 +261,17 @@ async def get_version(
 
         created_at_dt = version_dict.get("created_at")
         if isinstance(created_at_dt, str):
-            try:
+            with contextlib.suppress(_MEDIA_VERSIONS_COERCE_EXCEPTIONS):
                 created_at_dt = datetime.fromisoformat(
                     created_at_dt.replace("Z", "+00:00")
                 )
-            except Exception:
-                pass
         safe_md = version_dict.get("safe_metadata")
         if isinstance(safe_md, str):
             import json as _json
 
             try:
                 safe_md = _json.loads(safe_md)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 safe_md = None
 
         return VersionDetailResponse(
@@ -324,7 +343,7 @@ async def create_version(
     try:
         if _is_test_mode():
             db_path = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
-            headers: Dict[str, Any] = getattr(request, "headers", {}) or {}
+            headers: dict[str, Any] = getattr(request, "headers", {}) or {}
             logger.info(
                 "TEST_MODE: create_version media_id={} db_path={} user_id={} "
                 "auth_headers={{'X-API-KEY': {{'present': {}}}}, "
@@ -335,14 +354,14 @@ async def create_version(
                 bool(headers.get("X-API-KEY")),
                 bool(headers.get("authorization")),
             )
-    except Exception:  # pragma: no cover - diagnostics only
+    except _MEDIA_VERSIONS_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - diagnostics only
         pass
 
     try:
         import json as _json
 
         with db.transaction():
-            safe_metadata_json: Optional[str] = None
+            safe_metadata_json: str | None = None
             if request_body.safe_metadata is not None:
                 try:
                     safe_metadata_json = _json.dumps(
@@ -704,12 +723,12 @@ async def patch_metadata(
         if isinstance(existing, str):
             try:
                 existing = _json.loads(existing)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
 
-        new_meta: Dict[str, Any] = dict(existing)
+        new_meta: dict[str, Any] = dict(existing)
         if body.merge:
             new_meta.update(normalized)
         else:
@@ -717,11 +736,11 @@ async def patch_metadata(
 
         try:
             new_meta_json = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         if body.new_version:
             with db.transaction():
@@ -823,12 +842,12 @@ async def put_version_metadata(
         if isinstance(existing, str):
             try:
                 existing = _json.loads(existing)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 existing = None
         if not isinstance(existing, dict):
             existing = {}
 
-        new_meta: Dict[str, Any] = dict(existing)
+        new_meta: dict[str, Any] = dict(existing)
         if body.merge:
             new_meta.update(normalized)
         else:
@@ -836,11 +855,11 @@ async def put_version_metadata(
 
         try:
             smj = _json.dumps(new_meta, ensure_ascii=False)
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         with db.transaction() as conn:
             update_version_safe_metadata_in_transaction(
@@ -896,7 +915,7 @@ async def create_or_update_version_advanced(
     import json as _json
 
     try:
-        normalized: Optional[Dict[str, Any]] = None
+        normalized: dict[str, Any] | None = None
         if body.safe_metadata is not None:
             try:
                 normalized = normalize_safe_metadata(body.safe_metadata)
@@ -935,7 +954,7 @@ async def create_or_update_version_advanced(
         if isinstance(latest_sm, str):
             try:
                 latest_sm = _json.loads(latest_sm)
-            except Exception:
+            except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
                 latest_sm = None
         if not isinstance(latest_sm, dict):
             latest_sm = {}
@@ -952,11 +971,11 @@ async def create_or_update_version_advanced(
 
         try:
             smj = _json.dumps(merged_sm, ensure_ascii=False) if merged_sm else None
-        except Exception:
+        except _MEDIA_VERSIONS_COERCE_EXCEPTIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         if body.new_version:
             content = (

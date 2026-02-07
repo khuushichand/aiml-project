@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -21,11 +20,20 @@ from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_pdfs_form,
 )
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
     file_validator_instance,
 )
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
+from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessPDFsForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
     save_uploaded_files,
@@ -37,17 +45,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.result_normalization import (
     normalise_pdf_result,
 )
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
-)
-
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    UsageEventLogger,
-    get_usage_event_logger,
-)
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
-from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessPDFsForm
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import FileValidator
 
 router = APIRouter()
 
@@ -64,9 +62,9 @@ async def process_pdfs_endpoint(
     background_tasks: BackgroundTasks,  # Parity with legacy endpoint signature
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessPDFsForm = Depends(get_process_pdfs_form),
-    files: Optional[List[UploadFile]] = File(None, description="PDF uploads"),
+    files: list[UploadFile] | None = File(None, description="PDF uploads"),
     vlm_enable: bool = Form(False, description="Enable VLM detection (separate from OCR)"),
-    vlm_backend: Optional[str] = Form(
+    vlm_backend: str | None = Form(
         None,
         description="VLM backend (e.g., 'hf_table_transformer')",
     ),
@@ -74,7 +72,7 @@ async def process_pdfs_endpoint(
         True,
         description="Only keep 'table' detections",
     ),
-    vlm_max_pages: Optional[int] = Form(
+    vlm_max_pages: int | None = Form(
         None,
         description="Max pages to scan with VLM",
     ),
@@ -104,10 +102,10 @@ async def process_pdfs_endpoint(
     # the legacy implementation (including "No valid media sources supplied").
     media_mod._validate_inputs("pdf", form_data.urls, files)  # type: ignore[arg-type]
 
-    batch: Dict[str, Any] = {"results": [], "errors": []}
-    items: List[ProcessItem] = []
-    saved_files_info: List[Dict[str, Any]] = []
-    chunk_options_dict: Optional[Dict[str, Any]] = None
+    batch: dict[str, Any] = {"results": [], "errors": []}
+    items: list[ProcessItem] = []
+    saved_files_info: list[dict[str, Any]] = []
+    chunk_options_dict: dict[str, Any] | None = None
 
     with TempDirManager(prefix="process_pdfs_") as temp_dir:
         temp_dir_path = Path(temp_dir)
@@ -161,7 +159,7 @@ async def process_pdfs_endpoint(
 
         # ---- Handle URL inputs via shared downloader ----
         if form_data.urls:
-            download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = media_mod._download_url_async
             download_tasks = [
                 download_url_async(
                     client=None,
@@ -204,7 +202,7 @@ async def process_pdfs_endpoint(
         # - 207 when we have result entries (all errors)
         # - 400 when no inputs at all (handled by _validate_inputs above)
         if not items:
-            async def _noop_processor(_: List[ProcessItem]) -> List[Dict[str, Any]]:
+            async def _noop_processor(_: list[ProcessItem]) -> list[dict[str, Any]]:
                 return []
 
             batch = await run_batch_processor(
@@ -247,8 +245,8 @@ async def process_pdfs_endpoint(
         else:
             chunk_options_dict = None
 
-        async def _pdf_batch_processor(process_items: List[ProcessItem]) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+        async def _pdf_batch_processor(process_items: list[ProcessItem]) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             for item in process_items:
                 original_ref = item.input_ref
 

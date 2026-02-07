@@ -1,5 +1,7 @@
 import configparser
 
+from tldw_Server_API.app.core.exceptions import EgressPolicyError
+
 
 def _fake_config():
     cfg = configparser.ConfigParser()
@@ -9,6 +11,12 @@ def _fake_config():
     cfg.set("API", "default_api", "openai")
     # Provide minimal Local-API section to satisfy callers that probe both
     cfg.add_section("Local-API")
+    return cfg
+
+
+def _fake_config_with_local_discovery():
+    cfg = _fake_config()
+    cfg.set("Local-API", "vllm_api_IP", "http://127.0.0.1:8080/v1")
     return cfg
 
 
@@ -78,3 +86,29 @@ def test_llm_models_metadata_filter_modalities(monkeypatch, client_user_only):
     names = {m.get("name") for m in payload.get("models", [])}
     assert "stable_diffusion_cpp" in names
     assert "gpt-4o-mini" not in names
+
+
+def test_llm_models_metadata_handles_local_discovery_policy_errors(monkeypatch, client_user_only):
+    import tldw_Server_API.app.api.v1.endpoints.llm_providers as llm_providers
+
+    calls = {"count": 0}
+
+    def _raise_egress_policy(*_args, **_kwargs):
+        calls["count"] += 1
+        raise EgressPolicyError("Port not allowed: 8080")
+
+    monkeypatch.setattr(llm_providers, "load_comprehensive_config", _fake_config_with_local_discovery)
+    monkeypatch.setattr(llm_providers, "list_provider_models", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(llm_providers, "apply_llm_provider_overrides_to_listing", lambda result: result)
+    monkeypatch.setattr(llm_providers, "get_api_keys", lambda: {})
+    monkeypatch.setattr(llm_providers, "list_image_models_for_catalog", _fake_image_models)
+    monkeypatch.setattr(llm_providers, "_http_fetch", _raise_egress_policy)
+
+    client = client_user_only
+    response = client.get("/api/v1/llm/models/metadata")
+    assert response.status_code == 200
+
+    payload = response.json()
+    names = {m.get("name") for m in payload.get("models", [])}
+    assert "gpt-4o-mini" in names
+    assert calls["count"] > 0

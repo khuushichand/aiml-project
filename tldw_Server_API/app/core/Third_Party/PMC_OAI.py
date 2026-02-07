@@ -10,16 +10,26 @@ Returns normalized dictionaries and resumption tokens where applicable.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
-
-from tldw_Server_API.app.core.http_client import fetch
+import contextlib
+from typing import Any
 from xml.etree import ElementTree as ET
 
+from tldw_Server_API.app.core.http_client import fetch
 
 BASE_URL = "https://pmc.ncbi.nlm.nih.gov/api/oai/v1/mh/"
+_PMC_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    ET.ParseError,
+)
 
 
-def _get_xml(params: Dict[str, Any]) -> ET.Element:
+def _get_xml(params: dict[str, Any]) -> ET.Element:
     """Perform a GET to PMC OAI-PMH and return parsed XML root."""
     r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/xml"}, timeout=20)
     if r.status_code >= 400:
@@ -28,21 +38,19 @@ def _get_xml(params: Dict[str, Any]) -> ET.Element:
     try:
         return ET.fromstring(r.text)
     finally:
-        try:
+        with contextlib.suppress(AttributeError, OSError):
             r.close()
-        except Exception:
-            pass
 
 
-def pmc_oai_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def pmc_oai_identify() -> tuple[dict[str, Any] | None, str | None]:
     try:
         root = _get_xml({"verb": "Identify"})
-        info: Dict[str, Any] = {}
+        info: dict[str, Any] = {}
         ident = root.find(".//{http://www.openarchives.org/OAI/2.0/}Identify")
         if ident is None:
             return {"raw_xml": r_text(root)}, None
         # Extract some common fields
-        def text(tag: str) -> Optional[str]:
+        def text(tag: str) -> str | None:
             el = ident.find(f"{{http://www.openarchives.org/OAI/2.0/}}{tag}")
             return el.text if el is not None else None
 
@@ -55,7 +63,7 @@ def pmc_oai_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             "granularity": text("granularity"),
         })
         return info, None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, f"PMC OAI-PMH Identify error: {str(e)}"
 
 
@@ -63,19 +71,19 @@ def r_text(el: ET.Element) -> str:
     return ET.tostring(el, encoding="unicode")
 
 
-def _parse_resumption(root: ET.Element) -> Optional[str]:
+def _parse_resumption(root: ET.Element) -> str | None:
     ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
     r = root.find(".//oai:resumptionToken", ns)
     return r.text.strip() if r is not None and r.text else None
 
 
-def pmc_oai_list_sets(resumption_token: Optional[str] = None) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+def pmc_oai_list_sets(resumption_token: str | None = None) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
     try:
-        params: Dict[str, Any] = {"verb": "ListSets"}
+        params: dict[str, Any] = {"verb": "ListSets"}
         if resumption_token:
             params = {"verb": "ListSets", "resumptionToken": resumption_token}
         root = _get_xml(params)
-        sets: List[Dict[str, Any]] = []
+        sets: list[dict[str, Any]] = []
         ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
         for se in root.findall(".//oai:set", ns):
             spec = se.find("oai:setSpec", ns)
@@ -85,16 +93,16 @@ def pmc_oai_list_sets(resumption_token: Optional[str] = None) -> Tuple[Optional[
                 "setName": name.text if name is not None else None,
             })
         return sets, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListSets error: {str(e)}"
 
 
-def _parse_dc_metadata(md: ET.Element) -> Dict[str, Any]:
+def _parse_dc_metadata(md: ET.Element) -> dict[str, Any]:
     # oai_dc namespace
     ns = {
         "dc": "http://purl.org/dc/elements/1.1/",
     }
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "title": None,
         "creators": [],
         "identifiers": [],
@@ -120,18 +128,14 @@ def _parse_dc_metadata(md: ET.Element) -> Dict[str, Any]:
                     # canonical PMC URL looks like https://pmc.ncbi.nlm.nih.gov/PMC1234567
                     pmcid = val.split("/PMC")[-1]
                     out["pmcid"] = pmcid
-                except Exception:
+                except (AttributeError, IndexError, TypeError, ValueError):
                     pass
             if "pubmed.ncbi.nlm.nih.gov" in val:
-                try:
+                with contextlib.suppress(AttributeError, IndexError, TypeError, ValueError):
                     out["pmid"] = val.rstrip('/').split('/')[-1]
-                except Exception:
-                    pass
             if "doi.org/" in val:
-                try:
+                with contextlib.suppress(AttributeError, IndexError, TypeError, ValueError):
                     out["doi"] = val.split("doi.org/")[-1]
-                except Exception:
-                    pass
     for r in md.findall(".//dc:rights", ns):
         if r.text:
             txt = r.text.strip()
@@ -143,13 +147,13 @@ def _parse_dc_metadata(md: ET.Element) -> Dict[str, Any]:
     return out
 
 
-def _parse_records(root: ET.Element) -> List[Dict[str, Any]]:
+def _parse_records(root: ET.Element) -> list[dict[str, Any]]:
     ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for rec in root.findall(".//oai:record", ns):
         header = rec.find("oai:header", ns)
         meta = rec.find("oai:metadata", ns)
-        item: Dict[str, Any] = {}
+        item: dict[str, Any] = {}
         if header is not None:
             id_el = header.find("oai:identifier", ns)
             ds = header.find("oai:datestamp", ns)
@@ -172,13 +176,13 @@ def _parse_records(root: ET.Element) -> List[Dict[str, Any]]:
 
 def pmc_oai_list_records(
     metadata_prefix: str = "oai_dc",
-    from_date: Optional[str] = None,
-    until_date: Optional[str] = None,
-    set_name: Optional[str] = None,
-    resumption_token: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+    from_date: str | None = None,
+    until_date: str | None = None,
+    set_name: str | None = None,
+    resumption_token: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
     try:
-        params: Dict[str, Any] = {"verb": "ListRecords"}
+        params: dict[str, Any] = {"verb": "ListRecords"}
         if resumption_token:
             params["resumptionToken"] = resumption_token
         else:
@@ -192,19 +196,19 @@ def pmc_oai_list_records(
         root = _get_xml(params)
         items = _parse_records(root)
         return items, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListRecords error: {str(e)}"
 
 
 def pmc_oai_list_identifiers(
     metadata_prefix: str = "oai_dc",
-    from_date: Optional[str] = None,
-    until_date: Optional[str] = None,
-    set_name: Optional[str] = None,
-    resumption_token: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+    from_date: str | None = None,
+    until_date: str | None = None,
+    set_name: str | None = None,
+    resumption_token: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
     try:
-        params: Dict[str, Any] = {"verb": "ListIdentifiers"}
+        params: dict[str, Any] = {"verb": "ListIdentifiers"}
         if resumption_token:
             params["resumptionToken"] = resumption_token
         else:
@@ -217,7 +221,7 @@ def pmc_oai_list_identifiers(
                 params["set"] = set_name
         root = _get_xml(params)
         ns = {"oai": "http://www.openarchives.org/OAI/2.0/"}
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         for he in root.findall(".//oai:header", ns):
             id_el = he.find("oai:identifier", ns)
             ds = he.find("oai:datestamp", ns)
@@ -228,14 +232,14 @@ def pmc_oai_list_identifiers(
                 "setSpecs": ss if ss else None,
             })
         return items, _parse_resumption(root), None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, None, f"PMC OAI-PMH ListIdentifiers error: {str(e)}"
 
 
 def pmc_oai_get_record(
     identifier: str,
     metadata_prefix: str = "oai_dc",
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+) -> tuple[dict[str, Any] | None, str | None]:
     try:
         if not identifier or not identifier.strip():
             return None, "Identifier cannot be empty"
@@ -245,5 +249,5 @@ def pmc_oai_get_record(
         if not items:
             return None, None
         return items[0], None
-    except Exception as e:
+    except _PMC_NONCRITICAL_EXCEPTIONS as e:
         return None, f"PMC OAI-PMH GetRecord error: {str(e)}"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -32,7 +32,7 @@ class AuthNZPolicyAdmin:
     Provides upsert/list/get/delete and tenant config helpers.
     """
 
-    def __init__(self, db_pool: Optional[DatabasePool] = None) -> None:
+    def __init__(self, db_pool: DatabasePool | None = None) -> None:
         self.db_pool = db_pool
         self._initialized = False
 
@@ -71,7 +71,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.initialize failed: {e}")
             raise
 
-    async def upsert_policy(self, policy_id: str, payload: Dict[str, Any], version: Optional[int] = None) -> None:
+    async def upsert_policy(self, policy_id: str, payload: dict[str, Any], version: int | None = None) -> None:
         if not self._initialized:
             await self.initialize()
         is_pg = await is_postgres_backend()
@@ -89,13 +89,10 @@ class AuthNZPolicyAdmin:
                     row = await self.db_pool.fetchone("SELECT version FROM rg_policies WHERE id = ?", policy_id)
 
                 if row is None:
-                    current: Optional[int] = None
+                    current: int | None = None
                     new_version = expected
                 else:
-                    if isinstance(row, dict):
-                        current = int(row.get("version") or 0)
-                    else:
-                        current = int(row[0] or 0)
+                    current = int(row.get("version") or 0) if isinstance(row, dict) else int(row[0] or 0)
                     if current != expected:
                         raise PolicyVersionConflictError(policy_id, expected=expected, actual=current)
                     new_version = expected + 1
@@ -131,10 +128,10 @@ class AuthNZPolicyAdmin:
                 return 1
             cur = int(row["version"] if isinstance(row, dict) else row[0] or 0)
             return max(1, cur + 1)
-        except Exception:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             return 1
 
-    async def get_policy(self, policy_id: str) -> Optional[Dict[str, Any]]:
+    async def get_policy(self, policy_id: str) -> dict[str, Any] | None:
         if not self._initialized:
             await self.initialize()
         try:
@@ -147,7 +144,7 @@ class AuthNZPolicyAdmin:
             if isinstance(payload, str):
                 try:
                     return json.loads(payload)
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     return {}
             if isinstance(payload, dict):
                 return payload
@@ -156,7 +153,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.get_policy failed: {e}")
             raise
 
-    async def get_policy_record(self, policy_id: str) -> Optional[Dict[str, Any]]:
+    async def get_policy_record(self, policy_id: str) -> dict[str, Any] | None:
         """
         Return full record including id, version, updated_at, and payload.
         """
@@ -173,14 +170,14 @@ class AuthNZPolicyAdmin:
                 if isinstance(payload, str):
                     try:
                         payload = json.loads(payload)
-                    except Exception:
+                    except (TypeError, ValueError, json.JSONDecodeError):
                         payload = {}
                 upd = row.get("updated_at")
                 try:
                     # Normalize datetimes to ISO strings for JSON friendliness
                     if hasattr(upd, "isoformat"):
                         upd = upd.isoformat()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 return {
                     "id": row.get("id"),
@@ -195,7 +192,7 @@ class AuthNZPolicyAdmin:
             try:
                 if hasattr(upd, "isoformat"):
                     upd = upd.isoformat()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 pass
             payload = row[3]
             if isinstance(payload, (bytes, bytearray)):
@@ -203,19 +200,19 @@ class AuthNZPolicyAdmin:
             if isinstance(payload, str):
                 try:
                     payload = json.loads(payload)
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     payload = {}
             return {"id": rid, "version": ver, "updated_at": upd, "payload": payload if isinstance(payload, dict) else {}}
         except Exception as e:
             logger.error(f"AuthNZPolicyAdmin.get_policy_record failed: {e}")
             raise
 
-    async def list_policies(self) -> List[Dict[str, Any]]:
+    async def list_policies(self) -> list[dict[str, Any]]:
         if not self._initialized:
             await self.initialize()
         try:
             rows = await self.db_pool.fetchall("SELECT id, version, updated_at FROM rg_policies ORDER BY id")
-            out: List[Dict[str, Any]] = []
+            out: list[dict[str, Any]] = []
             for r in rows:
                 rid = r["id"] if isinstance(r, dict) else r[0]
                 ver = int(r["version"] if isinstance(r, dict) else r[1] or 1)
@@ -223,7 +220,7 @@ class AuthNZPolicyAdmin:
                 try:
                     if hasattr(upd, "isoformat"):
                         upd = upd.isoformat()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
                 out.append({
                     "id": rid,
@@ -235,7 +232,7 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.list_policies failed: {e}")
             raise
 
-    async def delete_policy(self, policy_id: str, version: Optional[int] = None) -> int:
+    async def delete_policy(self, policy_id: str, version: int | None = None) -> int:
         if not self._initialized:
             await self.initialize()
         try:
@@ -267,7 +264,7 @@ class AuthNZPolicyAdmin:
             if isinstance(res, str) and res.startswith("DELETE"):
                 try:
                     return int(res.split(" ")[1])
-                except Exception:
+                except (IndexError, TypeError, ValueError):
                     return 0
             deleted = int(getattr(res, "rowcount", 0) or 0)
             return max(0, deleted)
@@ -275,8 +272,8 @@ class AuthNZPolicyAdmin:
             logger.error(f"AuthNZPolicyAdmin.delete_policy failed: {e}")
             raise
 
-    async def set_tenant_config(self, tenant_payload: Dict[str, Any], version: Optional[int] = None) -> None:
+    async def set_tenant_config(self, tenant_payload: dict[str, Any], version: int | None = None) -> None:
         await self.upsert_policy("tenant", tenant_payload, version)
 
-    async def get_tenant_config(self) -> Optional[Dict[str, Any]]:
+    async def get_tenant_config(self) -> dict[str, Any] | None:
         return await self.get_policy("tenant")

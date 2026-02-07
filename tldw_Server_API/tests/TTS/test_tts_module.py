@@ -2,14 +2,10 @@
 # Description: Comprehensive tests for the TTS module
 #
 # Imports
-import asyncio
 import os
 import importlib.util
-from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import numpy as np
-from fastapi import HTTPException
-from httpx import AsyncClient
 from fastapi.testclient import TestClient
 
 
@@ -25,12 +21,8 @@ def clear_tts_env(monkeypatch):
 
 #
 # Local Imports
-from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
-from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2
-from tldw_Server_API.app.core.TTS.adapter_registry import TTSAdapterRegistry, TTSProvider
-from tldw_Server_API.app.core.TTS.adapters.base import TTSAdapter, TTSCapabilities, AudioFormat
+from tldw_Server_API.app.core.TTS.adapters.base import TTSCapabilities, AudioFormat
 from tldw_Server_API.app.core.TTS.adapters.openai_adapter import OpenAIAdapter
-from tldw_Server_API.app.core.TTS.adapters.kokoro_adapter import KokoroAdapter
 from tldw_Server_API.app.core.TTS.streaming_audio_writer import StreamingAudioWriter, AudioNormalizer
 
 #
@@ -220,7 +212,7 @@ class TestTTSEndpoint:
     def client(self):
         """Create test client and ensure cleanup"""
         from fastapi import FastAPI
-        from tldw_Server_API.app.api.v1.endpoints.audio import router
+        from tldw_Server_API.app.api.v1.endpoints.audio.audio import router
 
         app = FastAPI()
         app.include_router(router)

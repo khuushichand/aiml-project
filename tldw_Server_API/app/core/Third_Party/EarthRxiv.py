@@ -10,9 +10,9 @@ enable ingest-by-pdf.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.osf.io/v2/preprints/"
 PROVIDER = "eartharxiv"
@@ -21,7 +21,7 @@ PROVIDER = "eartharxiv"
 
 
 
-def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     """Map OSF preprint item to GenericPaper fields.
 
     We compute EarthArXiv landing and download links from the OSF id.
@@ -51,13 +51,13 @@ def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_items(
-    term: Optional[str],
+    term: str | None,
     page: int,
     results_per_page: int,
-    from_date: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    from_date: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     try:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "filter[provider]": PROVIDER,
             "page[size]": max(1, min(results_per_page, 100)),
             "page[number]": max(1, page),
@@ -83,7 +83,7 @@ def search_items(
         return None, 0, f"EarthArXiv error: {str(e)}"
 
 
-def get_item_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_item_by_id(osf_id: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         url = f"{BASE_URL}{osf_id}"
         data = fetch_json(method="GET", url=url, headers={"Accept": "application/json"}, timeout=20)
@@ -94,10 +94,10 @@ def get_item_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]
         return None, f"EarthArXiv error: {str(e)}"
 
 
-def get_item_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_item_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         # Attempt direct DOI filter; fallback to search query
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "filter[provider]": PROVIDER,
             "filter[doi]": doi,
             "page[size]": 1,

@@ -577,7 +577,7 @@ export const CreateOptimizationWizard: React.FC<
       }
       width={750}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       <div className="mt-4 space-y-6">
         <Steps

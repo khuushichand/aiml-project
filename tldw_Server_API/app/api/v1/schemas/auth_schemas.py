@@ -3,11 +3,13 @@
 #
 # Imports
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 from uuid import UUID
+
 #
 # 3rd-party imports
 from pydantic import BaseModel, EmailStr, Field, field_validator
+
 #
 # Local imports
 
@@ -344,7 +346,7 @@ class SessionResponse(BaseModel):
 class MessageResponse(BaseModel):
     """Simple message response"""
     message: str = Field(..., description="Response message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional details")
+    details: Optional[dict[str, Any]] = Field(None, description="Additional details")
 
     model_config = {
         "json_schema_extra": {

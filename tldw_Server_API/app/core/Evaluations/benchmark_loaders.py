@@ -8,13 +8,16 @@ Supports loading from:
 - Custom formats
 """
 
-import json
+import contextlib
 import csv
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
-from typing import List, Dict, Any, Optional, Generator, Tuple
+import json
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any, Optional
+
 from loguru import logger
-from urllib.parse import urlparse
+
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 logger = logger
 
@@ -23,12 +26,12 @@ class DatasetLoader:
     """Base class for dataset loading."""
 
     @staticmethod
-    def load_json(source: str) -> List[Dict[str, Any]]:
+    def load_json(source: str) -> list[dict[str, Any]]:
         """Load JSON dataset from file or URL."""
         if source.startswith(('http://', 'https://')):
             data = fetch_json(method="GET", url=source, timeout=15)
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 data = json.load(f)
 
         # Handle different JSON structures
@@ -45,7 +48,7 @@ class DatasetLoader:
             raise ValueError(f"Unexpected JSON structure: {type(data)}")
 
     @staticmethod
-    def load_jsonl(source: str) -> List[Dict[str, Any]]:
+    def load_jsonl(source: str) -> list[dict[str, Any]]:
         """Load JSONL dataset from file or URL."""
         data = []
 
@@ -57,12 +60,10 @@ class DatasetLoader:
                     if line:
                         data.append(json.loads(line))
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         data.append(json.loads(line))
@@ -70,7 +71,7 @@ class DatasetLoader:
         return data
 
     @staticmethod
-    def load_csv(source: str, delimiter: str = ',') -> List[Dict[str, Any]]:
+    def load_csv(source: str, delimiter: str = ',') -> list[dict[str, Any]]:
         """Load CSV dataset from file or URL."""
         data = []
 
@@ -80,12 +81,10 @@ class DatasetLoader:
                 lines = r.text.strip().split('\n')
                 reader = csv.DictReader(lines, delimiter=delimiter)
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     r.close()
-                except Exception:
-                    pass
         else:
-            with open(source, 'r', encoding='utf-8') as f:
+            with open(source, encoding='utf-8') as f:
                 reader = csv.DictReader(f, delimiter=delimiter)
 
         for row in reader:
@@ -95,7 +94,7 @@ class DatasetLoader:
 
     @staticmethod
     def load_huggingface(dataset_id: str, split: str = 'test',
-                        limit: Optional[int] = None) -> List[Dict[str, Any]]:
+                        limit: Optional[int] = None) -> list[dict[str, Any]]:
         """Load dataset from HuggingFace.
 
         Note: This requires the 'datasets' library to be installed.
@@ -103,7 +102,7 @@ class DatasetLoader:
         try:
             from datasets import load_dataset
         except ImportError:
-            logger.error("HuggingFace datasets library not installed. "
+            logger.exception("HuggingFace datasets library not installed. "
                         "Install with: pip install datasets")
             return []
 
@@ -121,12 +120,12 @@ class DatasetLoader:
             return data
 
         except Exception as e:
-            logger.error(f"Failed to load HuggingFace dataset {dataset_id}: {e}")
+            logger.exception(f"Failed to load HuggingFace dataset {dataset_id}: {e}")
             return []
 
     @staticmethod
     def stream_large_file(source: str, format: str = 'jsonl',
-                         chunk_size: int = 1000) -> Generator[List[Dict[str, Any]], None, None]:
+                         chunk_size: int = 1000) -> Generator[list[dict[str, Any]], None, None]:
         """Stream large datasets in chunks."""
         if format == 'jsonl':
             chunk = []
@@ -141,12 +140,10 @@ class DatasetLoader:
                                 yield chunk
                                 chunk = []
                 finally:
-                    try:
+                    with contextlib.suppress(Exception):
                         r.close()
-                    except Exception:
-                        pass
             else:
-                with open(source, 'r', encoding='utf-8') as f:
+                with open(source, encoding='utf-8') as f:
                     for line in f:
                         if line.strip():
                             chunk.append(json.loads(line))
@@ -175,7 +172,7 @@ class BenchmarkDatasetLoader:
     """Specialized loaders for specific benchmarks."""
 
     @staticmethod
-    def load_mmlu_pro(source: Optional[str] = None) -> List[Dict[str, Any]]:
+    def load_mmlu_pro(source: Optional[str] = None) -> list[dict[str, Any]]:
         """Load MMLU Pro dataset."""
         if not source:
             # Default to HuggingFace
@@ -192,7 +189,7 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_json(source)
 
     @staticmethod
-    def load_simple_bench(source: Optional[str] = None) -> List[Dict[str, Any]]:
+    def load_simple_bench(source: Optional[str] = None) -> list[dict[str, Any]]:
         """Load Simple Bench dataset."""
         if not source:
             source = "https://raw.githubusercontent.com/simple-bench/SimpleBench/main/simple_bench_public.json"
@@ -224,7 +221,7 @@ class BenchmarkDatasetLoader:
 
     @staticmethod
     def load_aider_polyglot(source: Optional[str] = None,
-                           language: str = "python") -> List[Dict[str, Any]]:
+                           language: str = "python") -> list[dict[str, Any]]:
         """Load Aider Polyglot benchmark for a specific language."""
         if not source:
             source = f"https://raw.githubusercontent.com/Aider-AI/polyglot-benchmark/main/{language}"
@@ -236,7 +233,7 @@ class BenchmarkDatasetLoader:
 
     @staticmethod
     def load_swe_bench(source: Optional[str] = None,
-                      subset: str = "lite") -> List[Dict[str, Any]]:
+                      subset: str = "lite") -> list[dict[str, Any]]:
         """Load SWE-bench dataset."""
         if not source:
             dataset_id = f"princeton-nlp/SWE-bench_{subset}" if subset else "princeton-nlp/SWE-bench"
@@ -254,7 +251,7 @@ class BenchmarkDatasetLoader:
 
     @staticmethod
     def load_gpqa(source: Optional[str] = None,
-                 subset: str = "diamond") -> List[Dict[str, Any]]:
+                 subset: str = "diamond") -> list[dict[str, Any]]:
         """Load GPQA dataset."""
         if not source:
             # Default to HuggingFace
@@ -278,7 +275,7 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_json(source)
 
     @staticmethod
-    def load_bfcl(source: Optional[str] = None) -> List[Dict[str, Any]]:
+    def load_bfcl(source: Optional[str] = None) -> list[dict[str, Any]]:
         """Load Berkeley Function Calling Leaderboard dataset."""
         if not source:
             return DatasetLoader.load_huggingface(
@@ -297,7 +294,7 @@ class BenchmarkDatasetLoader:
                 return DatasetLoader.load_json(source)
 
     @staticmethod
-    def load_simpleqa(source: Optional[str] = None) -> List[Dict[str, Any]]:
+    def load_simpleqa(source: Optional[str] = None) -> list[dict[str, Any]]:
         """Load SimpleQA dataset."""
         if not source:
             # Try to load from HuggingFace if available
@@ -339,7 +336,7 @@ class BenchmarkDatasetLoader:
 def load_benchmark_dataset(benchmark_name: str,
                           source: Optional[str] = None,
                           limit: Optional[int] = None,
-                          **kwargs) -> List[Dict[str, Any]]:
+                          **kwargs) -> list[dict[str, Any]]:
     """Load dataset for a specific benchmark.
 
     Args:
@@ -391,8 +388,8 @@ def load_benchmark_dataset(benchmark_name: str,
     return data
 
 
-def validate_dataset_format(data: List[Dict[str, Any]],
-                           required_fields: List[str]) -> Tuple[bool, List[str]]:
+def validate_dataset_format(data: list[dict[str, Any]],
+                           required_fields: list[str]) -> tuple[bool, list[str]]:
     """Validate that dataset has required fields.
 
     Args:

@@ -4,8 +4,9 @@ Type definitions and base interfaces for the RAG service.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from enum import Enum, auto
-from typing import List, Dict, Any, Optional, Protocol, TypeVar, Generic
+from enum import Enum
+from typing import Any, Generic, Optional, Protocol, TypeVar
+
 import numpy as np
 
 
@@ -19,6 +20,20 @@ class DataSource(Enum):
     PROMPTS = "prompts"  # Add missing PROMPTS source
     KANBAN = "kanban"
     CLAIMS = "claims"  # Claims table/vector store
+
+
+class QueryType(Enum):
+    """Classification of query types for granularity routing."""
+    BROAD = "broad"          # Overview/summary queries - use document-level
+    SPECIFIC = "specific"    # Detail queries - use chunk-level
+    FACTOID = "factoid"      # Precise fact queries - use passage-level
+
+
+class Granularity(Enum):
+    """Retrieval granularity levels."""
+    DOCUMENT = "document"    # Full document retrieval
+    CHUNK = "chunk"          # Chunk-level retrieval (default)
+    PASSAGE = "passage"      # Fine-grained passage retrieval
 
 
 class CitationType(Enum):
@@ -52,6 +67,7 @@ class VerificationStatus(Enum):
     UNVERIFIED = "unverified"                # Insufficient evidence (NEI)
     NUMERICAL_ERROR = "numerical_error"      # Numbers don't match source
     REFUTED = "refuted"                      # Evidence contradicts claim
+    CONTESTED = "contested"                  # Evidence exists both for and against
 
 
 class MatchLevel(Enum):
@@ -96,7 +112,7 @@ class Citation:
     end_char: int
     confidence: float
     match_type: CitationType
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     location: Optional[str] = None  # "Chapter 3, Page 45" or "Section 2.1"
     formatted_citation: Optional[str] = None  # Pre-formatted academic citation
 
@@ -134,21 +150,21 @@ class Document:
     """
     id: str  # Unique identifier
     content: str  # The actual text content
-    metadata: Dict[str, Any]  # Source-specific metadata
+    metadata: dict[str, Any]  # Source-specific metadata
     source: DataSource = DataSource.MEDIA_DB  # Default for compatibility with tests
     score: float = 0.0  # Relevance score (set during retrieval)
     embedding: Optional[np.ndarray] = None  # Vector embedding if available
 
     # Citation support
-    citations: List[Citation] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
 
     # Enhanced chunk lineage tracking
     source_document_id: Optional[str] = None  # Original document this chunk came from
-    source_document_metadata: Dict[str, Any] = field(default_factory=dict)  # Title, author, date, URL, etc.
+    source_document_metadata: dict[str, Any] = field(default_factory=dict)  # Title, author, date, URL, etc.
 
     # Parent document support (for hierarchical chunking)
     parent_id: Optional[str] = None  # ID of parent document if this is a chunk
-    children_ids: List[str] = field(default_factory=list)  # IDs of child chunks
+    children_ids: list[str] = field(default_factory=list)  # IDs of child chunks
     chunk_index: Optional[int] = None  # Position in parent document (1-based)
     total_chunks: Optional[int] = None  # Total number of chunks in source document
 
@@ -173,11 +189,11 @@ class Document:
         """Add a citation to this document."""
         self.citations.append(citation)
 
-    def get_citations_by_type(self, citation_type: CitationType) -> List[Citation]:
+    def get_citations_by_type(self, citation_type: CitationType) -> list[Citation]:
         """Get citations of a specific type."""
         return [c for c in self.citations if c.match_type == citation_type]
 
-    def get_source_info(self) -> Dict[str, Any]:
+    def get_source_info(self) -> dict[str, Any]:
         """Get source document information for citation generation."""
         if self.source_document_metadata:
             return self.source_document_metadata
@@ -201,21 +217,21 @@ class Document:
 @dataclass
 class SearchResult:
     """Result from a search operation."""
-    documents: List[Document]
+    documents: list[Document]
     query: str
     search_type: str  # "vector", "fts", "hybrid"
-    metadata: Dict[str, Any] = None  # Additional search metadata
+    metadata: dict[str, Any] = field(default_factory=dict)  # Additional search metadata
 
     # Enhanced features
-    citations: List[Citation] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
     expanded_context: Optional[str] = None  # Context expanded with parent documents
-    query_variations: List[str] = field(default_factory=list)  # Query expansion results
+    query_variations: list[str] = field(default_factory=list)  # Query expansion results
 
 
 @dataclass
 class EnhancedSearchResult(SearchResult):
     """Enhanced search result with additional features."""
-    parent_documents: List[Document] = field(default_factory=list)
+    parent_documents: list[Document] = field(default_factory=list)
     reranked: bool = False
     diversity_score: float = 0.0
 
@@ -223,15 +239,15 @@ class EnhancedSearchResult(SearchResult):
 @dataclass
 class RAGContext:
     """Context prepared for generation."""
-    documents: List[Document]
+    documents: list[Document]
     combined_text: str
     total_tokens: int
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
     # Enhanced features
-    citations: List[Citation] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
     parent_context: Optional[str] = None  # Expanded context from parent documents
-    structured_sections: Dict[str, str] = field(default_factory=dict)  # Structured content
+    structured_sections: dict[str, str] = field(default_factory=dict)  # Structured content
 
 
 @dataclass
@@ -246,12 +262,12 @@ class RAGPipelineContext:
     """
     query: str
     original_query: str
-    documents: List[Document] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    config: Dict[str, Any] = field(default_factory=dict)
+    documents: list[Document] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
     cache_hit: bool = False
-    timings: Dict[str, float] = field(default_factory=dict)
-    errors: List[Any] = field(default_factory=list)
+    timings: dict[str, float] = field(default_factory=dict)
+    errors: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -259,11 +275,11 @@ class RAGResponse:
     """Response from the RAG pipeline."""
     answer: str
     context: RAGContext
-    sources: List[Document]
-    metadata: Dict[str, Any]  # Timing, model used, etc.
+    sources: list[Document]
+    metadata: dict[str, Any]  # Timing, model used, etc.
 
     # Enhanced features
-    citations: List[Citation] = field(default_factory=list)
+    citations: list[Citation] = field(default_factory=list)
     confidence_score: float = 0.0  # Overall confidence in the response
 
 
@@ -275,13 +291,13 @@ class Embedder(Protocol):
         """Generate embedding for text."""
         ...
 
-    def embed_batch(self, texts: List[str]) -> List[np.ndarray]:
+    def embed_batch(self, texts: list[str]) -> list[np.ndarray]:
         """Generate embeddings for multiple texts."""
         ...
 
 # Provide a backwards-compatible global for tests referencing the name directly
 try:  # pragma: no cover - defensive convenience for tests
-    import builtins as _builtins  # type: ignore
+    import builtins as _builtins
     if not hasattr(_builtins, "RAGPipelineContext"):
         _builtins.RAGPipelineContext = RAGPipelineContext  # type: ignore[attr-defined]
 except Exception:
@@ -290,7 +306,7 @@ except Exception:
 
 class Reranker(Protocol):
     """Protocol for reranking models."""
-    def rerank(self, query: str, documents: List[Document]) -> List[Document]:
+    def rerank(self, query: str, documents: list[Document]) -> list[Document]:
         """Rerank documents based on relevance to query."""
         ...
 
@@ -326,7 +342,7 @@ class RetrieverStrategy(ABC):
     async def retrieve(
         self,
         query: str,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Optional[dict[str, Any]] = None,
         top_k: int = 10
     ) -> SearchResult:
         """
@@ -355,7 +371,7 @@ class ProcessingStrategy(ABC):
     @abstractmethod
     def process(
         self,
-        search_results: List[SearchResult],
+        search_results: list[SearchResult],
         query: str,
         max_context_length: int = 4096
     ) -> RAGContext:
@@ -395,6 +411,113 @@ class GenerationStrategy(ABC):
             Generated response
         """
         pass
+
+
+# Evidence Chain Types for Multi-Hop Reasoning
+
+@dataclass
+class EvidenceNode:
+    """
+    A node in an evidence chain representing a single fact from a source.
+
+    Tracks the relationship between a source document, the fact extracted,
+    and which claims this fact supports.
+    """
+    document_id: str
+    chunk_id: str
+    fact: str
+    confidence: float
+    supports: list[str] = field(default_factory=list)  # Claim IDs this fact supports
+    source_text: str = ""  # Original text from which fact was extracted
+    extraction_method: str = "llm"  # "llm", "pattern", "keyword"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Validate node data."""
+        if self.confidence < 0 or self.confidence > 1:
+            raise ValueError(f"Confidence must be between 0 and 1, got {self.confidence}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "document_id": self.document_id,
+            "chunk_id": self.chunk_id,
+            "fact": self.fact,
+            "confidence": self.confidence,
+            "supports": self.supports,
+            "source_text": self.source_text[:200] if self.source_text else "",
+            "extraction_method": self.extraction_method,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
+class EvidenceChain:
+    """
+    A chain of evidence nodes supporting claims in a response.
+
+    Tracks dependencies between evidence nodes and computes aggregate
+    confidence scores for the chain.
+    """
+    query: str
+    nodes: list[EvidenceNode] = field(default_factory=list)
+    root_claims: list[str] = field(default_factory=list)  # Top-level claims being supported
+    chain_confidence: float = 0.0  # Aggregate confidence (product of node confidences)
+    hop_count: int = 0  # Number of reasoning hops in the chain
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        """Compute chain statistics after initialization."""
+        self._compute_chain_confidence()
+        self._compute_hop_count()
+
+    def _compute_chain_confidence(self) -> None:
+        """Compute aggregate chain confidence as product of node confidences."""
+        if not self.nodes:
+            self.chain_confidence = 0.0
+            return
+
+        # Use product of confidences (conservative estimate)
+        confidence = 1.0
+        for node in self.nodes:
+            confidence *= node.confidence
+        self.chain_confidence = confidence
+
+    def _compute_hop_count(self) -> None:
+        """Compute the number of reasoning hops in the chain."""
+        if not self.nodes:
+            self.hop_count = 0
+            return
+
+        # Count unique documents involved
+        unique_docs = {node.document_id for node in self.nodes}
+        self.hop_count = len(unique_docs)
+
+    def add_node(self, node: EvidenceNode) -> None:
+        """Add a node to the chain and recompute statistics."""
+        self.nodes.append(node)
+        self._compute_chain_confidence()
+        self._compute_hop_count()
+
+    def get_nodes_for_claim(self, claim_id: str) -> list[EvidenceNode]:
+        """Get all nodes that support a specific claim."""
+        return [n for n in self.nodes if claim_id in n.supports]
+
+    def get_source_documents(self) -> list[str]:
+        """Get unique list of source document IDs."""
+        return list({node.document_id for node in self.nodes})
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "query": self.query,
+            "nodes": [n.to_dict() for n in self.nodes],
+            "root_claims": self.root_claims,
+            "chain_confidence": self.chain_confidence,
+            "hop_count": self.hop_count,
+            "source_documents": self.get_source_documents(),
+            "metadata": self.metadata,
+        }
 
 
 # Exceptions

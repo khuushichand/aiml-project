@@ -2,22 +2,36 @@
 # Comprehensive health monitoring for the embeddings service
 
 import asyncio
-import time
-import psutil
 import os
-from typing import Dict, Any, List, Optional, Tuple
+import time
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from dataclasses import dataclass, asdict
-import json
+from typing import Any, Optional
 
+import psutil
 from loguru import logger
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
+from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
 from tldw_Server_API.app.core.Embeddings.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
+
+_HEALTH_CHECK_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 class HealthStatus(Enum):
@@ -35,14 +49,14 @@ class ComponentHealth:
     status: HealthStatus
     message: str
     latency_ms: Optional[float] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
     checked_at: datetime = None
 
     def __post_init__(self):
         if self.checked_at is None:
             self.checked_at = datetime.utcnow()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary"""
         result = asdict(self)
         result['status'] = self.status.value
@@ -79,7 +93,7 @@ class HealthChecker:
         }
 
         # Health history
-        self.health_history: List[Dict[str, Any]] = []
+        self.health_history: list[dict[str, Any]] = []
         self.max_history = 100
 
         # Thresholds
@@ -95,7 +109,7 @@ class HealthChecker:
 
         logger.info("Health checker initialized")
 
-    async def check_health(self, detailed: bool = False) -> Dict[str, Any]:
+    async def check_health(self, detailed: bool = False) -> dict[str, Any]:
         """
         Perform comprehensive health check.
 
@@ -174,7 +188,7 @@ class HealthChecker:
                     message="Check passed" if result else "Check failed",
                     latency_ms=latency
                 )
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name=name,
                 status=HealthStatus.UNHEALTHY,
@@ -226,7 +240,7 @@ class HealthChecker:
                 }
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="system",
                 status=HealthStatus.UNHEALTHY,
@@ -268,7 +282,7 @@ class HealthChecker:
                 metadata=provider_status
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="providers",
                 status=HealthStatus.UNHEALTHY,
@@ -300,7 +314,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="cache",
                 status=HealthStatus.DEGRADED,
@@ -338,7 +352,7 @@ class HealthChecker:
                 metadata={'collection_count': len(collections), 'latency_ms': latency_ms}
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="database",
                 status=HealthStatus.UNHEALTHY,
@@ -367,7 +381,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="rate_limiter",
                 status=HealthStatus.DEGRADED,
@@ -399,7 +413,7 @@ class HealthChecker:
                 metadata=stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="dlq",
                 status=HealthStatus.DEGRADED,
@@ -438,7 +452,7 @@ class HealthChecker:
                 metadata=all_stats
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="connection_pools",
                 status=HealthStatus.DEGRADED,
@@ -465,7 +479,7 @@ class HealthChecker:
                 metadata={'issues': issues}
             )
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             return ComponentHealth(
                 name="config",
                 status=HealthStatus.UNHEALTHY,
@@ -474,7 +488,7 @@ class HealthChecker:
 
     def _calculate_overall_status(
         self,
-        component_results: Dict[str, ComponentHealth]
+        component_results: dict[str, ComponentHealth]
     ) -> HealthStatus:
         """Calculate overall health status from component results"""
 
@@ -492,16 +506,14 @@ class HealthChecker:
         # Determine overall status
         if status_counts[HealthStatus.CRITICAL] > 0:
             return HealthStatus.CRITICAL
-        elif status_counts[HealthStatus.UNHEALTHY] > 0:
-            return HealthStatus.UNHEALTHY
-        elif status_counts[HealthStatus.DEGRADED] > len(component_results) / 2:
+        elif status_counts[HealthStatus.UNHEALTHY] > 0 or status_counts[HealthStatus.DEGRADED] > len(component_results) / 2:
             return HealthStatus.UNHEALTHY
         elif status_counts[HealthStatus.DEGRADED] > 0:
             return HealthStatus.DEGRADED
         else:
             return HealthStatus.HEALTHY
 
-    async def _get_detailed_metrics(self) -> Dict[str, Any]:
+    async def _get_detailed_metrics(self) -> dict[str, Any]:
         """Get detailed metrics for all components"""
         metrics = {}
 
@@ -514,7 +526,7 @@ class HealthChecker:
                 'threads': process.num_threads(),
                 'open_files': len(process.open_files())
             }
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to collect process metrics: error={e}")
 
         # Get metrics from metrics module
@@ -523,7 +535,7 @@ class HealthChecker:
 
         return metrics
 
-    def _update_history(self, health_report: Dict[str, Any]):
+    def _update_history(self, health_report: dict[str, Any]):
         """Update health history"""
         # Add to history
         self.health_history.append({
@@ -536,7 +548,7 @@ class HealthChecker:
         if len(self.health_history) > self.max_history:
             self.health_history = self.health_history[-self.max_history:]
 
-    def get_health_trends(self, minutes: int = 60) -> Dict[str, Any]:
+    def get_health_trends(self, minutes: int = 60) -> dict[str, Any]:
         """
         Get health trends over time.
 
@@ -584,7 +596,7 @@ async def liveness_probe() -> bool:
         # Just check if we can import and get config
         config = get_config()
         return config is not None
-    except Exception as e:
+    except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Liveness probe failed: error={e}")
         return False
 
@@ -600,7 +612,7 @@ async def readiness_probe() -> bool:
 
         # Service is ready if not critical
         return health['status'] != HealthStatus.CRITICAL.value
-    except Exception as e:
+    except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Readiness probe failed: error={e}")
         return False
 
@@ -618,7 +630,7 @@ def get_health_checker() -> HealthChecker:
 
 
 # FastAPI integration
-async def health_endpoint(detailed: bool = False) -> Dict[str, Any]:
+async def health_endpoint(detailed: bool = False) -> dict[str, Any]:
     """
     Health check endpoint for FastAPI.
 
@@ -632,7 +644,7 @@ async def health_endpoint(detailed: bool = False) -> Dict[str, Any]:
     return await checker.check_health(detailed=detailed)
 
 
-async def liveness_endpoint() -> Dict[str, str]:
+async def liveness_endpoint() -> dict[str, str]:
     """Liveness endpoint for Kubernetes."""
     is_alive = await liveness_probe()
 
@@ -642,7 +654,7 @@ async def liveness_endpoint() -> Dict[str, str]:
         raise Exception("Liveness check failed")
 
 
-async def readiness_endpoint() -> Dict[str, str]:
+async def readiness_endpoint() -> dict[str, str]:
     """Readiness endpoint for Kubernetes."""
     is_ready = await readiness_probe()
 
@@ -674,7 +686,7 @@ async def monitor_health_periodic(interval_seconds: int = 60):
 
                 # Could trigger alerts here
 
-        except Exception as e:
+        except _HEALTH_CHECK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error in periodic health monitoring: {e}")
 
 

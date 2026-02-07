@@ -1,30 +1,37 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
 from datetime import datetime
 from pathlib import Path as PathlibPath
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Path as FastAPIPath
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import Path as FastAPIPath
 from loguru import logger
+from pydantic import BaseModel
+from starlette.responses import FileResponse
 
-from tldw_Server_API.app.api.v1.schemas.outputs_schemas import OutputArtifact, OutputCreateRequest, OutputListResponse, OutputUpdateRequest
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.endpoints.outputs_templates import (
+    _build_items_context_from_media_ids,
+    _select_media_ids_for_run,
+)
+from tldw_Server_API.app.api.v1.schemas.outputs_schemas import (
+    OutputArtifact,
+    OutputCreateRequest,
+    OutputListResponse,
+    OutputUpdateRequest,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
     resolve_user_id_for_request,
 )
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.endpoints.outputs_templates import _build_items_context_from_media_ids, _select_media_ids_for_run
 from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-from starlette.responses import FileResponse
 from tldw_Server_API.app.services.outputs_service import (
-    build_items_context_from_content_items,
     _build_output_filename,
     _ingest_output_to_media_db,
     _outputs_dir_for_user,
@@ -32,6 +39,7 @@ from tldw_Server_API.app.services.outputs_service import (
     _sanitize_title_for_filename,
     _strip_html_for_tts,
     _write_tts_audio_file,
+    build_items_context_from_content_items,
     delete_outputs_by_ids,
     find_outputs_to_purge,
     normalize_output_storage_path,
@@ -39,8 +47,26 @@ from tldw_Server_API.app.services.outputs_service import (
     update_output_artifact_db,
 )
 
-
 router = APIRouter(prefix="/outputs", tags=["outputs"])
+
+_OUTPUTS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _normalize_output_storage_path_for_user(
@@ -65,7 +91,7 @@ def _normalize_output_storage_path_for_user(
                 new_format=None,
                 retention_until=None,
             )
-        except Exception as exc:
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"outputs: failed to normalize storage_path for {output_id}: {exc}")
             raise HTTPException(status_code=500, detail="db_update_failed") from exc
     return normalized
@@ -181,7 +207,7 @@ async def create_output(
     try:
         tpl = cdb.get_output_template(payload.template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
 
     # Build rendering context (shared by text + TTS)
 
@@ -196,8 +222,8 @@ async def create_output(
                     context["items"] = _build_items_context_from_media_ids(media_db, payload.item_ids, 1000)
                 else:
                     context["items"] = []
-        except Exception as e:
-            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}")
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
+            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}") from e
     else:
         if not payload.item_ids and not payload.run_id:
             raise HTTPException(status_code=422, detail="Provide item_ids, run_id, or inline data")
@@ -233,9 +259,9 @@ async def create_output(
     # Render base template
     try:
         rendered = render_output_template(tpl.body, context)
-    except Exception as e:
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"render failed: {e}")
-        raise HTTPException(status_code=422, detail="render_failed")
+        raise HTTPException(status_code=422, detail="render_failed") from e
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -246,9 +272,9 @@ async def create_output(
     out_dir = _outputs_dir_for_user(user_id)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"failed to create outputs dir: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from e
 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_title = payload.title or tpl.name or "output"
@@ -288,15 +314,15 @@ async def create_output(
                 )
             except HTTPException:
                 raise
-            except Exception as exc:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"TTS generation failed: {exc}")
-                raise HTTPException(status_code=500, detail="tts_generation_failed")
+                raise HTTPException(status_code=500, detail="tts_generation_failed") from exc
         else:
             try:
                 path.write_text(rendered_text, encoding="utf-8")
-            except Exception as exc:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"failed to write output file: {exc}")
-                raise HTTPException(status_code=500, detail="write_failed")
+                raise HTTPException(status_code=500, detail="write_failed") from exc
 
         meta = dict(base_meta)
         if meta_extra:
@@ -315,13 +341,13 @@ async def create_output(
                 run_id=payload.run_id,
                 media_item_id=None,
             )
-        except Exception as exc:
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"failed to insert output row: {exc}")
             try:
                 os.remove(path)
-            except Exception as cleanup_err:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as cleanup_err:
                 logger.warning(f"failed to cleanup output file after DB insert failure: {path} err={cleanup_err}")
-            raise HTTPException(status_code=500, detail="db_insert_failed")
+            raise HTTPException(status_code=500, detail="db_insert_failed") from exc
 
         outputs_created.append((row.id, path))
 
@@ -348,11 +374,11 @@ async def create_output(
             try:
                 if opath.exists():
                     opath.unlink()
-            except Exception as cleanup_err:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as cleanup_err:
                 logger.warning(f"failed to cleanup output file {opath}: {cleanup_err}")
             try:
                 cdb.delete_output_artifact(oid, hard=True)
-            except Exception as cleanup_err:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as cleanup_err:
                 logger.warning(f"failed to cleanup output row {oid}: {cleanup_err}")
 
     def _resolve_variant_template(template_id: int | None, template_type: str, detail: str):
@@ -360,7 +386,7 @@ async def create_output(
             try:
                 tpl_row = cdb.get_output_template(template_id)
             except KeyError:
-                raise HTTPException(status_code=404, detail=detail)
+                raise HTTPException(status_code=404, detail=detail) from None
             if tpl_row.type != template_type:
                 raise HTTPException(status_code=422, detail="invalid_variant_template")
             return tpl_row
@@ -389,7 +415,7 @@ async def create_output(
             )
             try:
                 mece_rendered = render_output_template(mece_tpl.body, context)
-            except Exception as exc:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                 raise HTTPException(status_code=422, detail="mece_render_failed") from exc
             await _persist_output(
                 output_title=f"{base_title} (MECE)",
@@ -408,7 +434,7 @@ async def create_output(
                 try:
                     tts_tpl = cdb.get_output_template(payload.tts_template_id)
                 except KeyError:
-                    raise HTTPException(status_code=404, detail="tts_template_not_found")
+                    raise HTTPException(status_code=404, detail="tts_template_not_found") from None
                 if tts_tpl.type != "tts_audio":
                     raise HTTPException(status_code=422, detail="invalid_variant_template")
             else:
@@ -417,7 +443,7 @@ async def create_output(
             if tts_tpl:
                 try:
                     tts_rendered = render_output_template(tts_tpl.body, context)
-                except Exception as exc:
+                except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                     raise HTTPException(status_code=422, detail="tts_render_failed") from exc
                 tts_template_row = tts_tpl
             else:
@@ -438,10 +464,10 @@ async def create_output(
     except HTTPException:
         _cleanup_outputs()
         raise
-    except Exception as e:
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         _cleanup_outputs()
         logger.error(f"outputs.create failed: {e}")
-        raise HTTPException(status_code=500, detail="output_create_failed")
+        raise HTTPException(status_code=500, detail="output_create_failed") from e
 
     return OutputArtifact(
         id=base_row.id,
@@ -463,7 +489,7 @@ async def get_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     return OutputArtifact(
         id=row.id,
         title=row.title,
@@ -484,7 +510,7 @@ async def download_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -525,7 +551,7 @@ async def download_output_by_name(
     try:
         row = cdb.get_output_artifact_by_title(title, format_=(format if format else None))
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,
@@ -563,7 +589,7 @@ async def head_download_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,
@@ -598,6 +624,7 @@ async def delete_output(
     delete_file: bool = False,
     current_user: User = Depends(get_request_user),
     cdb = Depends(get_collections_db_for_user),
+    media_db = Depends(get_media_db_for_user),
 ):
     # If hard delete and delete_file requested, remove file first
     user_id = resolve_user_id_for_request(
@@ -626,13 +653,20 @@ async def delete_output(
                     p.unlink()
                     fs_deleted = True
         except KeyError:
-            raise HTTPException(status_code=404, detail="output_not_found")
-        except Exception:
+            raise HTTPException(status_code=404, detail="output_not_found") from None
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
             fs_deleted = False
     # Delete metadata (soft by default)
     ok = cdb.delete_output_artifact(output_id, hard=hard)
     if not ok:
         raise HTTPException(status_code=404, detail="output_not_found")
+    try:
+        media_db.mark_tts_history_artifacts_deleted_for_output(
+            user_id=str(user_id),
+            output_id=int(output_id),
+        )
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"outputs.delete: failed to update tts_history for output {output_id}: {exc}")
     return {"success": True, "file_deleted": fs_deleted}
 
 
@@ -646,7 +680,7 @@ async def update_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -679,7 +713,7 @@ async def update_output(
                 p.rename(new_full)
             new_path = new_name
             new_title = payload.title
-        except Exception as e:
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
             # If FS rename fails, keep old path and only update title in DB
             new_path = None
             new_title = payload.title
@@ -692,13 +726,13 @@ async def update_output(
             source_path = _resolve_output_path_for_user(user_id, new_path)
         try:
             src_text = source_path.read_text(encoding="utf-8")
-        except Exception:
-            raise HTTPException(status_code=500, detail="read_failed")
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(status_code=500, detail="read_failed") from None
         if row.format == "md" and payload.format == "html":
             try:
                 import markdown as _md  # type: ignore
                 converted = _md.markdown(src_text)
-            except Exception:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
                 # Minimal fallback: escape angle brackets
                 converted = f"<html><body>\n{re.sub(r'<', '&lt;', src_text)}\n</body></html>"
         elif row.format == "html" and payload.format == "md":
@@ -718,12 +752,12 @@ async def update_output(
             if target_path.resolve() != source_path.resolve() and source_path.exists():
                 try:
                     source_path.unlink()
-                except Exception as _unlink_err:
+                except _OUTPUTS_NONCRITICAL_EXCEPTIONS as _unlink_err:
                     logger.warning(f"failed to remove old output file {source_path}: {_unlink_err}")
             new_path = new_filename
             new_format = payload.format
-        except Exception:
-            raise HTTPException(status_code=500, detail="write_failed")
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(status_code=500, detail="write_failed") from None
 
     # Apply DB updates via service
     try:
@@ -735,9 +769,9 @@ async def update_output(
             new_format=new_format,
             retention_until=payload.retention_until,
         )
-    except Exception as e:
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"outputs.update conflict or DB error: {e}")
-        raise HTTPException(status_code=409, detail="conflict_on_update")
+        raise HTTPException(status_code=409, detail="conflict_on_update") from e
 
     return OutputArtifact(
         id=final.id,
@@ -782,7 +816,7 @@ async def purge_outputs(
         for rid, pth in candidate_paths.items():
             ids.add(rid)
             paths[rid] = pth
-    except Exception as e:
+    except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"outputs.purge: failed to enumerate purge candidates: {e}")
 
     files_deleted = 0
@@ -802,7 +836,7 @@ async def purge_outputs(
                     files_deleted += 1
             except HTTPException as e:
                 logger.warning(f"outputs.purge: invalid output path for {rid}: {e.detail}")
-            except Exception as del_err:
+            except _OUTPUTS_NONCRITICAL_EXCEPTIONS as del_err:
                 logger.warning(f"outputs.purge: failed to delete file {pth}: {del_err}")
                 continue
 
@@ -810,7 +844,7 @@ async def purge_outputs(
     if ids:
         try:
             removed = delete_outputs_by_ids(cdb=cdb, user_id=cdb.user_id, ids=list(ids))
-        except Exception as e:
+        except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"outputs.purge: DB delete failed: {e}")
             removed = 0
 

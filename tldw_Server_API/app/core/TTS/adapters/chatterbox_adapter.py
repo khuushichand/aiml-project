@@ -9,30 +9,37 @@ Updated to use upstream chatterbox package (v0.1.4):
 """
 
 # Imports
+import asyncio
+import contextlib
 import os
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
+import numpy as np
 
 # Third-party Imports
 import torch
-import numpy as np
 from loguru import logger
 
-# Local Imports
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
 from ..tts_exceptions import (
     TTSModelLoadError,
 )
-from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
+# Local Imports
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
+_CHATTERBOX_IMPORT_EXCEPTIONS = (ImportError, ModuleNotFoundError)
+_CHATTERBOX_RUNTIME_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_CHATTERBOX_NUMERIC_EXCEPTIONS = (TypeError, ValueError)
 
 #######################################################################################################################
 # No-op watermarker to ensure no watermark is applied
@@ -100,13 +107,13 @@ class ChatterboxAdapter(TTSAdapter):
     }
 
     # Multilingual language codes supported upstream
-    MULTILINGUAL_LANGS: Set[str] = {
+    MULTILINGUAL_LANGS: set[str] = {
         "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi",
         "it", "ja", "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv",
         "sw", "tr", "zh"
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # Device selection: prefer explicit config; otherwise CUDA if available, else CPU.
@@ -162,7 +169,7 @@ class ChatterboxAdapter(TTSAdapter):
             # Verify the upstream package is available
             try:
                 import chatterbox  # noqa: F401
-            except Exception as e:
+            except _CHATTERBOX_IMPORT_EXCEPTIONS as e:
                 suggestion = (
                     "pip install chatterbox-tts\n"
                     "or install from source: git clone https://github.com/resemble-ai/chatterbox && pip install -e ."
@@ -172,12 +179,12 @@ class ChatterboxAdapter(TTSAdapter):
                     "Failed to import chatterbox package",
                     provider=self.provider_name,
                     details={"error": str(e), "suggestion": suggestion}
-                )
+                ) from e
 
             # Defer heavy model weights loading until first request
             self._status = ProviderStatus.AVAILABLE
             return True
-        except Exception as e:
+        except (TTSModelLoadError, *_CHATTERBOX_RUNTIME_EXCEPTIONS) as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             return False
@@ -288,7 +295,7 @@ class ChatterboxAdapter(TTSAdapter):
                 try:
                     from pathlib import Path
                     Path(voice_reference_path).unlink(missing_ok=True)
-                except Exception:
+                except (OSError, TypeError, ValueError):
                     pass
 
     async def _stream_audio_chatterbox(
@@ -303,7 +310,7 @@ class ChatterboxAdapter(TTSAdapter):
 
         try:
             # Prepare kwargs for upstream generate
-            gen_kwargs: Dict[str, Any] = {
+            gen_kwargs: dict[str, Any] = {
                 "audio_prompt_path": voice_reference_path,
                 "exaggeration": exaggeration,
                 "cfg_weight": request.extra_params.get("cfg_weight", self.default_cfg_weight),
@@ -374,7 +381,7 @@ class ChatterboxAdapter(TTSAdapter):
         # Scale around base with intensity [0.0..2.0]; clamp to [0.0..1.0]
         try:
             e = float(base) * float(max(0.0, min(2.0, intensity)))
-        except Exception:
+        except _CHATTERBOX_NUMERIC_EXCEPTIONS:
             e = base
         return max(0.0, min(1.0, e))
 
@@ -390,7 +397,7 @@ class ChatterboxAdapter(TTSAdapter):
         """
         try:
             import tempfile
-            from pathlib import Path
+
             from tldw_Server_API.app.core.TTS.audio_utils import process_voice_reference_async
 
             # Process voice reference for Chatterbox requirements
@@ -417,7 +424,7 @@ class ChatterboxAdapter(TTSAdapter):
             logger.info(f"Voice reference prepared: {tmp_path}")
             return tmp_path
 
-        except Exception as e:
+        except _CHATTERBOX_RUNTIME_EXCEPTIONS as e:
             logger.error(f"Failed to prepare voice reference: {e}")
             return None
 
@@ -475,10 +482,8 @@ class ChatterboxAdapter(TTSAdapter):
         # Clear commonly used attributes to satisfy tests and free memory
         for attr in ("model", "vocoder", "tokenizer", "processor"):
             if hasattr(self, attr):
-                try:
+                with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
                     setattr(self, attr, None)
-                except Exception:
-                    pass
         # Ensure our lazy models are cleared as well
         self.model_en = None
         self.model_multi = None
@@ -498,6 +503,20 @@ class ChatterboxAdapter(TTSAdapter):
                 if self.disable_watermark and hasattr(self.model_multi, 'watermarker'):
                     self.model_multi.watermarker = _NoopWatermarker()
                 self.sample_rate = int(getattr(self.model_multi, 'sr', 24000))
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.model_multi,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"multi:{self.device}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+                except _CHATTERBOX_RUNTIME_EXCEPTIONS:
+                    pass
             return self.model_multi
         else:
             if self.model_en is None:
@@ -510,6 +529,20 @@ class ChatterboxAdapter(TTSAdapter):
                 if self.disable_watermark and hasattr(self.model_en, 'watermarker'):
                     self.model_en.watermarker = _NoopWatermarker()
                 self.sample_rate = int(getattr(self.model_en, 'sr', 24000))
+                # Register model with resource manager (best-effort)
+                try:
+                    from ..tts_resource_manager import get_resource_manager
+                    resource_manager = await get_resource_manager()
+                    register_result = resource_manager.register_model(
+                        provider=self.provider_name.lower(),
+                        model_instance=self.model_en,
+                        cleanup_callback=self._cleanup_resources,
+                        model_key=f"en:{self.device}",
+                    )
+                    if asyncio.iscoroutine(register_result):
+                        await register_result
+                except _CHATTERBOX_RUNTIME_EXCEPTIONS:
+                    pass
             return self.model_en
 
 #

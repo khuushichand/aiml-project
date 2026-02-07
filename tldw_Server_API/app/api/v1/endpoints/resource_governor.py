@@ -1,17 +1,28 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
 import inspect
 import os
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Path, Body
+from fastapi import APIRouter, Body, Depends, Path, Query
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from tldw_Server_API.app.main import app as _app
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_roles
+from tldw_Server_API.app.main import app as _app
 
 router = APIRouter()
+
+_RG_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _get_app():
@@ -20,11 +31,11 @@ def _get_app():
         from tldw_Server_API.app import main as _main
 
         return getattr(_main, "app", _app)
-    except Exception:
+    except ImportError:
         return _app
 
 
-def _get_or_init_governor() -> Optional[Any]:
+def _get_or_init_governor() -> Any | None:
     """Return the resource governor from app state or lazily initialize it.
 
     Tries to create a MemoryResourceGovernor using the configured policy loader
@@ -43,7 +54,7 @@ def _get_or_init_governor() -> Optional[Any]:
             if loader is not None:
                 gov = MemoryResourceGovernor(policy_loader=loader)
                 app.state.rg_governor = gov
-        except Exception as e:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             # Keep behavior consistent with previous code path: best-effort only.
             logger.debug(f"Resource governor lazy-init skipped: {e}")
             gov = None
@@ -55,7 +66,7 @@ def _get_or_init_governor() -> Optional[Any]:
     dependencies=[Depends(require_roles("admin"))],
 )
 async def get_resource_governor_policy(
-    include: Optional[str] = Query(None, description="Include extra data: 'ids' or 'full'"),
+    include: str | None = Query(None, description="Include extra data: 'ids' or 'full'"),
 ) -> JSONResponse:
     """
     Return current Resource Governor policy snapshot metadata.
@@ -69,7 +80,7 @@ async def get_resource_governor_policy(
         # Prefer process env for store selection when app.state is unset
         try:
             store_env = os.getenv("RG_POLICY_STORE")
-        except Exception:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             store_env = None
         env_store = (store_env or "").strip().lower() or None
         store = getattr(app.state, "rg_policy_store", None) or (env_store or "file")
@@ -78,17 +89,15 @@ async def get_resource_governor_policy(
         # If loader missing or points to a different path than RG_POLICY_PATH, (re)initialize
         try:
             env_path = os.getenv("RG_POLICY_PATH")
-        except Exception:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             env_path = None
         snap = None
         try:
             snap = loader.get_snapshot() if loader else None
-        except Exception:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             snap = None
         needs_reload = False
-        if loader is None:
-            needs_reload = True
-        elif env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
+        if loader is None or env_path and snap and str(getattr(snap, "source_path", "")) != str(env_path):
             needs_reload = True
         elif env_store:
             current_store = (getattr(app.state, "rg_policy_store", None) or "file")
@@ -101,8 +110,12 @@ async def get_resource_governor_policy(
                 from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
                     PolicyLoader,
                     PolicyReloadConfig,
-                    default_policy_loader as _rg_default_loader,
+                )
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
                     db_policy_loader as _rg_db_loader,
+                )
+                from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                    default_policy_loader as _rg_default_loader,
                 )
                 # Decide store mode: 'db' → AuthNZ-backed; otherwise file-based
                 if str(store).lower() == "db":
@@ -118,7 +131,7 @@ async def get_resource_governor_policy(
                         await loader.load_once()
                         app.state.rg_policy_loader = loader
                         app.state.rg_policy_store = "db"
-                    except Exception as _db_e:
+                    except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _db_e:
                         # Fall back to file loader if DB path can't init
                         logger.warning(f"RG policy loader DB init failed; falling back to file store: {_db_e}")
                         if env_path:
@@ -148,7 +161,7 @@ async def get_resource_governor_policy(
                     snap_meta = loader.get_snapshot()
                     app.state.rg_policy_version = int(getattr(snap_meta, "version", 0) or 0)
                     app.state.rg_policy_count = len(getattr(snap_meta, "policies", {}) or {})
-                except Exception as meta_exc:
+                except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as meta_exc:
                     # Log with context and stack trace but do not interrupt flow
                     loader_name = type(loader).__name__ if loader is not None else "None"
                     snap_type = type(snap_meta).__name__ if "snap_meta" in locals() and snap_meta is not None else "None"
@@ -159,20 +172,20 @@ async def get_resource_governor_policy(
                         snap_type,
                         repr(meta_exc),
                     )
-            except Exception as _init_exc:
+            except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _init_exc:
                 logger.exception("Resource governor policy loader init failed: {}", repr(_init_exc))
                 return JSONResponse({"status": "unavailable", "reason": "policy_loader_not_initialized"}, status_code=503)
         # Ensure response reflects the effective store mode after init/fallback.
         store = getattr(app.state, "rg_policy_store", None) or store
         snap = loader.get_snapshot()
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "status": "ok",
             "version": int(getattr(snap, "version", 0) or 0),
             "store": store,
             "policies_count": len(getattr(snap, "policies", {}) or {}),
         }
         if include == "ids":
-            body["policy_ids"] = sorted(list((snap.policies or {}).keys()))
+            body["policy_ids"] = sorted((snap.policies or {}).keys())
         elif include == "full":
             # Caution: large response depending on policy size
             body["policies"] = snap.policies or {}
@@ -185,6 +198,7 @@ async def get_resource_governor_policy(
 
 # --- Policy admin endpoints (gated by require_roles('admin')) ---
 from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
     AuthNZPolicyAdmin,
     PolicyVersionConflictError,
@@ -192,8 +206,8 @@ from tldw_Server_API.app.core.Resource_Governance.policy_admin import (
 
 
 class PolicyUpsertRequest(BaseModel):
-    payload: Dict[str, Any] = Field(..., description="Policy payload JSON object")
-    version: Optional[int] = Field(None, description="Optional explicit version (auto-increments if omitted)")
+    payload: dict[str, Any] = Field(..., description="Policy payload JSON object")
+    version: int | None = Field(None, description="Optional explicit version (auto-increments if omitted)")
 
 
 @router.put(
@@ -220,12 +234,14 @@ async def upsert_policy(
                     loader = None
                 if loader is None:
                     try:
-                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
-                            db_policy_loader as _rg_db_loader,
-                            PolicyReloadConfig as _RGReloadCfg,
-                        )
                         from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
                             AuthNZPolicyStore as _RGDBStore,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            PolicyReloadConfig as _RGReloadCfg,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            db_policy_loader as _rg_db_loader,
                         )
 
                         interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
@@ -234,11 +250,11 @@ async def upsert_policy(
                         await loader.load_once()
                         app.state.rg_policy_loader = loader
                         app.state.rg_policy_store = "db"
-                    except Exception as _boot_err:
+                    except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _boot_err:
                         logger.debug(f"Policy upsert DB loader init skipped: {_boot_err}")
                 elif loader is not None:
                     await loader.load_once()
-        except Exception as _ref_e:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _ref_e:
             logger.debug(f"Policy upsert refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "policy_id": policy_id})
     except PolicyVersionConflictError as e:
@@ -263,7 +279,7 @@ async def upsert_policy(
 )
 async def delete_policy(
     policy_id: str = Path(..., description="Policy identifier"),
-    version: Optional[int] = Query(None, ge=1, description="Optional expected version for optimistic delete"),
+    version: int | None = Query(None, ge=1, description="Optional expected version for optimistic delete"),
 ):
     try:
         admin = AuthNZPolicyAdmin()
@@ -281,12 +297,14 @@ async def delete_policy(
                     loader = None
                 if loader is None:
                     try:
-                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
-                            db_policy_loader as _rg_db_loader,
-                            PolicyReloadConfig as _RGReloadCfg,
-                        )
                         from tldw_Server_API.app.core.Resource_Governance.authnz_policy_store import (
                             AuthNZPolicyStore as _RGDBStore,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            PolicyReloadConfig as _RGReloadCfg,
+                        )
+                        from tldw_Server_API.app.core.Resource_Governance.policy_loader import (
+                            db_policy_loader as _rg_db_loader,
                         )
 
                         interval = int(os.getenv("RG_POLICY_RELOAD_INTERVAL_SEC", "10") or "10")
@@ -295,11 +313,11 @@ async def delete_policy(
                         await loader.load_once()
                         app.state.rg_policy_loader = loader
                         app.state.rg_policy_store = "db"
-                    except Exception as _boot_err:
+                    except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _boot_err:
                         logger.debug(f"Policy delete DB loader init skipped: {_boot_err}")
                 elif loader is not None:
                     await loader.load_once()
-        except Exception as _ref_e:
+        except _RG_ENDPOINT_NONCRITICAL_EXCEPTIONS as _ref_e:
             logger.debug(f"Policy delete refresh skipped: {_ref_e}")
         return JSONResponse({"status": "ok", "deleted": int(deleted)})
     except PolicyVersionConflictError as e:
@@ -356,7 +374,7 @@ async def get_policy(policy_id: str = Path(..., description="Policy identifier")
 async def rg_diag_peek(
     entity: str = Query(..., description="Entity key, e.g., 'user:123'"),
     categories: str = Query(..., description="Comma-separated categories, e.g., 'requests,tokens'"),
-    policy_id: Optional[str] = Query(None, description="Optional policy id to use for peek_with_policy when supported"),
+    policy_id: str | None = Query(None, description="Optional policy id to use for peek_with_policy when supported"),
 ):
     try:
         gov = _get_or_init_governor()
@@ -364,7 +382,7 @@ async def rg_diag_peek(
             return JSONResponse({"status": "unavailable", "reason": "governor_not_initialized"}, status_code=503)
         cats = [c.strip() for c in categories.split(",") if c.strip()]
         # Prefer policy-aware peek when policy_id is provided and supported
-        if policy_id and hasattr(gov, "peek_with_policy") and callable(getattr(gov, "peek_with_policy")):
+        if policy_id and hasattr(gov, "peek_with_policy") and callable(gov.peek_with_policy):
             data = gov.peek_with_policy(entity, cats, policy_id)  # type: ignore[attr-defined]
             if inspect.isawaitable(data):
                 data = await data

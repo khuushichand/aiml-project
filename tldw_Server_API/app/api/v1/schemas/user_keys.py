@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,11 +9,11 @@ from pydantic import BaseModel, Field
 class UserProviderKeyUpsertRequest(BaseModel):
     provider: str = Field(..., description="Provider name (e.g., 'openai').")
     api_key: str = Field(..., description="Provider API key.")
-    credential_fields: Optional[Dict[str, Any]] = Field(
+    credential_fields: dict[str, Any] | None = Field(
         default=None,
         description="Optional provider-specific credential fields (e.g., base_url).",
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: dict[str, Any] | None = Field(
         default=None,
         description="Optional non-sensitive metadata tags.",
     )
@@ -21,7 +21,7 @@ class UserProviderKeyUpsertRequest(BaseModel):
 
 class ProviderKeyTestRequest(BaseModel):
     provider: str = Field(..., description="Provider name (e.g., 'openai').")
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None,
         description="Optional model override for the test call.",
     )
@@ -38,18 +38,18 @@ class UserProviderKeyStatusItem(BaseModel):
     provider: str
     has_key: bool
     source: Literal["user", "team", "org", "server_default", "none", "disabled"]
-    key_hint: Optional[str] = None
-    last_used_at: Optional[datetime] = None
+    key_hint: str | None = None
+    last_used_at: datetime | None = None
 
 
 class UserProviderKeysResponse(BaseModel):
-    items: List[UserProviderKeyStatusItem]
+    items: list[UserProviderKeyStatusItem]
 
 
 class ProviderKeyTestResponse(BaseModel):
     provider: str
     status: Literal["valid"] = "valid"
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class SharedProviderKeyUpsertRequest(BaseModel):
@@ -57,8 +57,8 @@ class SharedProviderKeyUpsertRequest(BaseModel):
     scope_id: int
     provider: str
     api_key: str
-    credential_fields: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
+    credential_fields: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SharedProviderKeyResponse(BaseModel):
@@ -74,7 +74,7 @@ class SharedProviderKeyTestRequest(BaseModel):
     scope_type: Literal["org", "team"]
     scope_id: int
     provider: str
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class SharedProviderKeyTestResponse(BaseModel):
@@ -82,28 +82,28 @@ class SharedProviderKeyTestResponse(BaseModel):
     scope_id: int
     provider: str
     status: Literal["valid"] = "valid"
-    model: Optional[str] = None
+    model: str | None = None
 
 
 class SharedProviderKeyStatusItem(BaseModel):
     scope_type: Literal["org", "team"]
     scope_id: int
     provider: str
-    key_hint: Optional[str] = None
-    last_used_at: Optional[datetime] = None
+    key_hint: str | None = None
+    last_used_at: datetime | None = None
 
 
 class SharedProviderKeysResponse(BaseModel):
-    items: List[SharedProviderKeyStatusItem]
+    items: list[SharedProviderKeyStatusItem]
 
 
 class AdminUserKeyStatusItem(BaseModel):
     provider: str
-    key_hint: Optional[str] = None
-    last_used_at: Optional[datetime] = None
+    key_hint: str | None = None
+    last_used_at: datetime | None = None
     allowed: bool
 
 
 class AdminUserKeysResponse(BaseModel):
     user_id: int
-    items: List[AdminUserKeyStatusItem]
+    items: list[AdminUserKeyStatusItem]

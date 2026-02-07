@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -45,7 +45,7 @@ class AuthnzLLMProviderOverridesRepo:
     def _normalize_datetime_for_postgres(dt: datetime) -> datetime:
         return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
-    async def list_overrides(self, provider: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list_overrides(self, provider: str | None = None) -> list[dict[str, Any]]:
         provider_norm = normalize_provider_name(provider) if provider else None
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -90,12 +90,12 @@ class AuthnzLLMProviderOverridesRepo:
                         ORDER BY provider
                         """
                     )
-            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row.keys()} for row in rows]
+            return [dict(row) if isinstance(row, dict) else {k: row[k] for k in row} for row in rows]
         except Exception as exc:
             logger.error(f"AuthnzLLMProviderOverridesRepo.list_overrides failed: {exc}")
             raise
 
-    async def fetch_override(self, provider: str) -> Optional[Dict[str, Any]]:
+    async def fetch_override(self, provider: str) -> dict[str, Any] | None:
         provider_norm = normalize_provider_name(provider)
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -127,13 +127,13 @@ class AuthnzLLMProviderOverridesRepo:
         self,
         *,
         provider: str,
-        is_enabled: Optional[bool],
-        allowed_models: Optional[str],
-        config_json: Optional[str],
-        secret_blob: Optional[str],
-        api_key_hint: Optional[str],
+        is_enabled: bool | None,
+        allowed_models: str | None,
+        config_json: str | None,
+        secret_blob: str | None,
+        api_key_hint: str | None,
         updated_at: datetime,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         provider_norm = normalize_provider_name(provider)
         try:
             if getattr(self.db_pool, "pool", None) is not None:

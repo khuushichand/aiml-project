@@ -8,32 +8,47 @@ Handles periodic cleanup of:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.repos.generated_files_repo import (
-    AuthnzGeneratedFilesRepo,
+    FILE_CATEGORY_TTS_AUDIO,
     FILE_CATEGORY_VOICE_CLONE,
+    AuthnzGeneratedFilesRepo,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.storage_quota_service import get_storage_service
-
 
 # Default configuration
 DEFAULT_CLEANUP_INTERVAL_SEC = 3600  # 1 hour
 DEFAULT_TRASH_RETENTION_DAYS = 30
 DEFAULT_BATCH_SIZE = 100
 
+_STORAGE_CLEANUP_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 def _safe_resolve_user_path(
-    user_id: Optional[int],
+    user_id: int | None,
     storage_path: str,
-    file_category: Optional[str] = None,
-) -> Optional[Path]:
+    file_category: str | None = None,
+) -> Path | None:
     """Resolve a stored path and ensure it stays within the user's allowed directory."""
     if not user_id or not storage_path:
         return None
@@ -50,6 +65,23 @@ def _safe_resolve_user_path(
     except ValueError:
         return None
     return None
+
+
+def _mark_tts_history_artifact_deleted(user_id: int | None, file_id: int | None) -> None:
+    if not user_id or not file_id:
+        return
+    try:
+        db_path = DatabasePaths.get_media_db_path(user_id)
+        db = MediaDatabase(db_path=str(db_path), client_id="storage_cleanup")
+        try:
+            db.mark_tts_history_artifacts_deleted_for_file_id(
+                user_id=str(user_id),
+                file_id=int(file_id),
+            )
+        finally:
+            db.close_connection()
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
+        logger.debug(f"storage_cleanup: failed to update tts_history for file {file_id}: {exc}")
 
 
 async def cleanup_expired_files(
@@ -86,16 +118,19 @@ async def cleanup_expired_files(
                     if deleted:
                         total_deleted += 1
 
+                if deleted and file_category == FILE_CATEGORY_TTS_AUDIO:
+                    _mark_tts_history_artifact_deleted(user_id, file_id)
+
                 # Delete physical file if it exists (with path validation)
                 resolved_path = _safe_resolve_user_path(user_id, storage_path, file_category=file_category)
                 if deleted and resolved_path and resolved_path.exists():
                     resolved_path.unlink()
                     logger.debug(f"Deleted expired file: {resolved_path}")
 
-            except Exception as exc:
+            except _STORAGE_CLEANUP_EXCEPTIONS as exc:
                 logger.warning(f"Failed to cleanup expired file {file_id}: {exc}")
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"cleanup_expired_files failed: {exc}")
 
     return total_deleted
@@ -142,10 +177,13 @@ async def purge_old_trashed_files(
                 await files_repo.hard_delete_file(file_id)
                 total_purged += 1
 
-            except Exception as exc:
+                if file_category == FILE_CATEGORY_TTS_AUDIO:
+                    _mark_tts_history_artifact_deleted(user_id, file_id)
+
+            except _STORAGE_CLEANUP_EXCEPTIONS as exc:
                 logger.warning(f"Failed to purge trashed file {file_id}: {exc}")
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"purge_old_trashed_files failed: {exc}")
 
     return total_purged
@@ -168,7 +206,7 @@ async def recalculate_user_usage(
     try:
         usage = await files_repo.get_user_storage_usage(user_id)
         return usage
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"recalculate_user_usage failed for user {user_id}: {exc}")
         return {}
 
@@ -227,7 +265,7 @@ async def run_storage_cleanup_cycle(
                 f"purged {stats['trash_purged']} from trash"
             )
 
-    except Exception as exc:
+    except _STORAGE_CLEANUP_EXCEPTIONS as exc:
         logger.error(f"Storage cleanup cycle failed: {exc}")
         stats["errors"] += 1
         stats["completed_at"] = datetime.now(timezone.utc).isoformat()
@@ -236,8 +274,8 @@ async def run_storage_cleanup_cycle(
 
 
 async def run_storage_cleanup_loop(
-    stop_event: Optional[asyncio.Event] = None,
-    interval_seconds: Optional[int] = None,
+    stop_event: asyncio.Event | None = None,
+    interval_seconds: int | None = None,
     temp_retention_hours: int = 24,
 ) -> None:
     """
@@ -275,7 +313,7 @@ async def run_storage_cleanup_loop(
                 batch_size=batch_size,
                 temp_retention_hours=temp_retention_hours,
             )
-        except Exception as exc:
+        except _STORAGE_CLEANUP_EXCEPTIONS as exc:
             logger.warning(f"Storage cleanup loop error: {exc}")
 
         # Wait for next cycle or stop event
@@ -301,7 +339,7 @@ class StorageCleanupService:
     Provides start/stop methods for integration with FastAPI lifespan.
     """
 
-    def __init__(self, interval_seconds: Optional[int] = None, temp_retention_hours: int = 24):
+    def __init__(self, interval_seconds: int | None = None, temp_retention_hours: int = 24):
         """
         Initialize the cleanup service.
 
@@ -311,8 +349,8 @@ class StorageCleanupService:
         """
         self.interval = interval_seconds
         self.temp_retention_hours = temp_retention_hours
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event: Optional[asyncio.Event] = None
+        self._task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event | None = None
         self._running = False
 
     async def start(self):
@@ -340,19 +378,17 @@ class StorageCleanupService:
                 await asyncio.wait_for(self._task, timeout=5.0)
             except asyncio.TimeoutError:
                 self._task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await self._task
-                except asyncio.CancelledError:
-                    pass
         logger.info("StorageCleanupService stopped")
 
 
 # Singleton
-_cleanup_service: Optional[StorageCleanupService] = None
+_cleanup_service: StorageCleanupService | None = None
 
 
 def get_cleanup_service(
-    interval_seconds: Optional[int] = None,
+    interval_seconds: int | None = None,
     temp_retention_hours: int = 24,
 ) -> StorageCleanupService:
     """Get or create the storage cleanup service singleton."""

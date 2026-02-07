@@ -1,23 +1,44 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
 import asyncio
+import contextlib
 import functools
+from sqlite3 import Error as SQLiteError
+from typing import Any, Callable
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Claims_Extraction.budget_guard import (
     ClaimsJobBudget,
     resolve_claims_job_budget,
 )
+from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import resolve_claims_extractor_mode
 from tldw_Server_API.app.core.Claims_Extraction.ingestion_claims import (
     extract_claims_for_chunks,
     store_claims,
 )
-from tldw_Server_API.app.core.Claims_Extraction.extractor_catalog import resolve_claims_extractor_mode
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+
+_SETTINGS_LOOKUP_EXCEPTIONS = (AttributeError, OSError, RuntimeError, TypeError, ValueError)
+_FORM_ACCESS_EXCEPTIONS = (AttributeError, RuntimeError, TypeError, ValueError)
+_CLAIMS_PROCESSING_EXCEPTIONS = (
+    AssertionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_CLAIMS_DB_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def claims_extraction_enabled(form_data: Any) -> bool:
@@ -32,11 +53,11 @@ def claims_extraction_enabled(form_data: Any) -> bool:
         return bool(value)
     try:
         return bool(settings.get("ENABLE_INGESTION_CLAIMS", False))
-    except Exception:
+    except _SETTINGS_LOOKUP_EXCEPTIONS:
         return False
 
 
-def resolve_claims_parameters(form_data: Any) -> Tuple[str, int]:
+def resolve_claims_parameters(form_data: Any) -> tuple[str, int]:
     """
     Resolve extractor mode and max claims per chunk from request or settings.
     """
@@ -46,19 +67,19 @@ def resolve_claims_parameters(form_data: Any) -> Tuple[str, int]:
     else:
         try:
             extractor_mode = str(settings.get("CLAIM_EXTRACTOR_MODE", "heuristic"))
-        except Exception:
+        except _SETTINGS_LOOKUP_EXCEPTIONS:
             extractor_mode = "heuristic"
 
     max_per = getattr(form_data, "claims_max_per_chunk", None)
     if max_per is None:
         try:
             max_per = int(settings.get("CLAIMS_MAX_PER_CHUNK", 3))
-        except Exception:
+        except _SETTINGS_LOOKUP_EXCEPTIONS:
             max_per = 3
     else:
         try:
             max_per = int(max_per)
-        except Exception:
+        except (TypeError, ValueError):
             max_per = 3
     if max_per <= 0:
         max_per = 1
@@ -66,16 +87,16 @@ def resolve_claims_parameters(form_data: Any) -> Tuple[str, int]:
 
 
 def prepare_claims_chunks(
-    process_result: Dict[str, Any],
-) -> Tuple[List[Dict[str, Any]], Dict[int, str]]:
+    process_result: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[int, str]]:
     """
     Build a chunk list and index->text map suitable for claim extraction.
 
     Prefers existing chunks, falls back to segments, and finally full content.
     Mirrors `_legacy_media._prepare_claims_chunks`.
     """
-    prepared_chunks: List[Dict[str, Any]] = []
-    chunk_text_map: Dict[int, str] = {}
+    prepared_chunks: list[dict[str, Any]] = []
+    chunk_text_map: dict[int, str] = {}
 
     raw_chunks = process_result.get("chunks")
     if isinstance(raw_chunks, list):
@@ -117,10 +138,10 @@ def prepare_claims_chunks(
 
 
 async def extract_claims_if_requested(
-    process_result: Dict[str, Any],
+    process_result: dict[str, Any],
     form_data: Any,
     loop: asyncio.AbstractEventLoop,
-) -> Optional[Dict[str, Any]]:
+) -> dict[str, Any] | None:
     """
     Optionally extract claims for a processing result.
 
@@ -156,26 +177,26 @@ async def extract_claims_if_requested(
             "max_per_chunk": max_per_chunk,
         }
 
-    budget: Optional[ClaimsJobBudget] = None
+    budget: ClaimsJobBudget | None = None
     try:
         budget_usd = getattr(form_data, "claims_budget_usd", None)
-    except Exception:
+    except _FORM_ACCESS_EXCEPTIONS:
         budget_usd = None
     try:
         budget_tokens = getattr(form_data, "claims_budget_tokens", None)
-    except Exception:
+    except _FORM_ACCESS_EXCEPTIONS:
         budget_tokens = None
     try:
         budget_strict = getattr(form_data, "claims_budget_strict", None)
-    except Exception:
+    except _FORM_ACCESS_EXCEPTIONS:
         budget_strict = None
     try:
         budget_usd = float(budget_usd) if budget_usd is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         budget_usd = None
     try:
         budget_tokens = int(budget_tokens) if budget_tokens is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         budget_tokens = None
     if isinstance(budget_strict, str):
         budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
@@ -186,7 +207,7 @@ async def extract_claims_if_requested(
         strict=budget_strict if isinstance(budget_strict, bool) else None,
     )
 
-    extraction_callable: Callable[[], List[Dict[str, Any]]] = functools.partial(
+    extraction_callable: Callable[[], list[dict[str, Any]]] = functools.partial(
         extract_claims_for_chunks,
         prepared_chunks,
         extractor_mode=extractor_mode,
@@ -197,7 +218,7 @@ async def extract_claims_if_requested(
 
     try:
         claims = await loop.run_in_executor(None, extraction_callable)
-    except Exception as exc:  # pragma: no cover - error path
+    except _CLAIMS_PROCESSING_EXCEPTIONS as exc:  # pragma: no cover - error path
         process_result["claims"] = None
         process_result["claims_details"] = {
             "enabled": True,
@@ -240,12 +261,12 @@ async def extract_claims_if_requested(
 
 
 async def persist_claims_if_applicable(
-    claims_context: Optional[Dict[str, Any]],
-    media_id: Optional[int],
+    claims_context: dict[str, Any] | None,
+    media_id: int | None,
     db_path: str,
     client_id: str,
     loop: asyncio.AbstractEventLoop,
-    process_result: Dict[str, Any],
+    process_result: dict[str, Any],
 ) -> None:
     """
     Persist extracted claims to the database when a media id is available.
@@ -274,7 +295,7 @@ async def persist_claims_if_applicable(
         try:
             try:
                 db.soft_delete_claims_for_media(int(media_id))
-            except Exception as e:
+            except _CLAIMS_DB_EXCEPTIONS as e:
                 logger.exception(
                     "Failed to soft delete claims for media {}: {}",
                     media_id,
@@ -290,10 +311,8 @@ async def persist_claims_if_applicable(
             )
             return inserted
         finally:
-            try:
+            with contextlib.suppress(_CLAIMS_DB_EXCEPTIONS):
                 db.close_connection()
-            except Exception:
-                pass
 
     try:
         inserted_count = await loop.run_in_executor(None, _worker)
@@ -301,7 +320,7 @@ async def persist_claims_if_applicable(
             details = {}
         details["stored_in_db"] = int(inserted_count or 0)
         process_result["claims_details"] = details
-    except Exception as exc:  # pragma: no cover - error path
+    except _CLAIMS_PROCESSING_EXCEPTIONS as exc:  # pragma: no cover - error path
         if details is None:
             details = {}
         details["stored_in_db"] = 0

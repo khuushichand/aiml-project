@@ -7,7 +7,7 @@ This module includes adapters for GitHub operations:
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -23,7 +23,7 @@ from tldw_Server_API.app.core.Workflows.adapters.integration._config import GitH
     tags=["integration", "github"],
     config_model=GitHubCreateIssueConfig,
 )
-async def run_github_create_issue_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_github_create_issue_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Create a GitHub issue."""
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 

@@ -26,18 +26,17 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
 from ....core.AuthNZ.User_DB_Handling import User, get_request_user
-from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from ....core.DB_Management.db_path_utils import DatabasePaths
-from ....core.Chatbooks.quota_manager import QuotaManager
 from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
+from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
+from ....core.Chatbooks.quota_manager import QuotaManager
+from ....core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ....core.DB_Management.db_path_utils import DatabasePaths
 from ..API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user as get_chacha_db
 from ..schemas.chatbook_schemas import (
     CancelJobResponse,
-    RemoveJobResponse,
     ChatbookManifestResponse,
-    ChatbookVersion as SchemaChatbookVersion,
     CleanupExpiredExportsResponse,
     CreateChatbookRequest,
     CreateChatbookResponse,
@@ -48,6 +47,29 @@ from ..schemas.chatbook_schemas import (
     ListExportJobsResponse,
     ListImportJobsResponse,
     PreviewChatbookResponse,
+    RemoveJobResponse,
+)
+from ..schemas.chatbook_schemas import (
+    ChatbookVersion as SchemaChatbookVersion,
+)
+
+_CHATBOOKS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    HTTPException,
 )
 
 router = APIRouter(prefix="/chatbooks", tags=["chatbooks"])
@@ -58,7 +80,7 @@ def _safe_increment_metric(metric_name: str, labels: dict, error_context: str = 
     """Safely increment a metric, logging failures without raising."""
     try:
         increment_counter(metric_name, labels=labels)
-    except Exception as m_err:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as m_err:
         logger.debug(f"metrics increment failed ({error_context}): error={m_err}")
 
 
@@ -83,8 +105,10 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
         raise HTTPException(status_code=400, detail="Insecure chatbooks temp directory")
     temp_dir = temp_dir.resolve(strict=True)
     base_dir = DatabasePaths.get_user_chatbooks_dir(user_id).resolve(strict=True)
-    if os.path.commonpath([str(temp_dir), str(base_dir)]) != str(base_dir):
-        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path")
+    try:
+        temp_dir.relative_to(base_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path") from None
 
     return temp_dir
 
@@ -123,7 +147,7 @@ async def chatbooks_health():
                     f.write("ok")
                 os.remove(test_file)
                 writable = True
-            except Exception:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
                 writable = False
 
         health["components"]["storage_base"] = {
@@ -134,7 +158,7 @@ async def chatbooks_health():
 
         if not exists or not writable:
             health["status"] = "degraded"
-    except Exception as e:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
         health["status"] = "unhealthy"
         health["error"] = str(e)
 
@@ -198,7 +222,7 @@ async def create_chatbook(
 
         # Create chatbook
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         success, message, result = await service.create_chatbook(
             name=request_data.name,
             description=request_data.description,
@@ -236,7 +260,7 @@ async def create_chatbook(
                             "tags": request_data.tags,
                         },
                     )
-                except Exception as audit_err:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                     logger.warning(f"Failed to log audit event for export start: {audit_err}")
 
                 return CreateChatbookResponse(
@@ -247,18 +271,20 @@ async def create_chatbook(
             else:
                 # Sync mode - create a completed export job with a UUID as job_id
                 import uuid
-                from datetime import datetime, timedelta, timezone
+                from datetime import datetime, timezone
 
                 job_id = str(uuid.uuid4())
                 file_path = Path(result).resolve()
                 expected_base = Path(service.export_dir).resolve()
-                if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
-                    raise HTTPException(status_code=500, detail="Export path validation failed")
+                try:
+                    file_path.relative_to(expected_base)
+                except ValueError:
+                    raise HTTPException(status_code=500, detail="Export path validation failed") from None
                 file_size = None
                 try:
                     if file_path.exists() and file_path.is_file():
                         file_size = file_path.stat().st_size
-                except Exception:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 # Expiry and signed download URL per configuration
@@ -289,7 +315,7 @@ async def create_chatbook(
                 try:
                     # Save job using the service helper
                     service._save_export_job(job)  # noqa: SLF001 (internal helper is appropriate here)
-                except Exception as _e:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as _e:
                     save_ok = False
                     logger.warning(f"Failed to persist completed export job for sync path: {_e}")
                 if not save_ok:
@@ -297,7 +323,7 @@ async def create_chatbook(
                     try:
                         if file_path and file_path.exists():
                             file_path.unlink()
-                    except Exception as cleanup_err:
+                    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as cleanup_err:
                         logger.warning(f"Failed to remove export archive after job persistence failure: {cleanup_err}")
                     raise HTTPException(
                         status_code=500,
@@ -320,7 +346,7 @@ async def create_chatbook(
                         action="chatbook_export_completed_sync",
                         metadata={"filename": file_path.name if file_path else None, "file_size": file_size},
                     )
-                except Exception as audit_err:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                     logger.warning(f"Failed to log audit event for export completion: {audit_err}")
 
                 return CreateChatbookResponse(
@@ -341,7 +367,7 @@ async def create_chatbook(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         # Log full traceback to aid debugging intermittent 500s in CI
         get_ps_logger(
             request_id=ensure_request_id(request),
@@ -349,7 +375,7 @@ async def create_chatbook(
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Unhandled exception creating chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook") from None
 
 
 @router.post("/import", response_model=ImportChatbookResponse)
@@ -403,7 +429,7 @@ async def import_chatbook(
         if import_request.content_selections:
             unsupported = {"media", "embedding", "prompt", "evaluation", "generated_document"}
             requested = []
-            for content_type in import_request.content_selections.keys():
+            for content_type in import_request.content_selections:
                 ct_val = content_type.value if hasattr(content_type, "value") else str(content_type)
                 if ct_val in unsupported:
                     requested.append(ct_val)
@@ -437,11 +463,16 @@ async def import_chatbook(
 
         # Save uploaded file to secure temp location with sanitized name
         temp_dir = _setup_secure_temp_directory(str(user.id))
+        temp_dir_resolved = temp_dir.resolve(strict=True)
 
         # Build the destination file path
         temp_file = temp_dir / f"import_{uuid4().hex}_{safe_filename}"
-        if temp_file.parent != temp_dir:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        temp_file_resolved = temp_file.resolve()
+        try:
+            temp_file_resolved.relative_to(temp_dir_resolved)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid file path") from None
+        temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
@@ -451,7 +482,7 @@ async def import_chatbook(
         if not valid:
             try:
                 temp_file.unlink()
-            except Exception as e:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to remove invalid uploaded file during import: path={temp_file}, user={user.id}, error={e}")
             _safe_increment_metric(
                 "app_warning_events_total",
@@ -470,7 +501,7 @@ async def import_chatbook(
 
         # Import chatbook
         rid = ensure_request_id(request)
-        tp = ensure_traceparent(request)
+        ensure_traceparent(request)
         success, message, result = await service.import_chatbook(
             file_path=str(temp_file),
             content_selections=content_selections,
@@ -500,7 +531,7 @@ async def import_chatbook(
                         action="chatbook_import_started",
                         metadata={"filename": file.filename},
                     )
-                except Exception as audit_err:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                     logger.warning(f"Failed to log audit event for import start: {audit_err}")
                 return ImportChatbookResponse(
                     success=True,
@@ -523,7 +554,7 @@ async def import_chatbook(
                         action="chatbook_import_completed_sync",
                         metadata={"filename": file.filename},
                     )
-                except Exception as audit_err:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                     logger.warning(f"Failed to log audit event for import completion: {audit_err}")
                 warnings_out = result if isinstance(result, list) else None
                 return ImportChatbookResponse(
@@ -538,7 +569,7 @@ async def import_chatbook(
                 if temp_file is not None and temp_file.exists():
                     try:
                         temp_file.unlink()
-                    except Exception as e:
+                    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Cleanup of temp import file failed after enqueue failure: path={temp_file}, user={user.id}, error={e}")
                         _safe_increment_metric(
                             "app_warning_events_total",
@@ -554,20 +585,20 @@ async def import_chatbook(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         get_ps_logger(
             request_id=ensure_request_id(request),
             ps_component="endpoint",
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Error importing chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook") from None
     finally:
         # Cleanup uploaded file if not async
         if temp_file is not None and not import_request.async_mode and temp_file.exists():
             try:
                 temp_file.unlink()
-            except Exception as e:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Cleanup of temp import file failed: path={temp_file}, user={user.id}, error={e}")
                 _safe_increment_metric(
                     "app_warning_events_total",
@@ -627,11 +658,16 @@ async def preview_chatbook(
 
         # Save uploaded file to secure temp location with sanitized name
         temp_dir = _setup_secure_temp_directory(str(user.id))
+        temp_dir_resolved = temp_dir.resolve(strict=True)
 
         # Build the preview file path
         temp_file = temp_dir / f"preview_{uuid4().hex}_{safe_filename}"
-        if temp_file.parent != temp_dir:
-            raise HTTPException(status_code=400, detail="Invalid file path")
+        temp_file_resolved = temp_file.resolve()
+        try:
+            temp_file_resolved.relative_to(temp_dir_resolved)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid file path") from None
+        temp_file = temp_file_resolved
 
         with open(temp_file, 'wb') as f:
             shutil.copyfileobj(file.file, f)
@@ -641,7 +677,7 @@ async def preview_chatbook(
         if not ok:
             try:
                 temp_file.unlink()
-            except Exception as e:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to remove invalid uploaded file during preview: path={temp_file}, user={user.id}, error={e}")
             _safe_increment_metric(
                 "app_warning_events_total",
@@ -656,7 +692,7 @@ async def preview_chatbook(
         # Cleanup temp file
         try:
             temp_file.unlink()
-        except Exception as e:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
             _safe_increment_metric(
                 "app_warning_events_total",
@@ -691,6 +727,9 @@ async def preview_chatbook(
                 total_notes=manifest.total_notes,
                 total_characters=manifest.total_characters,
                 total_media_items=manifest.total_media_items,
+                total_prompts=manifest.total_prompts,
+                total_evaluations=manifest.total_evaluations,
+                total_embeddings=manifest.total_embeddings,
                 total_world_books=manifest.total_world_books,
                 total_dictionaries=manifest.total_dictionaries,
                 total_documents=manifest.total_documents,
@@ -717,7 +756,7 @@ async def preview_chatbook(
                     action="chatbook_preview",
                     metadata={"filename": file.filename},
                 )
-            except Exception as audit_err:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                 logger.warning(f"Failed to log audit event for preview: {audit_err}")
             return PreviewChatbookResponse(manifest=manifest_response)
         else:
@@ -725,20 +764,20 @@ async def preview_chatbook(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         get_ps_logger(
             request_id=ensure_request_id(request),
             ps_component="endpoint",
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Error previewing chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook") from None
     finally:
         # Ensure preview upload cleanup on all paths
         if temp_file is not None and temp_file.exists():
             try:
                 temp_file.unlink()
-            except Exception as e:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Cleanup of preview temp file failed: path={temp_file}, user={user.id}, error={e}")
                 _safe_increment_metric(
                     "app_warning_events_total",
@@ -803,7 +842,7 @@ async def list_export_jobs(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error listing export jobs for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -861,7 +900,7 @@ async def get_export_job(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error getting export job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -916,7 +955,7 @@ async def list_import_jobs(
 
         return ListImportJobsResponse(jobs=job_responses, total=total)
 
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error listing import jobs for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -967,7 +1006,7 @@ async def get_import_job(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error getting import job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -1019,7 +1058,8 @@ async def download_chatbook(
         # Enforce expiration (config-gated)
         enforce_expiry = str(os.getenv("CHATBOOKS_ENFORCE_EXPIRY", "true")).lower() in {"1","true","yes"}
         if enforce_expiry and getattr(job, 'expires_at', None) is not None:
-            from datetime import datetime as _dt, timezone as _tz
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
             now_utc = _dt.now(_tz.utc)
             expires_at = job.expires_at
             # Handle naive datetime from database by assuming UTC
@@ -1040,14 +1080,15 @@ async def download_chatbook(
                 exp_int = int(exp)
             except ValueError as e:
                 logger.warning(f"Invalid exp parameter in signed URL: exp={exp!r}, error={e}")
-                raise HTTPException(status_code=400, detail="Invalid exp")
+                raise HTTPException(status_code=400, detail="Invalid exp") from e
             # Check exp against current time
             import time
             if time.time() > exp_int:
                 raise HTTPException(status_code=410, detail="Signed URL expired")
             # Verify signature
-            import hmac, hashlib
-            msg = f"{job_id}:{exp_int}".encode("utf-8")
+            import hashlib
+            import hmac
+            msg = f"{job_id}:{exp_int}".encode()
             expected = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             if not hmac.compare_digest(expected, token):
                 raise HTTPException(status_code=403, detail="Invalid signature")
@@ -1061,8 +1102,9 @@ async def download_chatbook(
         # Additional path containment check - ensure file is in expected user directory
         # The file should be within the user's export directory
         expected_base = Path(service.export_dir).resolve()
-        import os as _os
-        if _os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+        try:
+            file_path.relative_to(expected_base)
+        except ValueError:
             logger.warning(f"Path traversal attempt detected for user {user.id}")
             # Log security event via unified audit service
             try:
@@ -1082,9 +1124,9 @@ async def download_chatbook(
                         "attempted_path": str(file_path)[:100]
                     }
                 )
-            except Exception as audit_err:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                 logger.warning(f"Failed to log audit event for path traversal: {audit_err}")
-            raise HTTPException(status_code=403, detail="Access denied")
+            raise HTTPException(status_code=403, detail="Access denied") from None
 
         # Verify file exists (containment already validated above)
         if not file_path.exists() or not file_path.is_file():
@@ -1112,7 +1154,7 @@ async def download_chatbook(
                     "file_size": file_path.stat().st_size
                 }
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for download: {audit_err}")
 
         # Build safe Content-Disposition (ASCII fallback + RFC 5987 filename*)
@@ -1120,11 +1162,11 @@ async def download_chatbook(
             try:
                 name.encode("ascii")
                 return name, None
-            except Exception:
+            except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
                 try:
                     import urllib.parse as _u
                     return "download", _u.quote(name)
-                except Exception:
+                except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
                     return "download", None
         ascii_name, encoded_name = _safe_disp_parts(filename)
         headers = {
@@ -1146,9 +1188,9 @@ async def download_chatbook(
 
     except HTTPException:
         raise
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error downloading chatbook {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while downloading the file")
+        raise HTTPException(status_code=500, detail="An error occurred while downloading the file") from None
 
 
 @router.post("/cleanup", response_model=CleanupExpiredExportsResponse)
@@ -1186,14 +1228,14 @@ async def cleanup_expired_exports(
                 action="chatbook_cleanup_expired_exports",
                 metadata={"deleted_count": deleted_count},
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for cleanup: {audit_err}")
 
         return CleanupExpiredExportsResponse(
             deleted_count=deleted_count
         )
 
-    except Exception:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error cleaning up expired exports for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -1239,7 +1281,7 @@ async def cancel_export_job(
                 resource_id=job_id,
                 action="chatbook_export_job_cancelled",
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for export job cancellation: {audit_err}")
         return CancelJobResponse(
             success=True,
@@ -1249,7 +1291,9 @@ async def cancel_export_job(
 
     except HTTPException:
         raise
-    except Exception:
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error cancelling export job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -1295,7 +1339,7 @@ async def cancel_import_job(
                 resource_id=job_id,
                 action="chatbook_import_job_cancelled",
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for import job cancellation: {audit_err}")
         return CancelJobResponse(
             success=True,
@@ -1305,7 +1349,9 @@ async def cancel_import_job(
 
     except HTTPException:
         raise
-    except Exception:
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error cancelling import job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -1345,7 +1391,7 @@ async def remove_export_job(
                 resource_id=job_id,
                 action="chatbook_export_job_removed",
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for export job removal: {audit_err}")
         return RemoveJobResponse(
             success=True,
@@ -1354,7 +1400,9 @@ async def remove_export_job(
         )
     except HTTPException:
         raise
-    except Exception:
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error removing export job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,
@@ -1394,7 +1442,7 @@ async def remove_import_job(
                 resource_id=job_id,
                 action="chatbook_import_job_removed",
             )
-        except Exception as audit_err:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
             logger.warning(f"Failed to log audit event for import job removal: {audit_err}")
         return RemoveJobResponse(
             success=True,
@@ -1403,7 +1451,9 @@ async def remove_import_job(
         )
     except HTTPException:
         raise
-    except Exception:
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error removing import job {job_id} for user {user.id}")
         raise HTTPException(
             status_code=500,

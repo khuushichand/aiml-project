@@ -1,14 +1,35 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tarfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from loguru import logger
+
+_SNAPSHOTS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    shutil.Error,
+    tarfile.TarError,
+)
 
 
 class SnapshotManager:
@@ -18,7 +39,7 @@ class SnapshotManager:
     restore from snapshots, and clone sessions with their current state.
     """
 
-    def __init__(self, storage_path: Optional[str] = None) -> None:
+    def __init__(self, storage_path: str | None = None) -> None:
         """Initialize the snapshot manager.
 
         Args:
@@ -35,7 +56,7 @@ class SnapshotManager:
         # Ensure storage directory exists
         try:
             os.makedirs(self.storage_path, exist_ok=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to create snapshot storage path: {e}")
 
     def _snapshot_dir(self, session_id: str) -> Path:
@@ -77,8 +98,8 @@ class SnapshotManager:
 
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            raise IOError(f"Failed to create snapshot directory: {e}")
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to create snapshot directory: {e}") from e
 
         # Create the tarball
         try:
@@ -87,18 +108,16 @@ class SnapshotManager:
                 for item in os.listdir(workspace_path):
                     item_path = os.path.join(workspace_path, item)
                     tar.add(item_path, arcname=item)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             # Clean up on failure
-            try:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                 snapshot_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            raise IOError(f"Failed to create snapshot archive: {e}")
+            raise OSError(f"Failed to create snapshot archive: {e}") from e
 
         # Get snapshot size
         try:
             size_bytes = snapshot_path.stat().st_size
-        except Exception:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
             size_bytes = 0
 
         # Create metadata
@@ -116,7 +135,7 @@ class SnapshotManager:
             import json
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=2)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to write snapshot metadata: {e}")
 
         return {
@@ -160,14 +179,12 @@ class SnapshotManager:
                     if os.path.isdir(item_path):
                         shutil.rmtree(item_path, ignore_errors=True)
                     else:
-                        try:
+                        with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                             os.remove(item_path)
-                        except Exception:
-                            pass
             else:
                 os.makedirs(workspace_path, exist_ok=True)
-        except Exception as e:
-            raise IOError(f"Failed to clear workspace: {e}")
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to clear workspace: {e}") from e
 
         # Extract snapshot
         try:
@@ -184,8 +201,8 @@ class SnapshotManager:
                 safe_extract(tar, workspace_path)
         except ValueError:
             raise
-        except Exception as e:
-            raise IOError(f"Failed to extract snapshot: {e}")
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to extract snapshot: {e}") from e
 
         return True
 
@@ -228,13 +245,13 @@ class SnapshotManager:
                 shutil.rmtree(new_workspace, ignore_errors=True)
 
             shutil.copytree(source_workspace, new_workspace, dirs_exist_ok=True)
-        except Exception as e:
-            raise IOError(f"Failed to clone workspace: {e}")
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
+            raise OSError(f"Failed to clone workspace: {e}") from e
 
         logger.info(f"Cloned session {source_session_id} to {new_session_id}")
         return True
 
-    def list_snapshots(self, session_id: str) -> List[dict]:
+    def list_snapshots(self, session_id: str) -> list[dict]:
         """List all snapshots for a session.
 
         Args:
@@ -248,12 +265,12 @@ class SnapshotManager:
         if not snapshot_dir.exists():
             return []
 
-        snapshots: List[dict] = []
+        snapshots: list[dict] = []
         import json
 
         for meta_file in snapshot_dir.glob("*.meta.json"):
             try:
-                with open(meta_file, "r") as f:
+                with open(meta_file) as f:
                     metadata = json.load(f)
                     # Verify the actual archive exists
                     snapshot_id = metadata.get("snapshot_id")
@@ -261,12 +278,10 @@ class SnapshotManager:
                         archive_path = self._snapshot_path(session_id, snapshot_id)
                         if archive_path.exists():
                             # Update size in case it changed
-                            try:
+                            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                                 metadata["size_bytes"] = archive_path.stat().st_size
-                            except Exception:
-                                pass
                             snapshots.append(metadata)
-            except Exception as e:
+            except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to read snapshot metadata {meta_file}: {e}")
 
         # Sort by created_at, newest first
@@ -292,14 +307,14 @@ class SnapshotManager:
             if snapshot_path.exists():
                 snapshot_path.unlink()
                 deleted = True
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to delete snapshot archive {snapshot_id}: {e}")
 
         try:
             if metadata_path.exists():
                 metadata_path.unlink()
                 deleted = True
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to delete snapshot metadata {snapshot_id}: {e}")
 
         # Clean up empty session snapshot directory
@@ -307,7 +322,7 @@ class SnapshotManager:
             snapshot_dir = self._snapshot_dir(session_id)
             if snapshot_dir.exists() and not any(snapshot_dir.iterdir()):
                 snapshot_dir.rmdir()
-        except Exception:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS:
             pass
 
         return deleted
@@ -332,12 +347,12 @@ class SnapshotManager:
             count = len(list(snapshot_dir.glob("*.tar.gz")))
             # Remove the entire directory
             shutil.rmtree(snapshot_dir, ignore_errors=True)
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to cleanup session snapshots: {e}")
 
         return count
 
-    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> Optional[dict]:
+    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
         """Get information about a specific snapshot.
 
         Args:
@@ -355,15 +370,13 @@ class SnapshotManager:
 
         try:
             import json
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 metadata = json.load(f)
                 # Update size
-                try:
+                with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                     metadata["size_bytes"] = snapshot_path.stat().st_size
-                except Exception:
-                    pass
                 return metadata
-        except Exception as e:
+        except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to read snapshot metadata: {e}")
             return None
 
@@ -383,16 +396,14 @@ class SnapshotManager:
 
         total = 0
         for archive in snapshot_dir.glob("*.tar.gz"):
-            try:
+            with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                 total += archive.stat().st_size
-            except Exception:
-                pass
 
         return total
 
     def enforce_quota(
         self, session_id: str, max_snapshots: int = 10, max_size_mb: int = 256
-    ) -> List[str]:
+    ) -> list[str]:
         """Enforce snapshot quotas by deleting old snapshots.
 
         Deletes oldest snapshots to enforce count and size limits.
@@ -406,7 +417,7 @@ class SnapshotManager:
             List of deleted snapshot IDs.
         """
         snapshots = self.list_snapshots(session_id)
-        deleted: List[str] = []
+        deleted: list[str] = []
         max_size_bytes = max_size_mb * 1024 * 1024
 
         # Delete by count (keep newest)

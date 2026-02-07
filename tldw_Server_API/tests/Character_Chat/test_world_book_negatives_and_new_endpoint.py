@@ -160,6 +160,76 @@ async def test_world_book_process_endpoint_handles_new_return_shape():
 
 
 @pytest.mark.asyncio
+async def test_world_book_process_endpoint_returns_diagnostics_payload():
+    tmpdir = tempfile.mkdtemp(prefix="chacha_wb_process_diag_")
+    original_user_db_dir = os.environ.get("USER_DB_BASE_DIR")
+    os.environ["USER_DB_BASE_DIR"] = tmpdir
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            create = {
+                "name": f"WB {_uuid.uuid4()}",
+                "description": "Lore diagnostics book",
+                "scan_depth": 3,
+                "token_budget": 500,
+                "recursive_scanning": True,
+                "enabled": True,
+            }
+            resp = await client.post("/api/v1/characters/world-books", headers=headers, json=create)
+            assert resp.status_code == 201
+            wb_id = resp.json()["id"]
+
+            entries = [
+                {"keywords": ["seed"], "content": "dragon marker", "priority": 120, "enabled": True},
+                {"keywords": [r"se.d"], "content": "regex marker", "priority": 110, "enabled": True, "regex_match": True},
+                {"keywords": ["dragon"], "content": "depth marker", "priority": 90, "enabled": True},
+            ]
+            for entry in entries:
+                create_entry = await client.post(
+                    f"/api/v1/characters/world-books/{wb_id}/entries",
+                    headers=headers,
+                    json=entry,
+                )
+                assert create_entry.status_code == 201
+
+            process_request = {
+                "text": "seed",
+                "world_book_ids": [wb_id],
+                "token_budget": 200,
+                "recursive_scanning": True,
+            }
+            resp = await client.post("/api/v1/characters/world-books/process", headers=headers, json=process_request)
+            assert resp.status_code == 200
+            body = resp.json()
+
+            assert body.get("token_budget") == 200
+            assert isinstance(body.get("budget_exhausted"), bool)
+            assert isinstance(body.get("skipped_entries_due_to_budget"), int)
+
+            diagnostics = body.get("diagnostics")
+            assert isinstance(diagnostics, list)
+            assert diagnostics
+            reasons = {item.get("activation_reason") for item in diagnostics if isinstance(item, dict)}
+            assert "keyword_match" in reasons
+            assert "regex_match" in reasons
+            assert "depth" in reasons
+
+            for item in diagnostics:
+                assert isinstance(item.get("token_cost"), int)
+                assert item.get("token_cost") >= 0
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        if original_user_db_dir is None:
+            os.environ.pop("USER_DB_BASE_DIR", None)
+        else:
+            os.environ["USER_DB_BASE_DIR"] = original_user_db_dir
+
+
+@pytest.mark.asyncio
 async def test_rate_limits_max_messages_and_chats_and_completions_endpoint():
     if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
         pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")

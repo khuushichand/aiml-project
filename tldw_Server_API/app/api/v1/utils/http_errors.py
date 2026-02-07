@@ -8,8 +8,6 @@ instances with consistent status codes and messages.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import HTTPException, status
 from loguru import logger
 
@@ -24,7 +22,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
 def map_db_error_to_http(
     exc: Exception,
     *,
-    not_found_status: Optional[int] = None,
+    not_found_status: int | None = None,
     default_detail: str = "Database error occurred",
 ) -> HTTPException:
     """

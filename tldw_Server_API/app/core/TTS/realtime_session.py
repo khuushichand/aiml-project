@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -19,17 +20,17 @@ class RealtimeSessionConfig:
     voice: str
     response_format: str
     speed: float = 1.0
-    lang_code: Optional[str] = None
-    extra_params: Optional[Dict[str, Any]] = None
-    provider: Optional[str] = None
+    lang_code: str | None = None
+    extra_params: dict[str, Any] | None = None
+    provider: str | None = None
 
 
 @dataclass
 class RealtimeSessionHandle:
     """Handle returned by TTSServiceV2.open_realtime_session."""
-    session: "RealtimeTTSSession"
-    provider: Optional[str] = None
-    warning: Optional[str] = None
+    session: RealtimeTTSSession
+    provider: str | None = None
+    warning: str | None = None
 
 
 class RealtimeTTSSession:
@@ -48,7 +49,7 @@ class RealtimeTTSSession:
         raise NotImplementedError
 
     @property
-    def error(self) -> Optional[Exception]:
+    def error(self) -> Exception | None:
         return None
 
 
@@ -60,9 +61,9 @@ class BufferedRealtimeSession(RealtimeTTSSession):
         *,
         tts_service: Any,
         config: RealtimeSessionConfig,
-        provider_hint: Optional[str] = None,
+        provider_hint: str | None = None,
         route: str = "audio.stream.tts.realtime",
-        user_id: Optional[int] = None,
+        user_id: int | None = None,
     ) -> None:
         self._tts_service = tts_service
         self._config = config
@@ -70,14 +71,14 @@ class BufferedRealtimeSession(RealtimeTTSSession):
         self._route = route
         self._user_id = user_id
         self._buffer = ""
-        self._text_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-        self._audio_queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
+        self._text_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._closed = False
-        self._error: Optional[Exception] = None
+        self._error: Exception | None = None
         self._worker_task = asyncio.create_task(self._worker())
 
     @property
-    def error(self) -> Optional[Exception]:
+    def error(self) -> Exception | None:
         return self._error
 
     async def push_text(self, delta: str) -> None:

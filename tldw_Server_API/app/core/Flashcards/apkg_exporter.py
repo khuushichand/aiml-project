@@ -3,7 +3,6 @@
 # Imports
 import io
 import json
-import math
 import os
 import sqlite3
 import tempfile
@@ -11,7 +10,8 @@ import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
+
 #
 ########################################################################################################################
 #
@@ -37,7 +37,7 @@ def _sha1_8_int(s: str) -> int:
     return int(h[:8], 16)
 
 
-def _build_models_json(basic_mid: int, cloze_mid: int) -> Dict:
+def _build_models_json(basic_mid: int, cloze_mid: int) -> dict:
     # Basic model
     basic = {
         "css": ".card { font-family: arial; font-size: 20px; text-align: left; color: black; background-color: white; }",
@@ -114,7 +114,7 @@ def _build_models_json(basic_mid: int, cloze_mid: int) -> Dict:
     return {str(basic_mid): basic, str(cloze_mid): cloze}
 
 
-def _build_decks_json(deck_map: Dict[int, str]) -> Dict:
+def _build_decks_json(deck_map: dict[int, str]) -> dict:
     now = _now_secs()
     decks = {}
     for deck_id, name in deck_map.items():
@@ -138,7 +138,7 @@ def _build_decks_json(deck_map: Dict[int, str]) -> Dict:
     return decks
 
 
-def _build_dconf_json() -> Dict:
+def _build_dconf_json() -> dict:
     now = _now_secs()
     return {
         "1": {
@@ -174,7 +174,7 @@ def _build_dconf_json() -> Dict:
     }
 
 
-def _build_conf_json(default_deck_id: int) -> Dict:
+def _build_conf_json(default_deck_id: int) -> dict:
     return {
         "curDeck": default_deck_id,
         "activeDecks": [default_deck_id],
@@ -195,7 +195,7 @@ def _build_conf_json(default_deck_id: int) -> Dict:
 
 
 def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetitions: int, lapses: int,
-                        due_at_iso: Optional[str], col_crt_secs: int) -> Tuple[int, int, int, int, int, int, int]:
+                        due_at_iso: Optional[str], col_crt_secs: int) -> tuple[int, int, int, int, int, int, int]:
     # Returns: (type, queue, due, ivl, factor, reps, lapses)
     factor = int(round(ef * 1000)) if ef else 2500
     reps_val = int(repetitions or 0)
@@ -217,15 +217,21 @@ def _compute_card_sched(model_type: str, ef: float, interval_days: int, repetiti
         return (1, 1, due_secs, 0, factor, reps_val, lapses_val)
     # Review
     ivl_days = max(1, int(interval_days))
-    # due: days since collection creation
+    # due: days since collection creation (prefer due_at when available)
     days_since_crt = max(1, int((datetime.now(timezone.utc).timestamp() - col_crt_secs) / 86400.0))
+    if due_at_iso:
+        try:
+            due_dt = datetime.fromisoformat(due_at_iso.replace('Z', '+00:00'))
+            days_since_crt = max(1, int((due_dt.timestamp() - col_crt_secs) / 86400.0))
+        except Exception:
+            pass
     return (2, 2, days_since_crt, ivl_days, factor, reps_val, lapses_val)
 
 
 import re
 
 
-def _extract_media_from_html(html: str, media_accum: List[Tuple[str, bytes]], media_map: Dict[str, int]) -> str:
+def _extract_media_from_html(html: str, media_accum: list[tuple[str, bytes]], media_map: dict[str, int]) -> str:
     """
     Extract data URIs in img/audio tags, store as files, and replace src with filename.
     media_accum: list of (filename, bytes) to be written later
@@ -260,11 +266,11 @@ def _extract_media_from_html(html: str, media_accum: List[Tuple[str, bytes]], me
             return tag
 
     # Replace img and audio src
-    pattern = re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
+    re.compile(r'(?:<img[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)|(?:<audio[^>]+src\s*=\s*["\"])([^"\"]+)(?:["\"][^>]*>)', re.IGNORECASE)
     # We need to handle both capturing groups; easier: custom parser for img/src and audio/src separately
     def replace_tag_src(tag_name: str, s: str) -> str:
         # Match src with either single or double quotes
-        rgx = re.compile(r'<%s[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1' % tag_name, re.IGNORECASE)
+        rgx = re.compile(rf'<{tag_name}[^>]*?\s+src\s*=\s*([\'"\"])\s*(.*?)\1', re.IGNORECASE)
         return rgx.sub(lambda m: m.group(0).replace(m.group(2), _handle_src(m.group(2))), s)
 
     def _handle_src(src: str) -> str:
@@ -293,15 +299,15 @@ def _extract_media_from_html(html: str, media_accum: List[Tuple[str, bytes]], me
     return html
 
 
-def export_apkg_from_rows(rows: List[Dict], default_deck_name: str = "Default", include_reverse: bool = False) -> bytes:
+def export_apkg_from_rows(rows: list[dict], default_deck_name: str = "Default", include_reverse: bool = False) -> bytes:
     """
     Build an APKG bytes object from flashcard rows returned by list_flashcards().
     Each row should contain: deck_name, front, back, notes, extra, model_type, ef, interval_days, repetitions, lapses, due_at.
     """
     # Prepare deck ids
-    unique_decks = sorted(set([r.get("deck_name") or default_deck_name for r in rows]))
+    unique_decks = sorted({r.get("deck_name") or default_deck_name for r in rows})
     base_id = _now_millis()
-    deck_ids: Dict[str, int] = {name: base_id + i for i, name in enumerate(unique_decks)}
+    deck_ids: dict[str, int] = {name: base_id + i for i, name in enumerate(unique_decks)}
 
     # Model ids
     basic_mid = base_id + 100000
@@ -404,8 +410,8 @@ def export_apkg_from_rows(rows: List[Dict], default_deck_name: str = "Default", 
         nid_base = now_ms + 200000
         cid_base = now_ms + 300000
         card_seq = 0
-        media_accum: List[Tuple[str, bytes]] = []
-        media_idx_map: Dict[str, int] = {}
+        media_accum: list[tuple[str, bytes]] = []
+        media_idx_map: dict[str, int] = {}
 
         for i, r in enumerate(rows):
             deck_name = r.get("deck_name") or default_deck_name
@@ -454,7 +460,7 @@ def export_apkg_from_rows(rows: List[Dict], default_deck_name: str = "Default", 
 
             if is_cloze:
                 # Generate one card per unique cloze index N in Text
-                cloze_ids = set(int(m.group(1)) for m in re.finditer(r"\{\{c(\d+)::", front))
+                cloze_ids = {int(m.group(1)) for m in re.finditer(r"\{\{c(\d+)::", front)}
                 if not cloze_ids:
                     cloze_ids = {1}
                 for n in sorted(cloze_ids):
@@ -498,7 +504,7 @@ def export_apkg_from_rows(rows: List[Dict], default_deck_name: str = "Default", 
             z.write(col_path, arcname='collection.anki2')
             # Build media mapping: index string -> filename
             media_mapping = {str(idx): fname for idx, (fname, _) in enumerate(media_accum)}
-            for idx, (fname, content) in enumerate(media_accum):
+            for idx, (_fname, content) in enumerate(media_accum):
                 z.writestr(str(idx), content)
             z.writestr('media', json.dumps(media_mapping))
         return apkg_bytes.getvalue()

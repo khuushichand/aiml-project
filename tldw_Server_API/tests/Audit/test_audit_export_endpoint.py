@@ -415,6 +415,38 @@ async def test_audit_export_filters_and_max_rows(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_audit_export_rejects_non_positive_max_rows(monkeypatch):
+    async with _get_client(monkeypatch) as (client, app):
+        from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+        from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+
+        app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
+        principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+        _override_principal(app, principal)
+
+        class _StubAudit:
+            async def export_events(self, **kwargs):
+                return "[]"
+
+        async def _get_stub_service():
+            return _StubAudit()
+
+        app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+        r0 = await client.get(
+            "/api/v1/audit/export?format=json&max_rows=0",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+        assert r0.status_code == 422
+
+        r1 = await client.get(
+            "/api/v1/audit/export?format=json&max_rows=-1",
+            headers={"X-API-KEY": "test-api-key-12345"},
+        )
+        assert r1.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_audit_count_endpoint_filters(monkeypatch):
     async with _get_client(monkeypatch) as (client, app):
         from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -604,3 +636,67 @@ async def test_audit_export_filename_extension_normalization(monkeypatch):
         )
         cd = r.headers.get("content-disposition", "")
         assert "filename=report.json" in cd
+
+
+@pytest.mark.asyncio
+async def test_audit_export_returns_500_on_read_failure(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "true")
+    from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+    from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+
+    app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
+    principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+    _override_principal(app, principal)
+
+    class _StubAudit:
+        async def export_events(self, **kwargs):
+            raise RuntimeError("audit read failed")
+
+    async def _get_stub_service():
+        return _StubAudit()
+
+    app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+        try:
+            r = await client.get(
+                "/api/v1/audit/export?format=json",
+                headers={"X-API-KEY": "test-api-key-12345"},
+            )
+            assert r.status_code == 500
+        finally:
+            app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_audit_count_returns_500_on_read_failure(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "true")
+    from tldw_Server_API.app.main import app
+    from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+    from tldw_Server_API.app.api.v1.API_Deps import Audit_DB_Deps as audit_deps
+
+    app.dependency_overrides[get_request_user] = lambda: User(id=1, username="admin", is_active=True)
+    principal = _make_principal(is_admin=True, roles=["admin"], permissions=["system.logs"])
+    _override_principal(app, principal)
+
+    class _StubAudit:
+        async def count_events(self, **kwargs):
+            raise RuntimeError("audit count failed")
+
+    async def _get_stub_service():
+        return _StubAudit()
+
+    app.dependency_overrides[audit_deps.get_audit_service_for_user] = _get_stub_service
+
+    transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=None) as client:
+        try:
+            r = await client.get(
+                "/api/v1/audit/count",
+                headers={"X-API-KEY": "test-api-key-12345"},
+            )
+            assert r.status_code == 500
+        finally:
+            app.dependency_overrides.clear()

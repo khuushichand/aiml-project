@@ -2,27 +2,47 @@
 # Async implementation of embeddings creation and management
 
 import asyncio
-import hashlib
-import time
 import atexit
+import contextlib
+import hashlib
 import threading
+import time
 import weakref
-from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
-import numpy as np
+from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
+
 from tldw_Server_API.app.core.Embeddings.connection_pool import get_pool_manager
-from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.error_recovery import get_recovery_manager
-from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
+from tldw_Server_API.app.core.Embeddings.metrics_integration import get_metrics
 from tldw_Server_API.app.core.Embeddings.multi_tier_cache import get_multi_tier_cache
+from tldw_Server_API.app.core.Embeddings.rate_limiter import get_async_rate_limiter
 from tldw_Server_API.app.core.Embeddings.request_batching import get_batcher
 from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
+_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
-def _normalize_embedding_response(payload: Any) -> List[float]:
+
+def _normalize_embedding_response(payload: Any) -> list[float]:
     """Normalize embedding payloads into a single vector."""
     if isinstance(payload, dict):
         if "error" in payload:
@@ -32,7 +52,7 @@ def _normalize_embedding_response(payload: Any) -> List[float]:
 
     try:
         array = np.asarray(payload)
-    except Exception as exc:
+    except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         raise ValueError(f"Unexpected embedding response type: {type(payload)}") from exc
 
     if not np.issubdtype(array.dtype, np.number):
@@ -65,16 +85,16 @@ class AsyncEmbeddingProvider:
         text: str,
         model: str,
         user_id: Optional[str] = None
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding asynchronously"""
         raise NotImplementedError
 
     async def create_embeddings_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         model: str,
         user_id: Optional[str] = None
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """Create embeddings for multiple texts"""
         tasks = [
             self.create_embedding(text, model, user_id)
@@ -102,7 +122,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         model: str = "text-embedding-3-small",
         user_id: Optional[str] = None,
         base_url_override: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using OpenAI API"""
         import time as _time
         t0 = _time.perf_counter()
@@ -112,7 +132,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
         if user_id:
             try:
                 tokens_units = int(_count_tokens(text))
-            except Exception:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
@@ -159,7 +179,7 @@ class AsyncOpenAIProvider(AsyncEmbeddingProvider):
                 return data["data"][0]["embedding"]
             status = "failure"
             raise ValueError("Invalid OpenAI embeddings response format")
-        except Exception as e:
+        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             status = "failure"
             self.metrics.log_error(self.provider_name, str(type(e).__name__))
             raise
@@ -184,14 +204,14 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
         model: str = "sentence-transformers/all-MiniLM-L6-v2",
         user_id: Optional[str] = None,
         base_url_override: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using HuggingFace API"""
 
         # Check rate limit
         if user_id:
             try:
                 tokens_units = int(_count_tokens(text))
-            except Exception:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
@@ -234,7 +254,7 @@ class AsyncHuggingFaceProvider(AsyncEmbeddingProvider):
             )
             # Usage is already recorded in check_rate_limit_async
             return _normalize_embedding_response(data)
-        except Exception as e:
+        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             self.metrics.log_error(self.provider_name, str(type(e).__name__))
             raise
 
@@ -251,7 +271,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
         text: str,
         model: str,
         user_id: Optional[str] = None,
-    ) -> List[float]:
+    ) -> list[float]:
         import time as _time
         t0 = _time.perf_counter()
         status = "success"
@@ -259,7 +279,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
         if user_id:
             try:
                 tokens_units = int(_count_tokens(text))
-            except Exception:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 tokens_units = 0
             allowed, retry_after = await self.rate_limiter.check_rate_limit_async(
                 user_id,
@@ -295,7 +315,7 @@ class AsyncLocalAPIProvider(AsyncEmbeddingProvider):
                 json_data=payload,
             )
             return _normalize_embedding_response(data)
-        except Exception as e:
+        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             status = "failure"
             self.metrics.log_error(self.provider_name, str(type(e).__name__))
             raise
@@ -310,13 +330,13 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
 
     def __init__(self, max_models_in_memory: int = 3, model_ttl_seconds: int = 3600):
         super().__init__("local", None)
-        self.models: Dict[str, Any] = {}
-        self.model_last_used: Dict[str, float] = {}
-        self.model_in_use: Dict[str, int] = {}
+        self.models: dict[str, Any] = {}
+        self.model_last_used: dict[str, float] = {}
+        self.model_in_use: dict[str, int] = {}
         self.max_models_in_memory = max(1, int(max_models_in_memory))
         self.model_ttl_seconds = max(0, int(model_ttl_seconds)) if model_ttl_seconds is not None else 0
         self.executor = ThreadPoolExecutor(max_workers=2)
-        self._model_locks: Dict[str, asyncio.Lock] = {}
+        self._model_locks: dict[str, asyncio.Lock] = {}
         self._model_locks_guard = asyncio.Lock()
         self._models_guard = asyncio.Lock()
 
@@ -354,7 +374,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
             try:
                 if hasattr(model, "cpu"):
                     model.cpu()
-            except Exception:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _evict_if_needed(self, keep: Optional[str] = None) -> None:
@@ -371,8 +391,10 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                         continue
                     to_drop.append(name)
 
-            # Only evict when we exceed the limit; keep exactly max_models_in_memory.
-            while len(self.models) - len(to_drop) > self.max_models_in_memory:
+            # Reserve capacity only when `keep` names a model that is not loaded yet.
+            reserve_slot = 1 if keep is not None and keep not in self.models else 0
+            target_loaded = max(0, self.max_models_in_memory - reserve_slot)
+            while len(self.models) - len(to_drop) > target_loaded:
                 candidates = [
                     (name, last_used) for name, last_used in self.model_last_used.items()
                     if name != keep and self.model_in_use.get(name, 0) <= 0 and name not in to_drop
@@ -412,7 +434,7 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
         text: str,
         model: str = "all-MiniLM-L6-v2",
         user_id: Optional[str] = None
-    ) -> List[float]:
+    ) -> list[float]:
         """Create embedding using local model"""
 
         # Load model if needed
@@ -443,6 +465,7 @@ class AsyncEmbeddingService:
     def __init__(self, config: Optional[Any] = None):
         """Initialize async embedding service"""
         self.config = config or get_config()
+        self.pool_manager = get_pool_manager()
         self.cache = get_multi_tier_cache()
         self.batcher = get_batcher()
         self.recovery_manager = get_recovery_manager()
@@ -487,13 +510,12 @@ class AsyncEmbeddingService:
                         max_models_in_memory=self.config.resources.max_models_in_memory,
                         model_ttl_seconds=self.config.resources.model_ttl_seconds,
                     )
-            elif provider_config.name == "local_api":
-                if provider_config.api_url:
-                    self.providers["local_api"] = AsyncLocalAPIProvider(
-                        api_url=provider_config.api_url,
-                        api_key=provider_config.api_key,
-                    )
-                    pool_key = "local_api"
+            elif provider_config.name == "local_api" and provider_config.api_url:
+                self.providers["local_api"] = AsyncLocalAPIProvider(
+                    api_url=provider_config.api_url,
+                    api_key=provider_config.api_key,
+                )
+                pool_key = "local_api"
 
             try:
                 self.pool_manager.get_pool(
@@ -501,7 +523,7 @@ class AsyncEmbeddingService:
                     max_connections=provider_config.max_connections,
                     timeout_seconds=provider_config.timeout_seconds,
                 )
-            except Exception as exc:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to initialize connection pool for provider '{pool_key}': {exc}")
 
             logger.info(f"Initialized provider: {provider_config.name}")
@@ -514,7 +536,7 @@ class AsyncEmbeddingService:
         user_id: Optional[str] = None,
         use_cache: bool = True,
         use_batching: bool = True
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Create embedding with full async pipeline.
 
@@ -538,12 +560,11 @@ class AsyncEmbeddingService:
         actual_model = model
         provider_config = self.config.get_provider(provider)
         base_url_override: Optional[str] = None
-        if provider_config and provider in {"openai", "huggingface"}:
-            if provider_config.api_url:
-                base_url_override = provider_config.api_url
-                # Ensure explicit provider overrides reach the async providers directly.
-                if explicit_provider:
-                    use_batching = False
+        if provider_config and provider in {"openai", "huggingface"} and provider_config.api_url:
+            base_url_override = provider_config.api_url
+            # Ensure explicit provider overrides reach the async providers directly.
+            if explicit_provider:
+                use_batching = False
 
         # Create deterministic cache key across processes
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -578,7 +599,7 @@ class AsyncEmbeddingService:
                 if base_url_override and provider in {"openai", "huggingface"}:
                     call_kwargs["base_url_override"] = base_url_override
                 embedding = await provider_instance.create_embedding(**call_kwargs)
-            except Exception as e:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 # Try fallback provider
                 embedding, actual_provider, actual_model = await self._try_fallback_providers(
                     text, model, provider, user_id, e
@@ -609,12 +630,12 @@ class AsyncEmbeddingService:
 
     async def create_embeddings_batch(
         self,
-        texts: List[str],
+        texts: list[str],
         model: Optional[str] = None,
         provider: Optional[str] = None,
         user_id: Optional[str] = None,
         parallel: bool = True
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         """
         Create embeddings for multiple texts.
 
@@ -652,7 +673,7 @@ class AsyncEmbeddingService:
         failed_provider: str,
         user_id: Optional[str],
         original_error: Exception
-    ) -> Tuple[List[float], str, str]:
+    ) -> tuple[list[float], str, str]:
         """Try fallback providers when primary fails"""
 
         # Get provider config
@@ -695,7 +716,7 @@ class AsyncEmbeddingService:
                     embedding = await provider_instance.create_embedding(**call_kwargs)
                     used_model = fallback_model or model
                     return embedding, fallback, used_model
-                except Exception as e:
+                except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Fallback provider {fallback} also failed: {e}")
 
         # No fallback available or fallback failed
@@ -718,10 +739,10 @@ class AsyncEmbeddingService:
                 elapsed = time.time() - start_time
                 logger.info(f"Provider {provider_name} warmed up in {elapsed:.2f}s")
 
-            except Exception as e:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to warmup provider {provider_name}: {e}")
 
-    async def get_provider_status(self) -> Dict[str, Any]:
+    async def get_provider_status(self) -> dict[str, Any]:
         """Get status of all providers"""
         status = {}
 
@@ -739,7 +760,7 @@ class AsyncEmbeddingService:
                     "status": "healthy",
                     "latency_ms": int(latency * 1000)
                 }
-            except Exception as e:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 status[provider_name] = {
                     "status": "unhealthy",
                     "error": str(e)
@@ -764,11 +785,9 @@ class AsyncEmbeddingService:
             if hasattr(provider, 'executor'):
                 try:
                     provider.executor.shutdown(wait=False)
-                except Exception:
-                    try:
+                except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                    with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         provider.executor.shutdown(wait=False)
-                    except Exception:
-                        pass
 
         logger.info("Async embedding service shutdown complete")
 
@@ -804,10 +823,8 @@ async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = 
 
             if current_loop and task_loop is current_loop:
                 task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
             else:
                 # Different loop or no running loop; request cancellation and return
                 try:
@@ -815,16 +832,12 @@ async def _cancel_health_check_task(loop: Optional[asyncio.AbstractEventLoop] = 
                         task_loop.call_soon_threadsafe(task.cancel)
                     else:
                         task.cancel()
-                except Exception:
-                    try:
+                except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
+                    with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                         task.cancel()
-                    except Exception:
-                        pass
         finally:
-            try:
+            with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 _health_check_tasks.pop(task_loop, None)
-            except Exception:
-                pass
 
 
 async def _shutdown_service(service: AsyncEmbeddingService):
@@ -857,7 +870,7 @@ def get_async_embedding_service() -> AsyncEmbeddingService:
         if not _shutdown_registered:
             try:
                 atexit.register(_shutdown_async_embedding_service_sync)
-            except Exception as exc:
+            except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to register async embedding service shutdown hook: {exc}")
             else:
                 _shutdown_registered = True
@@ -882,20 +895,16 @@ def _shutdown_async_embedding_service_sync():
                     fut = asyncio.run_coroutine_threadsafe(_shutdown_service(service), loop)
                     try:
                         fut.result(timeout=15)
-                    except Exception as exc:
-                        try:
+                    except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
+                        with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             logger.warning(f"Async embedding service shutdown timed out: {exc}")
-                        except Exception:
-                            pass
                 else:
                     loop.run_until_complete(_shutdown_service(service))
             else:
                 asyncio.run(_shutdown_service(service))
-        except Exception as exc:
-            try:
+        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
+            with contextlib.suppress(_ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 logger.warning(f"Failed during async embedding service shutdown: {exc}")
-            except Exception:
-                pass
 
     for loop, service in services:
         _shutdown_with_loop(service, loop)
@@ -910,7 +919,7 @@ async def create_embedding_async(
     model: Optional[str] = None,
     provider: Optional[str] = None,
     user_id: Optional[str] = None
-) -> List[float]:
+) -> list[float]:
     """
     Create a single embedding asynchronously.
 
@@ -928,11 +937,11 @@ async def create_embedding_async(
 
 
 async def create_embeddings_batch_async(
-    texts: List[str],
+    texts: list[str],
     model: Optional[str] = None,
     provider: Optional[str] = None,
     user_id: Optional[str] = None
-) -> List[List[float]]:
+) -> list[list[float]]:
     """
     Create embeddings for multiple texts asynchronously.
 
@@ -983,5 +992,8 @@ async def periodic_health_check():
                 if info["status"] == "unhealthy":
                     logger.warning(f"Provider {provider} is unhealthy: {info.get('error')}")
 
-        except Exception as e:
+        except asyncio.CancelledError:
+            # Propagate cancellation so shutdown can stop this task promptly.
+            raise
+        except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error in periodic health check: {e}")

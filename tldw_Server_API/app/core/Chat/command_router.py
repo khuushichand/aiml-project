@@ -18,23 +18,42 @@ Env flags:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import re
-import time
 from dataclasses import dataclass
-import asyncio
-from typing import Callable, Dict, Optional, Tuple, List
+from typing import Callable, Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.rate_limiter import TokenBucket
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
-from tldw_Server_API.app.core.Metrics import increment_counter
-from tldw_Server_API.app.core.Integrations import weather_providers
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.Integrations import weather_providers
+from tldw_Server_API.app.core.Metrics import increment_counter
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
+
+_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 try:
     from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission as _user_has_permission
-except Exception:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
+except ImportError:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
     def _user_has_permission(user_id: int, permission: str) -> bool:  # type: ignore
         return True
 
@@ -42,10 +61,10 @@ except Exception:  # pragma: no cover - fallback if AuthNZ is trimmed in tests
 SLASH_RE = re.compile(r"^/(\w+)(?:\s+(.*))?$")
 
 
-def _cfg() -> Optional[any]:
+def _cfg() -> any | None:
     try:
         return load_comprehensive_config()
-    except Exception:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -58,7 +77,7 @@ def _cfg_bool(env_name: str, cfg_key: str, fallback: bool) -> bool:
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=str(fallback))
             return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             return fallback
     return fallback
 
@@ -68,14 +87,14 @@ def _cfg_int(env_name: str, cfg_key: str, fallback: int) -> int:
     if isinstance(v, str) and v.strip():
         try:
             return max(1, int(v))
-        except Exception:
+        except (TypeError, ValueError):
             return fallback
     cp = _cfg()
     if cp and cp.has_section('Chat-Commands'):
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=str(fallback))
             return max(1, int(str(raw)))
-        except Exception:
+        except (TypeError, ValueError):
             return fallback
     return fallback
 
@@ -89,7 +108,7 @@ def _cfg_str(env_name: str, cfg_key: str, fallback: str) -> str:
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=fallback)
             return str(raw).strip()
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             return fallback
     return fallback
 
@@ -106,7 +125,7 @@ def is_single_user_mode() -> bool:
     """
     try:
         return str(os.getenv("AUTH_MODE", "")).strip().lower() == "single_user"
-    except Exception:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
         return False
 
 
@@ -126,9 +145,9 @@ def _per_command_rpm() -> int:
 @dataclass
 class CommandContext:
     user_id: str = "anonymous"
-    conversation_id: Optional[str] = None
-    request_meta: Optional[Dict] = None
-    auth_user_id: Optional[int] = None  # numeric user id when available for RBAC
+    conversation_id: str | None = None
+    request_meta: dict | None = None
+    auth_user_id: int | None = None  # numeric user id when available for RBAC
 
 
 @dataclass
@@ -136,7 +155,7 @@ class CommandResult:
     ok: bool
     command: str
     content: str
-    metadata: Dict
+    metadata: dict
 
 
 Handler = Callable[[CommandContext, Optional[str]], CommandResult]
@@ -147,20 +166,20 @@ class CommandSpec:
     name: str
     description: str
     handler: Handler
-    allowed_roles: Optional[List[str]] = None  # reserved for future RBAC
-    required_permission: Optional[str] = None  # permission string when enforcement is enabled
+    allowed_roles: list[str] | None = None  # reserved for future RBAC
+    required_permission: str | None = None  # permission string when enforcement is enabled
 
 
-_registry: Dict[str, CommandSpec] = {}
-_buckets: Dict[Tuple[str, str], TokenBucket] = {}
+_registry: dict[str, CommandSpec] = {}
+_buckets: dict[tuple[str, str], TokenBucket] = {}
 
 
 def register_command(
     name: str,
     description: str,
     handler: Handler,
-    allowed_roles: Optional[List[str]] = None,
-    required_permission: Optional[str] = None,
+    allowed_roles: list[str] | None = None,
+    required_permission: str | None = None,
 ) -> None:
     _registry[name.lower()] = CommandSpec(
         name=name.lower(),
@@ -171,11 +190,11 @@ def register_command(
     )
 
 
-def list_commands() -> List[Dict[str, str]]:
+def list_commands() -> list[dict[str, str]]:
     return [{"name": spec.name, "description": spec.description} for spec in _registry.values()]
 
 
-def parse_slash_command(message: str) -> Optional[Tuple[str, Optional[str]]]:
+def parse_slash_command(message: str) -> tuple[str, str | None] | None:
     if not isinstance(message, str):
         return None
     m = SLASH_RE.match(message.strip())
@@ -196,7 +215,7 @@ def _acquire_bucket(user_id: str, command: str) -> TokenBucket:
     return _buckets[key]
 
 
-def dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> CommandResult:
+def dispatch_command(ctx: CommandContext, command: str, args: str | None) -> CommandResult:
     raise RuntimeError(
         "command_router.dispatch_command has been removed. "
         "Use async_dispatch_command(...) or the chat orchestrator "
@@ -204,7 +223,7 @@ def dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> 
     )
 
 
-async def async_dispatch_command(ctx: CommandContext, command: str, args: Optional[str]) -> CommandResult:
+async def async_dispatch_command(ctx: CommandContext, command: str, args: str | None) -> CommandResult:
     """Async variant of dispatch_command that uses TokenBucket.consume() safely.
 
     Mirrors dispatch_command behavior but awaits the bucket's consume method to
@@ -225,14 +244,14 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: Option
                 permitted = bool(_user_has_permission(int(ctx.auth_user_id), spec.required_permission))
             else:
                 permitted = False
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             permitted = False
         if not permitted:
             log_counter("chat_command_error", labels={"command": cmd, "reason": "permission_denied"})
             try:
                 increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "permission_denied"})
                 increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "denied"})
-            except Exception:
+            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
                 pass
             details.update({"permitted": False})
             return CommandResult(
@@ -250,7 +269,7 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: Option
         try:
             increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "rate_limited"})
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "rate_limited"})
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             pass
         return CommandResult(
             ok=False,
@@ -265,23 +284,19 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: Option
             res = await res  # type: ignore[assignment]
         # annotate result metadata with RBAC info when applicable
         if rbac_enforced and spec.required_permission:
-            try:
+            with contextlib.suppress(_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS):
                 res.metadata = {**(res.metadata or {}), "rbac": {"checked": True, "required_permission": spec.required_permission, "permitted": True}}
-            except Exception:
-                pass
         log_counter("chat_command_invoked", labels={"command": cmd})
-        try:
+        with contextlib.suppress(_COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS):
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "success"})
-        except Exception:
-            pass
         return res
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error executing /{cmd}: {e}", exc_info=True)
         log_counter("chat_command_error", labels={"command": cmd, "reason": "exception"})
         try:
             increment_counter("chat_command_errors_total", labels={"command": cmd, "reason": "exception"})
             increment_counter("chat_command_invoked_total", labels={"command": cmd, "status": "error"})
-        except Exception:
+        except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             pass
         return CommandResult(ok=False, command=cmd, content=f"Command /{cmd} failed: {e}", metadata={"error": "exception"})
 
@@ -290,7 +305,7 @@ async def async_dispatch_command(ctx: CommandContext, command: str, args: Option
 # Built-in command handlers
 # -----------------------------
 
-def _time_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
+def _time_handler(ctx: CommandContext, args: str | None) -> CommandResult:
     from datetime import datetime
     try:
         # Optional timezone support via zoneinfo
@@ -302,7 +317,7 @@ def _time_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
                 from zoneinfo import ZoneInfo  # Python 3.9+
                 dt = datetime.now(ZoneInfo(tzlabel))
                 tzused = tzlabel
-            except Exception:
+            except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
                 dt = datetime.now()
                 tzused = "local"
         else:
@@ -314,11 +329,11 @@ def _time_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
             content=f"Current time ({tzused}): {text}",
             metadata={"tz": tzused},
         )
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         return CommandResult(ok=False, command="time", content=f"Time lookup failed: {e}", metadata={"error": "time_error"})
 
 
-def _weather_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
+def _weather_handler(ctx: CommandContext, args: str | None) -> CommandResult:
     location = (args or "").strip()
     if not location:
         location = _cfg_str("DEFAULT_LOCATION", "default_location", "").strip()
@@ -333,7 +348,7 @@ def _weather_handler(ctx: CommandContext, args: Optional[str]) -> CommandResult:
         if result.ok:
             return CommandResult(ok=True, command="weather", content=result.summary, metadata=result.metadata)
         return CommandResult(ok=False, command="weather", content=result.summary, metadata={"error": "unavailable"})
-    except Exception as e:
+    except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Weather provider error: {e}", exc_info=True)
         return CommandResult(ok=False, command="weather", content=f"Weather unavailable: {e}", metadata={"error": "exception"})
 
@@ -343,7 +358,7 @@ register_command("time", "Show the current time (optional TZ).", _time_handler, 
 register_command("weather", "Show current weather for a location.", _weather_handler, required_permission="chat.commands.weather")
 
 # --- Test seam helpers ---
-def get_weather_client(ctx: Optional[CommandContext] = None):
+def get_weather_client(ctx: CommandContext | None = None):
     """Thin wrapper to allow tests to monkeypatch the weather client at the router level.
 
     Tests expect to patch command_router.get_weather_client; delegate to the

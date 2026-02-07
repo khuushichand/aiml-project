@@ -6,15 +6,17 @@
 #
 ########################################################################################################################
 
+import contextlib
 import os
-from typing import Optional, Dict, Any
 from pathlib import Path
-from urllib.parse import urlparse, unquote
+from typing import Any, Optional
+from urllib.parse import unquote, urlparse
+
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig, BackendType
-from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseConfig
+from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import UserDatabase
 
 logger = logger
 
@@ -119,10 +121,7 @@ class AuthDatabaseConfig:
 
         if base_scheme in {"sqlite", "file", ""}:
             combined = _combine_path()
-            if combined == ":memory:":
-                sqlite_path = ":memory:"
-            else:
-                sqlite_path = combined
+            sqlite_path = ":memory:" if combined == ":memory:" else combined
         else:
             # Fallback for unexpected schemes, treat as direct path
             sqlite_path = raw_url
@@ -243,10 +242,8 @@ class AuthDatabaseConfig:
                             exc_info=pool_exc,
                         )
         self._user_db = None
-        try:
+        with contextlib.suppress(Exception):
             delattr(self, "_initialized")
-        except Exception:
-            pass
 
     @staticmethod
     def _get_bool_env(key: str, default: bool) -> bool:
@@ -267,7 +264,7 @@ class AuthDatabaseConfig:
             return False
         return default
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_info(self) -> dict[str, Any]:
         """
         Get configuration information for debugging/logging.
 

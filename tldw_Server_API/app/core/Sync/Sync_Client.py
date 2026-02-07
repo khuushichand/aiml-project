@@ -2,18 +2,26 @@
 import json
 import os
 import sqlite3  # For specific error types
-from typing import List, Dict, Optional, Tuple
+from typing import Optional
+
 #
 # Third-Party Imports
 from loguru import logger
+
 #
 # Local Imports
 try:
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, ConflictError, DatabaseError, InputError
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+        ConflictError,
+        DatabaseError,
+        InputError,
+        MediaDatabase,
+    )
 except ImportError:
     logger.error("Could not import the 'Media_DB' library. Make sure Media_DB.py is accessible.")
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError, EgressPolicyError
+from tldw_Server_API.app.core.exceptions import EgressPolicyError, NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import fetch
+
 #
 #######################################################################################################################
 #
@@ -32,8 +40,19 @@ DATABASE_PATH = f"./client_dbs/{CLIENT_ID}_media.db" # Example: One DB per clien
 SYNC_BATCH_SIZE = 50 # How many changes to send/receive at once
 SYNC_INTERVAL_SECONDS = 60 # How often to run the sync cycle automatically
 
+SYNC_RUNTIME_ERRORS = (
+    DatabaseError,
+    sqlite3.Error,
+    ValueError,
+    TypeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    json.JSONDecodeError,
+)
 
-def _extract_http_status_error(exc: Exception) -> Optional[Tuple[int, str]]:
+
+def _extract_http_status_error(exc: Exception) -> Optional[tuple[int, str]]:
     resp = getattr(exc, "response", None)
     status = getattr(resp, "status_code", None)
     if status is None:
@@ -77,7 +96,7 @@ class ClientSyncEngine:
         """Loads the last sync IDs from the state file."""
         try:
             if os.path.exists(self.state_file):
-                with open(self.state_file, 'r') as f:
+                with open(self.state_file) as f:
                     state = json.load(f)
                     self.last_local_log_id_sent = state.get('last_local_log_id_sent', 0)
                     self.last_server_log_id_processed = state.get('last_server_log_id_processed', 0)
@@ -86,7 +105,7 @@ class ClientSyncEngine:
                 logger.info(f"State file {self.state_file} not found, starting from scratch.")
                 # Ensure the initial save happens if the file doesn't exist
                 self._save_sync_state()
-        except (json.JSONDecodeError, IOError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
             logger.error(f"Error loading sync state from {self.state_file}: {e}. Starting from scratch.", exc_info=True)
             self.last_local_log_id_sent = 0
             self.last_server_log_id_processed = 0
@@ -106,7 +125,7 @@ class ClientSyncEngine:
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=4)
             logger.debug(f"Saved sync state to {self.state_file}: {state}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Error saving sync state to {self.state_file}: {e}", exc_info=True)
 
     # --- Core Sync Logic ---
@@ -122,16 +141,13 @@ class ClientSyncEngine:
         except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
             logger.error(f"Network error during push phase: {e}")
             network_error = True # Don't proceed to pull if push failed due to network
-        except Exception as e:
+        except SYNC_RUNTIME_ERRORS as e:
             # Treat centralized NetworkError as network error as well
-            try:
-                http_err = _extract_http_status_error(e)
-                if http_err:
-                    status, text = http_err
-                    logger.error(f"HTTP error during push phase: {status} - {text}")
-                else:
-                    logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
-            except Exception:
+            http_err = _extract_http_status_error(e)
+            if http_err:
+                status, text = http_err
+                logger.error(f"HTTP error during push phase: {status} - {text}")
+            else:
                 logger.error(f"Unexpected error during push phase: {e}", exc_info=True)
             # Decide if we should attempt pull phase even if push had non-network error
 
@@ -142,7 +158,7 @@ class ClientSyncEngine:
 
             except (NetworkError, RetryExhaustedError, EgressPolicyError) as e:
                 logger.error(f"Network error during pull phase: {e}")
-            except Exception as e:
+            except SYNC_RUNTIME_ERRORS as e:
                 http_err = _extract_http_status_error(e)
                 if http_err:
                     status, text = http_err
@@ -211,7 +227,7 @@ class ClientSyncEngine:
             self._save_sync_state()
             logger.info(f"Successfully pushed {len(client_changes)} changes. Last sent ID updated to {new_last_sent}.")
 
-        except Exception as e:
+        except SYNC_RUNTIME_ERRORS as e:
             http_err = _extract_http_status_error(e)
             if http_err:
                 status, text = http_err
@@ -284,7 +300,7 @@ class ClientSyncEngine:
         # Let transport errors be caught by run_sync_cycle
 
 
-    def _apply_remote_changes_batch(self, changes: List[Dict]) -> bool:
+    def _apply_remote_changes_batch(self, changes: list[dict]) -> bool:
         """
         Applies a batch of ordered changes received from the server within a single transaction.
         Returns True if the entire batch was applied successfully (or skipped idempotently), False otherwise.
@@ -309,12 +325,12 @@ class ClientSyncEngine:
                          if not resolved:
                               logger.error(f"Conflict resolution failed for change ID {change['change_id']}. Rolling back batch.")
                               all_applied_or_skipped = False
-                              raise cf_err # Re-raise to trigger transaction rollback
+                              raise # Re-raise to trigger transaction rollback
 
                     except (DatabaseError, sqlite3.Error, json.JSONDecodeError, KeyError, InputError) as item_error:
                         logger.error(f"Failed to apply change ID {change['change_id']} ({change['entity']} {change['operation']}): {item_error}", exc_info=True)
                         all_applied_or_skipped = False
-                        raise item_error # Re-raise to trigger transaction rollback
+                        raise # Re-raise to trigger transaction rollback
 
             # If the loop completes without exceptions, the transaction commits here.
             logger.info("Batch of remote changes applied transactionally.")
@@ -322,13 +338,13 @@ class ClientSyncEngine:
         except (DatabaseError, sqlite3.Error, ConflictError) as e:
             logger.error(f"Transaction rolled back while applying remote changes batch: {e}")
             all_applied_or_skipped = False
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError, json.JSONDecodeError) as e:
              logger.error(f"Unexpected error during remote changes batch application: {e}", exc_info=True)
              all_applied_or_skipped = False
 
         return all_applied_or_skipped
 
-    def _apply_single_change(self, cursor: sqlite3.Cursor, change: Dict):
+    def _apply_single_change(self, cursor: sqlite3.Cursor, change: dict):
         """
         Applies a single change record. Raises ConflictError if optimistic lock fails.
         This is called within the transaction managed by _apply_remote_changes_batch.
@@ -400,7 +416,7 @@ class ClientSyncEngine:
                                      authoritative_timestamp, force_apply=False)
 
 
-    def _resolve_conflict(self, cursor: sqlite3.Cursor, change: Dict, conflict_error: ConflictError) -> bool:
+    def _resolve_conflict(self, cursor: sqlite3.Cursor, change: dict, conflict_error: ConflictError) -> bool:
         """
         Attempts to resolve a conflict based on the chosen strategy (LWW).
         Returns True if resolved (applied or skipped), False if resolution failed.
@@ -432,11 +448,11 @@ class ClientSyncEngine:
                 # Skip applying the remote change; local state is kept
                 return True # Resolved by skipping remote change
 
-        except Exception as e:
+        except (DatabaseError, sqlite3.Error, ConflictError, ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
             logger.error(f"Error during LWW conflict resolution for {entity} {entity_uuid}: {e}", exc_info=True)
             return False # Resolution failed
 
-    def _execute_change_sql(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: Dict, uuid: str,
+    def _execute_change_sql(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: dict, uuid: str,
                             remote_version: int, client_id: str, timestamp: str, force_apply: bool = False):
         """
         Generates and executes SQL to apply a single change operation locally.
@@ -502,7 +518,7 @@ class ClientSyncEngine:
         # --- End Optimistic Lock SQL ---
 
         main_sql = ""
-        main_params_tuple = tuple()
+        main_params_tuple = ()
         execute_main_sql = False  # Flag to control execution flow
 
         # --- Prepare SQL for main operation ---
@@ -515,10 +531,12 @@ class ClientSyncEngine:
             all_data = {**payload, **core_sync_meta, 'deleted': payload.get('deleted', 0)}
 
             for col in table_columns:
-                if col == 'id': continue
+                if col == 'id':
+                    continue
                 if col in all_data:
                     value = all_data[col]
-                    if isinstance(value, bool): value = 1 if value else 0
+                    if isinstance(value, bool):
+                        value = 1 if value else 0
                     cols_sql.append(f"`{col}`")
                     placeholders_sql.append("?")
                     params_list.append(value)
@@ -537,7 +555,8 @@ class ClientSyncEngine:
             for col in table_columns:
                 if col in payload and col not in ['id', 'uuid']:
                     value = payload[col]
-                    if isinstance(value, bool): value = 1 if value else 0
+                    if isinstance(value, bool):
+                        value = 1 if value else 0
                     set_clauses.append(f"`{col}` = ?")
                     params_list.append(value)
 
@@ -580,11 +599,11 @@ class ClientSyncEngine:
 
         # --- Determine Manual FTS Operations Needed ---
         fts_update_sql = None
-        fts_update_params = tuple()
+        fts_update_params = ()
         fts_delete_sql = None
-        fts_delete_params = tuple()
+        fts_delete_params = ()
         fts_insert_sql = None
-        fts_insert_params = tuple()
+        fts_insert_params = ()
 
         if entity == 'Media':
             if operation == 'create' and ('title' in payload or 'content' in payload):
@@ -648,7 +667,7 @@ class ClientSyncEngine:
                 if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql and rows_affected == 0:
                     logger.warning(
                         f"Optimistic lock failed for {entity} UUID {uuid} (Op: {operation}, Expected Base Ver: {expected_base_version}). Rowcount 0.")
-                    raise ConflictError(f"Optimistic lock failed applying change.", entity=entity, identifier=uuid)
+                    raise ConflictError("Optimistic lock failed applying change.", entity=entity, identifier=uuid)
                 elif not force_apply and operation == 'create' and rows_affected == 0:
                     logger.warning(
                         f"'Create' operation for {entity} UUID {uuid} affected 0 rows (INSERT OR IGNORE). Likely benign duplicate.")
@@ -675,7 +694,7 @@ class ClientSyncEngine:
         elif not main_sql:
             logger.debug(f"No Main SQL generated or needed execution for {entity} {uuid} (Op: {operation})")
 
-    def _execute_media_keyword_sql(self, cursor: sqlite3.Cursor, operation: str, payload: Dict):
+    def _execute_media_keyword_sql(self, cursor: sqlite3.Cursor, operation: str, payload: dict):
         """Handles SQL execution specifically for the MediaKeywords junction table."""
         media_uuid = payload.get('media_uuid')
         keyword_uuid = payload.get('keyword_uuid')
@@ -702,7 +721,7 @@ class ClientSyncEngine:
         keyword_id_local = kw_rec[0]  # Access by index for SQLite Row
 
         sql = ""
-        params_tuple = tuple()
+        params_tuple = ()
 
         if operation == 'link':
             # Use INSERT OR IGNORE for idempotency. If the link already exists, it does nothing.
@@ -724,7 +743,7 @@ class ClientSyncEngine:
     # --- Helper to get table columns (cached for efficiency) ---
     _column_cache = {}
 
-    def _get_table_columns(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[List[str]]:
+    def _get_table_columns(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[list[str]]:
         """Gets column names for a table, using a simple cache."""
         if table_name in self._column_cache:
             return self._column_cache[table_name]
@@ -781,7 +800,7 @@ if __name__ == "__main__":
             # Use the Database instance methods directly for local changes
             db.add_keyword("test_sync_keyword") # 'db' is guaranteed to be Database object here if no exception occurred above
             logger.info("Local change presumably made and logged by sync_log trigger.")
-        except Exception as e:
+        except (DatabaseError, sqlite3.Error, ValueError, TypeError) as e:
             logger.error(f"Error making simulated local change: {e}")
 
 
@@ -799,7 +818,19 @@ if __name__ == "__main__":
         # time.sleep(SYNC_INTERVAL_SECONDS)
         # if engine: engine.run_sync_cycle()
 
-    except Exception as main_err:
+    except (
+        DatabaseError,
+        sqlite3.Error,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+        json.JSONDecodeError,
+        NetworkError,
+        RetryExhaustedError,
+        EgressPolicyError,
+    ) as main_err:
         logger.error(f"Critical error during client sync setup or execution: {main_err}", exc_info=True)
 
     finally:
@@ -809,7 +840,7 @@ if __name__ == "__main__":
              try:
                   db.close_connection() # Close the connection for this main thread
                   logger.info("Closed main thread DB connection.")
-             except Exception as close_err:
+             except (DatabaseError, sqlite3.Error, OSError, RuntimeError, ValueError) as close_err:
                   logger.error(f"Error closing DB connection: {close_err}")
         else:
             logger.warning("DB object was not successfully initialized, no connection to close.")

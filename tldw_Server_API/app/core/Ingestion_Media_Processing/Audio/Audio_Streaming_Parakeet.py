@@ -16,24 +16,23 @@
 import asyncio
 import base64
 import json
-from loguru import logger
 import time
-from typing import Optional, AsyncGenerator, Dict, Any, Callable
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
 import numpy as np
-import soundfile as sf
-import tempfile
-from pathlib import Path
+from loguru import logger
+
+from .Audio_Transcription_Lib import is_transcription_error_message
 
 # Import transcription functions
 from .Audio_Transcription_Nemo import (
     transcribe_with_parakeet,
-    load_parakeet_model,
 )
 from .Audio_Transcription_Parakeet_MLX import (
     transcribe_with_parakeet_mlx,
 )
-from .Audio_Transcription_Lib import is_transcription_error_message
 
 logger = logger
 
@@ -153,7 +152,7 @@ class ParakeetStreamingTranscriber:
 
         return _noop()
 
-    async def process_audio_chunk(self, audio_data: bytes) -> Optional[Dict[str, Any]]:
+    async def process_audio_chunk(self, audio_data: bytes) -> Optional[dict[str, Any]]:
         """
         Process a chunk of audio data.
 
@@ -243,7 +242,7 @@ class ParakeetStreamingTranscriber:
             return result
 
         except Exception as e:
-            logger.error(f"Error processing audio chunk: {e}")
+            logger.exception(f"Error processing audio chunk: {e}")
             return {"type": "error", "message": str(e)}
 
     async def _transcribe_chunk(self, audio_chunk: np.ndarray) -> Optional[str]:
@@ -277,10 +276,10 @@ class ParakeetStreamingTranscriber:
                 )
                 return result
         except Exception as e:
-            logger.error(f"Transcription error: {e}")
+            logger.exception(f"Transcription error: {e}")
             return None
 
-    async def flush(self) -> Optional[Dict[str, Any]]:
+    async def flush(self) -> Optional[dict[str, Any]]:
         """Process any remaining audio in the buffer."""
         if self.buffer.get_duration() > 0:
             audio = self.buffer.get_audio()
@@ -326,7 +325,7 @@ async def handle_websocket_transcription(
         # Defer imports to avoid circular dependencies during module import
         from .Audio_Streaming_Unified import UnifiedStreamingConfig, handle_unified_websocket
     except Exception as import_err:
-        logger.error(f"Failed to import unified streaming handler: {import_err}")
+        logger.exception(f"Failed to import unified streaming handler: {import_err}")
         raise
 
     # Map legacy StreamingConfig to UnifiedStreamingConfig
@@ -427,7 +426,7 @@ def create_streaming_generator(
                     yield result["text"]
 
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
+            logger.exception(f"Streaming error: {e}")
             yield f"[Error: {str(e)}]"
 
     return generate()

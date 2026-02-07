@@ -3,6 +3,7 @@
 # FIXME - File is dummy code, needs to be updated
 import uuid
 
+
 class EphemeralStorage:
     def __init__(self):
         self._store = {}

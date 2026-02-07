@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Set
+from typing import Any
 
 from loguru import logger
 
@@ -22,7 +22,7 @@ _USER_PROFILE_QUOTA_KEYS = {
     "limits.prompt_studio_max_queued_jobs": "JOBS_QUOTA_MAX_QUEUED_PROMPT_STUDIO_USER_{user_id}",
     "limits.prompt_studio_submits_per_min": "JOBS_QUOTA_SUBMITS_PER_MIN_PROMPT_STUDIO_USER_{user_id}",
 }
-_APPLIED_USER_QUOTAS: Dict[str, Set[str]] = {}
+_APPLIED_USER_QUOTAS: dict[str, set[str]] = {}
 
 
 def _parse_quota(value: str) -> int | None:
@@ -49,9 +49,9 @@ def _read_setting(key: str) -> str | None:
     return env_value
 
 
-def apply_prompt_studio_quota_defaults() -> Dict[str, int]:
+def apply_prompt_studio_quota_defaults() -> dict[str, int]:
     """Apply Prompt Studio quota defaults to core Jobs env vars."""
-    applied: Dict[str, int] = {}
+    applied: dict[str, int] = {}
     for source_key, target_key in _QUOTA_ENV_MAP.items():
         if os.getenv(target_key):
             continue
@@ -67,7 +67,7 @@ def apply_prompt_studio_quota_defaults() -> Dict[str, int]:
     return applied
 
 
-async def _load_effective_config(user_id: int) -> Dict[str, Any]:
+async def _load_effective_config(user_id: int) -> dict[str, Any]:
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
     from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
 
@@ -80,7 +80,7 @@ async def _load_effective_config(user_id: int) -> Dict[str, Any]:
     )
 
 
-async def apply_prompt_studio_quota_policy(user_id: str) -> Dict[str, int]:
+async def apply_prompt_studio_quota_policy(user_id: str) -> dict[str, int]:
     """Apply per-user Prompt Studio quotas from AuthNZ policy/DB overrides."""
     if not user_id:
         return {}
@@ -97,8 +97,8 @@ async def apply_prompt_studio_quota_policy(user_id: str) -> Dict[str, int]:
         logger.debug("Prompt Studio quota policy lookup failed for user {}: {}", user_id, exc)
         return {}
 
-    applied: Dict[str, int] = {}
-    active_keys: Set[str] = set()
+    applied: dict[str, int] = {}
+    active_keys: set[str] = set()
     for profile_key, env_fmt in _USER_PROFILE_QUOTA_KEYS.items():
         raw = effective.get(profile_key)
         if raw is None:

@@ -6,18 +6,18 @@ Handles invite creation, validation, redemption, and cleanup.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.repos.org_invites_repo import AuthnzOrgInvitesRepo
 from tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo import AuthnzOrgsTeamsRepo
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 class InviteStatus(str, Enum):
@@ -33,8 +33,8 @@ class InviteStatus(str, Enum):
 class InviteValidationResult:
     """Result of invite validation."""
     status: InviteStatus
-    invite: Optional[Dict[str, Any]] = None
-    message: Optional[str] = None
+    invite: dict[str, Any] | None = None
+    message: str | None = None
 
     @property
     def is_valid(self) -> bool:
@@ -45,14 +45,14 @@ class InviteValidationResult:
 class RedemptionResult:
     """Result of invite redemption."""
     success: bool
-    invite_id: Optional[int] = None
-    org_id: Optional[int] = None
-    org_name: Optional[str] = None
-    team_id: Optional[int] = None
-    team_name: Optional[str] = None
-    role: Optional[str] = None
+    invite_id: int | None = None
+    org_id: int | None = None
+    org_name: str | None = None
+    team_id: int | None = None
+    team_name: str | None = None
+    role: str | None = None
     was_already_member: bool = False
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class OrgInviteService:
@@ -68,9 +68,9 @@ class OrgInviteService:
 
     def __init__(
         self,
-        db_pool: Optional[DatabasePool] = None,
-        invites_repo: Optional[AuthnzOrgInvitesRepo] = None,
-        orgs_repo: Optional[AuthnzOrgsTeamsRepo] = None,
+        db_pool: DatabasePool | None = None,
+        invites_repo: AuthnzOrgInvitesRepo | None = None,
+        orgs_repo: AuthnzOrgsTeamsRepo | None = None,
     ):
         self._db_pool = db_pool
         self._invites_repo = invites_repo
@@ -98,13 +98,13 @@ class OrgInviteService:
         *,
         org_id: int,
         created_by: int,
-        team_id: Optional[int] = None,
+        team_id: int | None = None,
         role_to_grant: str = "member",
         max_uses: int = 1,
         expiry_days: int = 7,
-        description: Optional[str] = None,
-        allowed_email_domain: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        description: str | None = None,
+        allowed_email_domain: str | None = None,
+    ) -> dict[str, Any]:
         """
         Create a new organization invite code.
 
@@ -228,7 +228,7 @@ class OrgInviteService:
             message="Invite is valid"
         )
 
-    async def preview_invite(self, code: str) -> Optional[Dict[str, Any]]:
+    async def preview_invite(self, code: str) -> dict[str, Any] | None:
         """
         Get a public preview of an invite (no auth required).
 
@@ -264,9 +264,9 @@ class OrgInviteService:
         *,
         code: str,
         user_id: int,
-        user_email: Optional[str] = None,
-        ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None,
+        user_email: str | None = None,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> RedemptionResult:
         """
         Redeem an invite code, adding the user to the org/team.
@@ -421,7 +421,7 @@ class OrgInviteService:
         include_inactive: bool = False,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """
         List invites for an organization.
 
@@ -465,7 +465,7 @@ class OrgInviteService:
 
         return result
 
-    async def get_invite(self, invite_id: int) -> Optional[Dict[str, Any]]:
+    async def get_invite(self, invite_id: int) -> dict[str, Any] | None:
         """Get invite by ID."""
         invites_repo = await self._get_invites_repo()
         return await invites_repo.get_invite_by_id(invite_id)
@@ -485,7 +485,7 @@ class OrgInviteService:
 
 
 # Singleton instance
-_invite_service: Optional[OrgInviteService] = None
+_invite_service: OrgInviteService | None = None
 
 
 async def get_invite_service() -> OrgInviteService:

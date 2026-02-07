@@ -20,6 +20,10 @@ export const buildActorSettingsFromForm = (
   isEnabled: !!values.actorEnabled,
   notes: values.actorNotes ?? "",
   notesGmOnly: !!values.actorNotesGmOnly,
+  appendable:
+    typeof values.actorAppendable === "boolean"
+      ? values.actorAppendable
+      : base.appendable ?? false,
   chatPosition: values.actorChatPosition || base.chatPosition,
   chatDepth: (() => {
     const raw =
@@ -244,9 +248,22 @@ export const buildActorMessage = async (
 
   // Default/system role
   return await systemPromptFormatter({
-    content: text
+    content: text,
+    appendable: settings.appendable === true
   })
 }
+
+const extractMessageText = (message: BaseMessage): string => {
+  const content = message.content
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content
+    .map((part) => (part && part.type === "text" ? part.text : ""))
+    .join("")
+}
+
+const getAppendableFlag = (message: BaseMessage): boolean =>
+  message.additional_kwargs?.appendable === true
 
 export const maybeInjectActorMessage = async (
   history: BaseMessage[],
@@ -270,6 +287,49 @@ export const maybeInjectActorMessage = async (
     actorText
   )
   if (!actorMessage) return history
+
+  if (
+    templatesActive &&
+    actorSettings?.templateMode === "override" &&
+    actorMessage instanceof SystemMessage
+  ) {
+    if (actorSettings.chatPosition === "after") {
+      const lastSystemIndex = (() => {
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i] instanceof SystemMessage) return i
+        }
+        return -1
+      })()
+
+      if (lastSystemIndex >= 0) {
+        const target = history[lastSystemIndex]
+        const targetAppendable = getAppendableFlag(target)
+        const actorAppendable = actorSettings.appendable === true
+
+        if (actorAppendable && targetAppendable) {
+          const targetText = extractMessageText(target)
+          const actorTextCombined = extractMessageText(actorMessage)
+          const combined = [targetText, actorTextCombined]
+            .filter((part) => part && part.trim().length > 0)
+            .join("\n\n")
+          const merged = new SystemMessage({
+            content: combined,
+            additional_kwargs: {
+              ...target.additional_kwargs,
+              appendable: true
+            }
+          })
+          const next = [...history]
+          next[lastSystemIndex] = merged
+          return next
+        }
+
+        const next = [...history]
+        next[lastSystemIndex] = actorMessage
+        return next
+      }
+    }
+  }
 
   return injectActorMessageIntoHistory(
     history,

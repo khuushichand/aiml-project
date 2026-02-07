@@ -7,7 +7,6 @@ Provides role-based access control for self-service org management.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 from fastapi import Depends, Header, HTTPException, Query, status
 from loguru import logger
@@ -32,7 +31,7 @@ class TeamContext:
     org_id: int
     team_id: int
     org_role: str
-    team_role: Optional[str] = None
+    team_role: str | None = None
     is_platform_admin: bool = False
 
 
@@ -54,7 +53,7 @@ def _role_at_least(user_role: str, required_role: str) -> bool:
     return user_level >= required_level
 
 
-def _is_membership_active(membership: Optional[dict]) -> bool:
+def _is_membership_active(membership: dict | None) -> bool:
     if not membership:
         return False
     status = membership.get("status")
@@ -64,15 +63,15 @@ def _is_membership_active(membership: Optional[dict]) -> bool:
     return str(status).strip().lower() in ACTIVE_MEMBERSHIP_STATUSES
 
 
-def _role_allowed(user_role: str, allowed_roles: List[str]) -> bool:
+def _role_allowed(user_role: str, allowed_roles: list[str]) -> bool:
     if not allowed_roles:
         return True
     return any(_role_at_least(user_role, role) for role in allowed_roles)
 
 
 async def _get_user_org_membership(
-    user_id: int, org_id: int, repo: Optional[AuthnzOrgsTeamsRepo] = None
-) -> Optional[dict]:
+    user_id: int, org_id: int, repo: AuthnzOrgsTeamsRepo | None = None
+) -> dict | None:
     """Get a user's membership in an organization."""
     if repo is None:
         db_pool = await get_db_pool()
@@ -81,8 +80,8 @@ async def _get_user_org_membership(
 
 
 async def _get_user_team_membership(
-    user_id: int, team_id: int, repo: Optional[AuthnzOrgsTeamsRepo] = None
-) -> Optional[dict]:
+    user_id: int, team_id: int, repo: AuthnzOrgsTeamsRepo | None = None
+) -> dict | None:
     """Get a user's membership in a team."""
     if repo is None:
         db_pool = await get_db_pool()
@@ -140,12 +139,11 @@ def require_org_role(*allowed_roles: str):
         user_role = membership.get("role", "member")
 
         # If specific roles are required, check them
-        if allowed_roles_normalized:
-            if not _role_allowed(user_role, allowed_roles_normalized):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles_normalized)}",
-                )
+        if allowed_roles_normalized and not _role_allowed(user_role, allowed_roles_normalized):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. Required role: {', '.join(allowed_roles_normalized)}",
+            )
 
         return OrgContext(
             org_id=org_id,
@@ -279,7 +277,7 @@ def require_team_lead():
 
 async def get_user_orgs(
     principal: AuthPrincipal = Depends(get_auth_principal),
-) -> List[dict]:
+) -> list[dict]:
     """
     Get all organizations the current user belongs to.
 
@@ -293,9 +291,9 @@ async def get_user_orgs(
 
 async def get_active_org_id(
     principal: AuthPrincipal = Depends(get_auth_principal),
-    x_tldw_org_id: Optional[int] = Header(None, alias="X-TLDW-Org-Id"),
-    org_id: Optional[int] = Query(None, description="Organization ID (optional)"),
-) -> Optional[int]:
+    x_tldw_org_id: int | None = Header(None, alias="X-TLDW-Org-Id"),
+    org_id: int | None = Query(None, description="Organization ID (optional)"),
+) -> int | None:
     """
     Resolve the active org ID for the current request.
 

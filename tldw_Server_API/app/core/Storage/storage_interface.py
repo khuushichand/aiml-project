@@ -5,8 +5,8 @@
 # while maintaining a consistent API for storing and retrieving media files.
 
 from abc import ABC, abstractmethod
-from typing import AsyncIterator, BinaryIO, Optional, Union
-from pathlib import Path
+from collections.abc import AsyncIterator
+from typing import BinaryIO, Optional, Union
 
 
 class StorageBackend(ABC):

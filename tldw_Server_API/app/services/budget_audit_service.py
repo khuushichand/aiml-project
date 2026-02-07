@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Helpers for emitting mandatory audit events for budget updates."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import Request
 
@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 
 
-def _coerce_actor_id(actor_id_raw: Optional[Any]) -> Optional[int]:
+def _coerce_actor_id(actor_id_raw: Any | None) -> int | None:
     """Best-effort conversion of actor identifiers to int."""
     try:
         return int(actor_id_raw) if actor_id_raw is not None else None
@@ -30,10 +30,10 @@ async def emit_budget_audit_event(
     principal: AuthPrincipal,
     *,
     org_id: int,
-    budget_updates: Optional[Dict[str, Any]],
-    audit_changes: Optional[List[Dict[str, Any]]],
+    budget_updates: dict[str, Any] | None,
+    audit_changes: list[dict[str, Any]] | None,
     clear_budgets: bool,
-    actor_role: Optional[str],
+    actor_role: str | None,
 ) -> None:
     """Emit a mandatory audit event for a budget update."""
     actor_id_raw = getattr(request.state, "user_id", None) or principal.user_id

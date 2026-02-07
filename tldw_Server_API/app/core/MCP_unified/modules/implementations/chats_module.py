@@ -6,11 +6,30 @@ FTS-only search backed by ChaChaNotes DB.
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from sqlite3 import Error as SQLiteError
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
+
+_CHATS_HEALTHCHECK_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
+_CHATS_CLOSE_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+    AttributeError,
+)
 
 
 class ChatsModule(BaseModule):
@@ -20,25 +39,23 @@ class ChatsModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Chats module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = CharactersRAGDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -50,12 +67,12 @@ class ChatsModule(BaseModule):
                     # Trivial call to ensure DB usable
                     _ = db.search_messages_by_content("ping", conversation_id=None, limit=1)
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _CHATS_HEALTHCHECK_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="chats.search",
@@ -97,12 +114,12 @@ class ChatsModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+        except (TypeError, ValueError) as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
         if tool_name == "chats.search":
             return await self._search(args, context)
         if tool_name == "chats.get":
@@ -117,7 +134,7 @@ class ChatsModule(BaseModule):
             raise ValueError("ChaChaNotes DB path not available in context")
         return CharactersRAGDB(db_path=chacha_path, client_id=f"mcp_chats_{self.config.name}")
 
-    async def _search(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         by: str = args.get("by", "both")
         limit: int = int(args.get("limit", 10))
@@ -138,7 +155,7 @@ class ChatsModule(BaseModule):
             sender,
         )
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "chats.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):
@@ -187,7 +204,7 @@ class ChatsModule(BaseModule):
                 if loc.get("message_id") is not None and not isinstance(loc.get("message_id"), str):
                     raise ValueError("retrieval.loc.message_id must be a string if provided")
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         conversation_id: str = args.get("conversation_id")
         retrieval = args.get("retrieval") or {}
         mode = retrieval.get("mode", "snippet")
@@ -223,11 +240,11 @@ class ChatsModule(BaseModule):
         snippet_len: int,
         character_id: Any,
         sender: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             max_fetch = limit + offset
-            combined: List[Dict[str, Any]] = []
+            combined: list[dict[str, Any]] = []
             convs_raw_len = 0
             msgs_raw_len = 0
 
@@ -261,7 +278,7 @@ class ChatsModule(BaseModule):
             if by in {"both", "message"}:
                 msgs = db.search_messages_by_content(query, conversation_id=None, limit=max_fetch)
                 msgs_raw_len = len(msgs)
-                msg_results: List[Dict[str, Any]] = []
+                msg_results: list[dict[str, Any]] = []
                 for r in msgs:
                     if sender and (str(r.get("sender") or "").lower() != str(sender).lower()):
                         continue
@@ -301,8 +318,10 @@ class ChatsModule(BaseModule):
             }
         finally:
             try:
-                db.close_all_connections()
-            except Exception as exc:
+                close_all = getattr(db, "close_all_connections", None)
+                if callable(close_all):
+                    close_all()
+            except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats search: {}", exc)
 
     def _get_sync(
@@ -313,8 +332,8 @@ class ChatsModule(BaseModule):
         snippet_len: int,
         max_tokens: Any,
         cpt: int,
-        loc: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        loc: dict[str, Any],
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             conv = db.get_conversation_by_id(conversation_id)
@@ -350,7 +369,7 @@ class ChatsModule(BaseModule):
                 try:
                     if isinstance(loc, dict) and loc.get("message_id"):
                         anchor_id = str(loc.get("message_id"))
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     anchor_id = None
                 anchor_index = 0
                 if anchor_id:
@@ -401,6 +420,8 @@ class ChatsModule(BaseModule):
             return {"meta": meta, "content": meta["snippet"], "attachments": None}
         finally:
             try:
-                db.close_all_connections()
-            except Exception as exc:
+                close_all = getattr(db, "close_all_connections", None)
+                if callable(close_all):
+                    close_all()
+            except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats get: {}", exc)

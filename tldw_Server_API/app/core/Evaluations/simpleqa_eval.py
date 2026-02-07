@@ -14,8 +14,9 @@ SimpleQA features:
 
 import json
 import re
-from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
+from typing import Any
+
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import BaseEvaluation
@@ -40,7 +41,7 @@ class SimpleQAEvaluation(BaseEvaluation):
         self.grading_model = grading_model
         self.strict_grading = strict_grading
 
-    def format_for_custom_metric(self, input_data: Dict[str, Any]) -> Dict[str, Any]:
+    def format_for_custom_metric(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Format SimpleQA question for evaluation.
 
         Args:
@@ -173,7 +174,7 @@ EXPLANATION: [brief explanation]"""
 
         return response.strip()
 
-    def score(self, predicted: str, expected: str) -> Tuple[float, str]:
+    def score(self, predicted: str, expected: str) -> tuple[float, str]:
         """Score a SimpleQA answer.
 
         This is a simplified scoring for when not using LLM grading.
@@ -246,7 +247,7 @@ EXPLANATION: [brief explanation]"""
 
         return text
 
-    def parse_grading_response(self, grading_response: str) -> Dict[str, Any]:
+    def parse_grading_response(self, grading_response: str) -> dict[str, Any]:
         """Parse the grading response from LLM.
 
         Args:
@@ -297,7 +298,7 @@ class SimpleQADataset:
     """Helper class for loading and managing SimpleQA dataset."""
 
     @staticmethod
-    def load_from_file(filepath: str) -> List[Dict[str, Any]]:
+    def load_from_file(filepath: str) -> list[dict[str, Any]]:
         """Load SimpleQA dataset from file.
 
         Args:
@@ -314,12 +315,12 @@ class SimpleQADataset:
 
         # Determine format
         if path.suffix == '.jsonl':
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         questions.append(json.loads(line))
         else:  # Assume JSON
-            with open(path, 'r', encoding='utf-8') as f:
+            with open(path, encoding='utf-8') as f:
                 data = json.load(f)
 
                 # Handle different JSON structures
@@ -341,7 +342,7 @@ class SimpleQADataset:
 
     @staticmethod
     def load_from_huggingface(dataset_id: str = "openai/simple-qa",
-                            split: str = "test") -> List[Dict[str, Any]]:
+                            split: str = "test") -> list[dict[str, Any]]:
         """Load SimpleQA from HuggingFace.
 
         Args:
@@ -354,7 +355,7 @@ class SimpleQADataset:
         try:
             from datasets import load_dataset
         except ImportError:
-            logger.error("HuggingFace datasets not installed. Install with: pip install datasets")
+            logger.exception("HuggingFace datasets not installed. Install with: pip install datasets")
             return []
 
         try:
@@ -383,11 +384,11 @@ class SimpleQADataset:
             return questions
 
         except Exception as e:
-            logger.error(f"Failed to load SimpleQA from HuggingFace: {e}")
+            logger.exception(f"Failed to load SimpleQA from HuggingFace: {e}")
             return []
 
     @staticmethod
-    def create_sample_dataset() -> List[Dict[str, Any]]:
+    def create_sample_dataset() -> list[dict[str, Any]]:
         """Create a sample SimpleQA dataset for testing.
 
         Returns:
@@ -451,7 +452,7 @@ class SimpleQAAnalyzer:
     """Analyzer for SimpleQA results."""
 
     @staticmethod
-    def analyze_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def analyze_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         """Analyze SimpleQA evaluation results.
 
         Args:
@@ -517,7 +518,7 @@ class SimpleQAAnalyzer:
         }
 
     @staticmethod
-    def generate_report(results: List[Dict[str, Any]],
+    def generate_report(results: list[dict[str, Any]],
                        benchmark_name: str = "SimpleQA") -> str:
         """Generate a formatted report of SimpleQA results.
 

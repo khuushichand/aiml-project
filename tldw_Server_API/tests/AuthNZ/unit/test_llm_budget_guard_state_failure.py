@@ -89,6 +89,7 @@ async def test_enforce_llm_budget_error_payload_shape(monkeypatch):
     assert isinstance(detail.get("details"), dict)
     assert detail["details"].get("path") == "/unit/llm-guard"
     assert detail["details"].get("attributes") == ["api_key_id", "user_id"]
+    assert "intentional state failure" not in str(detail)
 
 
 @pytest.mark.asyncio

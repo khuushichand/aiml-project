@@ -41,10 +41,11 @@ export function useEpubSearch(
 
     try {
       // epub.js search returns results from all chapters
-      const searchResults = await book.search(query)
+      const searchFn = (book as any)?.search
+      const searchResults = searchFn ? await searchFn.call(book, query) : []
 
       // Map results to our format
-      const mappedResults: EpubSearchResult[] = searchResults.map((result: any) => ({
+      const mappedResults: EpubSearchResult[] = (searchResults || []).map((result: any) => ({
         cfi: result.cfi,
         excerpt: result.excerpt || query,
         chapter: result.section?.label

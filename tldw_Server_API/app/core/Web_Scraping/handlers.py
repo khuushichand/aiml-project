@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any, Callable, Dict
+from typing import Any, Callable
+
+HandlerFunc = Callable[[str, str], dict[str, Any]]
 
 
-HandlerFunc = Callable[[str, str], Dict[str, Any]]
-
-
-def handle_generic_html(html: str, url: str) -> Dict[str, Any]:
+def handle_generic_html(html: str, url: str) -> dict[str, Any]:
     """Default handler: extract article metadata and convert content to Markdown."""
     # Lazy import to avoid circular dependency with Article_Extractor_Lib.
     from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
-        extract_article_data_from_html,
         convert_html_to_markdown,
+        extract_article_data_from_html,
     )
 
     data = extract_article_data_from_html(html, url)

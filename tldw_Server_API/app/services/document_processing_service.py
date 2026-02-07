@@ -6,22 +6,34 @@ import os
 import tempfile
 import time
 import zipfile
+from typing import Any, Optional
 
 import pypandoc
-from typing import Optional, List, Dict, Any
 from docx2txt import docx2txt
+from fastapi import HTTPException
 from pypandoc import convert_file
 
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
-from tldw_Server_API.app.core.Utils.Utils import logging
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from fastapi import HTTPException
+from tldw_Server_API.app.core.Utils.Utils import logging
 
+_DOC_PROCESSING_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _ensure_placeholder_enabled():
@@ -34,8 +46,8 @@ def _file_security_strict() -> bool:
     return (_os.getenv("FILE_SECURITY_STRICT", "true").strip().lower() in {"1","true","yes","on"})
 
 async def process_documents(
-    doc_urls: Optional[List[str]],
-    doc_files: Optional[List[str]],
+    doc_urls: Optional[list[str]],
+    doc_files: Optional[list[str]],
     api_name: Optional[str],
     api_key: Optional[str],
     custom_prompt_input: Optional[str],
@@ -43,7 +55,7 @@ async def process_documents(
     use_cookies: bool,
     cookies: Optional[str],
     keep_original: bool,
-    custom_keywords: List[str],
+    custom_keywords: list[str],
     chunk_method: Optional[str],
     max_chunk_size: int,
     chunk_overlap: int,
@@ -53,7 +65,7 @@ async def process_documents(
     store_in_db: bool = False,
     overwrite_existing: bool = False,
     custom_title: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Process a set of documents (URLs or local files).
     1) Download/Read the files
@@ -67,11 +79,11 @@ async def process_documents(
     processed_count = 0
     failed_count = 0
 
-    progress_log: List[str] = []
-    results: List[Dict[str, Any]] = []
+    progress_log: list[str] = []
+    results: list[dict[str, Any]] = []
 
     # Track temporary files for cleanup if needed
-    temp_files: List[str] = []
+    temp_files: list[str] = []
 
     def update_progress(message: str):
         logging.info(message)
@@ -86,7 +98,7 @@ async def process_documents(
                 if os.path.exists(fp):
                     os.remove(fp)
                     update_progress(f"Removed temp file: {fp}")
-            except Exception as e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
                 update_progress(f"Failed to remove {fp}: {str(e)}")
 
     def download_document_file(url: str, use_cookies: bool, cookies: Optional[str]) -> str:
@@ -110,20 +122,27 @@ async def process_documents(
                         raise RuntimeError(msg)
                     else:
                         logging.warning(f"[file_security] non-strict: {msg}")
-            except Exception as _e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _e:
                 if _file_security_strict():
-                    raise RuntimeError(f"Egress policy failure: {_e}")
+                    raise RuntimeError(f"Egress policy failure: {_e}") from _e
                 else:
                     logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
 
             # Validate with HEAD before download (size/MIME)
+            from loguru import logger as _logger
+
             from tldw_Server_API.app.core.http_client import (
-                fetch as http_fetch,
-                download as http_download,
                 RetryPolicy,
+            )
+            from tldw_Server_API.app.core.http_client import (
                 create_client as http_create_client,
             )
-            from loguru import logger as _logger
+            from tldw_Server_API.app.core.http_client import (
+                download as http_download,
+            )
+            from tldw_Server_API.app.core.http_client import (
+                fetch as http_fetch,
+            )
 
             head_headers: dict = {}
             _last_err: Optional[Exception] = None
@@ -146,9 +165,9 @@ async def process_documents(
                 finally:
                     try:
                         sc0.close()
-                    except Exception as cleanup_err:
+                    except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                         _logger.debug(f"Ignored client close error (preflight GET): {cleanup_err}")
-            except Exception as e_gr:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e_gr:
                 _last_err = e_gr
                 _logger.debug("Preflight GET Range failed, trying single HEAD with retries=1 (no http2): {}", e_gr)
                 # As a best-effort fallback, try a single HEAD with http2 disabled and limited retries
@@ -172,14 +191,14 @@ async def process_documents(
                         finally:
                             try:
                                 head_resp2.close()
-                            except Exception as cleanup_err:
+                            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                                 _logger.debug(f"Ignored response close error (preflight HEAD): {cleanup_err}")
                     finally:
                         try:
                             sc.close()
-                        except Exception as cleanup_err:
+                        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                             _logger.debug(f"Ignored client close error (preflight HEAD): {cleanup_err}")
-                except Exception as e2:
+                except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e2:
                     _last_err = e2
                     _logger.warning("All preflight attempts failed for URL {}: {}", url, e2)
                     raise _last_err from e2
@@ -200,9 +219,9 @@ async def process_documents(
                             raise RuntimeError(f"MIME not allowed: {mt}")
                         else:
                             logging.warning(f"[file_security] non-strict: MIME {mt} not allowed; continuing")
-            except Exception as _guard:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _guard:
                 if _file_security_strict():
-                    raise RuntimeError(str(_guard))
+                    raise RuntimeError(str(_guard)) from _guard
                 else:
                     logging.warning(f"[file_security] non-strict: guard error {str(_guard)}; continuing")
 
@@ -216,14 +235,14 @@ async def process_documents(
                 http_download(url=url, dest=tmp_path, headers=headers, retry=RetryPolicy())
                 temp_files.append(tmp_path)
                 return tmp_path
-            except Exception as e:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
                 try:
                     os.unlink(tmp_path)
-                except Exception as cleanup_err:
+                except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logging.debug(f"Ignored tmp unlink error: {cleanup_err}")
-                raise RuntimeError(f"Download from '{url}' failed: {e}")
-        except Exception as e:
-            raise RuntimeError(f"Download from '{url}' failed: {str(e)}")
+                raise RuntimeError(f"Download from '{url}' failed: {e}") from e
+        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
+            raise RuntimeError(f"Download from '{url}' failed: {str(e)}") from e
 
     def convert_to_text(file_path: str) -> str:
         """
@@ -234,7 +253,7 @@ async def process_documents(
         ext = ext.lower()
 
         if ext in [".txt", ".md"]:
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(file_path, encoding="utf-8", errors="replace") as f:
                 return f.read()
 
         elif ext == ".docx":
@@ -248,14 +267,14 @@ async def process_documents(
             # Minimal placeholder for PDF - prefer the dedicated PDF pipeline elsewhere
             try:
                 return pypandoc.convert_file(file_path, 'plain', format='pdf')
-            except Exception:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS:
                 return "[PDF format not handled here - use a separate PDF pipeline?]"
 
         else:
             return "[Unsupported file extension or not recognized]"
 
     def build_plaintext_chunks(text: str, method: Optional[str] = None, max_size: int = 500, overlap: int = 50,
-                               language: Optional[str] = None) -> List[Dict[str, Any]]:
+                               language: Optional[str] = None) -> list[dict[str, Any]]:
         """Chunk plaintext and return items ready for UnvectorizedMediaChunks persistence.
 
         Uses hierarchical flat chunking to obtain offsets and paragraph kind, then maps
@@ -279,7 +298,7 @@ async def process_documents(
             "header_line": "heading",
             "header_atx": "heading",
         }
-        chunks_out: List[Dict[str, Any]] = []
+        chunks_out: list[dict[str, Any]] = []
         for item in flat:
             md = item.get("metadata", {}) or {}
             start = md.get("start_offset")
@@ -340,7 +359,7 @@ async def process_documents(
                 # Combine them in a single pass
                 combined_summary = "\n\n".join(chunk_summaries)
                 return combined_summary
-        except Exception as e:
+        except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
             update_progress(f"Summarization failed: {str(e)}")
             return "Summary generation failed"
 
@@ -419,7 +438,7 @@ async def process_documents(
                 processed_count += 1
                 item_result["success"] = True
                 update_progress(f"Processed URL {i} successfully.")
-            except Exception as exc:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as exc:
                 failed_count += 1
                 item_result["error"] = str(exc)
                 update_progress(f"Failed to process URL {i}: {str(exc)}")
@@ -498,7 +517,7 @@ async def process_documents(
                 processed_count += 1
                 item_result["success"] = True
                 update_progress(f"Processed file {i}/{len(doc_files)}: {file_path}")
-            except Exception as exc:
+            except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as exc:
                 failed_count += 1
                 item_result["error"] = str(exc)
                 update_progress(f"Failed to process file {i} ({file_path}): {str(exc)}")
@@ -564,7 +583,7 @@ def _extract_zip_and_combine(zip_path: str) -> str:
                 extracted_path = os.path.join(root, f)
                 # Read each file
                 if ext in [".txt", ".md"]:
-                    with open(extracted_path, "r", encoding="utf-8", errors="replace") as f_obj:
+                    with open(extracted_path, encoding="utf-8", errors="replace") as f_obj:
                         combined_text.append(f_obj.read())
                 elif ext == ".docx":
                     combined_text.append(docx2txt.process(extracted_path))

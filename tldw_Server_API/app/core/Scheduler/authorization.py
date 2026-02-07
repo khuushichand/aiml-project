@@ -5,9 +5,10 @@ This module provides authorization checks to ensure users can only
 submit and manage tasks they have permissions for.
 """
 
-from typing import Optional, List, Dict, Any, Set
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -24,8 +25,8 @@ class AuthContext:
     """Authorization context for a request"""
     user_id: Optional[str] = None
     api_key: Optional[str] = None
-    roles: List[str] = None
-    permissions: Set[str] = None
+    roles: list[str] = None
+    permissions: set[str] = None
 
     def __post_init__(self):
         if self.roles is None:
@@ -58,26 +59,26 @@ class TaskAuthorizer:
     def __init__(self):
         """Initialize the authorizer"""
         # Handler permissions: handler_name -> required permissions
-        self._handler_permissions: Dict[str, Set[TaskPermission]] = {}
+        self._handler_permissions: dict[str, set[TaskPermission]] = {}
 
         # Queue permissions: queue_name -> required permissions
-        self._queue_permissions: Dict[str, Set[TaskPermission]] = {}
+        self._queue_permissions: dict[str, set[TaskPermission]] = {}
 
         # User rate limits: user_id -> max tasks per minute
-        self._user_rate_limits: Dict[str, int] = {}
+        self._user_rate_limits: dict[str, int] = {}
 
         # Default permissions for unauthenticated users
         self._allow_anonymous = False
-        self._anonymous_handlers: Set[str] = set()
+        self._anonymous_handlers: set[str] = set()
 
         # Admin-only handlers
-        self._admin_handlers: Set[str] = set()
+        self._admin_handlers: set[str] = set()
 
         logger.info("Task authorizer initialized")
 
     def register_handler_permissions(self,
                                     handler: str,
-                                    permissions: List[TaskPermission],
+                                    permissions: list[TaskPermission],
                                     admin_only: bool = False) -> None:
         """
         Register permission requirements for a handler.
@@ -97,7 +98,7 @@ class TaskAuthorizer:
 
     def register_queue_permissions(self,
                                   queue: str,
-                                  permissions: List[TaskPermission]) -> None:
+                                  permissions: list[TaskPermission]) -> None:
         """
         Register permission requirements for a queue.
 
@@ -153,9 +154,8 @@ class TaskAuthorizer:
             return False, "Authentication required"
 
         # Check admin-only handlers
-        if handler in self._admin_handlers:
-            if not context.is_admin:
-                return False, f"Handler '{handler}' requires admin privileges"
+        if handler in self._admin_handlers and not context.is_admin:
+            return False, f"Handler '{handler}' requires admin privileges"
 
         # Admins bypass further permission checks
         if context.is_admin:
@@ -254,8 +254,8 @@ class TaskAuthorizer:
         return False, "Not authorized to view this task"
 
     def filter_handlers_for_user(self,
-                                handlers: List[str],
-                                context: AuthContext) -> List[str]:
+                                handlers: list[str],
+                                context: AuthContext) -> list[str]:
         """
         Filter list of handlers to only those user can access.
 
@@ -345,7 +345,7 @@ def get_authorizer() -> TaskAuthorizer:
     return _authorizer
 
 
-def require_auth(permissions: List[TaskPermission] = None,
+def require_auth(permissions: list[TaskPermission] = None,
                 admin_only: bool = False):
     """
     Decorator to mark a handler as requiring authentication.

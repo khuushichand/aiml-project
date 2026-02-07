@@ -8,26 +8,27 @@ cheap LLM fallback (configurable) with caching to reduce token usage.
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import re
 import time
-import hashlib
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
 
 class PromptQualityScorer:
     """Prompt quality scoring with optional LLM fallback and caching."""
 
-    def __init__(self, executor: Optional[Any] = None, scorer_model: Optional[str] = None, cache_ttl_sec: int = 600):
+    def __init__(self, executor: Any | None = None, scorer_model: str | None = None, cache_ttl_sec: int = 600):
         self._executor = executor
         self._scorer_model = scorer_model
         self._cache_ttl = cache_ttl_sec
-        self._cache: Dict[str, Tuple[float, float]] = {}  # key -> (score, expires_at)
+        self._cache: dict[str, tuple[float, float]] = {}  # key -> (score, expires_at)
         self._on_tokens = None  # Optional callback(int)
 
     def set_executor(self, executor: Any) -> None:
         self._executor = executor
 
-    def set_model(self, model_name: Optional[str]) -> None:
+    def set_model(self, model_name: str | None) -> None:
         self._scorer_model = model_name
 
     def set_token_callback(self, cb) -> None:
@@ -39,9 +40,7 @@ class PromptQualityScorer:
         usr_len = len(user_text.strip())
         if 60 <= sys_len <= 800:
             score += 2.0
-        elif sys_len < 20:
-            score -= 1.0
-        elif sys_len > 1200:
+        elif sys_len < 20 or sys_len > 1200:
             score -= 1.0
         if 20 <= usr_len <= 2000:
             score += 1.0
@@ -102,10 +101,8 @@ class PromptQualityScorer:
             )
             text = (res or {}).get("content", "").strip()
             if self._on_tokens:
-                try:
+                with contextlib.suppress(Exception):
                     self._on_tokens(int((res or {}).get("tokens", 0) or 0))
-                except Exception:
-                    pass
             m = re.search(r"\d+(?:\.\d+)?", text)
             llm_score = float(m.group(0)) if m else base
             final = float(max(0.0, min(10.0, 0.6 * base + 0.4 * llm_score)))

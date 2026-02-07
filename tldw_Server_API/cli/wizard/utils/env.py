@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional
 
 from loguru import logger
 
@@ -18,8 +17,8 @@ _SENSITIVE_TOKENS = ("KEY", "SECRET", "TOKEN", "PASSWORD")
 @dataclass(frozen=True)
 class ParsedEnvLine:
     raw: str
-    key: Optional[str]
-    value: Optional[str]
+    key: str | None
+    value: str | None
     export: bool
 
 
@@ -28,7 +27,7 @@ class EnvUpdateResult:
     path: Path
     created: bool
     changed: bool
-    backup_path: Optional[Path]
+    backup_path: Path | None
     updated_keys: tuple[str, ...]
     added_keys: tuple[str, ...]
     dry_run: bool
@@ -42,9 +41,8 @@ def _strip_inline_comment(value: str) -> str:
             in_single = not in_single
         elif ch == '"' and not in_single:
             in_double = not in_double
-        elif ch == "#" and not in_single and not in_double:
-            if idx == 0 or value[idx - 1].isspace():
-                return value[:idx].rstrip()
+        elif ch == "#" and not in_single and not in_double and (idx == 0 or value[idx - 1].isspace()):
+            return value[:idx].rstrip()
     return value
 
 
@@ -101,7 +99,7 @@ def _chmod_600(path: Path) -> None:
         logger.debug(f"chmod on {path} ignored: {exc}")
 
 
-def load_env(path: Path) -> Dict[str, str]:
+def load_env(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     content = path.read_text(encoding="utf-8")
@@ -126,7 +124,7 @@ def mask_value(value: str) -> str:
     return "*" * (len(value) - 4) + value[-4:]
 
 
-def mask_env_values(values: Dict[str, str]) -> Dict[str, str]:
+def mask_env_values(values: dict[str, str]) -> dict[str, str]:
     masked: dict[str, str] = {}
     for key, value in values.items():
         if is_sensitive_key(key):
@@ -149,8 +147,8 @@ def generate_single_user_api_key() -> str:
 def ensure_env(
     path: Path,
     *,
-    updates: Dict[str, Optional[str]] | None = None,
-    defaults: Dict[str, Optional[str]] | None = None,
+    updates: dict[str, str | None] | None = None,
+    defaults: dict[str, str | None] | None = None,
     dry_run: bool = False,
 ) -> EnvUpdateResult:
     """Create or update a .env file idempotently with backups."""
@@ -197,13 +195,10 @@ def ensure_env(
             rendered.append(_format_env_line(key, str(value)))
             added_keys.append(key)
 
-    if rendered:
-        new_content = "\n".join(rendered).rstrip("\n") + "\n"
-    else:
-        new_content = ""
+    new_content = "\n".join(rendered).rstrip("\n") + "\n" if rendered else ""
 
     changed = new_content != content
-    backup_path: Optional[Path] = None
+    backup_path: Path | None = None
     if existed and changed and not dry_run:
         backup_path = _backup_env(path, content)
 

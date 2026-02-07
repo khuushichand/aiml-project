@@ -7,24 +7,31 @@ with support for multiple providers, streaming, and fallback strategies.
 """
 
 import asyncio
-import re
 import json
+import re
 import time
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, AsyncIterator, List, Union, Protocol
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Union, cast
 
 from loguru import logger
 
 # Import LLM infrastructure
 from ...Chat.Chat_Deps import ChatConfigurationError
 from ...LLM_Calls.adapter_registry import get_registry
-
 from .types import Document
+
+if TYPE_CHECKING:
+    from .claims import ClaimsEngine as ClaimsEngineType
+else:
+    ClaimsEngineType = Any
+
+ClaimsEngine: Optional[type[ClaimsEngineType]] = None
 try:
-    from .claims import ClaimsEngine
-except Exception:
+    from . import claims as _claims_mod
+    ClaimsEngine = cast(Optional[type[ClaimsEngineType]], getattr(_claims_mod, "ClaimsEngine", None))
+except ImportError:
     ClaimsEngine = None
 
 
@@ -36,11 +43,11 @@ class GenerationStrategy(Protocol):
         context: Any,  # RAGPipelineContext
         query: str,
         **kwargs
-    ) -> str:
+    ) -> "GenerationResult":
         """Generate a response using the context and query."""
         ...
 
-    async def generate_stream(
+    def generate_stream(
         self,
         context: Any,
         query: str,
@@ -75,7 +82,7 @@ class GenerationResult:
     generation_time: float
     provider: str
     model: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class PromptTemplates:
@@ -186,7 +193,7 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
     if isinstance(chunk, (bytes, bytearray)):
         try:
             chunk = chunk.decode("utf-8", errors="ignore")
-        except Exception:
+        except UnicodeDecodeError:
             return None
     if isinstance(chunk, str):
         stripped = chunk.strip()
@@ -198,13 +205,13 @@ def _extract_stream_text(chunk: Any) -> Optional[str]:
                 return None
             try:
                 payload = json.loads(data)
-            except Exception:
+            except json.JSONDecodeError:
                 return data or None
             return _extract_openai_content(payload) or None
         return stripped
     try:
         return str(chunk)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -216,7 +223,7 @@ class BaseGenerator(ABC):
         self.config = config
         self.prompt_template = PromptTemplates.get_template(config.prompt_template)
 
-    def format_context(self, documents: List[Document]) -> str:
+    def format_context(self, documents: list[Document]) -> str:
         """Format documents into context string."""
         if not documents:
             return "No relevant context found."
@@ -285,13 +292,12 @@ class LLMGenerator(BaseGenerator):
             prompt = self.build_prompt(context_text, query)
 
             # Add system prompt if configured
-            if self.config.system_prompt:
-                full_prompt = f"{self.config.system_prompt}\n\n{prompt}"
-            else:
-                full_prompt = prompt
+            full_prompt = f"{self.config.system_prompt}\n\n{prompt}" if self.config.system_prompt else prompt
 
             # Call appropriate LLM provider
-            response = await self._call_llm(full_prompt, **kwargs)
+            response: Any = await self._call_llm(full_prompt, **kwargs)
+            if asyncio.iscoroutine(response):
+                response = await response
 
             # Extract text from response
             response_text = _extract_openai_content(response)
@@ -340,7 +346,7 @@ class LLMGenerator(BaseGenerator):
         max_tokens = kwargs.get("max_tokens", self.config.max_tokens)
         timeout = kwargs.get("timeout", self.config.timeout)
 
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
             "model": model,
             "api_key": api_key,
@@ -384,10 +390,7 @@ class StreamingGenerator(LLMGenerator):
             prompt = self.build_prompt(context_text, query)
 
             # Add system prompt if configured
-            if self.config.system_prompt:
-                full_prompt = f"{self.config.system_prompt}\n\n{prompt}"
-            else:
-                full_prompt = prompt
+            full_prompt = f"{self.config.system_prompt}\n\n{prompt}" if self.config.system_prompt else prompt
 
             # Call LLM with streaming
             response = await self._call_llm(full_prompt, **kwargs)
@@ -480,7 +483,7 @@ class FallbackGenerator(BaseGenerator):
         )
 
 
-def create_generator(config: Union[GenerationConfig, Dict[str, Any]]) -> GenerationStrategy:
+def create_generator(config: Union[GenerationConfig, dict[str, Any]]) -> GenerationStrategy:
     """Factory function to create appropriate generator."""
     if isinstance(config, dict):
         config = GenerationConfig(**config)
@@ -535,9 +538,9 @@ class AnswerGenerator:
     def __init__(self, model: Optional[str] = None, provider: Optional[str] = None, system_prompt: Optional[str] = None):
         # Lazy-configure provider/model from env/config when not provided
         try:
-            from tldw_Server_API.app.core.config import load_and_log_configs  # type: ignore
+            from tldw_Server_API.app.core.config import load_and_log_configs
             cfg = load_and_log_configs() or {}
-        except Exception:
+        except Exception:  # noqa: BLE001 - config load best-effort
             cfg = {}
         self.provider = (provider or cfg.get("RAG_DEFAULT_LLM_PROVIDER") or "openai").strip()
         self.model = (model or cfg.get("RAG_DEFAULT_LLM_MODEL") or "gpt-4o-mini").strip()
@@ -551,7 +554,7 @@ class AnswerGenerator:
         prompt_template: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Union[str, dict[str, Any]]:
         # Build a minimal GenerationConfig and use LLMGenerator under the hood
         gcfg = GenerationConfig(
             provider=self.provider,
@@ -564,7 +567,7 @@ class AnswerGenerator:
 
         # Create a tiny context holder compatible with BaseGenerator expectations
         class _Ctx:
-            def __init__(self, documents: List[Document], query: str):
+            def __init__(self, documents: list[Document], query: str):
                 self.documents = documents
                 self.query = query
 
@@ -596,12 +599,11 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
     claims_max = int(kwargs.get("claims_max", 10))
     try:
         claims_concurrency = int(kwargs.get("claims_concurrency", 8))
-    except Exception:
+    except (TypeError, ValueError):
         claims_concurrency = 8
 
     if enable_claims and ClaimsEngine is not None:
         try:
-            import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
 
             def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
                          api_key: Optional[str] = None, system_message: Optional[str] = None,
@@ -644,13 +646,13 @@ async def generate_streaming_response(context: Any, **kwargs) -> Any:
                             context.metadata["claims_overlay"] = claims_out
                             last_emit = len(buffer)
                             last_emit_time = now
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - claims overlay best-effort
                             pass
                 # done
                 return
 
             context.stream_generator = _wrapped_stream()
-        except Exception:
+        except Exception:  # noqa: BLE001 - fallback to base stream
             context.stream_generator = base_stream
     else:
         context.stream_generator = base_stream

@@ -1,7 +1,7 @@
+import json
 import os
 import re
-import json
-from typing import Optional, Dict, Any
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -29,29 +29,29 @@ def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", key.strip().lower())
 
 
-def _load_yaml(path: str) -> Optional[Dict[str, Any]]:
+def _load_yaml(path: str) -> Optional[dict[str, Any]]:
     try:
         import yaml  # type: ignore
-    except Exception:
+    except ImportError:
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             return data
         return None
-    except Exception:
+    except (OSError, TypeError, ValueError, yaml.YAMLError):
         return None
 
 
-def _load_json(path: str) -> Optional[Dict[str, Any]]:
+def _load_json(path: str) -> Optional[dict[str, Any]]:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, dict):
             return data
         return None
-    except Exception:
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
@@ -73,7 +73,7 @@ def load_prompt(module: str, key: str) -> Optional[str]:
             if isinstance(ydata, dict):
                 # two shapes supported: {key: str} or {templates: {name: {template:..., type:...}}}
                 # Try flat map first
-                if norm in {_norm_key(k): k for k in ydata.keys()}:
+                if norm in {_norm_key(k): k for k in ydata}:
                     # Find original key name casing
                     for k, v in ydata.items():
                         if _norm_key(k) == norm and isinstance(v, str):
@@ -104,13 +104,13 @@ def load_prompt(module: str, key: str) -> Optional[str]:
     md_path = base + ".md"
     if os.path.exists(md_path):
         try:
-            with open(md_path, "r", encoding="utf-8") as f:
+            with open(md_path, encoding="utf-8") as f:
                 text = f.read()
-        except Exception:
+        except OSError:
             text = ""
         if text:
             pattern = re.compile(
-                r"^\s*#{1,6}\s*([^\n]+?%s[^\n]*)\n+```([\s\S]*?)```" % re.escape(key),
+                rf"^\s*#{{1,6}}\s*([^\n]+?{re.escape(key)}[^\n]*)\n+```([\s\S]*?)```",
                 re.IGNORECASE | re.MULTILINE,
             )
             m = pattern.search(text)

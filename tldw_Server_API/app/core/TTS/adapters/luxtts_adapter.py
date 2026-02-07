@@ -7,22 +7,15 @@ import base64
 import importlib
 import sys
 import tempfile
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Optional, Set
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-)
+
 from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
 from ..tts_exceptions import (
     TTSGenerationError,
@@ -35,6 +28,18 @@ from ..tts_exceptions import (
 )
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
+
 #
 #######################################################################################################################
 #
@@ -45,7 +50,7 @@ class LuxTTSAdapter(TTSAdapter):
     """Adapter for LuxTTS (ZipVoice-based voice cloning)."""
 
     PROVIDER_KEY = "lux_tts"
-    SUPPORTED_FORMATS: Set[AudioFormat] = {
+    SUPPORTED_FORMATS: set[AudioFormat] = {
         AudioFormat.MP3,
         AudioFormat.WAV,
         AudioFormat.FLAC,
@@ -58,7 +63,7 @@ class LuxTTSAdapter(TTSAdapter):
     DEFAULT_PROMPT_SAMPLE_RATE = 24000
     MAX_TEXT_LENGTH = 5000
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         cfg = config or {}
         cfg_extras = cfg.get("extra_params") if isinstance(cfg.get("extra_params"), dict) else {}
@@ -189,6 +194,19 @@ class LuxTTSAdapter(TTSAdapter):
             ) from exc
 
         self._engine = engine
+        try:
+            from ..tts_resource_manager import get_resource_manager
+            resource_manager = await get_resource_manager()
+            register_result = resource_manager.register_model(
+                provider=self.PROVIDER_KEY,
+                model_instance=self._engine,
+                cleanup_callback=self._cleanup_resources,
+                model_key=str(self.model_path),
+            )
+            if asyncio.iscoroutine(register_result):
+                await register_result
+        except Exception:
+            pass
         self._capabilities = await self.get_capabilities()
         self._status = ProviderStatus.AVAILABLE
         self._initialized = True
@@ -424,7 +442,7 @@ class LuxTTSAdapter(TTSAdapter):
             details={"type": type(voice_reference).__name__},
         )
 
-    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: Dict[str, Any]) -> bytes:
+    async def _prepare_voice_reference(self, voice_bytes: bytes, extras: dict[str, Any]) -> bytes:
         validate_ref = self._resolve_bool_setting(
             extras,
             ("validate_reference", "validate_voice_reference"),
@@ -481,7 +499,7 @@ class LuxTTSAdapter(TTSAdapter):
                 details={"error": str(exc)},
             ) from exc
 
-    def _resolve_output_sample_rate(self, return_smooth: bool, extras: Dict[str, Any]) -> int:
+    def _resolve_output_sample_rate(self, return_smooth: bool, extras: dict[str, Any]) -> int:
         for key in ("sample_rate", "output_sample_rate"):
             if key in extras:
                 coerced = self._coerce_int(extras.get(key), default=None)
@@ -491,7 +509,7 @@ class LuxTTSAdapter(TTSAdapter):
         vocos = getattr(engine, "vocos", None) if engine else None
         if vocos is not None and hasattr(vocos, "return_48k"):
             try:
-                return self.DEFAULT_SAMPLE_RATE if getattr(vocos, "return_48k") else self.DEFAULT_PROMPT_SAMPLE_RATE
+                return self.DEFAULT_SAMPLE_RATE if vocos.return_48k else self.DEFAULT_PROMPT_SAMPLE_RATE
             except Exception:
                 pass
         if return_smooth:
@@ -535,7 +553,7 @@ class LuxTTSAdapter(TTSAdapter):
 
         return stream()
 
-    def _resolve_stream_chunk_samples(self, extras: Dict[str, Any], sample_rate: int) -> int:
+    def _resolve_stream_chunk_samples(self, extras: dict[str, Any], sample_rate: int) -> int:
         if "stream_chunk_samples" in extras:
             return self._coerce_int(extras.get("stream_chunk_samples"), default=self.stream_chunk_samples)
         if "stream_chunk_ms" in extras or "stream_chunk_size_ms" in extras:
@@ -580,7 +598,7 @@ class LuxTTSAdapter(TTSAdapter):
 
     @staticmethod
     def _resolve_bool_setting(
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         extra_keys: tuple[str, ...],
         default: bool,
     ) -> bool:

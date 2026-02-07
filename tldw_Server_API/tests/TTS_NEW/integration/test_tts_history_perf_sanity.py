@@ -1,0 +1,50 @@
+import pytest
+from fastapi import status
+
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.config import settings
+
+
+pytestmark = [pytest.mark.integration]
+
+
+def test_tts_history_cursor_pagination_sanity(test_client, auth_headers, monkeypatch, tmp_path):
+    user_db_base = tmp_path / "user_dbs"
+    monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+    monkeypatch.setattr(settings, "USER_DB_BASE_DIR", str(user_db_base), raising=False)
+
+    media_db = MediaDatabase(db_path=str(DatabasePaths.get_media_db_path(1)), client_id="tts_history_perf_sanity")
+
+    # Keep the dataset large enough to exercise pagination without making tests too slow.
+    total_rows = 2000
+    for idx in range(total_rows):
+        media_db.create_tts_history_entry(
+            user_id="1",
+            text_hash=f"hash-{idx}",
+            provider="openai",
+            model="tts-1",
+            voice_name="alloy",
+            format="mp3",
+            status="success",
+        )
+    media_db.close_connection()
+
+    resp = test_client.get("/api/v1/audio/history?limit=100", headers=auth_headers)
+    assert resp.status_code == status.HTTP_200_OK
+    payload = resp.json()
+    assert len(payload["items"]) == 100
+    assert payload["next_cursor"]
+
+    first_page_ids = {item["id"] for item in payload["items"]}
+
+    resp_page2 = test_client.get(
+        f"/api/v1/audio/history?limit=100&cursor={payload['next_cursor']}",
+        headers=auth_headers,
+    )
+    assert resp_page2.status_code == status.HTTP_200_OK
+    payload_page2 = resp_page2.json()
+    assert len(payload_page2["items"]) == 100
+
+    second_page_ids = {item["id"] for item in payload_page2["items"]}
+    assert first_page_ids.isdisjoint(second_page_ids)

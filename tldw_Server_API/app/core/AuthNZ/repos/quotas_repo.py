@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Optional, Tuple
 
 from loguru import logger
 
@@ -62,9 +61,9 @@ class AuthnzQuotasRepo:
         *,
         jti: str,
         counter_type: str,
-        limit: Optional[int],
-        bucket: Optional[str] = None,
-    ) -> Tuple[bool, int]:
+        limit: int | None,
+        bucket: str | None = None,
+    ) -> tuple[bool, int]:
         """
         Atomically increment the JWT quota counter for a given ``jti``
         and compare to ``limit``.
@@ -136,9 +135,9 @@ class AuthnzQuotasRepo:
         *,
         api_key_id: int,
         counter_type: str,
-        limit: Optional[int],
-        bucket: Optional[str] = None,
-    ) -> Tuple[bool, int]:
+        limit: int | None,
+        bucket: str | None = None,
+    ) -> tuple[bool, int]:
         """
         Atomically increment the API-key quota counter for a given
         ``api_key_id`` and compare to ``limit``.

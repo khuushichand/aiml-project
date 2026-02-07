@@ -4,10 +4,11 @@ Enhanced multi-lingual support for the chunking system.
 Provides language detection, specialized tokenizers, and language-specific rules.
 """
 
-from typing import Dict, List, Optional, Tuple, Any
+import re
 from dataclasses import dataclass
 from enum import Enum
-import re
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -31,7 +32,7 @@ class LanguageConfig:
     name: str                     # Full name
     family: LanguageFamily        # Language family
     direction: str = "ltr"        # Text direction: ltr or rtl
-    sentence_delimiters: List[str] = None  # Sentence ending markers
+    sentence_delimiters: list[str] = None  # Sentence ending markers
     word_tokenizer: Optional[str] = None   # Specialized tokenizer
     requires_spacing: bool = True  # Whether words are space-separated
 
@@ -71,7 +72,7 @@ class LanguageDetector:
             'ja': ['の', 'は', 'を', 'が', 'に', 'で', 'と', 'も'],
         }
 
-    def detect(self, text: str) -> Tuple[str, float]:
+    def detect(self, text: str) -> tuple[str, float]:
         """
         Detect language of text.
 
@@ -128,7 +129,7 @@ class MultilingualTokenizer:
 
         logger.debug("MultilingualTokenizer initialized")
 
-    def _init_language_configs(self) -> Dict[str, LanguageConfig]:
+    def _init_language_configs(self) -> dict[str, LanguageConfig]:
         """Initialize language configurations."""
         configs = {
             # Germanic languages
@@ -197,7 +198,7 @@ class MultilingualTokenizer:
         """
         return self.configs.get(language, self.configs['en'])
 
-    def tokenize_words(self, text: str, language: Optional[str] = None) -> List[str]:
+    def tokenize_words(self, text: str, language: Optional[str] = None) -> list[str]:
         """
         Tokenize text into words using language-specific rules.
 
@@ -226,7 +227,7 @@ class MultilingualTokenizer:
         # fall back to character-based tokenization
         return list(text)
 
-    def _tokenize_with_library(self, text: str, tokenizer_name: str) -> List[str]:
+    def _tokenize_with_library(self, text: str, tokenizer_name: str) -> list[str]:
         """
         Use specialized tokenization library.
 
@@ -295,7 +296,7 @@ class MultilingualTokenizer:
             )
             return text.split() if ' ' in text else list(text)
 
-    def tokenize_sentences(self, text: str, language: Optional[str] = None) -> List[str]:
+    def tokenize_sentences(self, text: str, language: Optional[str] = None) -> list[str]:
         """
         Tokenize text into sentences using language-specific rules.
 
@@ -372,7 +373,7 @@ class LanguageAdapter:
         Returns:
             Sentence splitter function
         """
-        def splitter(text: str) -> List[str]:
+        def splitter(text: str) -> list[str]:
             return self.tokenizer.tokenize_sentences(text, language)
 
         return splitter
@@ -387,7 +388,7 @@ class LanguageAdapter:
         Returns:
             Word tokenizer function
         """
-        def tokenizer(text: str) -> List[str]:
+        def tokenizer(text: str) -> list[str]:
             return self.tokenizer.tokenize_words(text, language)
 
         return tokenizer

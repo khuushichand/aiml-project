@@ -10,11 +10,12 @@ This avoids cross-tenant leakage by isolating data per user.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -25,23 +26,23 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 class Prior:
     score: float
     last_updated: float
-    corpus: Optional[str] = None
+    corpus: str | None = None
 
 
 _MAX_EVENT_LOG = 200
 _MAX_LIST_ITEMS = 50
 
 
-def _empty_store() -> Dict[str, Any]:
+def _empty_store() -> dict[str, Any]:
     return {"priors": {}, "events": {}, "pairs": {}, "event_log": []}
 
 
 class UserPersonalizationStore:
-    def __init__(self, user_id: Optional[str]) -> None:
+    def __init__(self, user_id: str | None) -> None:
         self.path = DatabasePaths.get_user_rag_personalization_path(user_id)
         # Use the sanitized directory name as the canonical user id for storage/logging.
         self.user_id = self.path.parent.name
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
@@ -74,16 +75,16 @@ class UserPersonalizationStore:
         self,
         *,
         event_type: str,
-        doc_id: Optional[str],
-        corpus: Optional[str] = None,
-        impression: Optional[List[str]] = None,
-        chunk_ids: Optional[List[str]] = None,
-        rank: Optional[int] = None,
-        session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        message_id: Optional[str] = None,
-        dwell_ms: Optional[int] = None,
-        query: Optional[str] = None,
+        doc_id: str | None,
+        corpus: str | None = None,
+        impression: list[str] | None = None,
+        chunk_ids: list[str] | None = None,
+        rank: int | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+        message_id: str | None = None,
+        dwell_ms: int | None = None,
+        query: str | None = None,
     ) -> None:
         now = time.time()
         # Count events
@@ -91,8 +92,8 @@ class UserPersonalizationStore:
         evt[event_type] = int(evt.get(event_type, 0)) + 1
         # Update priors modestly
         if doc_id:
-            priors: Dict[str, Dict[str, float]] = self._data.setdefault("priors", {})
-            cur = priors.get(doc_id) or {"score": 0.0, "last_updated": 0.0, "corpus": corpus}
+            priors: dict[str, dict[str, Any]] = self._data.setdefault("priors", {})
+            cur: dict[str, Any] = priors.get(doc_id) or {"score": 0.0, "last_updated": 0.0, "corpus": corpus}
             cur["score"] = min(5.0, float(cur.get("score", 0.0)) + (0.1 if event_type == "expand" else 0.2))
             cur["last_updated"] = now
             if corpus:
@@ -100,7 +101,7 @@ class UserPersonalizationStore:
             priors[doc_id] = cur
         # Pairwise updates: clicked doc wins over docs ranked above but not clicked
         if event_type in {"click", "copy"} and doc_id and impression:
-            pairs: Dict[str, int] = self._data.setdefault("pairs", {})
+            pairs: dict[str, int] = self._data.setdefault("pairs", {})
             for other in impression:
                 if other == doc_id:
                     break  # only compare with items above in the list
@@ -148,7 +149,7 @@ class UserPersonalizationStore:
         except Exception:
             return 0.0
 
-    def boost_documents(self, documents: List[Any], *, corpus: Optional[str] = None) -> List[Any]:
+    def boost_documents(self, documents: list[Any], *, corpus: str | None = None) -> list[Any]:
         # Adjust scores by a bounded additive boost based on priors
         try:
             weight = float(os.getenv("RAG_PERSONALIZATION_WEIGHT", "0.1"))
@@ -184,8 +185,6 @@ class UserPersonalizationStore:
             except Exception:
                 boosted.append(d)
         # Keep ordering by updated score
-        try:
+        with contextlib.suppress(Exception):
             boosted.sort(key=lambda x: getattr(x, "score", x.get("score", 0.0) if isinstance(x, dict) else 0.0), reverse=True)
-        except Exception:
-            pass
         return boosted

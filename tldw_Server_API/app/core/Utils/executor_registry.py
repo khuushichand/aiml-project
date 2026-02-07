@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from concurrent.futures import Executor
 from threading import RLock
-from typing import Dict, Iterable, Tuple
 
 from loguru import logger
 
 _registry_lock = RLock()
-_executors: Dict[str, Executor] = {}
+_executors: dict[str, Executor] = {}
 
 
 def register_executor(name: str, executor: Executor) -> None:
@@ -31,7 +31,7 @@ def unregister_executor(name: str) -> None:
         _executors.pop(name, None)
 
 
-def _snapshot() -> Iterable[Tuple[str, Executor]]:
+def _snapshot() -> Iterable[tuple[str, Executor]]:
     with _registry_lock:
         return list(_executors.items())
 

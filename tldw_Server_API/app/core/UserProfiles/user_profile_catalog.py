@@ -7,16 +7,17 @@ and enumerates profile/config keys, editability, and UI metadata.
 
 from __future__ import annotations
 
+import contextlib
 import os
+from collections.abc import Iterable
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Set
+from typing import Any
 
-from loguru import logger
-from pydantic import BaseModel, Field, ValidationError, model_validator, validator
 import yaml
-
+from loguru import logger
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 _ALLOWED_EDITORS = {"user", "admin", "org_admin", "team_admin", "platform_admin"}
 
@@ -54,27 +55,30 @@ class UserProfileCatalogEntry(BaseModel):
 
     key: str
     label: str
-    description: Optional[str] = None
+    description: str | None = None
     type: str
-    enum: Optional[List[Any]] = None
-    minimum: Optional[float] = None
-    maximum: Optional[float] = None
-    default: Optional[Any] = None
-    editable_by: List[str] = Field(default_factory=list)
+    enum: list[Any] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    default: Any | None = None
+    editable_by: list[str] = Field(default_factory=list)
     sensitivity: str
-    ui: Optional[str] = None
+    ui: str | None = None
     deprecated: bool = False
 
-    @validator("key", "label", "type", "sensitivity")
+    @field_validator("key", "label", "type", "sensitivity")
+    @classmethod
     def _not_empty(cls, value: str) -> str:
         if not str(value).strip():
             raise ValueError("Field cannot be empty.")
         return value
 
-    @validator("editable_by", each_item=True)
-    def _validate_editable_by(cls, value: str) -> str:
-        if value not in _ALLOWED_EDITORS:
-            raise ValueError(f"Invalid editable_by role: {value}")
+    @field_validator("editable_by")
+    @classmethod
+    def _validate_editable_by(cls, value: list[str]) -> list[str]:
+        for role in value:
+            if role not in _ALLOWED_EDITORS:
+                raise ValueError(f"Invalid editable_by role: {role}")
         return value
 
 
@@ -83,23 +87,24 @@ class UserProfileCatalog(BaseModel):
 
     version: str
     updated_at: datetime
-    entries: List[UserProfileCatalogEntry]
+    entries: list[UserProfileCatalogEntry]
 
-    @validator("version")
+    @field_validator("version")
+    @classmethod
     def _validate_version(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Catalog version cannot be empty.")
         return value
 
     @model_validator(mode="after")
-    def _validate_unique_keys(self) -> "UserProfileCatalog":
+    def _validate_unique_keys(self) -> UserProfileCatalog:
         keys = [entry.key for entry in self.entries]
         self._assert_unique(keys, "catalog key")
         return self
 
     @staticmethod
     def _assert_unique(values: Iterable[str], label: str) -> None:
-        seen: Set[str] = set()
+        seen: set[str] = set()
         for value in values:
             if value in seen:
                 raise ValueError(f"Duplicate {label} detected: '{value}'")
@@ -130,7 +135,7 @@ def _load_user_profile_catalog(catalog_path: Path) -> UserProfileCatalog:
         raise
 
 
-def load_user_profile_catalog(path: Optional[Path] = None) -> UserProfileCatalog:
+def load_user_profile_catalog(path: Path | None = None) -> UserProfileCatalog:
     """
     Load and validate the user profile catalog from YAML.
 
@@ -146,7 +151,5 @@ def load_user_profile_catalog(path: Optional[Path] = None) -> UserProfileCatalog
 
 def clear_user_profile_catalog_cache() -> None:
     """Clear the load_user_profile_catalog() LRU cache (used in tests or hot-reload scenarios)."""
-    try:
+    with contextlib.suppress(Exception):
         _load_user_profile_catalog.cache_clear()
-    except Exception:
-        pass

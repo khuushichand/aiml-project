@@ -6,15 +6,14 @@ to avoid recomputing them for frequently accessed content.
 """
 
 import hashlib
-import pickle
-import time
-import threading
-from collections import OrderedDict
-from typing import Optional, Dict, Any, List, Tuple, Union
-from pathlib import Path
-import numpy as np
 import json
+import threading
+import time
+from collections import OrderedDict
+from pathlib import Path
+from typing import Any, Optional
 
+import numpy as np
 from loguru import logger
 
 
@@ -56,7 +55,7 @@ class EmbeddingCache:
         self.enable_stats = enable_stats
 
         # Cache storage (OrderedDict maintains insertion order for LRU)
-        self._cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        self._cache: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._lock = threading.RLock()
 
         # Memory tracking
@@ -112,7 +111,7 @@ class EmbeddingCache:
         else:
             return 1000  # Default estimate
 
-    def _is_expired(self, entry: Dict[str, Any]) -> bool:
+    def _is_expired(self, entry: dict[str, Any]) -> bool:
         """
         Check if a cache entry has expired.
 
@@ -125,10 +124,11 @@ class EmbeddingCache:
         if self.ttl_seconds is None:
             return False
 
-        age = time.time() - entry["timestamp"]
-        return age > self.ttl_seconds
+        age = time.time() - float(entry["timestamp"])
+        ttl_seconds = float(self.ttl_seconds)
+        return age > ttl_seconds
 
-    def _evict_lru(self) -> str:
+    def _evict_lru(self) -> Optional[str]:
         """
         Evict least recently used entry.
 
@@ -209,7 +209,10 @@ class EmbeddingCache:
                 if self.enable_stats:
                     self._stats["hits"] += 1
 
-                return entry["embedding"]
+                embedding = entry.get("embedding")
+                if isinstance(embedding, np.ndarray):
+                    return embedding
+                return None
 
             if self.enable_stats:
                 self._stats["misses"] += 1
@@ -221,7 +224,7 @@ class EmbeddingCache:
         text: str,
         embedding: np.ndarray,
         model_name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         """
         Store embedding in cache.
@@ -263,9 +266,9 @@ class EmbeddingCache:
 
     def batch_get(
         self,
-        texts: List[str],
+        texts: list[str],
         model_name: Optional[str] = None
-    ) -> Tuple[List[Optional[np.ndarray]], List[int]]:
+    ) -> tuple[list[Optional[np.ndarray]], list[int]]:
         """
         Get multiple embeddings from cache.
 
@@ -290,8 +293,8 @@ class EmbeddingCache:
 
     def batch_put(
         self,
-        texts: List[str],
-        embeddings: List[np.ndarray],
+        texts: list[str],
+        embeddings: list[np.ndarray],
         model_name: Optional[str] = None
     ):
         """
@@ -314,7 +317,7 @@ class EmbeddingCache:
             if self.enable_stats:
                 logger.info(f"Cache cleared. Stats: {self.get_stats()}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get cache statistics.
 
@@ -379,7 +382,7 @@ class EmbeddingCache:
             if not path.exists():
                 return
 
-            with open(path, 'r') as f:
+            with open(path) as f:
                 data = json.load(f)
 
             with self._lock:
@@ -420,14 +423,14 @@ class EmbeddingCacheManager:
     Manages multiple embedding caches for different models/purposes.
     """
 
-    def __init__(self, default_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, default_config: Optional[dict[str, Any]] = None):
         """
         Initialize cache manager.
 
         Args:
             default_config: Default configuration for new caches
         """
-        self._caches: Dict[str, EmbeddingCache] = {}
+        self._caches: dict[str, EmbeddingCache] = {}
         self._lock = threading.RLock()
         self._default_config = default_config or {
             "max_size": 10000,
@@ -462,7 +465,7 @@ class EmbeddingCacheManager:
 
             return self._caches[cache_name]
 
-    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """
         Get statistics for all caches.
 

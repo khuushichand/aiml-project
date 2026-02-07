@@ -3,70 +3,93 @@
 #
 # Imports
 import asyncio
+import base64
 import copy
 import inspect
 import os
 import time
-from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional, Dict, Any, List, Set
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager, suppress
+from dataclasses import replace
+from typing import Any, Optional
+
 #
 # Third-party Imports
+import numpy as np
 from loguru import logger
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
-from .adapter_registry import (
-    get_tts_factory,
-    close_tts_factory,
-    TTSAdapterFactory,
-    TTSProvider
+
+from .adapter_registry import TTSAdapterFactory, TTSProvider, close_tts_factory, get_tts_factory
+from .adapters.base import AudioFormat, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse
+from .audio_utils import (
+    crossfade_audio,
+    evaluate_audio_quality,
+    split_text_into_chunks,
+    trim_trailing_silence,
 )
-from .adapters.base import (
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat
-)
-from .circuit_breaker import (
-    get_circuit_manager,
-    CircuitBreakerManager,
-    CircuitOpenError
-)
-from .tts_exceptions import (
-    TTSError,
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
-    TTSModelNotFoundError,
-    TTSGenerationError,
-    TTSValidationError,
-    TTSAuthenticationError,
-    TTSRateLimitError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    TTSProviderError,
-    TTSResourceError,
-    TTSInsufficientMemoryError,
-    TTSGPUError,
-    TTSFallbackExhaustedError,
-    TTSInvalidVoiceReferenceError,
-    categorize_error,
-    is_retryable_error
-)
-from .tts_validation import validate_tts_request, validate_text_input
-import base64
-from .tts_resource_manager import get_resource_manager
+from .circuit_breaker import CircuitBreakerManager, CircuitOpenError, get_circuit_manager
 from .realtime_session import (
+    BufferedRealtimeSession,
     RealtimeSessionConfig,
     RealtimeSessionHandle,
     RealtimeTTSSession,
-    BufferedRealtimeSession,
 )
+from .streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
+from .tts_exceptions import (
+    TTSAudioQualityError,
+    TTSError,
+    TTSFallbackExhaustedError,
+    TTSGenerationError,
+    TTSInvalidVoiceReferenceError,
+    TTSProviderError,
+    TTSProviderNotConfiguredError,
+    TTSResourceError,
+    TTSValidationError,
+    categorize_error,
+    is_retryable_error,
+)
+from .tts_resource_manager import get_resource_manager
+from .tts_validation import validate_text_input, validate_tts_request
+from .utils import estimate_max_new_tokens, parse_bool
+
 #
 #######################################################################################################################
 #
 # Enhanced TTS Service with Adapter Pattern
+
+_TTS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    TTSError,
+    TTSAudioQualityError,
+    TTSFallbackExhaustedError,
+    TTSGenerationError,
+    TTSInvalidVoiceReferenceError,
+    TTSProviderError,
+    TTSProviderNotConfiguredError,
+    TTSResourceError,
+    TTSValidationError,
+    CircuitOpenError,
+)
 
 class TTSServiceV2:
     """
@@ -92,14 +115,14 @@ class TTSServiceV2:
         try:
             if hasattr(get_tts_factory, "return_value"):
                 # Patched with mock/AsyncMock
-                self._factory = getattr(get_tts_factory, "return_value")  # type: ignore[assignment]
+                self._factory = get_tts_factory.return_value  # type: ignore[assignment]
             else:
                 # Legacy behavior: only call if it's a regular (non-async) function
                 if not asyncio.iscoroutinefunction(get_tts_factory):
                     maybe_factory = get_tts_factory()  # type: ignore[func-returns-value]
                     if not asyncio.iscoroutine(maybe_factory):
                         self._factory = maybe_factory  # type: ignore[assignment]
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             # Safe to ignore - tests may override `_factory` directly
             pass
         self.circuit_manager = circuit_manager
@@ -126,7 +149,7 @@ class TTSServiceV2:
                         max_concurrent = int(mcg)
                         if max_concurrent <= 0:
                             max_concurrent = 1
-                    except Exception:
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
                         max_concurrent = 4
                     if env_stream_override is None and "stream_errors_as_audio" in perf_cfg:
                         try:
@@ -137,9 +160,9 @@ class TTSServiceV2:
                                 perf_cfg.get("stream_errors_as_audio"),
                                 default=False,
                             )
-                        except Exception:
+                        except _TTS_NONCRITICAL_EXCEPTIONS:
                             stream_errors_as_audio = bool(perf_cfg.get("stream_errors_as_audio"))
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             # Fallback to default on any parsing/config errors
             max_concurrent = 4
         self._semaphore = asyncio.Semaphore(max_concurrent)
@@ -150,16 +173,16 @@ class TTSServiceV2:
                 "Errors will be embedded as audio bytes; this mode is not "
                 "recommended for production deployments."
             )
-        self._active_request_counts: Dict[str, int] = {}
+        self._active_request_counts: dict[str, int] = {}
         self._active_requests_lock = asyncio.Lock()
-        self._provider_semaphores: Dict[str, asyncio.Semaphore] = {}
-        self._provider_limits: Dict[str, int] = {}
+        self._provider_semaphores: dict[str, asyncio.Semaphore] = {}
+        self._provider_limits: dict[str, int] = {}
 
         # Initialize metrics
         self.metrics = get_metrics_registry()
         self._register_tts_metrics()
 
-    def _get_validation_config(self) -> Optional[Dict[str, Any]]:
+    def _get_validation_config(self) -> Optional[dict[str, Any]]:
         """Return config dictionary for validation (best-effort)."""
         try:
             registry = None
@@ -170,9 +193,627 @@ class TTSServiceV2:
             cfg = getattr(registry, "config", None) if registry else None
             if isinstance(cfg, dict):
                 return cfg
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             return None
+
+    def _attach_response_metadata(
+        self,
+        target: Any,
+        response: TTSResponse,
+        provider_key: str,
+        request_for_provider: TTSRequest,
+    ) -> None:
+        metadata: dict[str, Any] = {}
+        if isinstance(response.metadata, dict):
+            metadata.update(response.metadata)
+
+        if metadata.get("provider") is None:
+            metadata["provider"] = response.provider or provider_key
+        if metadata.get("model") is None:
+            metadata["model"] = response.model or request_for_provider.model
+        if metadata.get("voice") is None:
+            metadata["voice"] = response.voice_used or request_for_provider.voice
+        if metadata.get("format") is None:
+            fmt_val = None
+            try:
+                fmt_val = response.format.value  # type: ignore[attr-defined]
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                try:
+                    fmt_val = str(response.format)
+                except _TTS_NONCRITICAL_EXCEPTIONS:
+                    fmt_val = None
+            if not fmt_val:
+                try:
+                    fmt_val = request_for_provider.format.value
+                except _TTS_NONCRITICAL_EXCEPTIONS:
+                    fmt_val = None
+            if fmt_val:
+                metadata["format"] = fmt_val
+        if metadata.get("duration_seconds") is None:
+            duration = response.duration_seconds if response.duration_seconds is not None else response.duration
+            if duration is not None:
+                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                    metadata["duration_seconds"] = float(duration)
+        if metadata.get("sample_rate") is None and response.sample_rate:
+            metadata["sample_rate"] = response.sample_rate
+
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+            target._tts_metadata = metadata
         return None
+
+    def _get_performance_config(self) -> dict[str, Any]:
+        """Return performance config dict (best-effort)."""
+        cfg = self._get_validation_config()
+        if isinstance(cfg, dict):
+            perf = cfg.get("performance")
+            if isinstance(perf, dict):
+                return perf
+        return {}
+
+    def _apply_token_defaults(self, request: TTSRequest) -> None:
+        """Apply max/min token defaults when not explicitly provided."""
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        perf = self._get_performance_config()
+
+        enabled = perf.get("token_estimation_enabled", True)
+        if parse_bool(extras.get("disable_token_estimation"), default=False):
+            enabled = False
+        if not enabled:
+            request.extra_params = extras
+            return
+
+        def _coerce_int(value: Any) -> Optional[int]:
+            try:
+                if value is None:
+                    return None
+                return int(value)
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                return None
+
+        max_new = _coerce_int(extras.get("max_new_tokens"))
+        if max_new is None:
+            max_new = estimate_max_new_tokens(
+                request.text,
+                tokens_per_char=perf.get("token_estimate_per_char", 2.5),
+                safety=perf.get("token_estimate_safety", 1.3),
+                min_tokens=perf.get("token_estimate_min_tokens", 256),
+                max_cap=perf.get("max_new_tokens_cap", 4096),
+            )
+            extras["max_new_tokens"] = max_new
+
+        min_new = _coerce_int(extras.get("min_new_tokens"))
+        if min_new is None:
+            min_default = _coerce_int(perf.get("min_new_tokens_default", 60))
+            if min_default is not None and min_default > 0:
+                extras["min_new_tokens"] = min_default
+                min_new = min_default
+
+        try:
+            if min_new is not None and max_new is not None and min_new > max_new:
+                extras["min_new_tokens"] = max_new
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        request.extra_params = extras
+
+    def _resolve_chunking_params(self, extras: dict[str, Any]) -> tuple[bool, int, int, int, int]:
+        """Resolve chunking parameters from extras with conservative defaults."""
+        if not isinstance(extras, dict):
+            return False, 0, 0, 0, 0
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+            return default
+
+        enabled: Optional[bool] = None
+        if "chunking_service" in extras:
+            enabled = parse_bool(extras.get("chunking_service"), default=False)
+        elif "chunking" in extras:
+            enabled = parse_bool(extras.get("chunking"), default=False)
+        else:
+            for key in ("chunk_target_chars", "chunk_max_chars", "chunk_min_chars", "chunk_crossfade_ms"):
+                if key in extras:
+                    enabled = True
+                    break
+
+        if not enabled:
+            return False, 0, 0, 0, 0
+
+        target = _pick_int(("chunk_target_chars", "chunk_target", "chunk_chars_target"), 120)
+        max_chars = _pick_int(("chunk_max_chars", "chunk_max", "chunk_chars_max"), 150)
+        min_chars = _pick_int(("chunk_min_chars", "chunk_min", "chunk_chars_min"), 50)
+        crossfade_ms = _pick_int(("chunk_crossfade_ms", "crossfade_ms"), 50)
+        if max_chars <= 0:
+            return False, 0, 0, 0, 0
+        if target > max_chars:
+            target = max_chars
+        if min_chars > max_chars:
+            min_chars = max_chars
+        return True, target, max_chars, min_chars, crossfade_ms
+
+    def _resolve_audio_check_params(
+        self,
+        extras: dict[str, Any],
+        *,
+        default_enabled: bool = True,
+        default_per_chunk: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(extras, dict):
+            extras = {}
+
+        def _pick_float(keys: tuple[str, ...], default: float) -> float:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return float(extras.get(key))
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+            return default
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+            return default
+
+        def _pick_bool(keys: tuple[str, ...], default: bool) -> bool:
+            for key in keys:
+                if key in extras:
+                    return parse_bool(extras.get(key), default=default)
+            return default
+
+        return {
+            "enabled": _pick_bool(("audio_checks", "audio_quality_checks"), default_enabled),
+            "strict": _pick_bool(("audio_checks_strict", "audio_quality_strict"), False),
+            "per_chunk": _pick_bool(("audio_checks_per_chunk",), default_per_chunk),
+            "trim_trailing_silence": _pick_bool(
+                ("audio_trim_trailing_silence", "trim_trailing_silence"),
+                False,
+            ),
+            "min_rms": _pick_float(("audio_min_rms", "min_rms"), 0.001),
+            "min_peak": _pick_float(("audio_min_peak", "min_peak"), 0.02),
+            "silence_threshold": _pick_float(("audio_silence_threshold", "silence_threshold"), 0.01),
+            "trailing_silence_ms": _pick_int(
+                ("audio_trailing_silence_ms", "trailing_silence_ms", "silence_tail_ms"),
+                800,
+            ),
+            "expected_chars_per_sec": _pick_float(
+                ("audio_expected_chars_per_sec", "expected_chars_per_sec", "chars_per_sec"),
+                15.0,
+            ),
+            "min_duration_ratio": _pick_float(
+                ("audio_min_duration_ratio", "min_duration_ratio"),
+                0.5,
+            ),
+            "min_duration_seconds": _pick_float(
+                ("audio_min_duration_seconds", "min_duration_seconds"),
+                0.4,
+            ),
+            "min_text_length": _pick_int(
+                ("audio_min_text_length", "min_text_length"),
+                40,
+            ),
+        }
+
+    def _build_silence_for_text(
+        self,
+        text: str,
+        sample_rate: int,
+        expected_chars_per_sec: float,
+        min_duration_seconds: float,
+    ) -> np.ndarray:
+        try:
+            sample_rate = int(sample_rate)
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            sample_rate = 24000
+        if sample_rate <= 0:
+            sample_rate = 24000
+        duration = max(min_duration_seconds, 0.0)
+        if expected_chars_per_sec > 0:
+            duration = max(duration, len(text or "") / float(expected_chars_per_sec))
+        samples = int(sample_rate * duration)
+        if samples <= 0:
+            return np.zeros(0, dtype=np.int16)
+        return np.zeros(samples, dtype=np.int16)
+
+    def _convert_pcm_to_format(
+        self,
+        audio: np.ndarray,
+        *,
+        target_format: AudioFormat,
+        sample_rate: int,
+    ) -> bytes:
+        normalizer = AudioNormalizer()
+        writer = StreamingAudioWriter(
+            format=target_format.value,
+            sample_rate=sample_rate,
+            channels=1,
+        )
+        try:
+            if audio.dtype != np.int16:
+                audio = normalizer.normalize(audio, target_dtype=np.int16)
+            chunk_bytes = writer.write_chunk(audio) or b""
+            final_bytes = writer.write_chunk(finalize=True) or b""
+            if target_format == AudioFormat.PCM:
+                return chunk_bytes
+            return chunk_bytes + final_bytes
+        finally:
+            writer.close()
+
+    def _resolve_segment_retry_params(self, extras: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(extras, dict):
+            extras = {}
+
+        def _pick_int(keys: tuple[str, ...], default: int) -> int:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return int(extras.get(key))
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+            return default
+
+        def _pick_float(keys: tuple[str, ...], default: float) -> float:
+            for key in keys:
+                if key in extras and extras.get(key) is not None:
+                    try:
+                        return float(extras.get(key))
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
+                        continue
+            return default
+
+        def _pick_bool(keys: tuple[str, ...], default: bool) -> bool:
+            for key in keys:
+                if key in extras:
+                    return parse_bool(extras.get(key), default=default)
+            return default
+
+        return {
+            "max_retries": _pick_int(("segment_retry_max", "segment_retries"), 2),
+            "backoff_ms": _pick_int(("segment_retry_backoff_ms", "segment_backoff_ms"), 250),
+            "backoff_factor": _pick_float(("segment_retry_backoff_factor", "segment_backoff_factor"), 2.0),
+            "max_backoff_ms": _pick_int(("segment_retry_max_backoff_ms", "segment_backoff_max_ms"), 4000),
+            "allow_partial": _pick_bool(("segment_allow_partial", "chunk_allow_partial"), True),
+            "silence_on_fail": _pick_bool(("segment_silence_on_fail", "chunk_silence_on_fail"), True),
+        }
+
+    def _is_retryable_segment_error(self, error: Exception) -> bool:
+        if isinstance(error, TTSError):
+            return is_retryable_error(error)
+        return False
+
+    def _apply_audio_quality_checks(
+        self,
+        *,
+        audio: np.ndarray,
+        text: str,
+        sample_rate: int,
+        params: dict[str, Any],
+        provider_key: str,
+        context: str,
+    ) -> tuple[np.ndarray, dict[str, float], list[str]]:
+        if not params.get("enabled", True):
+            return audio, {}, []
+
+        metrics, warnings = evaluate_audio_quality(
+            audio,
+            sample_rate,
+            text_length=len(text or ""),
+            min_text_length=int(params["min_text_length"]),
+            min_rms=float(params["min_rms"]),
+            min_peak=float(params["min_peak"]),
+            silence_threshold=float(params["silence_threshold"]),
+            trailing_silence_ms=int(params["trailing_silence_ms"]),
+            expected_chars_per_sec=float(params["expected_chars_per_sec"]),
+            min_duration_ratio=float(params["min_duration_ratio"]),
+            min_duration_seconds=float(params["min_duration_seconds"]),
+        )
+
+        if params.get("trim_trailing_silence") and params["trailing_silence_ms"] > 0:
+            if metrics.get("trailing_silence_ms", 0.0) >= params["trailing_silence_ms"]:
+                trimmed = trim_trailing_silence(
+                    audio,
+                    sample_rate,
+                    threshold=float(params["silence_threshold"]),
+                    min_silence_ms=int(params["trailing_silence_ms"]),
+                )
+                if trimmed.shape[0] < np.asarray(audio).reshape(-1).shape[0]:
+                    audio = trimmed
+                    metrics, warnings = evaluate_audio_quality(
+                        audio,
+                        sample_rate,
+                        text_length=len(text or ""),
+                        min_text_length=int(params["min_text_length"]),
+                        min_rms=float(params["min_rms"]),
+                        min_peak=float(params["min_peak"]),
+                        silence_threshold=float(params["silence_threshold"]),
+                        trailing_silence_ms=int(params["trailing_silence_ms"]),
+                        expected_chars_per_sec=float(params["expected_chars_per_sec"]),
+                        min_duration_ratio=float(params["min_duration_ratio"]),
+                        min_duration_seconds=float(params["min_duration_seconds"]),
+                    )
+
+        if warnings:
+            details = {
+                "context": context,
+                "metrics": metrics,
+                "warnings": warnings,
+            }
+            if params.get("strict"):
+                raise TTSAudioQualityError(
+                    "TTS audio failed quality checks",
+                    provider=provider_key,
+                    details=details,
+                )
+            logger.warning(
+                f"{provider_key}: audio checks flagged ({context}): {', '.join(warnings)}"
+            )
+        return audio, metrics, warnings
+
+    def _should_service_chunk(self, request: TTSRequest, adapter: TTSAdapter) -> tuple[bool, int, int, int, int]:
+        if request.stream:
+            return False, 0, 0, 0, 0
+        if getattr(adapter, "handles_text_chunking", False):
+            return False, 0, 0, 0, 0
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        enabled, target, max_chars, min_chars, crossfade_ms = self._resolve_chunking_params(extras)
+        if not enabled:
+            return False, 0, 0, 0, 0
+        if not request.text:
+            return False, 0, 0, 0, 0
+        if len(request.text) <= max_chars:
+            return False, 0, 0, 0, 0
+        return True, target, max_chars, min_chars, crossfade_ms
+
+    async def _generate_chunked_response(
+        self,
+        adapter: TTSAdapter,
+        request: TTSRequest,
+        provider_key: str,
+        target_chars: int,
+        max_chars: int,
+        min_chars: int,
+        crossfade_ms: int,
+    ) -> Optional[TTSResponse]:
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        check_params = self._resolve_audio_check_params(
+            extras,
+            default_enabled=True,
+            default_per_chunk=True,
+        )
+        retry_params = self._resolve_segment_retry_params(extras)
+        caps = None
+        try:
+            caps = getattr(adapter, "_capabilities", None)
+            if caps is None or not isinstance(caps, TTSCapabilities):
+                caps = await adapter.get_capabilities()
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            caps = None
+        if not isinstance(caps, TTSCapabilities) or AudioFormat.PCM not in caps.supported_formats:
+            logger.debug(
+                f"{provider_key}: chunking requested but PCM not supported; skipping service-level chunking"
+            )
+            return None
+        try:
+            max_len = getattr(caps, "max_text_length", None)
+            if isinstance(max_len, int) and max_len > 0:
+                max_chars = min(max_chars, max_len)
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            pass
+        if max_chars <= 0:
+            return None
+        if target_chars > max_chars:
+            target_chars = max_chars
+        if min_chars > max_chars:
+            min_chars = max_chars
+
+        chunks = split_text_into_chunks(
+            request.text,
+            target_chars=target_chars,
+            max_chars=max_chars,
+            min_chars=min_chars,
+        )
+        if len(chunks) <= 1:
+            return None
+
+        chunk_extras = dict(extras)
+        for key in (
+            "chunking_service",
+            "chunking",
+            "chunk_target_chars",
+            "chunk_target",
+            "chunk_chars_target",
+            "chunk_max_chars",
+            "chunk_max",
+            "chunk_chars_max",
+            "chunk_min_chars",
+            "chunk_min",
+            "chunk_chars_min",
+            "chunk_crossfade_ms",
+            "crossfade_ms",
+        ):
+            chunk_extras.pop(key, None)
+
+        base_request = replace(request, stream=False, format=AudioFormat.PCM)
+        base_request.extra_params = chunk_extras
+
+        audio_parts: list[np.ndarray] = []
+        sample_rate: Optional[int] = None
+        quality_events: list[dict[str, Any]] = []
+        segment_events: list[dict[str, Any]] = []
+        last_error: Optional[Exception] = None
+        fallback_sample_rate = getattr(adapter, "sample_rate", 24000)
+        for chunk_idx, chunk_text in enumerate(chunks):
+            chunk_request = replace(base_request, text=chunk_text)
+            attempts = 0
+            last_error = None
+            max_attempts = max(1, int(retry_params["max_retries"]))
+            backoff_ms = max(0, int(retry_params["backoff_ms"]))
+            backoff_factor = float(retry_params["backoff_factor"]) if retry_params["backoff_factor"] else 1.0
+            max_backoff_ms = max(backoff_ms, int(retry_params["max_backoff_ms"]))
+
+            while True:
+                attempts += 1
+                try:
+                    response = await adapter.generate(chunk_request)
+                    pcm_bytes = response.audio_data or response.audio_content
+                    if pcm_bytes is None and response.audio_stream is not None:
+                        collected = bytearray()
+                        async for data in response.audio_stream:
+                            if data:
+                                collected.extend(data)
+                        pcm_bytes = bytes(collected)
+                    if not pcm_bytes:
+                        raise TTSGenerationError(
+                            f"{provider_key} returned empty audio for chunked request",
+                            provider=provider_key,
+                        )
+                    pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+                    if sample_rate is None:
+                        sample_rate = response.sample_rate or getattr(adapter, "sample_rate", None)
+                    if check_params.get("enabled") and check_params.get("per_chunk"):
+                        pcm, metrics, warnings = self._apply_audio_quality_checks(
+                            audio=pcm,
+                            text=chunk_text,
+                            sample_rate=sample_rate or fallback_sample_rate,
+                            params=check_params,
+                            provider_key=provider_key,
+                            context="chunk",
+                        )
+                        if warnings:
+                            quality_events.append(
+                                {
+                                    "context": "chunk",
+                                    "chunk_index": len(audio_parts),
+                                    "warnings": warnings,
+                                    "metrics": metrics,
+                                }
+                            )
+                    audio_parts.append(pcm)
+                    segment_events.append(
+                        {
+                            "index": chunk_idx,
+                            "status": "success",
+                            "attempts": attempts,
+                        }
+                    )
+                    break
+                except _TTS_NONCRITICAL_EXCEPTIONS as exc:
+                    last_error = exc
+                    retryable = self._is_retryable_segment_error(exc)
+                    if attempts >= max_attempts or not retryable:
+                        segment_events.append(
+                            {
+                                "index": chunk_idx,
+                                "status": "failed",
+                                "attempts": attempts,
+                                "error": str(exc),
+                                "error_type": exc.__class__.__name__,
+                                "retryable": retryable,
+                                "details": getattr(exc, "details", None),
+                            }
+                        )
+                        break
+                    delay_ms = int(backoff_ms * (backoff_factor ** (attempts - 1)))
+                    delay_ms = min(delay_ms, max_backoff_ms)
+                    if delay_ms > 0:
+                        await asyncio.sleep(delay_ms / 1000.0)
+
+            if last_error is not None and segment_events[-1]["status"] == "failed":
+                if not retry_params.get("allow_partial", True):
+                    raise last_error
+                if retry_params.get("silence_on_fail", True):
+                    silence_rate = sample_rate or fallback_sample_rate
+                    silence = self._build_silence_for_text(
+                        chunk_text,
+                        silence_rate,
+                        expected_chars_per_sec=float(check_params["expected_chars_per_sec"]),
+                        min_duration_seconds=float(check_params["min_duration_seconds"]),
+                    )
+                    if silence.size:
+                        audio_parts.append(silence)
+                # Continue to next chunk; partial success is allowed if at least one segment succeeded.
+                continue
+
+        if not audio_parts:
+            if last_error:
+                raise last_error
+            return None
+        if sample_rate is None:
+            sample_rate = fallback_sample_rate
+
+        merged = audio_parts[0]
+        for part in audio_parts[1:]:
+            merged = crossfade_audio(
+                merged,
+                part,
+                sample_rate=sample_rate,
+                crossfade_ms=crossfade_ms,
+            )
+
+        if check_params.get("enabled"):
+            merged, metrics, warnings = self._apply_audio_quality_checks(
+                audio=merged,
+                text=request.text,
+                sample_rate=sample_rate,
+                params=check_params,
+                provider_key=provider_key,
+                context="merged",
+            )
+            if warnings:
+                quality_events.append(
+                    {
+                        "context": "merged",
+                        "warnings": warnings,
+                        "metrics": metrics,
+                    }
+                )
+
+        audio_bytes: Optional[bytes] = None
+        try:
+            if hasattr(adapter, "convert_audio_format"):
+                maybe = adapter.convert_audio_format(  # type: ignore[call-arg]
+                    merged,
+                    source_format=AudioFormat.PCM,
+                    target_format=request.format,
+                    sample_rate=sample_rate,
+                )
+                if asyncio.iscoroutine(maybe):
+                    audio_bytes = await maybe
+                elif isinstance(maybe, (bytes, bytearray)):
+                    audio_bytes = bytes(maybe)
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            audio_bytes = None
+        if audio_bytes is None:
+            audio_bytes = self._convert_pcm_to_format(
+                merged,
+                target_format=request.format,
+                sample_rate=sample_rate,
+            )
+
+        return TTSResponse(
+            audio_data=audio_bytes,
+            format=request.format,
+            sample_rate=sample_rate,
+            provider=provider_key,
+            model=request.model,
+            metadata={
+                "chunked": True,
+                "chunk_count": len(chunks),
+                "chunk_crossfade_ms": crossfade_ms,
+                "audio_quality_warnings": quality_events,
+                "segments": segment_events,
+                "partial": any(seg.get("status") == "failed" for seg in segment_events),
+            },
+        )
 
     def _get_provider_concurrency_limit(self, provider_key: str) -> Optional[int]:
         """Resolve provider-specific concurrency limit from config (if set)."""
@@ -244,7 +885,7 @@ class TTSServiceV2:
                 maybe2 = self._factory.close()  # type: ignore[attr-defined]
                 if asyncio.iscoroutine(maybe2):
                     await maybe2  # type: ignore[func-returns-value]
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             # Do not let shutdown errors fail tests
             pass
 
@@ -256,7 +897,7 @@ class TTSServiceV2:
             try:
                 # Many tests patch `_factory.get_adapter(provider)`
                 adapter = self._factory.get_adapter(provider)  # type: ignore[attr-defined]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None and self.factory is not None:
             # Try to resolve via new factory/registry by provider enum name
@@ -264,7 +905,7 @@ class TTSServiceV2:
                 from .adapter_registry import TTSProvider
                 prov_enum = TTSProvider(provider)
                 adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None:
             raise TTSProviderNotConfiguredError(f"Provider not found: {provider}")
@@ -272,6 +913,8 @@ class TTSServiceV2:
         # Optional resource check hook expected by tests
         try:
             resource_mgr = await get_resource_manager()
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                resource_mgr.touch_model(provider, getattr(request, "model", None))
             try:
                 ok = await resource_mgr.check_resources()
             except TypeError:
@@ -279,7 +922,7 @@ class TTSServiceV2:
                 ok = resource_mgr.check_resources()
             if not ok:
                 raise TTSResourceError("Insufficient resources")
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             # Ignore resource check errors in legacy path
             pass
 
@@ -293,24 +936,30 @@ class TTSServiceV2:
         if hasattr(self, "_factory") and self._factory is not None:
             try:
                 adapter = self._factory.get_adapter(provider)  # type: ignore[attr-defined]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None and self.factory is not None:
             try:
                 from .adapter_registry import TTSProvider
                 prov_enum = TTSProvider(provider)
                 adapter = await self.factory.registry.get_adapter(prov_enum)  # type: ignore[union-attr]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter is None:
             raise TTSProviderNotConfiguredError(f"Provider not found: {provider}")
+
+        try:
+            resource_mgr = await get_resource_manager()
+            resource_mgr.touch_model(provider, getattr(request, "model", None))
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            pass
 
         # Adapter is expected to expose `generate_stream` in legacy tests
         stream = await adapter.generate_stream(request)  # type: ignore[attr-defined]
         async for chunk in stream:
             yield chunk
 
-    async def list_providers(self) -> List[str]:
+    async def list_providers(self) -> list[str]:
         """Legacy provider listing wrapper."""
         if hasattr(self, "_factory") and self._factory is not None and hasattr(self._factory, "list_available_providers"):
             return self._factory.list_available_providers()  # type: ignore[attr-defined,return-value]
@@ -318,21 +967,21 @@ class TTSServiceV2:
         try:
             from .adapter_registry import TTSProvider
             return [p.value for p in TTSProvider]
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             return []
 
-    async def get_capabilities(self) -> Dict[str, Any]:
+    async def get_capabilities(self) -> dict[str, Any]:
         """
         Return capabilities for all available TTS providers.
 
         The structure is JSON-serializable and suitable for the
         `/api/v1/audio/providers` endpoint.
         """
-        capabilities: Dict[str, Any] = {}
+        capabilities: dict[str, Any] = {}
 
         try:
             factory = await self._ensure_factory()
-        except Exception as e:
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"get_capabilities: unable to acquire TTS factory: {e}")
             return capabilities
 
@@ -351,20 +1000,20 @@ class TTSServiceV2:
                         provider_key = getattr(key, "value", str(key))
                         capabilities[provider_key] = self._serialize_capabilities(value)
                     return capabilities
-            except Exception as e:
+            except _TTS_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"get_capabilities: get_all_capabilities helper failed: {e}")
 
         # Fallback: iterate known providers and lazily materialize adapters
         try:
             from .adapter_registry import TTSProvider as _TTSProviderEnum
             providers = list(_TTSProviderEnum)
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             providers = []
 
         for prov in providers:
             try:
                 adapter = await registry.get_adapter(prov)  # type: ignore[union-attr]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
             if not adapter or not getattr(adapter, "capabilities", None):
                 continue
@@ -372,16 +1021,16 @@ class TTSServiceV2:
 
         return capabilities
 
-    async def list_voices(self) -> Dict[str, List[Dict[str, Any]]]:
+    async def list_voices(self) -> dict[str, list[dict[str, Any]]]:
         """
         Return a mapping of provider -> list of voice descriptors.
 
         Used by `/api/v1/audio/voices/catalog` and WebUI audio configuration.
         """
-        voices_by_provider: Dict[str, List[Dict[str, Any]]] = {}
+        voices_by_provider: dict[str, list[dict[str, Any]]] = {}
         caps = await self.get_capabilities()
         for provider, provider_caps in caps.items():
-            voices: Optional[List[Dict[str, Any]]] = None
+            voices: Optional[list[dict[str, Any]]] = None
             if isinstance(provider_caps, dict):
                 maybe_voices = provider_caps.get("voices")
                 if isinstance(maybe_voices, list):
@@ -413,14 +1062,14 @@ class TTSServiceV2:
         if hint:
             try:
                 adapter = await self._get_adapter(config.model, hint)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
 
         # Fall back to model-based resolution
         if adapter is None and config.model:
             try:
                 adapter = await factory.get_adapter_by_model(config.model)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
 
         if adapter is not None:
@@ -434,7 +1083,7 @@ class TTSServiceV2:
                         return RealtimeSessionHandle(session=session, provider=provider_used)
                     # Duck-typed sessions are allowed; skip strict type checks.
                     return RealtimeSessionHandle(session=session, provider=provider_used)
-                except Exception as exc:
+                except _TTS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"Realtime session init failed for {provider_used}: {exc}")
                     warning = (
                         f"Realtime provider '{provider_used}' failed to initialize; "
@@ -461,7 +1110,7 @@ class TTSServiceV2:
         )
         return RealtimeSessionHandle(session=session, provider=provider_used or hint, warning=warning)
 
-    def _serialize_capabilities(self, caps_obj: Any) -> Dict[str, Any]:
+    def _serialize_capabilities(self, caps_obj: Any) -> dict[str, Any]:
         """
         Convert a TTSCapabilities instance (or compatible mapping)
         into a JSON-serializable dictionary.
@@ -478,10 +1127,10 @@ class TTSServiceV2:
         try:
             from dataclasses import asdict
             data = asdict(caps_obj)
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             try:
                 data = dict(caps_obj)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 return {}
 
         languages = data.get("supported_languages") or []
@@ -490,22 +1139,22 @@ class TTSServiceV2:
 
         # Normalize language set and formats
         try:
-            data["languages"] = sorted(list(languages))
-        except Exception:
+            data["languages"] = sorted(languages)
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             data["languages"] = list(languages)
         data["formats"] = [getattr(f, "value", str(f)) for f in formats]
 
         # Normalize voices (VoiceInfo dataclasses) into plain dicts
-        norm_voices: List[Dict[str, Any]] = []
+        norm_voices: list[dict[str, Any]] = []
         for v in voices:
-            v_dict: Optional[Dict[str, Any]] = None
+            v_dict: Optional[dict[str, Any]] = None
             try:
                 from dataclasses import asdict as _asdict
                 v_dict = _asdict(v)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 try:
                     v_dict = dict(v)
-                except Exception:
+                except _TTS_NONCRITICAL_EXCEPTIONS:
                     v_dict = None
             if v_dict is not None:
                 norm_voices.append(v_dict)
@@ -522,13 +1171,13 @@ class TTSServiceV2:
 
         return data
 
-    async def get_provider_info(self, provider: str) -> Dict[str, Any]:
+    async def get_provider_info(self, provider: str) -> dict[str, Any]:
         """Legacy provider information wrapper used by tests."""
         adapter = None
         if hasattr(self, "_factory") and self._factory is not None:
             try:
                 adapter = self._factory.get_adapter(provider)  # type: ignore[attr-defined]
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 adapter = None
         if adapter and hasattr(adapter, "get_info"):
             return adapter.get_info()  # type: ignore[attr-defined,return-value]
@@ -539,9 +1188,9 @@ class TTSServiceV2:
         """Set default provider (legacy behavior for tests)."""
         self._default_provider = provider
 
-    async def generate_with_fallback(self, request: TTSRequest, fallback_providers: Optional[List[str]] = None) -> TTSResponse:
+    async def generate_with_fallback(self, request: TTSRequest, fallback_providers: Optional[list[str]] = None) -> TTSResponse:
         """Legacy helper to try primary provider then fall back to others."""
-        primary = getattr(request, "provider", None) or getattr(self, "_default_provider", "openai")
+        getattr(request, "provider", None) or getattr(self, "_default_provider", "openai")
         # Try primary
         try:
             return await self.generate(request)
@@ -553,14 +1202,14 @@ class TTSServiceV2:
             for prov in fallback_providers:
                 try:
                     req2 = request
-                    setattr(req2, "provider", prov)
+                    req2.provider = prov
                     return await self.generate(req2)
-                except Exception as e:  # keep trying
+                except _TTS_NONCRITICAL_EXCEPTIONS as e:  # keep trying
                     last_exc = e
                     continue
             # If all failed, raise the last error
             if last_exc:
-                raise last_exc
+                raise last_exc from first_err
             raise
 
     def _register_tts_metrics(self):
@@ -631,7 +1280,7 @@ class TTSServiceV2:
         request: OpenAISpeechRequest,
         provider: Optional[str] = None,
         fallback: bool = True,
-        provider_overrides: Optional[Dict[str, Any]] = None,
+        provider_overrides: Optional[dict[str, Any]] = None,
         voice_to_voice_start: Optional[float] = None,
         voice_to_voice_route: str = "audio.speech",
         user_id: Optional[int] = None,
@@ -669,10 +1318,11 @@ class TTSServiceV2:
                         provider_enum = await provider_enum  # type: ignore[assignment]
                     if provider_enum:
                         provider_hint = getattr(provider_enum, "value", str(provider_enum)).lower()
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 provider_hint = None
 
         await self._apply_custom_voice_reference(tts_request, user_id, provider_hint)
+        self._apply_token_defaults(tts_request)
 
         # Validate the request first
         try:
@@ -703,13 +1353,19 @@ class TTSServiceV2:
             raise error
 
         provider_key = self._resolve_provider_key(adapter)
+        # Update model usage for LRU cache tracking (best-effort)
+        try:
+            resource_mgr = await get_resource_manager()
+            resource_mgr.touch_model(provider_key, getattr(tts_request, "model", None))
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            pass
 
         # Track metrics
         start_time = time.time()
         audio_size = 0
         chunks_count = 0
         released_active_slot = False
-        fallback_plan: Optional[Tuple[List[str], str]] = None
+        fallback_plan: Optional[tuple[list[str], str]] = None
         voice_to_voice_recorded = False
         voice_to_voice_route_label = voice_to_voice_route or "audio.speech"
         voice_to_voice_start_ts: Optional[float] = None
@@ -718,14 +1374,14 @@ class TTSServiceV2:
                 start_val = float(voice_to_voice_start)
                 if start_val > 0:
                     voice_to_voice_start_ts = start_val
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             voice_to_voice_start_ts = None
 
         if voice_to_voice_start_ts is not None:
             try:
-                setattr(tts_request, "voice_to_voice_start", voice_to_voice_start_ts)
-                setattr(tts_request, "voice_to_voice_route", voice_to_voice_route_label)
-            except Exception:
+                tts_request.voice_to_voice_start = voice_to_voice_start_ts
+                tts_request.voice_to_voice_route = voice_to_voice_route_label
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Re-validate against the concrete adapter's provider (important for fallback providers)
@@ -752,7 +1408,7 @@ class TTSServiceV2:
                     labels={"provider": provider_name, "route": voice_to_voice_route_label},
                 )
                 voice_to_voice_recorded = True
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         await self._increment_active_requests(provider_key)
@@ -770,9 +1426,29 @@ class TTSServiceV2:
 
                     # Generate response (with or without circuit breaker)
                     response: Optional[TTSResponse] = None
+
+                    async def _generate_with_adapter() -> TTSResponse:
+                        should_chunk, target_chars, max_chars, min_chars, crossfade_ms = self._should_service_chunk(
+                            request_for_provider,
+                            adapter,
+                        )
+                        if should_chunk:
+                            chunked = await self._generate_chunked_response(
+                                adapter=adapter,
+                                request=request_for_provider,
+                                provider_key=provider_key,
+                                target_chars=target_chars,
+                                max_chars=max_chars,
+                                min_chars=min_chars,
+                                crossfade_ms=crossfade_ms,
+                            )
+                            if chunked is not None:
+                                return chunked
+                        return await adapter.generate(request_for_provider)
+
                     if circuit_breaker:
                         try:
-                            response = await circuit_breaker.call(adapter.generate, request_for_provider)
+                            response = await circuit_breaker.call(_generate_with_adapter)
                         except CircuitOpenError as e:
                             logger.warning(f"Circuit open for {provider_key}: {e}")
                             if fallback:
@@ -789,23 +1465,22 @@ class TTSServiceV2:
                                     f"Circuit open for {provider_key}",
                                     provider=provider_key,
                                     details={"circuit_state": "open"}
-                                )
+                                ) from e
                     else:
-                        response = await adapter.generate(request_for_provider)
+                        response = await _generate_with_adapter()
 
                     if fallback_plan is None and response is not None:
-                        if response.metadata:
-                            try:
-                                setattr(request, "_tts_metadata", response.metadata)
-                            except Exception:
-                                pass
+                        self._attach_response_metadata(
+                            request,
+                            response,
+                            provider_key,
+                            request_for_provider,
+                        )
                         if metadata_only:
                             if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                                try:
+                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                     await response.audio_stream.aclose()
-                                except Exception:
-                                    pass
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 self._record_tts_metrics(
                                     provider=provider_key,
                                     model=request_for_provider.model or "default",
@@ -816,8 +1491,6 @@ class TTSServiceV2:
                                     duration=time.time() - start_time,
                                     success=True,
                                 )
-                            except Exception:
-                                pass
                             return
                         if response.audio_stream:
                             async for chunk in response.audio_stream:
@@ -834,17 +1507,15 @@ class TTSServiceV2:
                                             },
                                         )
                                         _record_voice_to_voice(provider_key)
-                                    except Exception:
+                                    except _TTS_NONCRITICAL_EXCEPTIONS:
                                         pass
                                 chunks_count += 1
                                 audio_size += len(chunk)
                                 yield chunk
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
                                 )
-                            except Exception:
-                                pass
                         elif response.audio_data:
                             chunks_count = 1
                             # Record TTFB when first audio bytes are available
@@ -859,22 +1530,20 @@ class TTSServiceV2:
                                     },
                                 )
                                 _record_voice_to_voice(provider_key)
-                            except Exception:
+                            except _TTS_NONCRITICAL_EXCEPTIONS:
                                 pass
                             audio_size = len(response.audio_data)
                             yield response.audio_data
-                            try:
+                            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                 await self._maybe_store_qwen3_voice_prompt(
                                     request_for_provider, user_id, provider_key
                                 )
-                            except Exception:
-                                pass
                         else:
                             error_msg = f"No audio data returned by {provider_key}"
                             logger.error(error_msg)
                             if fallback:
                                 # Record a soft failure for observability before falling back.
-                                try:
+                                with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                                     self._record_tts_metrics(
                                         provider=provider_key,
                                         model=request_for_provider.model or "default",
@@ -886,8 +1555,6 @@ class TTSServiceV2:
                                         success=False,
                                         error=error_msg,
                                     )
-                                except Exception:
-                                    pass
                                 await self._handle_provider_fallback(request_for_provider, provider_key, error_msg)
                                 await self._decrement_active_requests(provider_key)
                                 released_active_slot = True
@@ -943,8 +1610,8 @@ class TTSServiceV2:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
                 else:
-                    raise e
-        except Exception as e:
+                    raise
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
             # Handle unexpected errors
             error_msg = f"Unexpected error generating speech with {provider_key}: {str(e)}"
             logger.error(error_msg, exc_info=True)
@@ -978,12 +1645,12 @@ class TTSServiceV2:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
                 else:
-                    raise tts_error
+                    raise tts_error from e
         finally:
             try:
                 if not released_active_slot:
                     await self._decrement_active_requests(provider_key)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         if fallback_plan:
@@ -1041,7 +1708,7 @@ class TTSServiceV2:
                 parsed = float(raw)
                 if parsed > 0:
                     v2v_start = parsed
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             v2v_start = None
         v2v_route = getattr(request_for_provider, "voice_to_voice_route", "audio.speech") or "audio.speech"
 
@@ -1056,27 +1723,26 @@ class TTSServiceV2:
                     labels={"provider": provider_key, "route": v2v_route},
                 )
                 voice_metric_recorded = True
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
         try:
             async with self._semaphore:
                 response = await adapter.generate(request_for_provider)
 
-                if response.metadata:
-                    target = metadata_target if metadata_target is not None else request_for_provider
-                    try:
-                        setattr(target, "_tts_metadata", response.metadata)
-                    except Exception:
-                        pass
+                target = metadata_target if metadata_target is not None else request_for_provider
+                self._attach_response_metadata(
+                    target,
+                    response,
+                    provider_key,
+                    request_for_provider,
+                )
 
                 if metadata_only:
                     success = True
                     if response.audio_stream and hasattr(response.audio_stream, "aclose"):
-                        try:
+                        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                             await response.audio_stream.aclose()
-                        except Exception:
-                            pass
                     return
 
                 if response.audio_stream:
@@ -1095,7 +1761,7 @@ class TTSServiceV2:
                                     },
                                 )
                                 _record_voice_to_voice()
-                            except Exception:
+                            except _TTS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         audio_size += len(chunk)
                         yield chunk
@@ -1111,7 +1777,7 @@ class TTSServiceV2:
                             },
                         )
                         _record_voice_to_voice()
-                    except Exception:
+                    except _TTS_NONCRITICAL_EXCEPTIONS:
                         pass
                     audio_size = len(response.audio_data)
                     yield response.audio_data
@@ -1122,17 +1788,15 @@ class TTSServiceV2:
                         yield f"ERROR: {error_message}".encode()
                     raise TTSGenerationError(error_message, provider=provider_key)
                 success = True
-        except Exception as e:
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Fallback generation failed: {e}")
             error_message = str(e)
             if self._stream_errors_as_audio:
                 yield f"ERROR: All providers failed - {str(e)}".encode()
             raise TTSGenerationError(f"All providers failed - {str(e)}") from e
         finally:
-            try:
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
                 await self._decrement_active_requests(provider_key)
-            except Exception:
-                pass
             try:
                 duration = time.time() - start_time
                 self._record_tts_metrics(
@@ -1146,7 +1810,7 @@ class TTSServiceV2:
                     success=success,
                     error=error_message if not success else None
                 )
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 pass
 
     def _convert_request(self, request: OpenAISpeechRequest) -> TTSRequest:
@@ -1175,7 +1839,7 @@ class TTSServiceV2:
         if getattr(request, 'voice_reference', None):
             try:
                 voice_ref_bytes = base64.b64decode(request.voice_reference)
-            except Exception as exc:
+            except _TTS_NONCRITICAL_EXCEPTIONS as exc:
                 raise TTSInvalidVoiceReferenceError(
                     "Voice reference data is not valid base64",
                     details={"error": str(exc)}
@@ -1190,7 +1854,7 @@ class TTSServiceV2:
             elif extra_language is not None:
                 try:
                     coerced_language = str(extra_language)
-                except Exception:
+                except _TTS_NONCRITICAL_EXCEPTIONS:
                     coerced_language = None
                 if coerced_language:
                     language = coerced_language
@@ -1210,7 +1874,7 @@ class TTSServiceV2:
         )
 
         # Preserve originating model for metrics/diagnostics when available
-        setattr(tts_request, "model", getattr(request, "model", None))
+        tts_request.model = getattr(request, "model", None)
 
         return tts_request
 
@@ -1247,7 +1911,7 @@ class TTSServiceV2:
         if not raw_id:
             return
         try:
-            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceProcessingError
+            from tldw_Server_API.app.core.TTS.voice_manager import VoiceProcessingError, get_voice_manager
 
             voice_manager = get_voice_manager()
             if request.voice_reference is None:
@@ -1287,7 +1951,7 @@ class TTSServiceV2:
             request.extra_params = extras
         except VoiceProcessingError as e:
             logger.warning(f"Custom voice resolution failed for {raw_id}: {e}")
-        except Exception as e:
+        except _TTS_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Custom voice resolution error for {raw_id}: {e}")
 
     async def _maybe_store_qwen3_voice_prompt(
@@ -1313,7 +1977,7 @@ class TTSServiceV2:
         if not data_b64:
             return
         try:
-            from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager, VoiceReferenceMetadata
+            from tldw_Server_API.app.core.TTS.voice_manager import VoiceReferenceMetadata, get_voice_manager
 
             voice_manager = get_voice_manager()
             metadata = await voice_manager.load_reference_metadata(user_id, raw_id)
@@ -1327,14 +1991,14 @@ class TTSServiceV2:
             metadata.voice_clone_prompt_b64 = data_b64
             metadata.voice_clone_prompt_format = fmt
             await voice_manager.save_reference_metadata(user_id, metadata)
-        except Exception as exc:
+        except _TTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Failed to persist Qwen3 voice_clone_prompt for {raw_id}: {exc}")
 
     async def _get_adapter(
         self,
         model: str,
         provider: Optional[str] = None,
-        overrides: Optional[Dict[str, Any]] = None,
+        overrides: Optional[dict[str, Any]] = None,
     ) -> Optional[TTSAdapter]:
         """Get appropriate adapter for the request"""
         factory = await self._ensure_factory()
@@ -1360,7 +2024,7 @@ class TTSServiceV2:
             return provider_name.lower()
         return "unknown"
 
-    def _get_tts_config(self) -> Optional[Dict[str, Any]]:
+    def _get_tts_config(self) -> Optional[dict[str, Any]]:
         for factory in (self.factory, self._factory):
             registry = getattr(factory, "registry", None) if factory else None
             cfg = getattr(registry, "config", None) if registry else None
@@ -1386,7 +2050,7 @@ class TTSServiceV2:
             try:
                 from .utils import parse_bool
                 return parse_bool(value, default=True)
-            except Exception:
+            except _TTS_NONCRITICAL_EXCEPTIONS:
                 return bool(value)
         return True
 
@@ -1403,7 +2067,7 @@ class TTSServiceV2:
         try:
             from .utils import parse_bool
             return parse_bool(value, default=False)
-        except Exception:
+        except _TTS_NONCRITICAL_EXCEPTIONS:
             return bool(value)
 
     def _maybe_sanitize_request(self, request: TTSRequest, provider_key: str) -> TTSRequest:
@@ -1417,7 +2081,7 @@ class TTSServiceV2:
         sanitized_request.text = sanitized_text
         return sanitized_request
 
-    def _provider_aliases(self, adapter: TTSAdapter) -> Set[str]:
+    def _provider_aliases(self, adapter: TTSAdapter) -> set[str]:
         """Return a normalized alias set for a provider/adapter."""
         aliases = set()
         provider_name = getattr(adapter, "provider_name", None)
@@ -1441,7 +2105,7 @@ class TTSServiceV2:
             normalized.add(alias.replace("adapter", "").replace("_", "").replace("-", ""))
         return {alias for alias in normalized if alias}
 
-    def _build_exclude_tokens(self, adapter: TTSAdapter) -> List[str]:
+    def _build_exclude_tokens(self, adapter: TTSAdapter) -> list[str]:
         """Build normalized exclude tokens for a provider."""
         return list(self._provider_aliases(adapter))
 
@@ -1450,14 +2114,12 @@ class TTSServiceV2:
         async with self._active_requests_lock:
             current = self._active_request_counts.get(provider, 0) + 1
             self._active_request_counts[provider] = current
-        try:
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             self.metrics.set_gauge(
                 "tts_active_requests",
                 current,
                 labels={"provider": provider}
             )
-        except Exception:
-            pass
 
     async def _decrement_active_requests(self, provider: str) -> None:
         """Decrement per-provider active request count and update gauge."""
@@ -1469,19 +2131,17 @@ class TTSServiceV2:
                 self._active_request_counts.pop(provider, None)
             else:
                 self._active_request_counts[provider] = current
-        try:
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             self.metrics.set_gauge(
                 "tts_active_requests",
                 current,
                 labels={"provider": provider}
             )
-        except Exception:
-            pass
 
     async def _get_fallback_adapter(
         self,
         request: TTSRequest,
-        exclude: Optional[List[str]] = None
+        exclude: Optional[list[str]] = None
     ) -> Optional[TTSAdapter]:
         """Get a fallback adapter that can handle the request"""
         factory = await self._ensure_factory()
@@ -1519,7 +2179,7 @@ class TTSServiceV2:
                 continue
             # Skip providers without registered adapters (e.g., TODO placeholders)
             if registry and hasattr(registry, "_adapter_specs"):
-                specs = getattr(registry, "_adapter_specs")
+                specs = registry._adapter_specs
                 try:
                     if provider not in specs:
                         continue
@@ -1532,7 +2192,7 @@ class TTSServiceV2:
             except TTSProviderNotConfiguredError:
                 logger.debug(f"Skipping provider {provider.value} - no adapter configured")
                 continue
-            except Exception as exc:
+            except _TTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Skipping provider {provider.value} due to error: {exc}")
                 continue
 
@@ -1648,7 +2308,7 @@ class TTSServiceV2:
     async def _try_fallback_providers(
         self,
         request: TTSRequest,
-        exclude_providers: List[str],
+        exclude_providers: list[str],
         failed_provider: Optional[str],
         *,
         metadata_only: bool = False,
@@ -1676,7 +2336,7 @@ class TTSServiceV2:
                     getattr(fallback_adapter, "default_model", None)
                     or fallback_provider_key
                 )
-                setattr(request, "model", fallback_model)
+                request.model = fallback_model
                 try:
                     async for chunk in self._generate_with_adapter(
                         fallback_adapter,
@@ -1686,7 +2346,7 @@ class TTSServiceV2:
                     ):
                         yield chunk
                 finally:
-                    setattr(request, "model", original_model)
+                    request.model = original_model
                 logger.info(f"Successfully fell back to {fallback_provider_key}")
                 # Record successful fallback
                 self.metrics.increment(
@@ -1726,7 +2386,7 @@ class TTSServiceV2:
                                 getattr(final_fallback, "default_model", None)
                                 or final_provider_key
                             )
-                            setattr(request, "model", secondary_model)
+                            request.model = secondary_model
                             try:
                                 async for chunk in self._generate_with_adapter(
                                     final_fallback,
@@ -1736,7 +2396,7 @@ class TTSServiceV2:
                                 ):
                                     yield chunk
                             finally:
-                                setattr(request, "model", secondary_original_model)
+                                request.model = secondary_original_model
                             logger.info(f"Final fallback to {final_provider_key} succeeded")
                             # Record successful final fallback
                             self.metrics.increment(
@@ -1747,11 +2407,11 @@ class TTSServiceV2:
                                     "success": "true"
                                 }
                             )
-                        except Exception as final_e:
+                        except _TTS_NONCRITICAL_EXCEPTIONS as final_e:
                             # Wrap non-TTS errors
                             if not isinstance(final_e, TTSError):
                                 final_e = TTSGenerationError(
-                                    f"Final fallback failed",
+                                    "Final fallback failed",
                                     provider=final_provider_key,
                                     details={"error": str(final_e)}
                                 )
@@ -1768,33 +2428,33 @@ class TTSServiceV2:
                             if self._stream_errors_as_audio:
                                 yield f"ERROR: {error_msg}".encode()
                             else:
-                                raise final_e
+                                raise
                     else:
                         origin_provider = next_failed_provider
                         if self._stream_errors_as_audio:
-                            yield f"ERROR: All fallback providers exhausted".encode()
+                            yield b"ERROR: All fallback providers exhausted"
                         else:
-                            raise TTSFallbackExhaustedError("All fallback providers exhausted")
+                            raise TTSFallbackExhaustedError("All fallback providers exhausted") from e
                 else:
                     # Non-retryable error, don't attempt more fallbacks
                     if self._stream_errors_as_audio:
                         yield f"ERROR: {str(e)} (non-retryable)".encode()
                     else:
-                        raise e
-            except Exception as e:
+                        raise
+            except _TTS_NONCRITICAL_EXCEPTIONS as e:
                 # Handle unexpected errors
                 logger.error(f"Unexpected error in fallback: {e}", exc_info=True)
                 if self._stream_errors_as_audio:
                     yield f"ERROR: Unexpected error during fallback: {str(e)}".encode()
                 else:
-                    raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}")
+                    raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}") from e
         else:
             if self._stream_errors_as_audio:
-                yield f"ERROR: No fallback providers available".encode()
+                yield b"ERROR: No fallback providers available"
             else:
                 raise TTSFallbackExhaustedError("No fallback providers available")
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get service status"""
         factory = self.factory or self._factory
         if not factory or not hasattr(factory, "get_status"):
@@ -1813,7 +2473,7 @@ _service_instance: Optional[TTSServiceV2] = None
 _service_lock = asyncio.Lock()
 
 
-async def get_tts_service_v2(config: Optional[Dict[str, Any]] = None) -> TTSServiceV2:
+async def get_tts_service_v2(config: Optional[dict[str, Any]] = None) -> TTSServiceV2:
     """
     Get or create the enhanced TTS service singleton.
 
@@ -1897,10 +2557,7 @@ class TTSServiceAdapter:
         }
 
         # Update request model if needed
-        if internal_model_id in model_mapping:
-            request.model = model_mapping[internal_model_id]
-        else:
-            request.model = internal_model_id
+        request.model = model_mapping.get(internal_model_id, internal_model_id)
 
         # Generate with V2 service
         async for chunk in self.service_v2.generate_speech(request, fallback=True):

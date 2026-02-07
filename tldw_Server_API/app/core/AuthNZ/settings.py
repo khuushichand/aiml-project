@@ -2,24 +2,64 @@
 # Description: Pydantic settings for user registration system with persistent JWT secret management
 #
 # Imports
+import contextlib
 import json
 import os
-import secrets
 from pathlib import Path
 from typing import Annotated, Literal, Optional
-#
-# 3rd-party imports
-from pydantic_settings import BaseSettings, NoDecode
-from pydantic import Field, field_validator
+
 #
 # Local imports
 from loguru import logger
+from pydantic import Field, field_validator
+
+#
+# 3rd-party imports
+from pydantic_settings import BaseSettings, NoDecode
+
+_SETTINGS_IMPORT_EXCEPTIONS = (
+    ImportError,
+    RuntimeError,
+    AttributeError,
+)
+
+_SETTINGS_JSON_PARSE_EXCEPTIONS = (
+    json.JSONDecodeError,
+    TypeError,
+    ValueError,
+)
+
+_SETTINGS_CAST_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    AttributeError,
+)
+
+_SETTINGS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+)
+
 try:
     # Prefer centralized loader to honor project config precedence
-    from tldw_Server_API.app.core.config import load_comprehensive_config, settings as core_settings
-except Exception:
+    from tldw_Server_API.app.core.config import load_comprehensive_config
+    from tldw_Server_API.app.core.config import settings as core_settings
+except _SETTINGS_IMPORT_EXCEPTIONS:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
+
+try:
+    from tldw_Server_API.app.core.testing import (
+        is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    )
+except _SETTINGS_IMPORT_EXCEPTIONS:
+    def _is_explicit_pytest_runtime() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
 SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
@@ -623,7 +663,7 @@ class Settings(BaseSettings):
         description="Fixed user ID for single-user mode"
     )
     # Optional IP allowlist for single-user mode (comma-separated env or list)
-    SINGLE_USER_ALLOWED_IPS: list[str] = Field(
+    SINGLE_USER_ALLOWED_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Optional list of allowed client IPs/CIDRs for SINGLE_USER_API_KEY"
     )
@@ -636,7 +676,7 @@ class Settings(BaseSettings):
             "(see AUTH_TRUSTED_PROXY_IPS)."
         ),
     )
-    AUTH_TRUSTED_PROXY_IPS: list[str] = Field(
+    AUTH_TRUSTED_PROXY_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Optional list of trusted proxy IPs/CIDRs for X-Forwarded-For resolution."
     )
@@ -647,7 +687,7 @@ class Settings(BaseSettings):
         ge=100,
         description="Rate limit for service accounts per minute"
     )
-    SERVICE_TOKEN_ALLOWED_IPS: list[str] = Field(
+    SERVICE_TOKEN_ALLOWED_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description=(
             "Optional list of allowed client IPs/CIDRs for service tokens. "
@@ -701,11 +741,8 @@ class Settings(BaseSettings):
             logger.info("Using configured JWT secret key")
             return
 
-        # Allow deterministic fallback in explicit test contexts
-        test_mode = (
-            os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
+        # Allow deterministic fallback only in explicit pytest runtime.
+        test_mode = _is_explicit_pytest_runtime()
         if test_mode:
             fallback = os.getenv(
                 "JWT_SECRET_TEST_KEY",
@@ -731,22 +768,10 @@ class Settings(BaseSettings):
             # If an explicit key is provided via env/.env, honor it (legacy API_KEY supported)
             explicit_env_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
-            # Detect test contexts where the server should expose a stable key so client tests can authenticate
-            # Only rely on environment of the server process, never trust request headers
-            # Detect test contexts eagerly. Some test suites import the app before
-            # setting TEST_MODE or PYTEST_CURRENT_TEST, so also check for the
-            # presence of the pytest module and the TESTING flag.
-            try:
-                import sys as _sys  # Local import to avoid module-level cost
-            except Exception:
-                _sys = None
-            in_test_context = (
-                os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
-                or os.getenv("TESTING", "").lower() in ("true", "1", "yes")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
-                or (isinstance(_sys, object) and ("pytest" in getattr(_sys, "modules", {})))
-                or os.getenv("E2E_TEST_BASE_URL") is not None
-            )
+            # Detect explicit test contexts where the server should expose a
+            # stable key so client tests can authenticate. Only rely on server
+            # environment variables; never trust request headers.
+            in_test_context = _is_explicit_pytest_runtime() or os.getenv("E2E_TEST_BASE_URL") is not None
 
             if not self.SINGLE_USER_API_KEY:
                 if explicit_env_key:
@@ -828,10 +853,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -843,10 +865,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -858,10 +877,7 @@ class Settings(BaseSettings):
         if not v:
             return []
         if isinstance(v, str):
-            try:
-                return [s.strip() for s in v.split(',') if s.strip()]
-            except Exception:
-                return []
+            return [s.strip() for s in v.split(',') if s.strip()]
         if isinstance(v, (list, tuple)):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
@@ -989,7 +1005,7 @@ def _split_csv(val) -> list[str]:
         if stripped.startswith("[") and stripped.endswith("]"):
             try:
                 parsed = json.loads(stripped)
-            except Exception:
+            except _SETTINGS_JSON_PARSE_EXCEPTIONS:
                 parsed = None
             if isinstance(parsed, list):
                 return [str(x).strip() for x in parsed if str(x).strip()]
@@ -1017,10 +1033,8 @@ def _load_overrides_from_config() -> dict:
             # Map config key to Settings field if env var not set
             env_name = field
             if os.getenv(env_name) is None and cfg.has_option("AuthNZ", key):
-                try:
+                with contextlib.suppress(_SETTINGS_CAST_EXCEPTIONS):
                     overrides[field] = caster(cfg.get("AuthNZ", key))
-                except Exception:
-                    pass
 
         maybe_set("AUTH_MODE", "auth_mode", lambda v: v.strip())
         maybe_set("DATABASE_URL", "database_url", lambda v: v.strip())
@@ -1111,7 +1125,7 @@ def _load_overrides_from_config() -> dict:
                     else:
                         overrides["DATABASE_URL"] = f"postgresql://{user}:{pwd}@{host}:{port}/{db}?sslmode={sslm}"
                 # else: ignore unknown types
-    except Exception as e:
+    except _SETTINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"AuthNZ settings: failed to load overrides from config.txt: {e}")
     return overrides
 
@@ -1150,7 +1164,7 @@ def get_settings() -> Settings:
                 overrides["ORG_INVITE_ALLOW_MISSING_EMAIL"] = _alias_bool(
                     "ORG_INVITE_ALLOW_MISSING_EMAIL"
                 )
-        except Exception:
+        except _SETTINGS_IMPORT_EXCEPTIONS:
             pass
         _settings = Settings(**overrides)
         try:
@@ -1159,13 +1173,14 @@ def get_settings() -> Settings:
                 base_dir = core_settings.get("USER_DB_BASE_DIR")
             if base_dir:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
-        except Exception as exc:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic.
-        # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
-        # exercise real rate limiting under pytest.
+        # In explicit pytest/runtime test contexts, default-disable rate
+        # limiting to keep tests deterministic. Explicit falsey flags (e.g.,
+        # TEST_MODE=0) should take precedence so tests can exercise real rate
+        # limiting.
         try:
-            import os as _os, sys as _sys
+            import os as _os
             truthy = {"1", "true", "yes", "on"}
             falsy = {"0", "false", "no", "off"}
 
@@ -1188,11 +1203,9 @@ def get_settings() -> Settings:
             explicit_false = any(flag is False for flag in explicit_flags)
             explicit_true = any(flag is True for flag in explicit_flags)
 
-            if not explicit_false and (
-                explicit_true or _os.getenv("PYTEST_CURRENT_TEST") or "pytest" in _sys.modules
-            ):
+            if not explicit_false and (explicit_true or _os.getenv("PYTEST_CURRENT_TEST")):
                 _settings.RATE_LIMIT_ENABLED = False
-        except Exception:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
             pass
         # Log a lightweight profile hint for coordination/UX and optional
         # hardening. AUTH_MODE remains the canonical behavioral switch; PROFILE
@@ -1212,7 +1225,7 @@ def get_settings() -> Settings:
                 )
             else:
                 logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
-        except Exception:
+        except _SETTINGS_NONCRITICAL_EXCEPTIONS:
             logger.info("Settings initialized - Auth mode: %s", _settings.AUTH_MODE)
     return _settings
 
@@ -1273,7 +1286,7 @@ def _infer_profile_from_settings(settings: Settings) -> Optional[str]:
     try:
         mode = settings.AUTH_MODE
         db_url = str(settings.DATABASE_URL or "")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return None
 
     db_lower = db_url.lower()
@@ -1310,7 +1323,7 @@ def get_profile() -> Optional[str]:
     settings = get_settings()
     try:
         value = getattr(settings, "PROFILE", None)
-    except Exception:
+    except (AttributeError, TypeError):
         value = None
     if isinstance(value, str) and value.strip():
         return value.strip()

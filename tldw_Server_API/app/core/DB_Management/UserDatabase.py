@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
 
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
@@ -16,13 +15,15 @@ from tldw_Server_API.app.core.DB_Management.backends.base import (
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
-    UserDatabase as _UserDatabaseV2,
-    UserDatabaseError,
-    UserNotFoundError,
+    AuthenticationError,
     DuplicateUserError,
     InvalidPermissionError,
     RegistrationCodeError,
-    AuthenticationError,
+    UserDatabaseError,
+    UserNotFoundError,
+)
+from tldw_Server_API.app.core.DB_Management.UserDatabase_v2 import (
+    UserDatabase as _UserDatabaseV2,
 )
 
 
@@ -31,11 +32,11 @@ class UserDatabase(_UserDatabaseV2):
 
     def __init__(
         self,
-        db_path: Optional[Union[str, Path]] = None,
+        db_path: str | Path | None = None,
         client_id: str = "auth_service",
         *,
-        backend: Optional[DatabaseBackend] = None,
-        config: Optional[DatabaseConfig] = None,
+        backend: DatabaseBackend | None = None,
+        config: DatabaseConfig | None = None,
     ) -> None:
         # If a backend or explicit DatabaseConfig is supplied, honour it.
         if backend is not None or config is not None:

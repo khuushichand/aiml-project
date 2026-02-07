@@ -1,15 +1,16 @@
 # chunking_schema.py
 #
 # Imports
-from typing import Optional, Any, Dict, List
+from typing import Any, Optional
+
 #
 # Third-party Libraries
-from pydantic import Field, BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
 #
 # Local Imports
-from tldw_Server_API.app.core.Chunking import (
-    DEFAULT_CHUNK_OPTIONS as default_chunk_options_from_lib
-)
+from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS as DEFAULT_CHUNK_OPTIONS_FROM_LIB
+
 #
 ###########################################################################################################################
 #
@@ -36,16 +37,22 @@ class LLMOptionsForChunkerInternalSteps(BaseModel):
     @field_validator('temperature', mode='before')
     @classmethod
     def ensure_float_type(cls, v: Any, info) -> Optional[float]:
-        if v is None: return None
-        try: return float(v)
-        except (ValueError, TypeError): raise ValueError(f"Field '{info.field_name}' must be a float. Got: '{v}'")
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Field '{info.field_name}' must be a float. Got: '{v}'") from e
 
     @field_validator('max_tokens_per_step', mode='before')
     @classmethod
     def ensure_int_type(cls, v: Any, info) -> Optional[int]:
-        if v is None: return None
-        try: return int(v)
-        except (ValueError, TypeError): raise ValueError(f"Field '{info.field_name}' must be an int. Got: '{v}'")
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Field '{info.field_name}' must be an int. Got: '{v}'") from e
 
 
 class ChunkingOptionsRequest(BaseModel):
@@ -54,15 +61,15 @@ class ChunkingOptionsRequest(BaseModel):
                                         description="Name of a chunking template to use. If specified, template settings override individual parameters.")
 
     # Core Chunking Method & Basic Parameters
-    method: Optional[str] = Field(default_chunk_options_from_lib.get('method'),
+    method: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('method'),
                                   description="Chunking method (e.g., 'words', 'sentences', 'propositions', 'json', 'semantic', 'xml', 'ebook_chapters', 'rolling_summarize').")
-    max_size: Optional[int] = Field(default_chunk_options_from_lib.get('max_size'), gt=0,
+    max_size: Optional[int] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('max_size'), gt=0,
                                    description="Max size of chunks. Must be > 0 if set.")
-    overlap: Optional[int] = Field(default_chunk_options_from_lib.get('overlap'), ge=0,
+    overlap: Optional[int] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('overlap'), ge=0,
                                   description="Overlap between chunks. Must be >= 0 if set.")
-    language: Optional[str] = Field(default_chunk_options_from_lib.get('language'),
+    language: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('language'),
                                     description="Language of the text. Auto-detected if None.")
-    tokenizer_name_or_path: Optional[str] = Field(default_chunk_options_from_lib.get('tokenizer_name_or_path', "gpt2"),
+    tokenizer_name_or_path: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('tokenizer_name_or_path', "gpt2"),
                                                   description="Tokenizer model name or path.")
 
     # Code strategy mode (only relevant when method='code')
@@ -72,41 +79,41 @@ class ChunkingOptionsRequest(BaseModel):
     )
 
     # Behavior Modifiers
-    adaptive: Optional[bool] = Field(default_chunk_options_from_lib.get('adaptive'),
+    adaptive: Optional[bool] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('adaptive'),
                                      description="Enable adaptive chunk sizing.")
-    multi_level: Optional[bool] = Field(default_chunk_options_from_lib.get('multi_level'),
+    multi_level: Optional[bool] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('multi_level'),
                                         description="Enable multi-level chunking.")
 
     # Method-Specific Options
-    custom_chapter_pattern: Optional[str] = Field(default_chunk_options_from_lib.get('custom_chapter_pattern'),
+    custom_chapter_pattern: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('custom_chapter_pattern'),
                                                   description="Custom regex for 'ebook_chapters' method.")
-    semantic_similarity_threshold: Optional[float] = Field(default_chunk_options_from_lib.get('semantic_similarity_threshold'), ge=0.0, le=1.0,
+    semantic_similarity_threshold: Optional[float] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('semantic_similarity_threshold'), ge=0.0, le=1.0,
                                                        description="Similarity threshold for 'semantic' chunking.")
-    semantic_overlap_sentences: Optional[int] = Field(default_chunk_options_from_lib.get('semantic_overlap_sentences'), ge=0,
+    semantic_overlap_sentences: Optional[int] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('semantic_overlap_sentences'), ge=0,
                                                     description="Sentence overlap for 'semantic' chunking.")
-    json_chunkable_data_key: Optional[str] = Field(default_chunk_options_from_lib.get('json_chunkable_data_key', 'data'),
+    json_chunkable_data_key: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('json_chunkable_data_key', 'data'),
                                                  description="Key in JSON object whose dict value should be chunked.")
     enable_frontmatter_parsing: Optional[bool] = Field(
-        default_chunk_options_from_lib.get('enable_frontmatter_parsing', True),
+        DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('enable_frontmatter_parsing', True),
         description="Toggle JSON frontmatter extraction when sentinel key is present."
     )
     frontmatter_sentinel_key: Optional[str] = Field(
-        default_chunk_options_from_lib.get('frontmatter_sentinel_key', '__tldw_frontmatter__'),
+        DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('frontmatter_sentinel_key', '__tldw_frontmatter__'),
         description="Sentinel key required inside JSON frontmatter to permit extraction."
     )
 
     # Options for 'rolling_summarize' (high-level controls)
-    summarization_detail: Optional[float] = Field(default_chunk_options_from_lib.get('summarization_detail'), ge=0.0, le=1.0,
+    summarization_detail: Optional[float] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('summarization_detail'), ge=0.0, le=1.0,
                                                 description="Detail level for 'rolling_summarize' (0.0-1.0).")
 
     # Proposition-specific options (used when method='propositions')
-    proposition_engine: Optional[str] = Field(default_chunk_options_from_lib.get('proposition_engine', 'heuristic'),
+    proposition_engine: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('proposition_engine', 'heuristic'),
                                               description="Engine for propositions: 'heuristic' | 'spacy' | 'llm' | 'auto'.")
-    proposition_aggressiveness: Optional[int] = Field(default_chunk_options_from_lib.get('proposition_aggressiveness', 1), ge=0, le=2,
+    proposition_aggressiveness: Optional[int] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('proposition_aggressiveness', 1), ge=0, le=2,
                                                       description="Aggressiveness for heuristic splitting: 0..2.")
-    proposition_min_proposition_length: Optional[int] = Field(default_chunk_options_from_lib.get('proposition_min_proposition_length', 15), ge=0,
+    proposition_min_proposition_length: Optional[int] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('proposition_min_proposition_length', 15), ge=0,
                                                               description="Min chars before merging short propositions.")
-    proposition_prompt_profile: Optional[str] = Field(default_chunk_options_from_lib.get('proposition_prompt_profile', 'generic'),
+    proposition_prompt_profile: Optional[str] = Field(DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('proposition_prompt_profile', 'generic'),
                                                       description="Prompt profile for LLM engine: 'generic' | 'claimify' | 'gemma_aps'.")
 
     # Nested model for LLM parameters (client suggestions for non-provider/model aspects)
@@ -117,21 +124,27 @@ class ChunkingOptionsRequest(BaseModel):
     @field_validator('max_size', 'overlap', 'semantic_overlap_sentences', mode='before')
     @classmethod
     def ensure_int_type(cls, v: Any, info) -> Optional[int]:
-        if v is None: return None
-        try: return int(v)
-        except (ValueError, TypeError): raise ValueError(f"Field '{info.field_name}' must be an integer. Got: '{v}'")
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Field '{info.field_name}' must be an integer. Got: '{v}'") from e
 
     @field_validator('semantic_similarity_threshold', 'summarization_detail', mode='before')
     @classmethod
     def ensure_float_type(cls, v: Any, info) -> Optional[float]:
-        if v is None: return None
-        try: return float(v)
-        except (ValueError, TypeError): raise ValueError(f"Field '{info.field_name}' must be a float. Got: '{v}'")
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Field '{info.field_name}' must be a float. Got: '{v}'") from e
 
     @model_validator(mode='after')
     def check_overlap_less_than_max_size(self) -> 'ChunkingOptionsRequest':
         max_size, overlap = self.max_size, self.overlap
-        current_method = self.method or default_chunk_options_from_lib.get('method')
+        current_method = self.method or DEFAULT_CHUNK_OPTIONS_FROM_LIB.get('method')
         if max_size is not None and overlap is not None:
             if current_method in ['words', 'sentences', 'tokens', 'paragraphs', 'propositions', 'json_list']:
                 if overlap >= max_size:
@@ -152,10 +165,10 @@ class ChunkingTextRequest(BaseModel):
 
 class ChunkedContentResponse(BaseModel):
     text: str
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 class ChunkingResponse(BaseModel):
-    chunks: List[ChunkedContentResponse]
+    chunks: list[ChunkedContentResponse]
     original_file_name: Optional[str]
     applied_options: ChunkingOptionsRequest
 
@@ -178,8 +191,8 @@ class ChunkMetadataResponse(BaseModel):
 # --- Capabilities schema ---
 
 class CodeMethodOptions(BaseModel):
-    code_mode: List[str] = Field(description="Supported values for option 'code_mode' when method='code'")
-    language_hints: Dict[str, str] = Field(description="Filename extension to language mapping hints")
+    code_mode: list[str] = Field(description="Supported values for option 'code_mode' when method='code'")
+    language_hints: dict[str, str] = Field(description="Filename extension to language mapping hints")
 
 
 class MethodSpecificOptions(BaseModel):
@@ -187,12 +200,22 @@ class MethodSpecificOptions(BaseModel):
 
 
 class ChunkingCapabilitiesResponse(BaseModel):
-    methods: List[str]
-    default_options: Dict[str, Any]
-    llm_required_methods: List[str]
+    methods: list[str]
+    default_options: dict[str, Any]
+    llm_required_methods: list[str]
     hierarchical_support: bool
     notes: Optional[str] = None
+    pdf_parsing_engines: Optional[list[str]] = None
     method_specific_options: Optional[MethodSpecificOptions] = None
+    options_schema: Optional[dict[str, Any]] = None
+
+
+def build_chunking_options_schema() -> dict[str, Any]:
+    """Return a JSON-schema payload for ChunkingOptionsRequest."""
+    try:
+        return ChunkingOptionsRequest.model_json_schema()
+    except Exception:
+        return {}
 
 #
 # End of chunking_schema.py

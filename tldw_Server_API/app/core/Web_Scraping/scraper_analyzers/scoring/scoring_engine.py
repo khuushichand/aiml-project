@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any
 
 
-def _normalise_waf(entry: Any) -> Tuple[str, Optional[str]]:
+def _normalise_waf(entry: Any) -> tuple[str, str | None]:
     if isinstance(entry, dict):
         return str(entry.get("name", "")).strip(), str(entry.get("manufacturer")) if entry.get("manufacturer") else None
     if isinstance(entry, (list, tuple)):
@@ -15,7 +15,7 @@ def _normalise_waf(entry: Any) -> Tuple[str, Optional[str]]:
     return "", None
 
 
-def calculate_difficulty_score(results: Dict[str, Any]) -> Dict[str, Any]:
+def calculate_difficulty_score(results: dict[str, Any]) -> dict[str, Any]:
     """
     Calculate a difficulty score from 0-10 based on the collected analysis results.
     """
@@ -66,8 +66,8 @@ def calculate_difficulty_score(results: Dict[str, Any]) -> Dict[str, Any]:
     if integrity.get("status") == "success":
         modified = integrity.get("modified_functions") or {}
         if modified:
-            has_canvas = any("Canvas" in func for func in modified.keys())
-            has_timing = any("Date.now" in func or "performance.now" in func for func in modified.keys())
+            has_canvas = any("Canvas" in func for func in modified)
+            has_timing = any("Date.now" in func or "performance.now" in func for func in modified)
             if has_canvas or has_timing:
                 score += 2
             else:

@@ -3,44 +3,70 @@
 # Extends PromptsDatabase to add Prompt Studio specific functionality
 
 import json
-import os
 import re
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterable
 from configparser import ConfigParser
-from contextlib import contextmanager
-from datetime import datetime, timezone, timedelta
+from contextlib import contextmanager, suppress
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
+
 try:  # psycopg v3 preferred; fall back to psycopg2 if installed
     from psycopg import sql as psycopg_sql  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     try:
         from psycopg2 import sql as psycopg_sql  # type: ignore
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         psycopg_sql = None  # type: ignore
 
 from loguru import logger
 
-# Local imports
-from .Prompts_DB import PromptsDatabase, DatabaseError, SchemaError, InputError, ConflictError
 from .backends.base import (
     BackendType,
     DatabaseBackend,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
 )
+from .backends.base import (
+    DatabaseError as BackendDatabaseError,
+)
+from .backends.fts_translator import FTSQueryTranslator
 from .backends.query_utils import (
-    convert_sqlite_placeholders_to_postgres,
-    normalise_params,
     prepare_backend_many_statement,
     prepare_backend_statement,
     replace_collate_nocase,
     replace_insert_or_ignore,
-    transform_sqlite_query_for_postgres,
 )
-from .backends.fts_translator import FTSQueryTranslator
+
+# Local imports
+from .Prompts_DB import ConflictError, DatabaseError, InputError, PromptsDatabase, SchemaError
+
+_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    sqlite3.Error,
+    BackendDatabaseError,
+    ConflictError,
+    DatabaseError,
+    InputError,
+    SchemaError,
+)
 
 
 def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
@@ -64,7 +90,7 @@ def _serialise_tags(tags: Optional[Union[str, Iterable[str]]]) -> Optional[str]:
         return None
 
 
-def _parse_tags(value: Any) -> List[str]:
+def _parse_tags(value: Any) -> list[str]:
     """Convert stored tag payloads into a list representation."""
 
     if value is None:
@@ -78,7 +104,7 @@ def _parse_tags(value: Any) -> List[str]:
 
     try:
         decoded = bytes(value).decode("utf-8") if isinstance(value, (bytes, bytearray, memoryview)) else None
-    except Exception:  # pragma: no cover - defensive
+    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
         decoded = None
 
     if decoded:
@@ -87,7 +113,7 @@ def _parse_tags(value: Any) -> List[str]:
     return []
 
 
-def _format_test_case_record(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _format_test_case_record(record: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """Normalise Prompt Studio test case payloads for caller consumption."""
 
     if record is None:
@@ -105,10 +131,8 @@ def _format_test_case_record(record: Optional[Dict[str, Any]]) -> Optional[Dict[
     for json_field in ("inputs", "expected_outputs", "actual_outputs"):
         value = normalised.get(json_field)
         if isinstance(value, str):
-            try:
+            with suppress(json.JSONDecodeError, TypeError):
                 normalised[json_field] = json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                pass
 
     return normalised
 
@@ -122,7 +146,7 @@ class PromptStudioRowAdapter:
 
     __slots__ = ("_mapping", "_columns")
 
-    def __init__(self, mapping: Dict[str, Any], columns: Tuple[str, ...]):
+    def __init__(self, mapping: dict[str, Any], columns: tuple[str, ...]):
         self._mapping = mapping
         self._columns = columns
 
@@ -133,13 +157,13 @@ class PromptStudioRowAdapter:
                 col = self._columns[key]
                 if isinstance(col, str) and isinstance(self._mapping, dict):
                     return self._mapping.get(col)
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 pass
             # Fallback: positional access over mapping values
             if isinstance(self._mapping, dict):
                 try:
                     return list(self._mapping.values())[key]
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     return None
             return None
         return self._mapping.get(key)
@@ -148,7 +172,7 @@ class PromptStudioRowAdapter:
         for column in self._columns:
             yield self._mapping.get(column)
 
-    def keys(self) -> Tuple[str, ...]:
+    def keys(self) -> tuple[str, ...]:
         return self._columns
 
     def items(self):
@@ -158,7 +182,7 @@ class PromptStudioRowAdapter:
     def get(self, key: str, default: Any = None) -> Any:
         return self._mapping.get(key, default)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return dict(self._mapping)
 
 
@@ -171,7 +195,7 @@ class PromptStudioBackendCursorAdapter:
         self.rowcount = result.rowcount
         self.lastrowid = result.lastrowid
         self.description = result.description or []
-        self._columns: Tuple[str, ...] = tuple(
+        self._columns: tuple[str, ...] = tuple(
             (
                 desc[0]
                 if isinstance(desc, (list, tuple)) and desc
@@ -199,12 +223,12 @@ class PromptStudioBackendCursorAdapter:
         self._index += 1
         return self._wrap_row(row)
 
-    def fetchall(self) -> List[PromptStudioRowAdapter]:
+    def fetchall(self) -> list[PromptStudioRowAdapter]:
         rows = self._result.rows[self._index :]
         self._index = len(self._result.rows)
         return [self._wrap_row(row) for row in rows]
 
-    def fetchmany(self, size: Optional[int] = None) -> List[PromptStudioRowAdapter]:
+    def fetchmany(self, size: Optional[int] = None) -> list[PromptStudioRowAdapter]:
         if size is None or size <= 0:
             size = len(self._result.rows) - self._index
         end = min(self._index + size, len(self._result.rows))
@@ -217,7 +241,7 @@ class PromptStudioBackendCursorAdapter:
         self.rowcount = 0
         self.lastrowid = None
         self.description = None
-        self._columns = tuple()
+        self._columns = ()
 
 
 class PromptStudioBackendCursorWrapper:
@@ -231,9 +255,9 @@ class PromptStudioBackendCursorWrapper:
         self.rowcount: int = -1
         self.lastrowid: Optional[int] = None
         self.description = None
-        self._columns: Tuple[str, ...] = tuple()
+        self._columns: tuple[str, ...] = ()
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def execute(self, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         import sqlite3
 
         prepared_query, prepared_params = self._db._prepare_backend_statement(query, params)
@@ -246,8 +270,8 @@ class PromptStudioBackendCursorWrapper:
         except BackendDatabaseError as exc:
             msg = str(exc)
             if "duplicate" in msg.lower() or "unique constraint" in msg.lower():
-                raise sqlite3.IntegrityError(msg)
-            raise DatabaseError(f"Backend query execution failed: {msg}") from exc
+                raise sqlite3.IntegrityError(msg)  # noqa: B904
+            raise DatabaseError(f"Backend query execution failed: {msg}") from exc  # noqa: TRY003
 
         self._adapter = PromptStudioBackendCursorAdapter(self._result)
         self.rowcount = self._result.rowcount
@@ -256,7 +280,7 @@ class PromptStudioBackendCursorWrapper:
         self._columns = self._adapter._columns
         return self
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict, Any]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict, Any]]):
         import sqlite3
 
         prepared_query, prepared_params_list = self._db._prepare_backend_many_statement(query, params_list)
@@ -269,8 +293,8 @@ class PromptStudioBackendCursorWrapper:
         except BackendDatabaseError as exc:
             msg = str(exc)
             if "duplicate" in msg.lower() or "unique constraint" in msg.lower():
-                raise sqlite3.IntegrityError(msg)
-            raise DatabaseError(f"Backend batch execution failed: {msg}") from exc
+                raise sqlite3.IntegrityError(msg)  # noqa: B904
+            raise DatabaseError(f"Backend batch execution failed: {msg}") from exc  # noqa: TRY003
 
         self._adapter = PromptStudioBackendCursorAdapter(self._result)
         self.rowcount = self._result.rowcount
@@ -279,14 +303,14 @@ class PromptStudioBackendCursorWrapper:
         self._columns = self._adapter._columns
         return self
 
-    def fetchone(self) -> Optional[Dict[str, Any]]:
+    def fetchone(self) -> Optional[dict[str, Any]]:
         row = self._adapter.fetchone() if self._adapter else None
         return row
 
-    def fetchall(self) -> List[Dict[str, Any]]:
+    def fetchall(self) -> list[dict[str, Any]]:
         return self._adapter.fetchall() if self._adapter else []
 
-    def fetchmany(self, size: Optional[int] = None) -> List[Dict[str, Any]]:
+    def fetchmany(self, size: Optional[int] = None) -> list[dict[str, Any]]:
         return self._adapter.fetchmany(size) if self._adapter else []
 
     def close(self) -> None:
@@ -309,11 +333,11 @@ class PromptStudioBackendConnectionWrapper:
     def cursor(self):
         return PromptStudioBackendCursorWrapper(self._db, self.raw_connection)
 
-    def execute(self, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def execute(self, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         cursor = self.cursor()
         return cursor.execute(query, params)
 
-    def executemany(self, query: str, params_list: List[Union[Tuple, List, Dict, Any]]):
+    def executemany(self, query: str, params_list: list[Union[tuple, list, dict, Any]]):
         cursor = self.cursor()
         return cursor.executemany(query, params_list)
 
@@ -364,12 +388,12 @@ class BackendPromptStudioDatabaseBase:
         config: Optional[ConfigParser] = None,
     ) -> None:
         if backend is None:
-            raise ValueError("Prompt Studio backend database requires an explicit DatabaseBackend instance")
+            raise ValueError("Prompt Studio backend database requires an explicit DatabaseBackend instance")  # noqa: TRY003
 
         self.backend = backend
         self.backend_type = backend.backend_type
         if self.backend_type != BackendType.POSTGRESQL:
-            raise ValueError(
+            raise ValueError(  # noqa: TRY003
                 f"BackendPromptStudioDatabaseBase only supports PostgreSQL backends; received {self.backend_type.value}"
             )
 
@@ -386,10 +410,8 @@ class BackendPromptStudioDatabaseBase:
                 self._outer = outer
 
             def close(self) -> None:  # pragma: no cover - compatibility shim
-                try:
+                with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                     self._outer.close_connection()
-                except Exception:
-                    pass
 
         self.conn = _ConnCloseProxy(self)
 
@@ -399,7 +421,7 @@ class BackendPromptStudioDatabaseBase:
             pool = self.backend.get_pool()
             return pool.get_connection()
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to acquire backend connection: {exc}") from exc
+            raise DatabaseError(f"Failed to acquire backend connection: {exc}") from exc  # noqa: TRY003
 
     def _release_connection(self, wrapper: Optional[PromptStudioBackendConnectionWrapper]) -> None:
         if not wrapper:
@@ -435,11 +457,9 @@ class BackendPromptStudioDatabaseBase:
                         # Use parameterized query via format_map for safety
                         safe_value = user_value.replace("'", "''").replace("\\", "\\\\")
                         cur.execute(f"SET SESSION app.current_user_id = '{safe_value}'")
-                try:
+                with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                     raw_conn.commit()
-                except Exception:
-                    pass
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             # Non-fatal if SET fails
             pass
         wrapper = PromptStudioBackendConnectionWrapper(self, raw_conn)
@@ -461,10 +481,8 @@ class BackendPromptStudioDatabaseBase:
 
         try:
             if wrapper.raw_connection and getattr(wrapper.raw_connection, 'in_transaction', False):
-                try:
+                with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                     wrapper.rollback()
-                except Exception:
-                    pass
             self._release_connection(wrapper)
         finally:
             self._local.conn = None
@@ -479,7 +497,7 @@ class BackendPromptStudioDatabaseBase:
         try:
             yield conn
             ctx.__exit__(None, None, None)
-        except Exception as exc:  # noqa: BLE001
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             ctx.__exit__(exc.__class__, exc, exc.__traceback__)
             raise
 
@@ -487,8 +505,8 @@ class BackendPromptStudioDatabaseBase:
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
-    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: Optional[Union[tuple, list, dict, Any]] = None,
+    ) -> tuple[str, Optional[Union[tuple, dict]]]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -500,8 +518,8 @@ class BackendPromptStudioDatabaseBase:
     def _prepare_backend_many_statement(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
-    ) -> Tuple[str, List[Optional[Union[Tuple, Dict]]]]:
+        params_list: list[Union[tuple, list, dict, Any]],
+    ) -> tuple[str, list[Optional[Union[tuple, dict]]]]:
         return prepare_backend_many_statement(
             self.backend_type,
             query,
@@ -514,7 +532,7 @@ class BackendPromptStudioDatabaseBase:
     def _execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        params: Optional[Union[tuple, list, dict, Any]] = None,
         *,
         connection: Optional[PromptStudioBackendConnectionWrapper] = None,
     ) -> PromptStudioBackendCursorWrapper:
@@ -525,7 +543,7 @@ class BackendPromptStudioDatabaseBase:
     def _executemany(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
+        params_list: list[Union[tuple, list, dict, Any]],
         *,
         connection: Optional[PromptStudioBackendConnectionWrapper] = None,
     ) -> PromptStudioBackendCursorWrapper:
@@ -605,7 +623,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         }
         self._initialize_schema_postgres()
 
-    def _cursor_exec(self, conn: Any, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def _cursor_exec(self, conn: Any, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         """Execute a query using the backend's parameter style.
 
         Converts SQLite-style placeholders to PostgreSQL, then executes using the
@@ -652,7 +670,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 # Note: Postgres idempotency helpers are implemented in this class
                 # via _idem_lookup/_idem_record and scoped by (entity_type, idempotency_key, user_id).
             except BackendDatabaseError as exc:
-                raise SchemaError(f"Failed to ensure idempotency table: {exc}") from exc
+                raise SchemaError(f"Failed to ensure idempotency table: {exc}") from exc  # noqa: TRY003
             # Ensure leasing columns exist on job queue
             try:
                 self.backend.execute(
@@ -706,7 +724,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         try:
             self.backend.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto", connection=conn)
         except BackendDatabaseError as exc:
-            raise SchemaError(f"Failed enabling pgcrypto extension: {exc}") from exc
+            raise SchemaError(f"Failed enabling pgcrypto extension: {exc}") from exc  # noqa: TRY003
 
     def _apply_postgres_migrations(self, conn) -> None:
         for filename in self._MIGRATION_FILES_SQL:
@@ -720,7 +738,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 try:
                     self.backend.execute(statement, connection=conn)
                 except BackendDatabaseError as exc:
-                    raise SchemaError(f"Failed applying migration {filename}: {exc}") from exc
+                    raise SchemaError(f"Failed applying migration {filename}: {exc}") from exc  # noqa: TRY003
 
     def _ensure_postgres_fts(self) -> None:
         for source_table, columns in self._FTS_CONFIG:
@@ -731,14 +749,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     columns=list(columns),
                 )
             except BackendDatabaseError as exc:
-                raise SchemaError(f"Failed to provision Prompt Studio FTS ({source_table}): {exc}") from exc
+                raise SchemaError(f"Failed to provision Prompt Studio FTS ({source_table}): {exc}") from exc  # noqa: TRY003
 
     def get_fts_column(self, table_name: str) -> Optional[str]:
         return getattr(self, "_fts_columns", {}).get(table_name)
 
-    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> List[str]:
-        statements: List[str] = []
-        buffer: List[str] = []
+    def _convert_sqlite_schema_to_postgres_statements(self, sql: str) -> list[str]:
+        statements: list[str] = []
+        buffer: list[str] = []
         in_block_comment = False
         in_trigger_block = False
 
@@ -897,11 +915,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     # indentation/scope issues during import.
 
     # --- Data helpers ---
-    def _row_to_dict(self, cursor, row: Optional[Any] = None) -> Optional[Dict[str, Any]]:
-        if row is None:
-            row_obj = cursor
-        else:
-            row_obj = row
+    def _row_to_dict(self, cursor, row: Optional[Any] = None) -> Optional[dict[str, Any]]:
+        row_obj = cursor if row is None else row
 
         if row_obj is None:
             return None
@@ -916,14 +931,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 columns = [desc[0] if isinstance(desc, (list, tuple)) and desc else desc for desc in cursor.description]
                 result = {col: row_obj[idx] for idx, col in enumerate(columns)}
             else:
-                raise DatabaseError("Unable to convert row to dict; missing column metadata")
+                raise DatabaseError("Unable to convert row to dict; missing column metadata")  # noqa: TRY003
 
         for field in self._JSON_FIELDS:
             if field in result and isinstance(result[field], str):
-                try:
+                with suppress(TypeError, ValueError):
                     result[field] = json.loads(result[field])
-                except (TypeError, ValueError):
-                    pass
             elif field in result and isinstance(result[field], (bytes, bytearray, memoryview)):
                 try:
                     result[field] = json.loads(bytes(result[field]).decode('utf-8'))
@@ -933,14 +946,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         for field in self._DATETIME_FIELDS:
             value = result.get(field)
             if isinstance(value, str):
-                try:
+                with suppress(ValueError):
                     result[field] = datetime.fromisoformat(value)
-                except ValueError:
-                    pass
 
         return result
 
-    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]) -> None:
+    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: dict[str, Any]) -> None:
         if not entity or not entity_uuid or not operation:
             return
         if self._sync_log_available is False:
@@ -954,13 +965,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             "sync_log",
                             connection=conn.raw_connection,
                         )
-                    except Exception as exc:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug("Prompt Studio sync_log availability check failed: %s", exc)
                         self._sync_log_available = False
                         return
                 if not self._sync_log_available:
                     return
-                cursor = self._cursor_exec(
+                self._cursor_exec(
                     conn,
                     """
                     INSERT INTO sync_log (entity, entity_uuid, operation, client_id, version, payload, timestamp)
@@ -974,7 +985,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         json.dumps(payload, separators=(',', ':')) if payload else None,
                     ),
                 )
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             # sync_log is optional across backends
             err_str = str(e).lower()
             if "no such table" in err_str or "does not exist" in err_str or "relation" in err_str:
@@ -1004,17 +1015,17 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         name: str,
         description: Optional[str] = None,
         status: str = "draft",
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         user_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         # Validate project name
         if not name or not isinstance(name, str):
-            raise ValueError("Project name must be a non-empty string")
+            raise ValueError("Project name must be a non-empty string")  # noqa: TRY003
         name = name.strip()
         if len(name) < self.MIN_PROJECT_NAME_LENGTH:
-            raise ValueError("Project name cannot be empty")
+            raise ValueError("Project name cannot be empty")  # noqa: TRY003
         if len(name) > self.MAX_PROJECT_NAME_LENGTH:
-            raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")
+            raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")  # noqa: TRY003
 
         project_uuid = str(uuid.uuid4())
         payload = (
@@ -1037,11 +1048,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    project = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                project = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_project",
                 project_uuid,
@@ -1052,22 +1062,22 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "status": status,
                 },
             )
-            return project or {}
+            return project or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
             message = str(exc)
             if 'duplicate' in message.lower() and 'prompt_studio_projects_name_user_id_deleted_key' in message:
-                raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
-            raise DatabaseError(f"Failed to create prompt studio project: {exc}") from exc
-        except Exception as exc:
+                raise ConflictError(f"Project with name '{name}' already exists for this user") from exc  # noqa: TRY003
+            raise DatabaseError(f"Failed to create prompt studio project: {exc}") from exc  # noqa: TRY003
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
             # Psycopg unique violations, etc.
             msg = str(exc).lower()
             if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
-                raise ConflictError(f"Project with name '{name}' already exists for this user") from exc
+                raise ConflictError(f"Project with name '{name}' already exists for this user") from exc  # noqa: TRY003
             raise
 
-    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
         query = (
@@ -1080,7 +1090,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(row)
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch prompt studio project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch prompt studio project {project_id}: {exc}") from exc  # noqa: TRY003
 
     def list_projects(
         self,
@@ -1090,9 +1100,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         search: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        where_clauses: List[str] = []
-        params: List[Any] = []
+    ) -> dict[str, Any]:
+        where_clauses: list[str] = []
+        params: list[Any] = []
 
         if not include_deleted:
             where_clauses.append("deleted = FALSE")
@@ -1115,7 +1125,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             total = count_cursor.fetchone()
             total_count = int(total.get('total', 0)) if total else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed counting prompt studio projects: {exc}") from exc
+            raise DatabaseError(f"Failed counting prompt studio projects: {exc}") from exc  # noqa: TRY003
 
         offset = (page - 1) * per_page
         list_sql = f"""
@@ -1135,7 +1145,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             projects = [self._row_to_dict(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed listing prompt studio projects: {exc}") from exc
+            raise DatabaseError(f"Failed listing prompt studio projects: {exc}") from exc  # noqa: TRY003
 
         return {
             "projects": projects,
@@ -1161,7 +1171,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         parent_version_id: Optional[int] = None,
         change_description: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         prompt_uuid = str(uuid.uuid4())
         payload = (
             prompt_uuid,
@@ -1191,11 +1201,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    prompt = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                prompt = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_prompt",
                 prompt_uuid,
@@ -1206,37 +1215,37 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "version_number": version_number,
                 },
             )
-            return prompt or {}
+            return prompt or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
             message = str(exc).lower()
             if 'duplicate' in message and 'prompt_studio_prompts' in message and 'name' in message:
-                raise ConflictError(
+                raise ConflictError(  # noqa: TRY003
                     f"Prompt with name '{name}' already exists in project {project_id}"
                 ) from exc
-            raise DatabaseError(f"Failed to create prompt studio prompt: {exc}") from exc
-        except Exception as exc:
+            raise DatabaseError(f"Failed to create prompt studio prompt: {exc}") from exc  # noqa: TRY003
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
             msg = str(exc).lower()
             if 'duplicate' in msg or 'unique constraint' in msg or 'unique violation' in msg:
-                raise ConflictError(
+                raise ConflictError(  # noqa: TRY003
                     f"Prompt with name '{name}' already exists in project {project_id}"
                 ) from exc
             raise
 
-    def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {"name", "description", "status", "metadata"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         # Validate name if being updated
         if "name" in updates:
             name = updates["name"]
             if not name or not isinstance(name, str):
-                raise ValueError("Project name must be a non-empty string")
+                raise ValueError("Project name must be a non-empty string")  # noqa: TRY003
             name = name.strip()
             if len(name) < self.MIN_PROJECT_NAME_LENGTH:
-                raise ValueError("Project name cannot be empty")
+                raise ValueError("Project name cannot be empty")  # noqa: TRY003
             if len(name) > self.MAX_PROJECT_NAME_LENGTH:
-                raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")
+                raise ValueError(f"Project name cannot exceed {self.MAX_PROJECT_NAME_LENGTH} characters")  # noqa: TRY003
             updates["name"] = name
 
         for field, value in updates.items():
@@ -1251,7 +1260,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not set_clauses:
             project = self.get_project(project_id, include_deleted=True)
             if project is None:
-                raise InputError(f"Project {project_id} not found or already deleted")
+                raise InputError(f"Project {project_id} not found or already deleted")  # noqa: TRY003
             return project
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -1264,12 +1273,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Project {project_id} not found or already deleted")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Project {project_id} not found or already deleted")  # noqa: TRY003
             project = self._row_to_dict(row)
             if project:
                 self._log_sync_event(
@@ -1278,33 +1286,32 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "update",
                     {key: updates[key] for key in updates if key in allowed_fields},
                 )
-            return project or {}
+            return project or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to update prompt studio project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update prompt studio project {project_id}: {exc}") from exc  # noqa: TRY003
 
     def delete_project(self, project_id: int, hard_delete: bool = False) -> bool:
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    if hard_delete:
-                        cursor = self._cursor_exec(
-                            conn,
-                            "DELETE FROM prompt_studio_projects WHERE id = ? RETURNING uuid",
-                            (project_id,),
-                        )
-                    else:
-                        cursor = self._cursor_exec(
-                            conn,
-                            """
+            with self._write_lock, self.transaction() as conn:
+                if hard_delete:
+                    cursor = self._cursor_exec(
+                        conn,
+                        "DELETE FROM prompt_studio_projects WHERE id = ? RETURNING uuid",
+                        (project_id,),
+                    )
+                else:
+                    cursor = self._cursor_exec(
+                        conn,
+                        """
                             UPDATE prompt_studio_projects
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND deleted = FALSE
                             RETURNING uuid
                             """,
-                            (project_id,),
-                        )
-                    row = cursor.fetchone()
-                    success = row is not None
+                        (project_id,),
+                    )
+                row = cursor.fetchone()
+                success = row is not None
             if success and row:
                 self._log_sync_event(
                     "prompt_studio_project",
@@ -1312,9 +1319,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "delete" if hard_delete else "soft_delete",
                     {"hard": hard_delete},
                 )
-            return success
+            return success  # noqa: TRY300
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to delete prompt studio project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to delete prompt studio project {project_id}: {exc}") from exc  # noqa: TRY003
 
     # --- Signature helpers -----------------------------------------------
 
@@ -1328,9 +1335,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         constraints: Optional[Any] = None,
         validation_rules: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not str(name).strip():
-            raise InputError("Signature name cannot be empty")
+            raise InputError("Signature name cannot be empty")  # noqa: TRY003
 
         signature_uuid = str(uuid.uuid4())
         payload = (
@@ -1353,11 +1360,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    signature = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                signature = self._row_to_dict(row)
 
             self._log_sync_event(
                 "prompt_studio_signature",
@@ -1368,23 +1374,23 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "name": name,
                 },
             )
-            return signature or {}
+            return signature or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
             message = str(exc).lower()
             if "duplicate" in message and "prompt_studio_signatures" in message:
-                raise ConflictError(
+                raise ConflictError(  # noqa: TRY003
                     f"Signature with name '{name}' already exists for project {project_id}"
                 ) from exc
-            raise DatabaseError(f"Failed to create prompt studio signature: {exc}") from exc
+            raise DatabaseError(f"Failed to create prompt studio signature: {exc}") from exc  # noqa: TRY003
 
     def get_signature(
         self,
         signature_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [signature_id]
+        params: list[Any] = [signature_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -1395,7 +1401,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row)
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
     def list_signatures(
         self,
@@ -1406,14 +1412,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = FALSE")
@@ -1431,7 +1437,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             total_row = count_cursor.fetchone()
             total = int(total_row[0]) if total_row and total_row[0] is not None else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed counting signatures for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed counting signatures for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = f"""
@@ -1448,7 +1454,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             signatures = [self._row_to_dict(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed listing signatures for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed listing signatures for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         if return_pagination:
             return {
@@ -1462,7 +1468,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             }
         return signatures
 
-    def update_signature(self, signature_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_signature(self, signature_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
             "name",
             "input_schema",
@@ -1471,8 +1477,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "validation_rules",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -1487,7 +1493,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not set_clauses:
             signature = self.get_signature(signature_id, include_deleted=True)
             if signature is None:
-                raise InputError(f"Signature {signature_id} not found or already deleted")
+                raise InputError(f"Signature {signature_id} not found or already deleted")  # noqa: TRY003
             return signature
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -1500,51 +1506,49 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Signature {signature_id} not found or already deleted")
-                    signature = self._row_to_dict(row)
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Signature {signature_id} not found or already deleted")  # noqa: TRY003
+                signature = self._row_to_dict(row)
             self._log_sync_event(
                 "prompt_studio_signature",
                 signature.get("uuid", ""),
                 "update",
                 {key: updates[key] for key in updates if key in allowed_fields},
             )
-            return signature or {}
+            return signature or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
             message = str(exc).lower()
             if "duplicate" in message and "prompt_studio_signatures" in message:
-                raise ConflictError(
+                raise ConflictError(  # noqa: TRY003
                     "Signature update conflicts with an existing record"
                 ) from exc
-            raise DatabaseError(f"Failed to update signature {signature_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
     def delete_signature(self, signature_id: int, hard_delete: bool = False) -> bool:
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    if hard_delete:
-                        cursor = self._cursor_exec(
-                            conn,
-                            "DELETE FROM prompt_studio_signatures WHERE id = ? RETURNING uuid",
-                            (signature_id,),
-                        )
-                    else:
-                        cursor = self._cursor_exec(
-                            conn,
-                            """
+            with self._write_lock, self.transaction() as conn:
+                if hard_delete:
+                    cursor = self._cursor_exec(
+                        conn,
+                        "DELETE FROM prompt_studio_signatures WHERE id = ? RETURNING uuid",
+                        (signature_id,),
+                    )
+                else:
+                    cursor = self._cursor_exec(
+                        conn,
+                        """
                             UPDATE prompt_studio_signatures
                             SET deleted = TRUE, deleted_at = CURRENT_TIMESTAMP
                             WHERE id = ? AND deleted = FALSE
                             RETURNING uuid
                             """,
-                            (signature_id,),
-                        )
-                    row = cursor.fetchone()
-                    success = row is not None
+                        (signature_id,),
+                    )
+                row = cursor.fetchone()
+                success = row is not None
             if success and row:
                 self._log_sync_event(
                     "prompt_studio_signature",
@@ -1552,9 +1556,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     "delete" if hard_delete else "soft_delete",
                     {"hard": hard_delete},
                 )
-            return success
+            return success  # noqa: TRY300
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
     # --- Test run helpers ------------------------------------------------
 
@@ -1565,17 +1569,17 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_id: int,
         test_case_id: int,
         model_name: str,
-        model_params: Optional[Dict[str, Any]] = None,
-        inputs: Optional[Dict[str, Any]] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        scores: Optional[Dict[str, Any]] = None,
+        model_params: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        outputs: Optional[dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        scores: Optional[dict[str, Any]] = None,
         execution_time_ms: Optional[int] = None,
         tokens_used: Optional[int] = None,
         cost_estimate: Optional[float] = None,
         error_message: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         run_uuid = str(uuid.uuid4())
         payload = (
             run_uuid,
@@ -1606,20 +1610,19 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to create prompt studio test run: {exc}") from exc
+            raise DatabaseError(f"Failed to create prompt studio test run: {exc}") from exc  # noqa: TRY003
 
     def get_test_cases_by_ids(
         self,
         test_case_ids: Iterable[int],
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         identifiers = list(dict.fromkeys(test_case_ids))
         if not identifiers:
             return []
@@ -1636,7 +1639,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._format_test_case(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed fetching test cases: {exc}") from exc
+            raise DatabaseError(f"Failed fetching test cases: {exc}") from exc  # noqa: TRY003
 
     # --- Evaluation helpers ---------------------------------------------
 
@@ -1645,11 +1648,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         prompt_id: int,
         project_id: int,
-        model_configs: Optional[Dict[str, Any]] = None,
+        model_configs: Optional[dict[str, Any]] = None,
         status: str = "running",
         test_case_ids: Optional[Iterable[int]] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         evaluation_uuid = str(uuid.uuid4())
         payload = (
             evaluation_uuid,
@@ -1670,24 +1673,23 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to create prompt studio evaluation: {exc}") from exc
+            raise DatabaseError(f"Failed to create prompt studio evaluation: {exc}") from exc  # noqa: TRY003
 
-    def update_evaluation(self, evaluation_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_evaluation(self, evaluation_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         if not updates:
             evaluation = self.get_evaluation(evaluation_id)
             if evaluation is None:
-                raise InputError(f"Evaluation {evaluation_id} not found")
+                raise InputError(f"Evaluation {evaluation_id} not found")  # noqa: TRY003
             return evaluation
 
         json_fields = {"model_configs", "test_case_ids", "test_run_ids", "aggregate_metrics"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -1707,17 +1709,16 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Evaluation {evaluation_id} not found")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Evaluation {evaluation_id} not found")  # noqa: TRY003
             return self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to update evaluation {evaluation_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update evaluation {evaluation_id}: {exc}") from exc  # noqa: TRY003
 
-    def get_evaluation(self, evaluation_id: int) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, evaluation_id: int) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_evaluations WHERE id = ?",
@@ -1726,7 +1727,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}: {exc}") from exc  # noqa: TRY003
 
     def list_evaluations(
         self,
@@ -1736,14 +1737,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if project_id is not None:
             conditions.append("project_id = ?")
@@ -1763,7 +1764,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             total_row = count_cursor.fetchone()
             total = int(total_row[0]) if total_row and total_row[0] is not None else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed counting evaluations: {exc}") from exc
+            raise DatabaseError(f"Failed counting evaluations: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = f"""
@@ -1780,7 +1781,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             evaluations = [self._row_to_dict(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed listing evaluations: {exc}") from exc
+            raise DatabaseError(f"Failed listing evaluations: {exc}") from exc  # noqa: TRY003
 
         return {
             "evaluations": evaluations,
@@ -1801,12 +1802,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         name: Optional[str],
         initial_prompt_id: Optional[int],
         optimizer_type: str,
-        optimization_config: Optional[Dict[str, Any]] = None,
+        optimization_config: Optional[dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         bootstrap_samples: Optional[int] = None,
         status: str = "pending",
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         optimization_uuid = str(uuid.uuid4())
         payload = (
             optimization_uuid,
@@ -1841,13 +1842,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             optimization = self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to create optimization: {exc}") from exc
+            raise DatabaseError(f"Failed to create optimization: {exc}") from exc  # noqa: TRY003
 
         self._log_sync_event(
             "prompt_studio_optimization",
@@ -1866,9 +1866,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         optimization_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [optimization_id]
+        params: list[Any] = [optimization_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -1879,7 +1879,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch optimization {optimization_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch optimization {optimization_id}: {exc}") from exc  # noqa: TRY003
 
     def list_optimizations(
         self,
@@ -1889,14 +1889,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
 
         if project_id is not None:
             conditions.append("project_id = ?")
@@ -1915,7 +1915,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             total_row = count_cursor.fetchone()
             total = int(total_row[0]) if total_row and total_row[0] is not None else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed counting optimizations: {exc}") from exc
+            raise DatabaseError(f"Failed counting optimizations: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = f"""
@@ -1932,7 +1932,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             optimizations = [self._row_to_dict(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed listing optimizations: {exc}") from exc
+            raise DatabaseError(f"Failed listing optimizations: {exc}") from exc  # noqa: TRY003
 
         return {
             "optimizations": optimizations,
@@ -1947,11 +1947,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
     def update_optimization(
         self,
         optimization_id: int,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         *,
         set_started_at: bool = False,
         set_completed_at: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         json_fields = {
             "optimization_config",
             "initial_metrics",
@@ -1959,8 +1959,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "test_case_ids",
             "test_run_ids",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -1978,7 +1978,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not set_clauses:
             optimization = self.get_optimization(optimization_id, include_deleted=True)
             if optimization is None:
-                raise InputError(f"Optimization {optimization_id} not found")
+                raise InputError(f"Optimization {optimization_id} not found")  # noqa: TRY003
             return optimization
 
         params.append(optimization_id)
@@ -1989,15 +1989,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, update_sql, params)
-                    row = cursor.fetchone()
-                    if not row:
-                        raise InputError(f"Optimization {optimization_id} not found")
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, update_sql, params)
+                row = cursor.fetchone()
+                if not row:
+                    raise InputError(f"Optimization {optimization_id} not found")  # noqa: TRY003
             optimization = self._row_to_dict(cursor, row) if row else {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to update optimization {optimization_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update optimization {optimization_id}: {exc}") from exc  # noqa: TRY003
 
         log_payload = {}
         for key, value in updates.items():
@@ -2030,8 +2029,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         error_message: Optional[str] = None,
         mark_started: bool = False,
         mark_completed: bool = False,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {"status": status}
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {"status": status}
         if error_message is not None:
             updates["error_message"] = error_message
         return self.update_optimization(
@@ -2047,13 +2046,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         optimized_prompt_id: Optional[int] = None,
         iterations_completed: Optional[int] = None,
-        initial_metrics: Optional[Dict[str, Any]] = None,
-        final_metrics: Optional[Dict[str, Any]] = None,
+        initial_metrics: Optional[dict[str, Any]] = None,
+        final_metrics: Optional[dict[str, Any]] = None,
         improvement_percentage: Optional[float] = None,
         total_tokens: Optional[int] = None,
         total_cost: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {
             "status": "completed",
             "optimized_prompt_id": optimized_prompt_id,
             "iterations_completed": iterations_completed,
@@ -2076,12 +2075,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         optimization_id: int,
         *,
         iteration_number: int,
-        prompt_variant: Optional[Dict[str, Any]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
+        prompt_variant: Optional[dict[str, Any]] = None,
+        metrics: Optional[dict[str, Any]] = None,
         tokens_used: Optional[int] = None,
         cost: Optional[float] = None,
         note: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payload = (
             str(uuid.uuid4()),
             optimization_id,
@@ -2106,7 +2105,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 cursor = self._cursor_exec(conn, insert_sql, payload)
                 row = cursor.fetchone()
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to record optimization iteration: {exc}") from exc
+            raise DatabaseError(f"Failed to record optimization iteration: {exc}") from exc  # noqa: TRY003
 
         record = self._row_to_dict(cursor, row) if row else {}
         self._log_sync_event(
@@ -2120,18 +2119,18 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         )
         return record
 
-    def list_optimization_iterations(
+    def list_optimization_iterations(  # noqa: F811
         self,
         optimization_id: int,
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List persisted iterations for an optimization (SQLite backend)."""
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         try:
             conn = self.get_connection()
@@ -2170,19 +2169,19 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 },
             }
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc
+            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc  # noqa: TRY003
 
-    def list_optimization_iterations(
+    def list_optimization_iterations(  # noqa: F811
         self,
         optimization_id: int,
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         count_sql = "SELECT COUNT(*) FROM prompt_studio_optimization_iterations WHERE optimization_id = ?"
 
@@ -2191,7 +2190,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             total_row = count_cursor.fetchone()
             total = int(total_row[0]) if total_row and total_row[0] is not None else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed counting optimization iterations: {exc}") from exc
+            raise DatabaseError(f"Failed counting optimization iterations: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = """
@@ -2207,7 +2206,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             iterations = [self._row_to_dict(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed listing optimization iterations: {exc}") from exc
+            raise DatabaseError(f"Failed listing optimization iterations: {exc}") from exc  # noqa: TRY003
 
         return {
             "iterations": iterations,
@@ -2221,9 +2220,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
 
     # --- Prompt helpers ---
 
-    def get_prompt(self, prompt_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_prompt(self, prompt_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         clauses = ["id = ?"]
-        params: List[Any] = [prompt_id]
+        params: list[Any] = [prompt_id]
         if not include_deleted:
             clauses.append("deleted = FALSE")
 
@@ -2236,7 +2235,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row)
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch prompt {prompt_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch prompt {prompt_id}: {exc}") from exc  # noqa: TRY003
 
     def list_prompts(
         self,
@@ -2245,14 +2244,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         page: int = 1,
         per_page: int = 20,
         include_deleted: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         base_conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             base_conditions.append("deleted = FALSE")
 
@@ -2287,7 +2286,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 },
             }
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to list prompts for project {project_id}: {exc}"
             ) from exc
 
@@ -2297,9 +2296,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_name: str,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         conditions = ["project_id = ?", "name = ?"]
-        params: List[Any] = [project_id, prompt_name]
+        params: list[Any] = [project_id, prompt_name]
         if not include_deleted:
             conditions.append("deleted = FALSE")
 
@@ -2316,7 +2315,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to list versions for prompt '{prompt_name}' in project {project_id}: {exc}"
             ) from exc
 
@@ -2341,7 +2340,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             if cursor.fetchone() is not None:
                 return
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to verify prompt {prompt_id} existence: {exc}"
             ) from exc
 
@@ -2360,11 +2359,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    _ = self._cursor_exec(conn, insert_sql, params)
+            with self._write_lock, self.transaction() as conn:
+                _ = self._cursor_exec(conn, insert_sql, params)
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to create placeholder prompt {prompt_id}: {exc}"
             ) from exc
 
@@ -2381,40 +2379,39 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         job_uuid = str(uuid.uuid4())
         payload_json = json.dumps(payload) if payload is not None else json.dumps({})
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     INSERT INTO prompt_studio_job_queue (
                         uuid, job_type, entity_id, project_id, priority, status,
                         payload, max_retries, client_id
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     RETURNING *
                     """,
-                    (
-                        job_uuid,
-                        job_type,
-                        entity_id,
-                        project_id,
-                        priority,
-                        status,
-                        payload_json,
-                        max_retries,
-                        client_id or self.client_id,
-                    ),
-                )
-                row = cursor.fetchone()
-                if not row:
-                    raise DatabaseError("Failed to create prompt studio job queue record")
-                job = self._row_to_dict(cursor, row)
+                (
+                    job_uuid,
+                    job_type,
+                    entity_id,
+                    project_id,
+                    priority,
+                    status,
+                    payload_json,
+                    max_retries,
+                    client_id or self.client_id,
+                ),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise DatabaseError("Failed to create prompt studio job queue record")  # noqa: TRY003
+            job = self._row_to_dict(cursor, row)
         return job or {}
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_job_queue WHERE id = ? LIMIT 1",
@@ -2423,9 +2420,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc  # noqa: TRY003
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         try:
             cursor = self._execute(
                 "SELECT * FROM prompt_studio_job_queue WHERE uuid = ? LIMIT 1",
@@ -2434,7 +2431,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch job {job_uuid}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch job {job_uuid}: {exc}") from exc  # noqa: TRY003
 
     def list_jobs(
         self,
@@ -2442,9 +2439,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        clauses: List[str] = []
-        params: List[Any] = []
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
         if status:
             clauses.append("status = ?")
             params.append(status)
@@ -2467,7 +2464,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to list prompt studio jobs: {exc}") from exc
+            raise DatabaseError(f"Failed to list prompt studio jobs: {exc}") from exc  # noqa: TRY003
 
     def update_job_status(
         self,
@@ -2476,9 +2473,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         updates = ["status = ?"]
-        params: List[Any] = [status]
+        params: list[Any] = [status]
 
         if status == "processing":
             updates.append("started_at = CURRENT_TIMESTAMP")
@@ -2514,18 +2511,16 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 record = self._row_to_dict(cursor, row) if row else None
                 # Release advisory lock on terminal states
                 if record and status in {"completed", "failed", "cancelled"}:
-                    try:
+                    with suppress(BackendDatabaseError):
                         self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
-                    except BackendDatabaseError:
-                        pass
                 return record
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc  # noqa: TRY003
 
     def renew_job_lease(self, job_id: int, seconds: int = 60, worker_id: Optional[str] = None) -> bool:
         try:
             seconds = max(1, min(3600, int(seconds)))
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             seconds = 60
 
         owner_value: Optional[str] = None
@@ -2534,12 +2529,12 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         set_owner_sql = ", lease_owner = COALESCE(?, lease_owner)" if owner_value is not None else ""
         owner_guard_sql = " AND (lease_owner IS NULL OR lease_owner = ?)" if owner_value is not None else ""
-        params: List[Any] = [job_id]
+        params: list[Any] = [job_id]
         if owner_value is not None:
             params = [owner_value, job_id, owner_value]
 
@@ -2564,10 +2559,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 row = cursor.fetchone()
                 return bool(row)
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc  # noqa: TRY003
 
-    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        with self._write_lock:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        with self._write_lock:  # noqa: SIM117
             with self.transaction() as conn:
                 cursor = conn.cursor()
                 owner_value: Optional[str] = None
@@ -2576,29 +2571,29 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                         owner_value = str(worker_id).strip()[:128]
                         if not owner_value:
                             owner_value = None
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         owner_value = None
                 if self.backend_type == BackendType.POSTGRESQL:
                     import os as _os
                     try:
                         _lease_secs = max(1, min(3600, int(_os.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs = 60
                     # Acquire using advisory lock as a gate to avoid double-processing across processes
                     # Metrics: advisory lock attempt
                     _psm = None
                     try:
-                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm
-                    except Exception:
+                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                            prompt_studio_metrics as _psm,
+                        )
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _psm = None
 
-                    def _inc_metric(name: str, labels: Optional[Dict[str, str]] = None) -> None:
+                    def _inc_metric(name: str, labels: Optional[dict[str, str]] = None) -> None:
                         if _psm is None:
                             return
-                        try:
+                        with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                             _psm.metrics_manager.increment(name, labels=labels)
-                        except Exception:
-                            pass
 
                     _inc_metric("prompt_studio.pg_advisory.lock_attempts_total")
                     cursor.execute(
@@ -2648,34 +2643,32 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                                 return v
                             try:
                                 return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                            except Exception:
+                            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                 return None
                         cdt = _parse(created)
                         sdt = _parse(started)
                         if cdt and sdt:
                             qlat = max(0.0, (sdt - cdt).total_seconds())
                             if _psm is not None:
-                                try:
+                                with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                                     _psm.metrics_manager.observe(
                                         "jobs.queue_latency_seconds",
                                         qlat,
                                         labels={"job_type": str(record.get("job_type", ""))},
                                     )
-                                except Exception:
-                                    pass
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
                     # Increment reclaims if applicable
                     try:
                         was_reclaim = False
                         try:
                             was_reclaim = bool(row["was_reclaim"])  # dict_row in pg
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             # positional
                             was_reclaim = bool(row[-1])
                         if was_reclaim:
                             _inc_metric("jobs.reclaims_total", labels={"job_type": str(record.get("job_type", ""))})
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
                     return record
                 else:
@@ -2696,7 +2689,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     import os as _os2
                     try:
                         _lease_secs2 = max(1, min(3600, int(_os2.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs2 = 60
                     cursor.execute(
                         f"""
@@ -2731,31 +2724,32 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                             return v
                         try:
                             return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             return None
                     cdt = _parse(created)
                     sdt = _parse(started)
                     if cdt and sdt:
                         qlat = max(0.0, (sdt - cdt).total_seconds())
                         try:
-                            from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                            from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                                prompt_studio_metrics as _psm2,
+                            )
                             _psm2.metrics_manager.observe(
                                 "jobs.queue_latency_seconds",
                                 qlat,
                                 labels={"job_type": str(job.get("job_type", ""))},
                             )
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
         return job
 
     def retry_job_record(self, job_id: int) -> bool:
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     UPDATE prompt_studio_job_queue
                     SET status = 'queued',
                         retry_count = retry_count + 1,
@@ -2767,16 +2761,14 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     WHERE id = ?
                     RETURNING retry_count, max_retries
                     """,
-                    (job_id,),
-                )
-                row = cursor.fetchone()
-                success = row is not None
-                if success:
-                    try:
-                        self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
-                    except BackendDatabaseError:
-                        pass
-                return success
+                (job_id,),
+            )
+            row = cursor.fetchone()
+            success = row is not None
+            if success:
+                with suppress(BackendDatabaseError):
+                    self._execute("SELECT pg_advisory_unlock(?)", (job_id,))
+            return success
 
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
@@ -2790,11 +2782,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 """,
                 (cutoff.isoformat(),),
             )
-            return cursor.rowcount
+            return cursor.rowcount  # noqa: TRY300
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed cleaning up old jobs: {exc}") from exc
+            raise DatabaseError(f"Failed cleaning up old jobs: {exc}") from exc  # noqa: TRY003
 
-    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[dict[str, Any]]:
         query = """
             SELECT *
             FROM prompt_studio_job_queue
@@ -2807,7 +2799,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed fetching latest job for entity {entity_id}: {exc}"
             ) from exc
 
@@ -2818,7 +2810,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         limit: int = 50,
         ascending: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         order_clause = "ASC" if ascending else "DESC"
         query = f"""
             SELECT *
@@ -2832,7 +2824,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed listing jobs for entity {entity_id}: {exc}"
             ) from exc
 
@@ -2841,7 +2833,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         prompt_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         clauses = ["p.id = ?"]
         if not include_deleted:
             clauses.append("p.deleted = FALSE")
@@ -2857,7 +2849,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch prompt {prompt_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch prompt {prompt_id}: {exc}") from exc  # noqa: TRY003
 
     def create_prompt_version(
         self,
@@ -2870,53 +2862,52 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not change_description:
-            raise InputError("change_description is required")
+            raise InputError("change_description is required")  # noqa: TRY003
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE id = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (prompt_id,),
-                )
-                current_row = cursor.fetchone()
-                if not current_row:
-                    raise InputError(f"Prompt {prompt_id} not found or already deleted")
-                current_prompt = self._row_to_dict(cursor, current_row) or {}
+                (prompt_id,),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                raise InputError(f"Prompt {prompt_id} not found or already deleted")  # noqa: TRY003
+            current_prompt = self._row_to_dict(cursor, current_row) or {}
 
-                new_uuid = str(uuid.uuid4())
-                new_version = int(current_prompt.get("version_number", 0)) + 1
+            new_uuid = str(uuid.uuid4())
+            new_version = int(current_prompt.get("version_number", 0)) + 1
 
-                next_name = name if name is not None else current_prompt.get("name")
-                next_system = (
-                    system_prompt
-                    if system_prompt is not None
-                    else current_prompt.get("system_prompt")
-                )
-                next_user = (
-                    user_prompt
-                    if user_prompt is not None
-                    else current_prompt.get("user_prompt")
-                )
-                next_examples = (
-                    few_shot_examples
-                    if few_shot_examples is not None
-                    else current_prompt.get("few_shot_examples")
-                )
-                next_modules = (
-                    modules_config
-                    if modules_config is not None
-                    else current_prompt.get("modules_config")
-                )
+            next_name = name if name is not None else current_prompt.get("name")
+            next_system = (
+                system_prompt
+                if system_prompt is not None
+                else current_prompt.get("system_prompt")
+            )
+            next_user = (
+                user_prompt
+                if user_prompt is not None
+                else current_prompt.get("user_prompt")
+            )
+            next_examples = (
+                few_shot_examples
+                if few_shot_examples is not None
+                else current_prompt.get("few_shot_examples")
+            )
+            next_modules = (
+                modules_config
+                if modules_config is not None
+                else current_prompt.get("modules_config")
+            )
 
-                insert_sql = """
+            insert_sql = """
                     INSERT INTO prompt_studio_prompts (
                         uuid,
                         project_id,
@@ -2934,24 +2925,24 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     RETURNING *
                 """
 
-                payload = (
-                    new_uuid,
-                    current_prompt.get("project_id"),
-                    current_prompt.get("signature_id"),
-                    new_version,
-                    next_name,
-                    next_system,
-                    next_user,
-                    json.dumps(next_examples) if next_examples is not None else None,
-                    json.dumps(next_modules) if next_modules is not None else None,
-                    prompt_id,
-                    change_description,
-                    client_id or current_prompt.get("client_id") or self.client_id,
-                )
+            payload = (
+                new_uuid,
+                current_prompt.get("project_id"),
+                current_prompt.get("signature_id"),
+                new_version,
+                next_name,
+                next_system,
+                next_user,
+                json.dumps(next_examples) if next_examples is not None else None,
+                json.dumps(next_modules) if next_modules is not None else None,
+                prompt_id,
+                change_description,
+                client_id or current_prompt.get("client_id") or self.client_id,
+            )
 
-                cursor.execute(insert_sql, payload)
-                new_row = cursor.fetchone()
-                prompt = self._row_to_dict(cursor, new_row)
+            cursor.execute(insert_sql, payload)
+            new_row = cursor.fetchone()
+            prompt = self._row_to_dict(cursor, new_row)
 
         self._log_sync_event(
             "prompt_studio_prompt",
@@ -2971,62 +2962,61 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         target_version: int,
         *,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if target_version < 1:
-            raise InputError("target_version must be >= 1")
+            raise InputError("target_version must be >= 1")  # noqa: TRY003
 
-        with self._write_lock:
-            with self.transaction() as conn:
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+        with self._write_lock, self.transaction() as conn:
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE id = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (prompt_id,),
-                )
-                current_row = cursor.fetchone()
-                if not current_row:
-                    raise InputError(f"Prompt {prompt_id} not found or already deleted")
-                current_prompt = self._row_to_dict(cursor, current_row) or {}
+                (prompt_id,),
+            )
+            current_row = cursor.fetchone()
+            if not current_row:
+                raise InputError(f"Prompt {prompt_id} not found or already deleted")  # noqa: TRY003
+            current_prompt = self._row_to_dict(cursor, current_row) or {}
 
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT *
                     FROM prompt_studio_prompts
                     WHERE project_id = ? AND name = ? AND version_number = ? AND deleted = FALSE
                     LIMIT 1
                     """,
-                    (
-                        current_prompt.get("project_id"),
-                        current_prompt.get("name"),
-                        target_version,
-                    ),
+                (
+                    current_prompt.get("project_id"),
+                    current_prompt.get("name"),
+                    target_version,
+                ),
+            )
+            target_row = cursor.fetchone()
+            if not target_row:
+                raise InputError(  # noqa: TRY003
+                    f"Version {target_version} not found for prompt {current_prompt.get('name')}"
                 )
-                target_row = cursor.fetchone()
-                if not target_row:
-                    raise InputError(
-                        f"Version {target_version} not found for prompt {current_prompt.get('name')}"
-                    )
-                target_prompt = self._row_to_dict(cursor, target_row) or {}
+            target_prompt = self._row_to_dict(cursor, target_row) or {}
 
-                cursor = self._cursor_exec(
-                    conn,
-                    """
+            cursor = self._cursor_exec(
+                conn,
+                """
                     SELECT COALESCE(MAX(version_number), 0)
                     FROM prompt_studio_prompts
                     WHERE project_id = ? AND name = ?
                     """,
-                    (current_prompt.get("project_id"), current_prompt.get("name")),
-                )
-                max_version_row = cursor.fetchone()
-                next_version = int(max_version_row[0]) + 1 if max_version_row else 1
+                (current_prompt.get("project_id"), current_prompt.get("name")),
+            )
+            max_version_row = cursor.fetchone()
+            next_version = int(max_version_row[0]) + 1 if max_version_row else 1
 
-                new_uuid = str(uuid.uuid4())
-                insert_sql = """
+            new_uuid = str(uuid.uuid4())
+            insert_sql = """
                     INSERT INTO prompt_studio_prompts (
                         uuid,
                         project_id,
@@ -3044,28 +3034,28 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                     RETURNING *
                 """
 
-                payload = (
-                    new_uuid,
-                    target_prompt.get("project_id"),
-                    target_prompt.get("signature_id"),
-                    next_version,
-                    target_prompt.get("name"),
-                    target_prompt.get("system_prompt"),
-                    target_prompt.get("user_prompt"),
-                    json.dumps(target_prompt.get("few_shot_examples"))
-                    if target_prompt.get("few_shot_examples") is not None
-                    else None,
-                    json.dumps(target_prompt.get("modules_config"))
-                    if target_prompt.get("modules_config") is not None
-                    else None,
-                    prompt_id,
-                    f"Reverted to version {target_version}",
-                    client_id or current_prompt.get("client_id") or self.client_id,
-                )
+            payload = (
+                new_uuid,
+                target_prompt.get("project_id"),
+                target_prompt.get("signature_id"),
+                next_version,
+                target_prompt.get("name"),
+                target_prompt.get("system_prompt"),
+                target_prompt.get("user_prompt"),
+                json.dumps(target_prompt.get("few_shot_examples"))
+                if target_prompt.get("few_shot_examples") is not None
+                else None,
+                json.dumps(target_prompt.get("modules_config"))
+                if target_prompt.get("modules_config") is not None
+                else None,
+                prompt_id,
+                f"Reverted to version {target_version}",
+                client_id or current_prompt.get("client_id") or self.client_id,
+            )
 
-                cursor.execute(insert_sql, payload)
-                new_row = cursor.fetchone()
-                prompt = self._row_to_dict(cursor, new_row)
+            cursor.execute(insert_sql, payload)
+            new_row = cursor.fetchone()
+            prompt = self._row_to_dict(cursor, new_row)
 
         self._log_sync_event(
             "prompt_studio_prompt",
@@ -3084,7 +3074,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         project_id: int,
         limit: int = 100,
         offset: int = 0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         query = (
             """
             SELECT id, uuid, project_id, signature_id, name, description,
@@ -3095,7 +3085,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             WHERE project_id = ? AND is_golden = TRUE
         """
         )
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         query += " AND deleted = FALSE"  # Always exclude deleted in helper
         query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
@@ -3105,11 +3095,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._format_test_case(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch golden test cases for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch golden test cases for project {project_id}: {exc}") from exc  # noqa: TRY003
 
     # --- Test case helpers -------------------------------------------------
 
-    def _format_test_case(self, row: Any) -> Optional[Dict[str, Any]]:
+    def _format_test_case(self, row: Any) -> Optional[dict[str, Any]]:
         return _format_test_case_record(self._row_to_dict(row))
 
     def _build_test_case_filters(
@@ -3118,11 +3108,11 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         include_deleted: bool = False,
-    ) -> Tuple[str, List[Any]]:
-        conditions: List[str] = ["project_id = ?"]
-        params: List[Any] = [project_id]
+    ) -> tuple[str, list[Any]]:
+        conditions: list[str] = ["project_id = ?"]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
@@ -3151,18 +3141,18 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         project_id: int,
         name: str,
         *,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
         description: Optional[str] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        actual_outputs: Optional[Dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        actual_outputs: Optional[dict[str, Any]] = None,
         tags: Optional[Iterable[str]] = None,
         is_golden: bool = False,
         is_generated: bool = False,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not name.strip():
-            raise InputError("Test case name cannot be empty")
+            raise InputError("Test case name cannot be empty")  # noqa: TRY003
 
         test_case_uuid = str(uuid.uuid4())
         payload = (
@@ -3190,26 +3180,25 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
-                    test_case = self._format_test_case(row)
-            return test_case or {}
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
+                test_case = self._format_test_case(row)
+            return test_case or {}  # noqa: TRY300
         except BackendDatabaseError as exc:
             message = str(exc).lower()
             if "unique" in message and "prompt_studio_test_cases" in message and "name" in message:
-                raise ConflictError(f"Test case with name '{name}' already exists") from exc
-            raise DatabaseError(f"Failed to create prompt studio test case: {exc}") from exc
+                raise ConflictError(f"Test case with name '{name}' already exists") from exc  # noqa: TRY003
+            raise DatabaseError(f"Failed to create prompt studio test case: {exc}") from exc  # noqa: TRY003
 
     def get_test_case(
         self,
         test_case_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         where_clauses = ["id = ?"]
-        params: List[Any] = [test_case_id]
+        params: list[Any] = [test_case_id]
         if not include_deleted:
             where_clauses.append("deleted = FALSE" if self.backend_type == BackendType.POSTGRESQL else "deleted = 0")
 
@@ -3224,7 +3213,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             row = cursor.fetchone()
             return self._format_test_case(row)
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch test case {test_case_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch test case {test_case_id}: {exc}") from exc  # noqa: TRY003
 
     def list_test_cases(
         self,
@@ -3232,13 +3221,13 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         search: Optional[str] = None,
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         where_clause, params = self._build_test_case_filters(
             project_id,
             signature_id=signature_id,
@@ -3258,7 +3247,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             count_row = count_cursor.fetchone()
             total = int(count_row[0]) if count_row else 0
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to count test cases for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to count test cases for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = f"""
@@ -3275,7 +3264,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             records = [self._format_test_case(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to list test cases for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to list test cases for project {project_id}: {exc}") from exc  # noqa: TRY003
 
         if return_pagination:
             return {
@@ -3289,7 +3278,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             }
         return records
 
-    def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_test_case(self, test_case_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         allowed_fields = {
             "name",
             "description",
@@ -3301,8 +3290,8 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             "is_generated",
             "signature_id",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -3321,7 +3310,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         if not set_clauses:
             existing = self.get_test_case(test_case_id)
             if existing is None:
-                raise InputError(f"Test case {test_case_id} not found or already deleted")
+                raise InputError(f"Test case {test_case_id} not found or already deleted")  # noqa: TRY003
             return existing
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -3340,10 +3329,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 cursor = self._cursor_exec(conn, update_sql, params)
                 row = cursor.fetchone()
                 if not row:
-                    raise InputError(f"Test case {test_case_id} not found or already deleted")
+                    raise InputError(f"Test case {test_case_id} not found or already deleted")  # noqa: TRY003
                 return self._format_test_case(row) or {}
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to update test case {test_case_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update test case {test_case_id}: {exc}") from exc  # noqa: TRY003
 
     def delete_test_case(self, test_case_id: int, *, hard_delete: bool = False) -> bool:
         try:
@@ -3371,17 +3360,17 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 row = cursor.fetchone()
                 return row is not None
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc  # noqa: TRY003
 
     def create_bulk_test_cases(
         self,
         project_id: int,
-        test_cases: List[Dict[str, Any]],
+        test_cases: list[dict[str, Any]],
         *,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        created: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        created: list[dict[str, Any]] = []
         for test_case in test_cases:
             created_case = self.create_test_case(
                 project_id,
@@ -3405,7 +3394,7 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
         query: str,
         *,
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         backend_query = query
         if self.backend_type == BackendType.POSTGRESQL:
             backend_query = FTSQueryTranslator.normalize_query(query, "postgresql") or query
@@ -3438,9 +3427,9 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._format_test_case(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to search test cases in project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to search test cases in project {project_id}: {exc}") from exc  # noqa: TRY003
 
-    def get_test_cases_by_signature(self, signature_id: int) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, signature_id: int) -> list[dict[str, Any]]:
         query = """
             SELECT *
             FROM prompt_studio_test_cases
@@ -3452,10 +3441,10 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
             rows = cursor.fetchall()
             return [self._format_test_case(row) for row in rows if row]
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to fetch test cases for signature {signature_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch test cases for signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
-    def get_test_case_stats(self, project_id: int) -> Dict[str, Any]:
-        stats: Dict[str, Any] = {}
+    def get_test_case_stats(self, project_id: int) -> dict[str, Any]:
+        stats: dict[str, Any] = {}
         try:
             total_cursor = self._execute(
                 "SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = ? AND deleted = 0",
@@ -3508,15 +3497,15 @@ class _BackendPromptStudioDatabase(BackendPromptStudioDatabaseBase):
                 """,
                 (project_id,),
             )
-            tag_counts: Dict[str, int] = {}
+            tag_counts: dict[str, int] = {}
             for row in tags_cursor.fetchall():
                 for tag in _parse_tags(row[0]):
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
             stats["top_tags"] = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
-            return stats
+            return stats  # noqa: TRY300
         except BackendDatabaseError as exc:
-            raise DatabaseError(f"Failed to compute test case stats for project {project_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to compute test case stats for project {project_id}: {exc}") from exc  # noqa: TRY003
 
 ########################################################################################################################
 # Prompt Studio Database Class
@@ -3560,11 +3549,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 _wal_requested = _ps_os.getenv("TLDW_PS_SQLITE_WAL", "0").lower() in {"1", "true", "yes", "on"}
                 _mode = "WAL" if _wal_requested else "DELETE"
                 cursor.execute(f"PRAGMA journal_mode={_mode}")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 pass
             cursor.execute("PRAGMA busy_timeout=1000")  # 1 second timeout for locked database
             conn.commit()
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Could not set pragmas: {e}")
 
         logger.info(f"PromptStudioDatabase initialized for {db_path} with client {client_id}")
@@ -3606,42 +3595,42 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     "CREATE INDEX IF NOT EXISTS idx_ps_idem_entity ON prompt_studio_idempotency(entity_type, user_id)"
                 )
                 conn.commit()
-            except Exception as _e:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as _e:
                 logger.warning(f"Failed ensuring idempotency table: {_e}")
 
             # Ensure leasing columns exist on job queue (SQLite)
             try:
                 cursor.execute("SELECT leased_until FROM prompt_studio_job_queue LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN leased_until TIMESTAMP")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 cursor.execute("SELECT lease_owner FROM prompt_studio_job_queue LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_job_queue ADD COLUMN lease_owner TEXT")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
             # Ensure optimization test_case_ids column exists (SQLite)
             try:
                 cursor.execute("SELECT test_case_ids FROM prompt_studio_optimizations LIMIT 1")
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 try:
                     cursor.execute("ALTER TABLE prompt_studio_optimizations ADD COLUMN test_case_ids JSON")
                     conn.commit()
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     pass
 
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error initializing Prompt Studio schema: {e}")
-            raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")
+            raise SchemaError(f"Failed to initialize Prompt Studio schema: {e}")  # noqa: B904, TRY003
 
     # Keep parity with backend helper: local execute that returns a cursor
-    def _cursor_exec(self, conn: sqlite3.Connection, query: str, params: Optional[Union[Tuple, List, Dict, Any]] = None):
+    def _cursor_exec(self, conn: sqlite3.Connection, query: str, params: Optional[Union[tuple, list, dict, Any]] = None):
         cursor = conn.cursor()
         if params is not None:
             cursor.execute(query, params)
@@ -3652,7 +3641,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def _execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict, Any]] = None,
+        params: Optional[Union[tuple, list, dict, Any]] = None,
         *,
         connection: Optional[sqlite3.Connection] = None,
     ):
@@ -3662,7 +3651,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     def _executemany(
         self,
         query: str,
-        params_list: List[Union[Tuple, List, Dict, Any]],
+        params_list: list[Union[tuple, list, dict, Any]],
         *,
         connection: Optional[sqlite3.Connection] = None,
     ):
@@ -3688,14 +3677,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             import os as _os
             if _os.getenv("SKIP_PROMPT_STUDIO_FTS", "").lower() == "true":
                 migration_files = [mf for mf in migration_files if not mf.startswith("004_")]
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             pass
 
         for migration_file in migration_files:
             migration_path = migrations_dir / migration_file
             if migration_path.exists():
                 logger.info(f"Applying migration: {migration_file}")
-                with open(migration_path, 'r') as f:
+                with open(migration_path) as f:
                     migration_sql = f.read()
 
                 # Execute migration statements
@@ -3703,9 +3692,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     conn.executescript(migration_sql)
                     conn.commit()
                     logger.info(f"Successfully applied {migration_file}")
-                except Exception as e:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to apply {migration_file}: {e}")
-                    raise SchemaError(f"Migration {migration_file} failed: {e}")
+                    raise SchemaError(f"Migration {migration_file} failed: {e}")  # noqa: B904, TRY003
             else:
                 logger.warning(f"Migration file not found: {migration_path}")
 
@@ -3729,7 +3718,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             )
             row = cursor.fetchone()
             return int(row[0]) if row else None
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _idem_record(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
@@ -3741,15 +3730,15 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 (entity_type, key, entity_id, user_id),
             )
             conn.commit()
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             pass
 
     ####################################################################################################################
     # Project Management
 
     def create_project(self, name: str, description: Optional[str] = None,
-                      status: str = "draft", metadata: Optional[Dict] = None,
-                      user_id: Optional[str] = None) -> Dict[str, Any]:
+                      status: str = "draft", metadata: Optional[dict] = None,
+                      user_id: Optional[str] = None) -> dict[str, Any]:
         """
         Create a new prompt studio project.
 
@@ -3762,9 +3751,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Created project record
         """
-        import time
-        import sqlite3
         import random
+        import sqlite3
+        import time
 
         project_id = None
         # Get connection before acquiring lock to avoid deadlock
@@ -3812,13 +3801,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         should_retry = True
                         retry_delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to create project: {e}")
+                        raise DatabaseError(f"Failed to create project: {e}")  # noqa: B904, TRY003
                 except sqlite3.IntegrityError as e:
                     if "UNIQUE" in str(e):
-                        raise ConflictError(f"Project with name '{name}' already exists for this user")
-                    raise DatabaseError(f"Failed to create project: {e}")
-                except Exception as e:
-                    raise DatabaseError(f"Failed to create project: {e}")
+                        raise ConflictError(f"Project with name '{name}' already exists for this user")  # noqa: B904, TRY003
+                    raise DatabaseError(f"Failed to create project: {e}")  # noqa: B904, TRY003
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
+                    raise DatabaseError(f"Failed to create project: {e}")  # noqa: B904, TRY003
 
             # Sleep outside the lock if we need to retry
             if should_retry:
@@ -3827,7 +3816,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         # Get the project after releasing the lock
         return self.get_project(project_id)
 
-    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_project(self, project_id: int, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         """
         Get a project by ID.
 
@@ -3838,7 +3827,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Project record or None
         """
-        import sqlite3, time, random
+        import random
+        import sqlite3
+        import time
         conn = self.get_connection()
         cursor = conn.cursor()
         query = """
@@ -3860,19 +3851,19 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 row = cursor.fetchone()
                 if row:
                     return self._row_to_dict(cursor, row)
-                return None
+                return None  # noqa: TRY300
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower() and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to get project: {e}")
+                raise DatabaseError(f"Failed to get project: {e}")  # noqa: B904, TRY003
             except sqlite3.Error as e:
-                raise DatabaseError(f"Failed to get project: {e}")
+                raise DatabaseError(f"Failed to get project: {e}")  # noqa: B904, TRY003
 
     def list_projects(self, user_id: Optional[str] = None, status: Optional[str] = None,
                      include_deleted: bool = False, page: int = 1, per_page: int = 20,
-                     search: Optional[str] = None) -> Dict[str, Any]:
+                     search: Optional[str] = None) -> dict[str, Any]:
         """
         List projects with optional filtering.
 
@@ -3886,7 +3877,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Dictionary with projects list and pagination metadata
         """
-        import sqlite3, time, random
+        import random
+        import sqlite3
+        import time
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -3922,9 +3915,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to list projects: {e}")
+                raise DatabaseError(f"Failed to list projects: {e}")  # noqa: B904, TRY003
             except sqlite3.Error as e:
-                raise DatabaseError(f"Failed to list projects: {e}")
+                raise DatabaseError(f"Failed to list projects: {e}")  # noqa: B904, TRY003
 
         # Get projects with pagination (retry)
         offset = (page - 1) * per_page
@@ -3957,11 +3950,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to list projects: {e}")
+                raise DatabaseError(f"Failed to list projects: {e}")  # noqa: B904, TRY003
             except sqlite3.Error as e:
-                raise DatabaseError(f"Failed to list projects: {e}")
+                raise DatabaseError(f"Failed to list projects: {e}")  # noqa: B904, TRY003
 
-    def update_project(self, project_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         """
         Update a project.
 
@@ -3972,9 +3965,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             Updated project record
         """
-        import time
-        import sqlite3
         import random
+        import sqlite3
+        import time
 
         conn = self.get_connection()
         max_retries = 5
@@ -3988,8 +3981,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
                     # Build update query
                     allowed_fields = ["name", "description", "status", "metadata"]
-                    set_clauses: List[str] = []
-                    params: List[Any] = []
+                    set_clauses: list[str] = []
+                    params: list[Any] = []
 
                     for field in allowed_fields:
                         if field in updates:
@@ -4014,7 +4007,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     cursor.execute(query, params)
 
                     if cursor.rowcount == 0:
-                        raise InputError(f"Project {project_id} not found or already deleted")
+                        raise InputError(f"Project {project_id} not found or already deleted")  # noqa: TRY003
 
                     cursor.execute(
                         "SELECT uuid FROM prompt_studio_projects WHERE id = ?",
@@ -4038,18 +4031,18 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
             except sqlite3.IntegrityError as exc:
                 if "UNIQUE" in str(exc):
-                    raise ConflictError("Project with name already exists")
-                raise DatabaseError(f"Failed to update project: {exc}")
+                    raise ConflictError("Project with name already exists")  # noqa: B904, TRY003
+                raise DatabaseError(f"Failed to update project: {exc}")  # noqa: B904, TRY003
             except sqlite3.OperationalError as exc:
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to update project: {exc}")
-            except Exception as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to update project: {exc}")
+                raise DatabaseError(f"Failed to update project: {exc}")  # noqa: B904, TRY003
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+                raise DatabaseError(f"Failed to update project: {exc}")  # noqa: B904, TRY003
 
-        raise DatabaseError("Failed to update project after retries")
+        raise DatabaseError("Failed to update project after retries")  # noqa: TRY003
 
     ####################################################################################################################
     # Signature Management
@@ -4064,13 +4057,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         constraints: Optional[Any] = None,
         validation_rules: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         if not name or not str(name).strip():
-            raise InputError("Signature name cannot be empty")
+            raise InputError("Signature name cannot be empty")  # noqa: TRY003
 
         conn = self.get_connection()
         signature_uuid = str(uuid.uuid4())
@@ -4120,43 +4113,43 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             "name": name,
                         },
                     )
-                    return signature
+                    return signature  # noqa: TRY300
                 except sqlite3.IntegrityError as exc:
                     message = str(exc)
                     if "UNIQUE" in message:
-                        raise ConflictError(
+                        raise ConflictError(  # noqa: B904, TRY003
                             f"Signature with name '{name}' already exists for project {project_id}"
                         )
-                    raise DatabaseError(f"Failed to create signature: {exc}") from exc
+                    raise DatabaseError(f"Failed to create signature: {exc}") from exc  # noqa: TRY003
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to create signature: {exc}") from exc
+                        raise DatabaseError(f"Failed to create signature: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to create signature: {exc}") from exc
+                    raise DatabaseError(f"Failed to create signature: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to create signature due to database locks")
+        raise DatabaseError("Failed to create signature due to database locks")  # noqa: TRY003
 
     def get_signature(
         self,
         signature_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM prompt_studio_signatures WHERE id = ?"
-        params: List[Any] = [signature_id]
+        params: list[Any] = [signature_id]
         if not include_deleted:
             query += " AND deleted = 0"
 
@@ -4172,9 +4165,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to fetch signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
         return None
 
@@ -4187,21 +4180,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
+        import random
         import sqlite3
         import time
-        import random
 
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
         if not include_deleted:
             conditions.append("deleted = 0")
         if search:
@@ -4225,11 +4218,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to count signatures: {exc}") from exc
+                raise DatabaseError(f"Failed to count signatures: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to count signatures: {exc}") from exc
+                raise DatabaseError(f"Failed to count signatures: {exc}") from exc  # noqa: TRY003
         else:
-            raise DatabaseError("Failed to count signatures due to database locks")
+            raise DatabaseError("Failed to count signatures due to database locks")  # noqa: TRY003
 
         offset = max(page - 1, 0) * per_page
         list_sql = (
@@ -4248,11 +4241,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to list signatures: {exc}") from exc
+                raise DatabaseError(f"Failed to list signatures: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to list signatures: {exc}") from exc
+                raise DatabaseError(f"Failed to list signatures: {exc}") from exc  # noqa: TRY003
         else:
-            raise DatabaseError("Failed to list signatures due to database locks")
+            raise DatabaseError("Failed to list signatures due to database locks")  # noqa: TRY003
 
         if return_pagination:
             return {
@@ -4266,7 +4259,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             }
         return signatures
 
-    def update_signature(self, signature_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_signature(self, signature_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         import sqlite3
 
         allowed_fields = {
@@ -4277,8 +4270,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "validation_rules",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -4293,7 +4286,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         if not set_clauses:
             signature = self.get_signature(signature_id, include_deleted=True)
             if signature is None:
-                raise InputError(f"Signature {signature_id} not found or already deleted")
+                raise InputError(f"Signature {signature_id} not found or already deleted")  # noqa: TRY003
             return signature
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -4312,7 +4305,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 cursor = conn.cursor()
                 cursor.execute(update_sql, params)
                 if cursor.rowcount == 0:
-                    raise InputError(f"Signature {signature_id} not found or already deleted")
+                    raise InputError(f"Signature {signature_id} not found or already deleted")  # noqa: TRY003
                 conn.commit()
                 cursor.execute(
                     "SELECT * FROM prompt_studio_signatures WHERE id = ?",
@@ -4320,15 +4313,15 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 )
                 row = cursor.fetchone()
                 if not row:
-                    raise DatabaseError(f"Failed to fetch updated signature {signature_id}")
+                    raise DatabaseError(f"Failed to fetch updated signature {signature_id}")  # noqa: TRY003
                 signature = self._row_to_dict(cursor, row)
             except sqlite3.IntegrityError as exc:
                 message = str(exc)
                 if "UNIQUE" in message:
-                    raise ConflictError("Signature update conflicts with existing record") from exc
-                raise DatabaseError(f"Failed to update signature: {exc}") from exc
+                    raise ConflictError("Signature update conflicts with existing record") from exc  # noqa: TRY003
+                raise DatabaseError(f"Failed to update signature: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to update signature: {exc}") from exc
+                raise DatabaseError(f"Failed to update signature: {exc}") from exc  # noqa: TRY003
 
         self._log_sync_event(
             "prompt_studio_signature",
@@ -4389,16 +4382,16 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         {"hard": hard_delete},
                     )
                     return True
-                return False
+                return False  # noqa: TRY300
             except sqlite3.OperationalError as exc:
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     time.sleep(base_delay * (2 ** attempt))
                     continue
-                raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to delete signature {signature_id}: {exc}") from exc  # noqa: TRY003
 
-        raise DatabaseError("Failed to delete signature due to database locks")
+        raise DatabaseError("Failed to delete signature due to database locks")  # noqa: TRY003
 
     ####################################################################################################################
     # Test Run Management
@@ -4410,20 +4403,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_id: int,
         test_case_id: int,
         model_name: str,
-        model_params: Optional[Dict[str, Any]] = None,
-        inputs: Optional[Dict[str, Any]] = None,
-        outputs: Optional[Dict[str, Any]] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        scores: Optional[Dict[str, Any]] = None,
+        model_params: Optional[dict[str, Any]] = None,
+        inputs: Optional[dict[str, Any]] = None,
+        outputs: Optional[dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        scores: Optional[dict[str, Any]] = None,
         execution_time_ms: Optional[int] = None,
         tokens_used: Optional[int] = None,
         cost_estimate: Optional[float] = None,
         error_message: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -4473,18 +4466,18 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < 4:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to create test run: {exc}") from exc
+                raise DatabaseError(f"Failed to create test run: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to create test run: {exc}") from exc
+                raise DatabaseError(f"Failed to create test run: {exc}") from exc  # noqa: TRY003
 
-        raise DatabaseError("Failed to create test run due to database locks")
+        raise DatabaseError("Failed to create test run due to database locks")  # noqa: TRY003
 
     def get_test_cases_by_ids(
         self,
         test_case_ids: Iterable[int],
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import sqlite3
 
         identifiers = list(dict.fromkeys(test_case_ids))
@@ -4504,7 +4497,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             rows = cursor.fetchall()
             return [self._format_test_case(cursor, row) for row in rows if row]
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to fetch test cases: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch test cases: {exc}") from exc  # noqa: TRY003
 
     ####################################################################################################################
     # Evaluation Management
@@ -4514,14 +4507,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         prompt_id: int,
         project_id: int,
-        model_configs: Optional[Dict[str, Any]] = None,
+        model_configs: Optional[dict[str, Any]] = None,
         status: str = "running",
         test_case_ids: Optional[Iterable[int]] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -4561,24 +4554,24 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < 4:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to create evaluation: {exc}") from exc
+                raise DatabaseError(f"Failed to create evaluation: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to create evaluation: {exc}") from exc
+                raise DatabaseError(f"Failed to create evaluation: {exc}") from exc  # noqa: TRY003
 
-        raise DatabaseError("Failed to create evaluation due to database locks")
+        raise DatabaseError("Failed to create evaluation due to database locks")  # noqa: TRY003
 
-    def update_evaluation(self, evaluation_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_evaluation(self, evaluation_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         import sqlite3
 
         if not updates:
             evaluation = self.get_evaluation(evaluation_id)
             if evaluation is None:
-                raise InputError(f"Evaluation {evaluation_id} not found")
+                raise InputError(f"Evaluation {evaluation_id} not found")  # noqa: TRY003
             return evaluation
 
         json_fields = {"model_configs", "test_case_ids", "test_run_ids", "aggregate_metrics"}
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -4600,7 +4593,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             try:
                 cursor.execute(query, params)
                 if cursor.rowcount == 0:
-                    raise InputError(f"Evaluation {evaluation_id} not found")
+                    raise InputError(f"Evaluation {evaluation_id} not found")  # noqa: TRY003
                 self.get_connection().commit()
                 cursor.execute(
                     "SELECT * FROM prompt_studio_evaluations WHERE id = ?",
@@ -4608,12 +4601,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 )
                 row = cursor.fetchone()
                 if not row:
-                    raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}")
+                    raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}")  # noqa: TRY003
                 return self._row_to_dict(cursor, row)
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to update evaluation: {exc}") from exc
+                raise DatabaseError(f"Failed to update evaluation: {exc}") from exc  # noqa: TRY003
 
-    def get_evaluation(self, evaluation_id: int) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, evaluation_id: int) -> Optional[dict[str, Any]]:
         import sqlite3
 
         cursor = self.get_connection().cursor()
@@ -4625,9 +4618,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             row = cursor.fetchone()
             if row:
                 return self._row_to_dict(cursor, row)
-            return None
+            return None  # noqa: TRY300
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch evaluation {evaluation_id}: {exc}") from exc  # noqa: TRY003
 
     def list_evaluations(
         self,
@@ -4636,21 +4629,21 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: Optional[str] = None,
         page: int = 1,
         per_page: int = 20,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        import random
         import sqlite3
         import time
-        import random
 
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
-        conditions: List[str] = []
-        params: List[Any] = []
+        conditions: list[str] = []
+        params: list[Any] = []
         if project_id is not None:
             conditions.append("project_id = ?")
             params.append(project_id)
@@ -4675,11 +4668,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < 4:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc
+                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc
+                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc  # noqa: TRY003
         else:
-            raise DatabaseError("Failed to list evaluations due to database locks")
+            raise DatabaseError("Failed to list evaluations due to database locks")  # noqa: TRY003
 
         offset = (page - 1) * per_page
         query = f"""
@@ -4709,11 +4702,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < 4:
                     time.sleep(base_delay * (2 ** attempt) * (0.5 + random.random()))
                     continue
-                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc
+                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc
+                raise DatabaseError(f"Failed to list evaluations: {exc}") from exc  # noqa: TRY003
 
-        raise DatabaseError("Failed to list evaluations due to database locks")
+        raise DatabaseError("Failed to list evaluations due to database locks")  # noqa: TRY003
 
     def create_prompt(
         self,
@@ -4729,9 +4722,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         parent_version_id: Optional[int] = None,
         change_description: Optional[str] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        import time
+    ) -> dict[str, Any]:
         import random
+        import time
 
         prompt_uuid = str(uuid.uuid4())
         payload = (
@@ -4780,24 +4773,24 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             "version_number": version_number,
                         },
                     )
-                    return prompt or {}
+                    return prompt or {}  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to create prompt: {exc}") from exc
+                        raise DatabaseError(f"Failed to create prompt: {exc}") from exc  # noqa: TRY003
                 except sqlite3.IntegrityError as exc:
                     if "UNIQUE" in str(exc).upper():
-                        raise ConflictError(
+                        raise ConflictError(  # noqa: TRY003
                             f"Prompt with name '{name}' already exists in project {project_id}"
                         ) from exc
-                    raise DatabaseError(f"Failed to create prompt: {exc}") from exc
+                    raise DatabaseError(f"Failed to create prompt: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to create prompt after multiple retries")
+        raise DatabaseError("Failed to create prompt after multiple retries")  # noqa: TRY003
 
     def delete_project(self, project_id: int, hard_delete: bool = False) -> bool:
         """
@@ -4810,9 +4803,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         Returns:
             True if deleted
         """
+        import random
         import sqlite3
         import time
-        import random
 
         conn = self.get_connection()
         max_retries = 5
@@ -4848,9 +4841,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     logger.warning(f"Delete project locked, retrying in {delay:.3f}s (attempt {attempt+1})")
                     time.sleep(delay)
                 else:
-                    raise DatabaseError(f"Failed to delete project: {e}")
-            except Exception as e:
-                raise DatabaseError(f"Failed to delete project: {e}")
+                    raise DatabaseError(f"Failed to delete project: {e}")  # noqa: B904, TRY003
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
+                raise DatabaseError(f"Failed to delete project: {e}")  # noqa: B904, TRY003
 
             if not should_retry:
                 break
@@ -4860,7 +4853,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     ####################################################################################################################
     # Helper Methods
 
-    def _row_to_dict(self, cursor: sqlite3.Cursor, row: tuple) -> Dict[str, Any]:
+    def _row_to_dict(self, cursor: sqlite3.Cursor, row: tuple) -> dict[str, Any]:
         """Convert a database row to dictionary."""
         if not row:
             return None
@@ -4878,10 +4871,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         for field in json_fields:
             if field in result and result[field]:
-                try:
+                with suppress(json.JSONDecodeError, TypeError):
                     result[field] = json.loads(result[field])
-                except (json.JSONDecodeError, TypeError):
-                    pass
 
         # Parse datetime fields
         datetime_fields = ["created_at", "updated_at", "deleted_at", "last_modified",
@@ -4897,7 +4888,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
 
         return result
 
-    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: Dict[str, Any]):
+    def _log_sync_event(self, entity: str, entity_uuid: str, operation: str, payload: dict[str, Any]):
         """Log an event to sync_log table if it exists."""
         try:
             with self.transaction() as conn:
@@ -4933,7 +4924,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             json.dumps(payload),
                         ),
                     )
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             err_str = str(e).lower()
             if "no such table" in err_str or "does not exist" in err_str:
                 logger.debug(f"sync_log table not available: {e}")
@@ -4941,14 +4932,14 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 logger.warning(f"Failed to log sync event for {entity}/{entity_uuid}: {e}")
 
     # Public convenience alias matching some endpoint call sites
-    def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> Dict[str, Any]:
+    def row_to_dict(self, row: tuple, cursor: sqlite3.Cursor) -> dict[str, Any]:
         """
         Convert a (row, cursor) pair to a dict. Wrapper around _row_to_dict,
         provided to match call sites that pass (row, cursor) in that order.
         """
         return self._row_to_dict(cursor, row)
 
-    def _format_test_case(self, cursor: sqlite3.Cursor, row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+    def _format_test_case(self, cursor: sqlite3.Cursor, row: Optional[sqlite3.Row]) -> Optional[dict[str, Any]]:
         if row is None:
             return None
         return _format_test_case_record(self._row_to_dict(cursor, row))
@@ -4956,7 +4947,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
     ####################################################################################################################
     # Prompt Accessors (Prompt Studio tables)
 
-    def get_prompt(self, prompt_id: int) -> Optional[Dict[str, Any]]:
+    def get_prompt(self, prompt_id: int) -> Optional[dict[str, Any]]:
         """
         Fetch a prompt-studio prompt by id from the prompt_studio_prompts table.
 
@@ -4981,7 +4972,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if not row:
                 return None
             return self._row_to_dict(cursor, row)
-        except Exception as e:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get prompt {prompt_id}: {e}")
             return None
 
@@ -4990,7 +4981,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5008,7 +4999,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if not row:
                 return None
             return self._row_to_dict(cursor, row)
-        except Exception as exc:  # noqa: BLE001
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             logger.error(f"Failed to fetch prompt {prompt_id}: {exc}")
             return None
 
@@ -5023,12 +5014,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         few_shot_examples: Optional[Any] = None,
         modules_config: Optional[Any] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
         if not change_description:
-            raise InputError("change_description is required")
+            raise InputError("change_description is required")  # noqa: TRY003
 
         conn = self.get_connection()
         max_retries = 5
@@ -5049,7 +5040,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     )
                     current_row = cursor.fetchone()
                     if not current_row:
-                        raise InputError(f"Prompt {prompt_id} not found or already deleted")
+                        raise InputError(f"Prompt {prompt_id} not found or already deleted")  # noqa: TRY003
                     current_prompt = self._row_to_dict(cursor, current_row)
 
                     new_uuid = str(uuid.uuid4())
@@ -5121,20 +5112,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             "change_description": change_description,
                         },
                     )
-                    return prompt
+                    return prompt  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to create prompt version: {exc}") from exc
+                        raise DatabaseError(f"Failed to create prompt version: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to create prompt version: {exc}") from exc
+                    raise DatabaseError(f"Failed to create prompt version: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to create prompt version due to database locks")
+        raise DatabaseError("Failed to create prompt version due to database locks")  # noqa: TRY003
 
     def revert_prompt_to_version(
         self,
@@ -5142,12 +5133,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         target_version: int,
         *,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
         if target_version < 1:
-            raise InputError("target_version must be >= 1")
+            raise InputError("target_version must be >= 1")  # noqa: TRY003
 
         conn = self.get_connection()
         max_retries = 5
@@ -5167,7 +5158,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     )
                     current_row = cursor.fetchone()
                     if not current_row:
-                        raise InputError(f"Prompt {prompt_id} not found or already deleted")
+                        raise InputError(f"Prompt {prompt_id} not found or already deleted")  # noqa: TRY003
                     current_prompt = self._row_to_dict(cursor, current_row)
 
                     cursor.execute(
@@ -5183,7 +5174,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     )
                     target_row = cursor.fetchone()
                     if not target_row:
-                        raise InputError(
+                        raise InputError(  # noqa: TRY003
                             f"Version {target_version} not found for this prompt"
                         )
                     target_prompt = self._row_to_dict(cursor, target_row)
@@ -5247,20 +5238,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                             "new_version": prompt.get("version_number"),
                         },
                     )
-                    return prompt
+                    return prompt  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to revert prompt: {exc}") from exc
+                        raise DatabaseError(f"Failed to revert prompt: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to revert prompt: {exc}") from exc
+                    raise DatabaseError(f"Failed to revert prompt: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to revert prompt due to database locks")
+        raise DatabaseError("Failed to revert prompt due to database locks")  # noqa: TRY003
 
     # --- Optimization helpers -------------------------------------------------
 
@@ -5269,7 +5260,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         optimization_id: int,
         *,
         include_deleted: bool = False,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5286,20 +5277,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to fetch optimization {optimization_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch optimization {optimization_id}: {exc}") from exc  # noqa: TRY003
 
     def update_optimization(
         self,
         optimization_id: int,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         *,
         set_started_at: bool = False,
         set_completed_at: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not updates and not (set_started_at or set_completed_at):
             optimization = self.get_optimization(optimization_id, include_deleted=True)
             if optimization is None:
-                raise InputError(f"Optimization {optimization_id} not found")
+                raise InputError(f"Optimization {optimization_id} not found")  # noqa: TRY003
             return optimization
 
         json_fields = {
@@ -5309,8 +5300,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "test_case_ids",
             "test_run_ids",
         }
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field in json_fields and value is not None:
@@ -5337,7 +5328,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 cursor = conn.cursor()
                 cursor.execute(sql, params)
                 if cursor.rowcount == 0:
-                    raise InputError(f"Optimization {optimization_id} not found")
+                    raise InputError(f"Optimization {optimization_id} not found")  # noqa: TRY003
                 conn.commit()
 
                 cursor.execute(
@@ -5347,7 +5338,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 row = cursor.fetchone()
                 optimization = self._row_to_dict(cursor, row) if row else {}
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to update optimization {optimization_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to update optimization {optimization_id}: {exc}") from exc  # noqa: TRY003
 
         log_payload = {}
         for key, value in updates.items():
@@ -5379,8 +5370,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         error_message: Optional[str] = None,
         mark_started: bool = False,
         mark_completed: bool = False,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {"status": status}
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {"status": status}
         if error_message is not None:
             updates["error_message"] = error_message
         return self.update_optimization(
@@ -5396,13 +5387,13 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         optimized_prompt_id: Optional[int] = None,
         iterations_completed: Optional[int] = None,
-        initial_metrics: Optional[Dict[str, Any]] = None,
-        final_metrics: Optional[Dict[str, Any]] = None,
+        initial_metrics: Optional[dict[str, Any]] = None,
+        final_metrics: Optional[dict[str, Any]] = None,
         improvement_percentage: Optional[float] = None,
         total_tokens: Optional[int] = None,
         total_cost: Optional[float] = None,
-    ) -> Dict[str, Any]:
-        updates: Dict[str, Any] = {
+    ) -> dict[str, Any]:
+        updates: dict[str, Any] = {
             "status": "completed",
             "optimized_prompt_id": optimized_prompt_id,
             "iterations_completed": iterations_completed,
@@ -5424,12 +5415,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         optimization_id: int,
         *,
         iteration_number: int,
-        prompt_variant: Optional[Dict[str, Any]] = None,
-        metrics: Optional[Dict[str, Any]] = None,
+        prompt_variant: Optional[dict[str, Any]] = None,
+        metrics: Optional[dict[str, Any]] = None,
         tokens_used: Optional[int] = None,
         cost: Optional[float] = None,
         note: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payload = (
             str(uuid.uuid4()),
             optimization_id,
@@ -5464,7 +5455,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 row = cursor.fetchone()
                 record = self._row_to_dict(cursor, row) if row else {}
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to record optimization iteration: {exc}") from exc
+            raise DatabaseError(f"Failed to record optimization iteration: {exc}") from exc  # noqa: TRY003
 
         self._log_sync_event(
             "prompt_studio_optimization_iteration",
@@ -5483,12 +5474,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         page: int = 1,
         per_page: int = 50,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """List persisted iterations for an optimization (SQLite backend)."""
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         try:
             conn = self.get_connection()
@@ -5525,7 +5516,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 },
             }
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc
+            raise DatabaseError(f"Failed to list optimization iterations: {exc}") from exc  # noqa: TRY003
 
     # --- Job queue helpers ---
 
@@ -5540,7 +5531,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import random
         import time
 
@@ -5581,16 +5572,16 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to create job: {exc}") from exc
+                        raise DatabaseError(f"Failed to create job: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to create job: {exc}") from exc
+                    raise DatabaseError(f"Failed to create job: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to create job due to database locks")
+        raise DatabaseError("Failed to create job due to database locks")  # noqa: TRY003
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5601,9 +5592,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch job {job_id}: {exc}") from exc  # noqa: TRY003
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
@@ -5614,7 +5605,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to fetch job {job_uuid}: {exc}") from exc
+            raise DatabaseError(f"Failed to fetch job {job_uuid}: {exc}") from exc  # noqa: TRY003
 
     def list_jobs(
         self,
@@ -5622,12 +5613,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             query = "SELECT * FROM prompt_studio_job_queue WHERE 1=1"
-            params: List[Any] = []
+            params: list[Any] = []
             if status:
                 query += " AND status = ?"
                 params.append(status)
@@ -5641,7 +5632,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows if row]
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to list prompt studio jobs: {exc}") from exc
+            raise DatabaseError(f"Failed to list prompt studio jobs: {exc}") from exc  # noqa: TRY003
 
     def update_job_status(
         self,
@@ -5650,7 +5641,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         import random
         import time
 
@@ -5663,7 +5654,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 try:
                     cursor = conn.cursor()
                     updates = ["status = ?"]
-                    params: List[Any] = [status]
+                    params: list[Any] = [status]
 
                     if status == "processing":
                         updates.append("started_at = CURRENT_TIMESTAMP")
@@ -5671,7 +5662,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         import os as _os_ul
                         try:
                             _lease_secs_upd = max(1, min(3600, int(_os_ul.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             _lease_secs_upd = 60
                         updates.append(f"leased_until = DATETIME('now', '+{_lease_secs_upd} seconds')")
                     elif status in {"completed", "failed", "cancelled"}:
@@ -5706,22 +5697,22 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         )
                         row = cursor.fetchone()
                         return self._row_to_dict(cursor, row) if row else None
-                    return None
+                    return None  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc
+                        raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc
+                    raise DatabaseError(f"Failed to update job {job_id}: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
 
-        raise DatabaseError("Failed to update job status due to database locks")
+        raise DatabaseError("Failed to update job status due to database locks")  # noqa: TRY003
 
-    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         import random
         import time
 
@@ -5733,7 +5724,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         for attempt in range(5):
@@ -5759,7 +5750,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     import os as _os_s1
                     try:
                         _lease_secs_sqlite = max(1, min(3600, int(_os_s1.getenv("TLDW_PS_JOB_LEASE_SECONDS", "60"))))
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         _lease_secs_sqlite = 60
                     query = (
                         "UPDATE prompt_studio_job_queue "
@@ -5773,7 +5764,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     cursor.execute(query, (owner_value, job_id))
                     try:
                         row = cursor.fetchone()
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         row = None
 
                     if row is not None or cursor.rowcount > 0:
@@ -5792,22 +5783,24 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                                         return v
                                     try:
                                         return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-                                    except Exception:
+                                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                         return None
                                 cdt = _parse(created)
                                 sdt = _parse(started)
                                 if cdt and sdt:
                                     qlat = max(0.0, (sdt - cdt).total_seconds())
                                     try:
-                                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics as _psm2
+                                        from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import (
+                                            prompt_studio_metrics as _psm2,
+                                        )
                                         _psm2.metrics_manager.observe(
                                             "jobs.queue_latency_seconds",
                                             qlat,
                                             labels={"job_type": str(job.get("job_type", ""))},
                                         )
-                                    except Exception:
+                                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                                         pass
-                        except Exception:
+                        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                             pass
                         return job
                     # Lost race to another worker updating this job; retry selection
@@ -5818,17 +5811,17 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to acquire job: {exc}") from exc
+                        raise DatabaseError(f"Failed to acquire job: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to acquire job: {exc}") from exc
+                    raise DatabaseError(f"Failed to acquire job: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 try:
                     time.sleep(delay)
-                except Exception:
+                except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                     time.sleep(0.01)
 
-        raise DatabaseError("Failed to acquire job due to database locks or contention")
+        raise DatabaseError("Failed to acquire job due to database locks or contention")  # noqa: TRY003
 
     def retry_job_record(self, job_id: int) -> bool:
         import random
@@ -5870,19 +5863,19 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         if row2:
                             st = str(row2[0]) if row2[0] is not None else ""
                             owner = str(row2[1]) if row2[1] is not None else None
-                            if st.lower() == "processing" and (owner_value is None or owner == owner_value):
+                            if st.lower() == "processing" and owner is None:
                                 return True
-                    except Exception:
+                    except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                         pass
-                    return False
+                    return False  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to reschedule job {job_id}: {exc}") from exc
+                        raise DatabaseError(f"Failed to reschedule job {job_id}: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to reschedule job {job_id}: {exc}") from exc
+                    raise DatabaseError(f"Failed to reschedule job {job_id}: {exc}") from exc  # noqa: TRY003
 
             if should_retry:
                 time.sleep(delay)
@@ -5906,11 +5899,11 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             deleted = cursor.rowcount
             if deleted:
                 conn.commit()
-            return deleted
+            return deleted  # noqa: TRY300
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to clean up old jobs: {exc}") from exc
+            raise DatabaseError(f"Failed to clean up old jobs: {exc}") from exc  # noqa: TRY003
 
-    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, job_type: str, entity_id: int) -> Optional[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         query = """
@@ -5925,7 +5918,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else None
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed fetching latest job for entity {entity_id}: {exc}"
             ) from exc
 
@@ -5936,7 +5929,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         limit: int = 50,
         ascending: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         order_clause = "ASC" if ascending else "DESC"
@@ -5950,7 +5943,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows if row]
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed listing jobs for entity {entity_id}: {exc}"
             ) from exc
 
@@ -5959,7 +5952,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         import time
         try:
             seconds = max(1, min(3600, int(seconds)))
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             seconds = 60
         owner_value: Optional[str] = None
         if worker_id:
@@ -5967,7 +5960,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 owner_value = str(worker_id).strip()[:128]
                 if not owner_value:
                     owner_value = None
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 owner_value = None
 
         conn = self.get_connection()
@@ -5997,18 +5990,18 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     success = cursor.rowcount > 0
                     if success:
                         conn.commit()
-                    return success
+                    return success  # noqa: TRY300
                 except sqlite3.OperationalError as exc:
                     if "database is locked" in str(exc).lower() and attempt < 4:
                         should_retry = True
                         delay = base_delay * (2 ** attempt) * (0.5 + random.random())
                     else:
-                        raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+                        raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc  # noqa: TRY003
                 except sqlite3.Error as exc:  # noqa: BLE001
-                    raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc
+                    raise DatabaseError(f"Failed to renew job lease for {job_id}: {exc}") from exc  # noqa: TRY003
             if should_retry:
                 time.sleep(delay)
-        raise DatabaseError("Failed to renew job lease due to database locks")
+        raise DatabaseError("Failed to renew job lease due to database locks")  # noqa: TRY003
 
     def list_prompts(
         self,
@@ -6017,20 +6010,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         page: int = 1,
         per_page: int = 20,
         include_deleted: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         import sqlite3
 
         if page < 1:
-            raise InputError("Page index must be >= 1")
+            raise InputError("Page index must be >= 1")  # noqa: TRY003
         if per_page < 1:
-            raise InputError("Items per page must be >= 1")
+            raise InputError("Items per page must be >= 1")  # noqa: TRY003
 
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
 
             base_clause = "FROM prompt_studio_prompts WHERE project_id = ?"
-            params: List[Any] = [project_id]
+            params: list[Any] = [project_id]
             if not include_deleted:
                 base_clause += " AND deleted = 0"
 
@@ -6056,7 +6049,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 },
             }
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to list prompts: {exc}") from exc
+            raise DatabaseError(f"Failed to list prompts: {exc}") from exc  # noqa: TRY003
 
     def list_prompt_versions(
         self,
@@ -6064,7 +6057,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         prompt_name: str,
         *,
         include_deleted: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import sqlite3
 
         try:
@@ -6084,7 +6077,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             rows = cursor.fetchall()
             return [self._row_to_dict(cursor, row) for row in rows]
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to list prompt versions for project {project_id}: {exc}"
             ) from exc
 
@@ -6112,7 +6105,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             if cursor.fetchone() is not None:
                 return
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to verify prompt {prompt_id} existence: {exc}"
             ) from exc
 
@@ -6133,7 +6126,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             )
             conn.commit()
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(
+            raise DatabaseError(  # noqa: TRY003
                 f"Failed to create placeholder prompt {prompt_id}: {exc}"
             ) from exc
 
@@ -6145,18 +6138,18 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         project_id: int,
         name: str,
         *,
-        inputs: Dict[str, Any],
+        inputs: dict[str, Any],
         description: Optional[str] = None,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-        actual_outputs: Optional[Dict[str, Any]] = None,
+        expected_outputs: Optional[dict[str, Any]] = None,
+        actual_outputs: Optional[dict[str, Any]] = None,
         tags: Optional[Iterable[str]] = None,
         is_golden: bool = False,
         is_generated: bool = False,
         signature_id: Optional[int] = None,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not name or not name.strip():
-            raise InputError("Test case name cannot be empty")
+            raise InputError("Test case name cannot be empty")  # noqa: TRY003
 
         import time
 
@@ -6173,9 +6166,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 (project_id, name.strip()),
             )
             if cursor.fetchone()[0]:
-                raise ConflictError(f"Test case with name '{name}' already exists")
+                raise ConflictError(f"Test case with name '{name}' already exists")  # noqa: TRY003
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to validate test case uniqueness: {exc}") from exc
+            raise DatabaseError(f"Failed to validate test case uniqueness: {exc}") from exc  # noqa: TRY003
 
         test_case_uuid = str(uuid.uuid4())
         tags_str = _serialise_tags(tags)
@@ -6231,19 +6224,19 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                     )
                     time.sleep(delay)
                     continue
-                raise DatabaseError(f"Failed to create test case: {exc}") from exc
+                raise DatabaseError(f"Failed to create test case: {exc}") from exc  # noqa: TRY003
             except sqlite3.IntegrityError as exc:  # noqa: BLE001
-                raise ConflictError(f"Failed to create test case: {exc}") from exc
-            except Exception as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to create test case: {exc}") from exc
+                raise ConflictError(f"Failed to create test case: {exc}") from exc  # noqa: TRY003
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+                raise DatabaseError(f"Failed to create test case: {exc}") from exc  # noqa: TRY003
 
-        raise DatabaseError("Failed to create test case after multiple retries")
+        raise DatabaseError("Failed to create test case after multiple retries")  # noqa: TRY003
 
-    def get_test_case(self, test_case_id: int, *, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
+    def get_test_case(self, test_case_id: int, *, include_deleted: bool = False) -> Optional[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         query = "SELECT * FROM prompt_studio_test_cases WHERE id = ?"
-        params: List[Any] = [test_case_id]
+        params: list[Any] = [test_case_id]
         if not include_deleted:
             query += " AND deleted = 0"
         cursor.execute(query, params)
@@ -6256,20 +6249,20 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         *,
         signature_id: Optional[int] = None,
         is_golden: Optional[bool] = None,
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         search: Optional[str] = None,
         include_deleted: bool = False,
         page: int = 1,
         per_page: int = 20,
         return_pagination: bool = False,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    ) -> Union[dict[str, Any], list[dict[str, Any]]]:
         import time
 
         conn = self.get_connection()
         cursor = conn.cursor()
 
         conditions = ["project_id = ?"]
-        params: List[Any] = [project_id]
+        params: list[Any] = [project_id]
 
         if not include_deleted:
             conditions.append("deleted = 0")
@@ -6321,7 +6314,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     time.sleep(base_delay * (2 ** attempt))
                     continue
-                raise DatabaseError(f"Failed to list test cases: {exc}") from exc
+                raise DatabaseError(f"Failed to list test cases: {exc}") from exc  # noqa: TRY003
 
         records = [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
 
@@ -6337,7 +6330,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             }
         return records
 
-    def update_test_case(self, test_case_id: int, updates: Dict[str, Any]) -> Dict[str, Any]:
+    def update_test_case(self, test_case_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         conn = self.get_connection()
         cursor = conn.cursor()
 
@@ -6353,8 +6346,8 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             "signature_id",
         }
 
-        set_clauses: List[str] = []
-        params: List[Any] = []
+        set_clauses: list[str] = []
+        params: list[Any] = []
 
         for field, value in updates.items():
             if field not in allowed_fields:
@@ -6373,7 +6366,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         if not set_clauses:
             existing = self.get_test_case(test_case_id)
             if existing is None:
-                raise InputError(f"Test case {test_case_id} not found or already deleted")
+                raise InputError(f"Test case {test_case_id} not found or already deleted")  # noqa: TRY003
             return existing
 
         set_clauses.append("updated_at = CURRENT_TIMESTAMP")
@@ -6389,16 +6382,16 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                 params,
             )
             if cursor.rowcount == 0:
-                raise InputError(f"Test case {test_case_id} not found or already deleted")
+                raise InputError(f"Test case {test_case_id} not found or already deleted")  # noqa: TRY003
             conn.commit()
             updated = self.get_test_case(test_case_id)
             if updated is None:
-                raise DatabaseError(f"Failed to fetch updated test case {test_case_id}")
-            return updated
+                raise DatabaseError(f"Failed to fetch updated test case {test_case_id}")  # noqa: TRY003
+            return updated  # noqa: TRY300
         except sqlite3.IntegrityError as exc:  # noqa: BLE001
-            raise ConflictError(f"Failed to update test case: {exc}") from exc
+            raise ConflictError(f"Failed to update test case: {exc}") from exc  # noqa: TRY003
         except sqlite3.Error as exc:  # noqa: BLE001
-            raise DatabaseError(f"Failed to update test case: {exc}") from exc
+            raise DatabaseError(f"Failed to update test case: {exc}") from exc  # noqa: TRY003
 
     def delete_test_case(self, test_case_id: int, *, hard_delete: bool = False) -> bool:
         import time
@@ -6429,27 +6422,27 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         test_case_id,
                     )
                     return True
-                return False
+                return False  # noqa: TRY300
             except sqlite3.OperationalError as exc:
                 if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                     time.sleep(base_delay * (2 ** attempt))
                     continue
-                raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc  # noqa: TRY003
             except sqlite3.Error as exc:  # noqa: BLE001
-                raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc
+                raise DatabaseError(f"Failed to delete test case {test_case_id}: {exc}") from exc  # noqa: TRY003
 
         return False
 
     def create_bulk_test_cases(
         self,
         project_id: int,
-        test_cases: List[Dict[str, Any]],
+        test_cases: list[dict[str, Any]],
         *,
         signature_id: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         import time
 
-        created: List[Dict[str, Any]] = []
+        created: list[dict[str, Any]] = []
         with self.transaction() as conn:
             cursor = conn.cursor()
             max_retries = 5
@@ -6494,12 +6487,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
                         if "database is locked" in str(exc).lower() and attempt < max_retries - 1:
                             time.sleep(base_delay * (2 ** attempt))
                             continue
-                        raise DatabaseError(f"Failed to create test case in bulk: {exc}") from exc
+                        raise DatabaseError(f"Failed to create test case in bulk: {exc}") from exc  # noqa: TRY003
 
         logger.info("Created %s test cases in bulk for project %s", len(created), project_id)
         return created
 
-    def search_test_cases(self, project_id: int, query: str, *, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_test_cases(self, project_id: int, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6517,7 +6510,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         )
         return [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
 
-    def get_test_cases_by_signature(self, signature_id: int) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, signature_id: int) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6531,10 +6524,10 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         )
         return [self._format_test_case(cursor, row) for row in cursor.fetchall() if row]
 
-    def get_test_case_stats(self, project_id: int) -> Dict[str, Any]:
+    def get_test_case_stats(self, project_id: int) -> dict[str, Any]:
         conn = self.get_connection()
         cursor = conn.cursor()
-        stats: Dict[str, Any] = {}
+        stats: dict[str, Any] = {}
 
         cursor.execute(
             "SELECT COUNT(*) FROM prompt_studio_test_cases WHERE project_id = ? AND deleted = 0",
@@ -6592,7 +6585,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             """,
             (project_id,),
         )
-        tag_counts: Dict[str, int] = {}
+        tag_counts: dict[str, int] = {}
         for row in cursor.fetchall():
             for tag in _parse_tags(row[0]):
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
@@ -6600,7 +6593,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         stats["top_tags"] = sorted(tag_counts.items(), key=lambda item: item[1], reverse=True)[:10]
         return stats
 
-    def get_golden_test_cases(self, project_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_golden_test_cases(self, project_id: int, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -6628,7 +6621,7 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         try:
             yield conn
             conn.commit()
-        except Exception:
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
             conn.rollback()
             raise
 
@@ -6642,12 +6635,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         name: Optional[str],
         initial_prompt_id: Optional[int],
         optimizer_type: str,
-        optimization_config: Optional[Dict[str, Any]] = None,
+        optimization_config: Optional[dict[str, Any]] = None,
         max_iterations: Optional[int] = None,
         bootstrap_samples: Optional[int] = None,
         status: str = "pending",
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         optimization_uuid = str(uuid.uuid4())
         payload = (
             optimization_uuid,
@@ -6682,13 +6675,12 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
         """
 
         try:
-            with self._write_lock:
-                with self.transaction() as conn:
-                    cursor = self._cursor_exec(conn, insert_sql, payload)
-                    row = cursor.fetchone()
+            with self._write_lock, self.transaction() as conn:
+                cursor = self._cursor_exec(conn, insert_sql, payload)
+                row = cursor.fetchone()
             return self._row_to_dict(cursor, row) if row else {}
-        except Exception as exc:
-            raise DatabaseError(f"Failed to create prompt studio optimization: {exc}") from exc
+        except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS as exc:
+            raise DatabaseError(f"Failed to create prompt studio optimization: {exc}") from exc  # noqa: TRY003
 
 
 class PromptStudioDatabase:
@@ -6738,13 +6730,11 @@ class PromptStudioDatabase:
 
     def record_idempotency(self, entity_type: str, key: str, entity_id: int, user_id: Optional[str]) -> None:
         if hasattr(self._impl, '_idem_record'):
-            try:
+            with suppress(_PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS):
                 self._impl._idem_record(entity_type, key, entity_id, user_id)  # type: ignore[attr-defined]
-            except Exception:
-                pass
 
-    def update_project(self, project_id: int, updates: Optional[Dict[str, Any]] = None, **fields: Any) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {}
+    def update_project(self, project_id: int, updates: Optional[dict[str, Any]] = None, **fields: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
         if updates:
             payload.update(updates)
         if fields:
@@ -6753,22 +6743,22 @@ class PromptStudioDatabase:
 
     # Signature delegation ------------------------------------------------
 
-    def create_signature(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_signature(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_signature(*args, **kwargs)
 
-    def get_signature(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_signature(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_signature(*args, **kwargs)
 
-    def list_signatures(self, *args: Any, **kwargs: Any) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    def list_signatures(self, *args: Any, **kwargs: Any) -> Union[dict[str, Any], list[dict[str, Any]]]:
         return self._impl.list_signatures(*args, **kwargs)
 
-    def update_signature(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_signature(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_signature(*args, **kwargs)
 
     def delete_signature(self, *args: Any, **kwargs: Any) -> bool:
         return self._impl.delete_signature(*args, **kwargs)
 
-    def create_prompt(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_prompt(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_prompt(*args, **kwargs)
 
     def ensure_prompt_stub(self, *args: Any, **kwargs: Any) -> None:
@@ -6787,7 +6777,7 @@ class PromptStudioDatabase:
         status: str = "queued",
         max_retries: int = 3,
         client_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self._impl.create_job(
             job_type,
             entity_id,
@@ -6799,10 +6789,10 @@ class PromptStudioDatabase:
             client_id=client_id,
         )
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[dict[str, Any]]:
         return self._impl.get_job(job_id)
 
-    def get_job_by_uuid(self, job_uuid: str) -> Optional[Dict[str, Any]]:
+    def get_job_by_uuid(self, job_uuid: str) -> Optional[dict[str, Any]]:
         return self._impl.get_job_by_uuid(job_uuid)
 
     def list_jobs(
@@ -6811,7 +6801,7 @@ class PromptStudioDatabase:
         status: Optional[str] = None,
         job_type: Optional[str] = None,
         limit: int = 100,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return self._impl.list_jobs(status=status, job_type=job_type, limit=limit)
 
     def update_job_status(
@@ -6821,7 +6811,7 @@ class PromptStudioDatabase:
         *,
         error_message: Optional[str] = None,
         result: Optional[Any] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         return self._impl.update_job_status(
             job_id,
             status,
@@ -6829,7 +6819,7 @@ class PromptStudioDatabase:
             result=result,
         )
 
-    def acquire_next_job(self, *, worker_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def acquire_next_job(self, *, worker_id: Optional[str] = None) -> Optional[dict[str, Any]]:
         return self._impl.acquire_next_job(worker_id=worker_id)
 
     def retry_job_record(self, job_id: int) -> bool:
@@ -6840,94 +6830,94 @@ class PromptStudioDatabase:
         if hasattr(self._impl, 'renew_job_lease'):
             try:
                 return bool(self._impl.renew_job_lease(job_id, seconds, worker_id=worker_id))  # type: ignore[attr-defined]
-            except Exception:
+            except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 
     def cleanup_jobs(self, older_than_days: int = 30) -> int:
         return self._impl.cleanup_jobs(older_than_days)
 
-    def get_latest_job_for_entity(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_latest_job_for_entity(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_latest_job_for_entity(*args, **kwargs)
 
-    def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def list_jobs_for_entity(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.list_jobs_for_entity(*args, **kwargs)
     # Test case delegation -------------------------------------------------
 
-    def create_test_case(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_test_case(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_test_case(*args, **kwargs)
 
-    def get_test_case(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_test_case(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_test_case(*args, **kwargs)
 
-    def list_test_cases(self, *args: Any, **kwargs: Any) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    def list_test_cases(self, *args: Any, **kwargs: Any) -> Union[dict[str, Any], list[dict[str, Any]]]:
         return self._impl.list_test_cases(*args, **kwargs)
 
-    def update_test_case(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_test_case(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_test_case(*args, **kwargs)
 
     def delete_test_case(self, *args: Any, **kwargs: Any) -> bool:
         return self._impl.delete_test_case(*args, **kwargs)
 
-    def create_bulk_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def create_bulk_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.create_bulk_test_cases(*args, **kwargs)
 
-    def search_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def search_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.search_test_cases(*args, **kwargs)
 
-    def get_test_cases_by_signature(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_test_cases_by_signature(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_test_cases_by_signature(*args, **kwargs)
 
-    def get_test_case_stats(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def get_test_case_stats(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.get_test_case_stats(*args, **kwargs)
 
-    def get_golden_test_cases(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_golden_test_cases(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_golden_test_cases(*args, **kwargs)
 
     # Test run delegation -------------------------------------------------
 
-    def create_test_run(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_test_run(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_test_run(*args, **kwargs)
 
-    def get_test_cases_by_ids(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:
+    def get_test_cases_by_ids(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self._impl.get_test_cases_by_ids(*args, **kwargs)
 
     # Evaluation delegation -----------------------------------------------
 
-    def create_evaluation(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_evaluation(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_evaluation(*args, **kwargs)
 
-    def update_evaluation(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_evaluation(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_evaluation(*args, **kwargs)
 
-    def get_evaluation(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_evaluation(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_evaluation(*args, **kwargs)
 
-    def list_evaluations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_evaluations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_evaluations(*args, **kwargs)
 
     # Optimization delegation --------------------------------------------
 
-    def create_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def create_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.create_optimization(*args, **kwargs)
 
-    def get_optimization(self, *args: Any, **kwargs: Any) -> Optional[Dict[str, Any]]:
+    def get_optimization(self, *args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
         return self._impl.get_optimization(*args, **kwargs)
 
-    def list_optimizations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_optimizations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_optimizations(*args, **kwargs)
 
-    def update_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def update_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.update_optimization(*args, **kwargs)
 
-    def set_optimization_status(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def set_optimization_status(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.set_optimization_status(*args, **kwargs)
 
-    def complete_optimization(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def complete_optimization(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.complete_optimization(*args, **kwargs)
 
-    def record_optimization_iteration(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def record_optimization_iteration(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.record_optimization_iteration(*args, **kwargs)
 
-    def list_optimization_iterations(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def list_optimization_iterations(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._impl.list_optimization_iterations(*args, **kwargs)

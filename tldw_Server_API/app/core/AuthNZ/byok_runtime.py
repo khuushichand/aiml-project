@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional
-
-import os
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -15,12 +15,11 @@ from tldw_Server_API.app.core.AuthNZ.byok_config import (
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
     is_provider_allowlisted,
-    resolve_server_default_key,
-    resolve_byok_base_url_allowlist,
     is_trusted_base_url_request,
+    resolve_byok_base_url_allowlist,
+    resolve_server_default_key,
     validate_credential_fields,
 )
-from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
@@ -35,9 +34,28 @@ from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     normalize_provider_name,
 )
 from tldw_Server_API.app.core.config import loaded_config_data
-
+from tldw_Server_API.app.core.Metrics import increment_counter
 
 DEFAULT_LAST_USED_THROTTLE_SECONDS = 300
+
+_BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _last_used_throttle_seconds() -> int:
@@ -50,18 +68,18 @@ def _last_used_throttle_seconds() -> int:
         return DEFAULT_LAST_USED_THROTTLE_SECONDS
 
 
-def _parse_last_used(value: Any) -> Optional[datetime]:
+def _parse_last_used(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str):
         try:
             return datetime.fromisoformat(value)
-        except Exception:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
             return None
     return None
 
 
-def _should_touch(last_used_at: Optional[datetime]) -> bool:
+def _should_touch(last_used_at: datetime | None) -> bool:
     if last_used_at is None:
         return True
     throttle = _last_used_throttle_seconds()
@@ -75,7 +93,7 @@ def _bool_label(value: bool) -> str:
     return "true" if value else "false"
 
 
-def _can_use_base_url_override(provider: str, request: Optional[Any]) -> bool:
+def _can_use_base_url_override(provider: str, request: Any | None) -> bool:
     if not is_trusted_base_url_request(request):
         return False
     provider_norm = normalize_provider_name(provider)
@@ -87,7 +105,7 @@ def _sanitize_credential_fields(
     credential_fields_raw: Any,
     *,
     allow_base_url: bool,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if credential_fields_raw is None:
         return {}
     if not isinstance(credential_fields_raw, dict):
@@ -116,12 +134,12 @@ def _apply_active_scope(ids: list[int], active_id: Any) -> list[int]:
 @dataclass
 class ResolvedByokCredentials:
     provider: str
-    api_key: Optional[str]
-    app_config: Optional[Dict[str, Any]]
-    credential_fields: Dict[str, Any]
+    api_key: str | None
+    app_config: dict[str, Any] | None
+    credential_fields: dict[str, Any]
     source: str
     allowlisted: bool
-    _touch_cb: Optional[Callable[[], Awaitable[None]]] = None
+    _touch_cb: Callable[[], Awaitable[None]] | None = None
 
     @property
     def uses_byok(self) -> bool:
@@ -132,7 +150,7 @@ class ResolvedByokCredentials:
             return
         try:
             await self._touch_cb()
-        except Exception as exc:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"BYOK last_used_at update failed for {self.provider}: {exc}")
 
 
@@ -148,7 +166,7 @@ def _record_byok_resolution(resolved: ResolvedByokCredentials, *, byok_enabled: 
                 "byok_enabled": _bool_label(byok_enabled),
             },
         )
-    except Exception as exc:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"BYOK resolution metrics failed for {resolved.provider}: {exc}")
 
 
@@ -157,11 +175,11 @@ def record_byok_missing_credentials(provider: str, *, operation: str) -> None:
     provider_norm = normalize_provider_name(provider)
     try:
         allowlisted = is_provider_allowlisted(provider_norm)
-    except Exception:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
         allowlisted = False
     try:
         byok_enabled = is_byok_enabled()
-    except Exception:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
         byok_enabled = False
     try:
         increment_counter(
@@ -173,7 +191,7 @@ def record_byok_missing_credentials(provider: str, *, operation: str) -> None:
                 "byok_enabled": _bool_label(byok_enabled),
             },
         )
-    except Exception as exc:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"BYOK missing-credentials metrics failed for {provider_norm}: {exc}")
 
 
@@ -200,13 +218,13 @@ def _fallback_result(
     provider: str,
     *,
     allowlisted: bool,
-    fallback_resolver: Optional[Callable[[str], Optional[str]]],
+    fallback_resolver: Callable[[str], str | None] | None,
 ) -> ResolvedByokCredentials:
     api_key = None
     if fallback_resolver is not None:
         try:
             api_key = fallback_resolver(provider)
-        except Exception as exc:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"BYOK fallback resolver failed for {provider}: {exc}")
             api_key = None
     if api_key is None:
@@ -235,15 +253,15 @@ def _invalid_byok_result(provider: str, *, source: str) -> ResolvedByokCredentia
     )
 
 
-def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_app_config(provider: str, credential_fields: dict[str, Any]) -> dict[str, Any] | None:
     if not credential_fields:
         return None
     try:
         base_cfg = loaded_config_data
-    except Exception:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
         base_cfg = None
     provider_norm = normalize_provider_name(provider)
-    scrubbed_cfg: Optional[Dict[str, Any]] = None
+    scrubbed_cfg: dict[str, Any] | None = None
     if base_cfg:
         try:
             section = PROVIDER_APP_CONFIG_KEYS.get(provider_norm)
@@ -257,19 +275,19 @@ def _build_app_config(provider: str, credential_fields: Dict[str, Any]) -> Optio
                 scrubbed_cfg[section] = cleaned
             else:
                 scrubbed_cfg = dict(base_cfg)
-        except Exception:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
             scrubbed_cfg = None
     merged = merge_app_config_overrides(scrubbed_cfg if scrubbed_cfg else None, provider, credential_fields)
     return merged or None
 
 
-def _extract_payload(row: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
+def _extract_payload(row: dict[str, Any], provider: str) -> dict[str, Any] | None:
     encrypted_blob = row.get("encrypted_blob")
     if not encrypted_blob:
         return None
     try:
         return decrypt_byok_payload(loads_envelope(encrypted_blob))
-    except Exception as exc:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"BYOK decrypt failed for provider={provider}: {exc}")
         return None
 
@@ -277,11 +295,11 @@ def _extract_payload(row: Dict[str, Any], provider: str) -> Optional[Dict[str, A
 def _build_touch_cb(
     *,
     provider: str,
-    last_used_at: Optional[datetime],
+    last_used_at: datetime | None,
     repo: AuthnzUserProviderSecretsRepo | AuthnzOrgProviderSecretsRepo,
-    user_id: Optional[int] = None,
-    scope_type: Optional[str] = None,
-    scope_id: Optional[int] = None,
+    user_id: int | None = None,
+    scope_type: str | None = None,
+    scope_id: int | None = None,
 ) -> Callable[[], Awaitable[None]]:
     async def _touch() -> None:
         if not _should_touch(last_used_at):
@@ -302,11 +320,11 @@ def _build_touch_cb(
 async def resolve_byok_credentials(
     provider: str,
     *,
-    user_id: Optional[int],
-    request: Optional[Any] = None,
-    team_ids: Optional[list[int]] = None,
-    org_ids: Optional[list[int]] = None,
-    fallback_resolver: Optional[Callable[[str], Optional[str]]] = None,
+    user_id: int | None,
+    request: Any | None = None,
+    team_ids: list[int] | None = None,
+    org_ids: list[int] | None = None,
+    fallback_resolver: Callable[[str], str | None] | None = None,
 ) -> ResolvedByokCredentials:
     provider_norm = normalize_provider_name(provider)
     byok_enabled = is_byok_enabled()
@@ -327,7 +345,7 @@ async def resolve_byok_credentials(
     try:
         user_repo = await _get_user_repo()
         user_row = await user_repo.fetch_secret_for_user(int(user_id), provider_norm)
-    except Exception as exc:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"BYOK user lookup failed for user_id={user_id}, provider={provider_norm}: {exc}")
         user_row = None
 
@@ -379,11 +397,11 @@ async def resolve_byok_credentials(
     if request is not None and hasattr(request, "state"):
         try:
             active_team_id = getattr(request.state, "active_team_id", None)
-        except Exception:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
             active_team_id = None
         try:
             active_org_id = getattr(request.state, "active_org_id", None)
-        except Exception:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
             active_org_id = None
 
     if team_ids is None or org_ids is None:
@@ -393,7 +411,7 @@ async def resolve_byok_credentials(
                     team_ids = list(getattr(request.state, "team_ids", None) or [])
                 if org_ids is None:
                     org_ids = list(getattr(request.state, "org_ids", None) or [])
-        except Exception:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS:
             team_ids = team_ids or []
             org_ids = org_ids or []
 
@@ -408,7 +426,7 @@ async def resolve_byok_credentials(
                 org_ids = sorted(
                     {m.get("org_id") for m in memberships if m.get("org_id") is not None}
                 )
-        except Exception as exc:
+        except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"BYOK membership lookup failed for user_id={user_id}: {exc}")
             team_ids = team_ids or []
             org_ids = org_ids or []
@@ -420,7 +438,7 @@ async def resolve_byok_credentials(
 
     try:
         shared_repo = await _get_org_repo()
-    except Exception as exc:
+    except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"BYOK shared repo init failed: {exc}")
         shared_repo = None
 
@@ -429,7 +447,7 @@ async def resolve_byok_credentials(
         for team_id in sorted({int(tid) for tid in team_ids if tid is not None}):
             try:
                 row = await shared_repo.fetch_secret("team", int(team_id), provider_norm)
-            except Exception as exc:
+            except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"BYOK team lookup failed for team_id={team_id}: {exc}")
                 row = None
             if not row:
@@ -481,7 +499,7 @@ async def resolve_byok_credentials(
         for org_id in sorted({int(oid) for oid in org_ids if oid is not None}):
             try:
                 row = await shared_repo.fetch_secret("org", int(org_id), provider_norm)
-            except Exception as exc:
+            except _BYOK_RUNTIME_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"BYOK org lookup failed for org_id={org_id}: {exc}")
                 row = None
             if not row:

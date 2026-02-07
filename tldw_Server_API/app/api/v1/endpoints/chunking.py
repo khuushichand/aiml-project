@@ -3,28 +3,30 @@
 #
 # Imports
 import asyncio
-from typing import List, Optional, Dict, Any
-#
-# Third-party Libraries
-from loguru import logger
+from typing import Any, Optional, get_args
+
 from fastapi import (
     APIRouter,
     Body,
-    HTTPException,
-    Request,
-    status,
-    UploadFile,
+    Depends,  # Added for dependency injection
     File,
     Form,
-    Depends  # Added for dependency injection
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
 )
+
+#
+# Third-party Libraries
+from loguru import logger
 
 # Local Imports
 from tldw_Server_API.app.core.Chunking import (
-    improved_chunking_process,
     ChunkingError,
+    InvalidChunkingMethodError,
     InvalidInputError,
-    InvalidChunkingMethodError
+    improved_chunking_process,
 )
 
 # Default chunking options
@@ -41,21 +43,31 @@ default_chunk_options_from_lib = {
     'summarization_detail': 0.5,
     'tokenizer_name_or_path': 'gpt2'
 }
-from tldw_Server_API.app.api.v1.schemas.chunking_schema import ChunkingResponse, ChunkingTextRequest, \
-    ChunkingOptionsRequest, ChunkedContentResponse, ChunkingCapabilitiesResponse, MethodSpecificOptions, CodeMethodOptions
-from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
-from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+# Dependencies for user-specific database access
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
+from tldw_Server_API.app.api.v1.schemas.chunking_schema import (
+    ChunkedContentResponse,
+    ChunkingCapabilitiesResponse,
+    ChunkingOptionsRequest,
+    ChunkingResponse,
+    ChunkingTextRequest,
+    CodeMethodOptions,
+    MethodSpecificOptions,
+    build_chunking_options_schema,
+)
+from tldw_Server_API.app.api.v1.schemas.media_request_models import PdfEngine
 from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     record_byok_missing_credentials,
     resolve_byok_credentials,
 )
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-# Dependencies for user-specific database access
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import try_get_media_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Chunking import Chunker
+from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
+from tldw_Server_API.app.core.config import load_and_log_configs as load_server_configs
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze as general_llm_analyzer
+
 #
 #######################################################################################################################
 #
@@ -140,7 +152,8 @@ async def process_text_for_chunking_json(
     if request_data.options and request_data.options.template_name:
         # Import necessary modules for template support
         import json
-        from tldw_Server_API.app.core.Chunking.templates import TemplateProcessor, ChunkingTemplate, TemplateStage
+
+        from tldw_Server_API.app.core.Chunking.templates import ChunkingTemplate, TemplateProcessor, TemplateStage
 
         try:
             # Use the injected user-specific database instance
@@ -309,7 +322,7 @@ async def process_text_for_chunking_json(
                  raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Option '{key_to_check}' must be an integer. Value: {effective_options[key_to_check]}. Error: {e}"
-                )
+                ) from e
 
 
     # Filename-based language hint if language not set/empty
@@ -351,7 +364,8 @@ async def process_text_for_chunking_json(
         # Determine LLM provider and model for the summarization steps
         # Priority: Request's llm_options -> Server default for summarization -> Hardcoded default
         requested_llm_options = effective_options.get('llm_options_for_internal_steps', {}) # This is a dict now
-        if requested_llm_options is None: requested_llm_options = {}
+        if requested_llm_options is None:
+            requested_llm_options = {}
 
 
         default_summarization_provider = server_configs.get('llm_api_settings', {}).get('default_api', 'openai')
@@ -426,7 +440,7 @@ async def process_text_for_chunking_json(
     # --- Perform Chunking ---
     loop = asyncio.get_running_loop()
     try:
-        chunk_results: List[Dict[str, Any]] = await loop.run_in_executor(
+        chunk_results: list[dict[str, Any]] = await loop.run_in_executor(
             None,
             improved_chunking_process,
             request_data.text_content,
@@ -437,14 +451,14 @@ async def process_text_for_chunking_json(
         )
     except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors from chunker
         logger.warning(f"Chunking library error for '{request_data.file_name}': {lib_error}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error)) from lib_error
     except ValueError as ve: # General value errors (e.g., from Pydantic or type conversions if not caught earlier)
         logger.warning(f"ValueError during chunking setup or process for '{request_data.file_name}': {ve}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve)) from ve
     except Exception as e:
         logger.error(f"Unexpected error during chunking process for '{request_data.file_name}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"An internal error occurred during text chunking: {type(e).__name__}")
+                            detail=f"An internal error occurred during text chunking: {type(e).__name__}") from e
 
     if not chunk_results:
         logger.info(f"Chunking produced no results for '{request_data.file_name}'. Returning empty list.")
@@ -513,7 +527,7 @@ async def process_file_for_chunking(
         text_content = text_content_bytes.decode('utf-8')
     except Exception as e:
         logger.error(f"Error reading uploaded file '{file.filename}': {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not read or decode file: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not read or decode file: {e}") from e
     finally:
         await file.close()
 
@@ -529,9 +543,12 @@ async def process_file_for_chunking(
     }
     # Build the nested llm_options_for_internal_steps from flattened form fields
     internal_llm_opts_from_form = {}
-    if llm_step_temperature is not None: internal_llm_opts_from_form['temperature'] = llm_step_temperature
-    if llm_step_system_prompt is not None: internal_llm_opts_from_form['system_prompt_for_step'] = llm_step_system_prompt
-    if llm_step_max_tokens is not None: internal_llm_opts_from_form['max_tokens_per_step'] = llm_step_max_tokens
+    if llm_step_temperature is not None:
+        internal_llm_opts_from_form['temperature'] = llm_step_temperature
+    if llm_step_system_prompt is not None:
+        internal_llm_opts_from_form['system_prompt_for_step'] = llm_step_system_prompt
+    if llm_step_max_tokens is not None:
+        internal_llm_opts_from_form['max_tokens_per_step'] = llm_step_max_tokens
 
     if internal_llm_opts_from_form:
         form_options_dict['llm_options_for_internal_steps'] = internal_llm_opts_from_form
@@ -594,7 +611,8 @@ async def process_file_for_chunking(
             _raise_missing_chunking_key(provider_key_file)
 
         requested_llm_params_file = effective_processing_options.get('llm_options_for_internal_steps', {})
-        if requested_llm_params_file is None: requested_llm_params_file = {}
+        if requested_llm_params_file is None:
+            requested_llm_params_file = {}
 
         client_suggested_system_prompt_file = requested_llm_params_file.get('system_prompt_for_step')
         method_default_system_prompt_file = effective_processing_options.get('summarize_system_prompt')
@@ -616,20 +634,20 @@ async def process_file_for_chunking(
 
     loop = asyncio.get_running_loop()
     try:
-        chunk_results: List[Dict[str, Any]] = await loop.run_in_executor(
+        chunk_results: list[dict[str, Any]] = await loop.run_in_executor(
             None, improved_chunking_process, text_content,
             effective_processing_options, tokenizer_for_chunker_file,
             llm_call_func_to_use_file, llm_api_config_to_use_file
         )
     except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors
         logger.warning(f"Chunking library error for file '{file.filename}': {lib_error}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error)) from lib_error
     except ValueError as ve: # General value errors
         logger.warning(f"ValueError during chunking file '{file.filename}': {ve}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve)) from ve
     except Exception as e:
         logger.error(f"Unexpected error during chunking file '{file.filename}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error during file chunking: {type(e).__name__}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error during file chunking: {type(e).__name__}") from e
 
     # Convert chunk_results to ChunkedContentResponse objects
     chunked_responses = [
@@ -669,12 +687,15 @@ async def get_chunking_capabilities(
     # Merge and de-duplicate
     methods = sorted(set(enum_methods + runtime_methods))
     llm_required = [m for m in ["rolling_summarize", "propositions"] if m in methods]
+    pdf_engines = list(get_args(PdfEngine))
     return {
         "methods": methods,
         "default_options": default_chunk_options_from_lib,
         "llm_required_methods": llm_required,
         "hierarchical_support": True,
         "notes": "Text chunking capabilities. For method='code', the option 'code_mode' controls routing: 'auto' (default), 'ast' (Python), or 'heuristic'. Ingestion-specific chunkers are configured via templates or step config.",
+        "pdf_parsing_engines": pdf_engines,
+        "options_schema": build_chunking_options_schema(),
         "method_specific_options": MethodSpecificOptions(
             code=CodeMethodOptions(
                 code_mode=["auto", "ast", "heuristic"],

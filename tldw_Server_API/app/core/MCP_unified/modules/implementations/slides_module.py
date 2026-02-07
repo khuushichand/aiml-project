@@ -8,12 +8,14 @@ version history, and export to multiple formats.
 
 import asyncio
 import json
-from typing import Dict, Any, List, Optional, Iterable
+from collections.abc import Iterable
+from typing import Any, Optional
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....Slides.slides_db import ConflictError
-
+from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 # Available Reveal.js themes
 REVEAL_THEMES = [
@@ -31,30 +33,28 @@ class SlidesModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Slides module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             from ....Slides.slides_db import SlidesDatabase
             _ = SlidesDatabase
             checks["driver_available"] = True
-        except Exception:
+        except (ImportError, AttributeError):
             checks["driver_available"] = False
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
-            except Exception:
+            except (ImportError, AttributeError, RuntimeError):
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError, RuntimeError):
             checks["disk_space"] = False
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             # Presentations CRUD
             create_tool_definition(
@@ -372,7 +372,7 @@ class SlidesModule(BaseModule):
             ),
         ]
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "slides.presentations.list":
             limit = int(arguments.get("limit", 50))
             if limit < 1 or limit > 100:
@@ -482,12 +482,12 @@ class SlidesModule(BaseModule):
             if fmt not in {"reveal", "json", "markdown", "pdf"}:
                 raise ValueError("format must be reveal, json, markdown, or pdf")
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+        except (ValueError, TypeError, KeyError) as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         # Presentations CRUD
         if tool_name == "slides.presentations.list":
@@ -546,7 +546,7 @@ class SlidesModule(BaseModule):
             raise ValueError("Slides DB path not available in context")
         return SlidesDatabase(db_path=slides_path, client_id=f"mcp_slides_{self.config.name}")
 
-    def _presentation_to_dict(self, row) -> Dict[str, Any]:
+    def _presentation_to_dict(self, row) -> dict[str, Any]:
         """Convert PresentationRow dataclass to dict."""
         return {
             "id": row.id,
@@ -569,7 +569,7 @@ class SlidesModule(BaseModule):
             "version": row.version,
         }
 
-    def _version_to_dict(self, row) -> Dict[str, Any]:
+    def _version_to_dict(self, row) -> dict[str, Any]:
         """Convert PresentationVersionRow dataclass to dict."""
         return {
             "presentation_id": row.presentation_id,
@@ -581,10 +581,10 @@ class SlidesModule(BaseModule):
 
     # Presentations CRUD
 
-    async def _list_presentations(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_presentations(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._list_presentations_sync, context, args)
 
-    def _list_presentations_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _list_presentations_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             rows, total = db.list_presentations(
@@ -595,7 +595,7 @@ class SlidesModule(BaseModule):
                 sort_direction=args.get("sort_direction", "DESC"),
             )
             presentations = [self._presentation_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 50))
+            int(args.get("limit", 50))
             offset = int(args.get("offset", 0))
             has_more = offset + len(presentations) < total
             return {
@@ -607,10 +607,10 @@ class SlidesModule(BaseModule):
         finally:
             db.close_connection()
 
-    async def _search_presentations(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _search_presentations(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._search_presentations_sync, context, args)
 
-    def _search_presentations_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _search_presentations_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             rows, total = db.search_presentations(
@@ -620,7 +620,7 @@ class SlidesModule(BaseModule):
                 include_deleted=bool(args.get("include_deleted", False)),
             )
             presentations = [self._presentation_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 50))
+            int(args.get("limit", 50))
             offset = int(args.get("offset", 0))
             has_more = offset + len(presentations) < total
             return {
@@ -632,10 +632,10 @@ class SlidesModule(BaseModule):
         finally:
             db.close_connection()
 
-    async def _get_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._get_presentation_sync, context, args)
 
-    def _get_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             row = db.get_presentation_by_id(
@@ -644,14 +644,14 @@ class SlidesModule(BaseModule):
             )
             return {"presentation": self._presentation_to_dict(row)}
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         finally:
             db.close_connection()
 
-    async def _create_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _create_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._create_presentation_sync, context, args)
 
-    def _create_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _create_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             slides = args.get("slides", "")
@@ -703,10 +703,10 @@ class SlidesModule(BaseModule):
         # Otherwise return as-is (markdown)
         return slides
 
-    async def _update_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _update_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._update_presentation_sync, context, args)
 
-    def _update_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _update_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
@@ -732,23 +732,23 @@ class SlidesModule(BaseModule):
                 "presentation": self._presentation_to_dict(row),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
             db.close_connection()
 
-    async def _patch_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _patch_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._patch_presentation_sync, context, args)
 
-    def _patch_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _patch_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
             patch = args.get("patch", {})
             expected_version = args.get("expected_version")
 
-            row = db.update_presentation(
+            db.update_presentation(
                 presentation_id=pid,
                 update_fields=patch,
                 expected_version=expected_version,
@@ -759,16 +759,16 @@ class SlidesModule(BaseModule):
                 "updated_fields": list(patch.keys()),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
             db.close_connection()
 
-    async def _reorder_slides(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _reorder_slides(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._reorder_slides_sync, context, args)
 
-    def _reorder_slides_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _reorder_slides_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
@@ -792,9 +792,9 @@ class SlidesModule(BaseModule):
                 else:
                     raise ValueError("Cannot reorder non-JSON slides content")
             except json.JSONDecodeError:
-                raise ValueError("Cannot reorder markdown slides; use update instead")
+                raise ValueError("Cannot reorder markdown slides; use update instead") from None
 
-            row = db.update_presentation(
+            db.update_presentation(
                 presentation_id=pid,
                 update_fields={
                     "slides": new_content,
@@ -808,37 +808,37 @@ class SlidesModule(BaseModule):
                 "new_order": slide_order,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
             db.close_connection()
 
-    async def _delete_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _delete_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._delete_presentation_sync, context, args)
 
-    def _delete_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _delete_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
             expected_version = args.get("expected_version")
-            row = db.soft_delete_presentation(pid, expected_version)
+            db.soft_delete_presentation(pid, expected_version)
             return {
                 "presentation_id": pid,
                 "action": "soft_deleted",
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
             db.close_connection()
 
-    async def _restore_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _restore_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._restore_presentation_sync, context, args)
 
-    def _restore_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _restore_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
@@ -851,7 +851,7 @@ class SlidesModule(BaseModule):
                 "presentation": self._presentation_to_dict(row),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -859,7 +859,7 @@ class SlidesModule(BaseModule):
 
     # Templates
 
-    async def _list_templates(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_templates(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """List available presentation templates."""
         # Built-in templates
         templates = [
@@ -904,7 +904,7 @@ class SlidesModule(BaseModule):
             templates = [t for t in templates if t["category"] == category]
         return {"templates": templates}
 
-    async def _get_template(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_template(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Get template details with sample structure."""
         template_id = args.get("template_id")
         templates = {
@@ -983,10 +983,10 @@ class SlidesModule(BaseModule):
 
     # Versions
 
-    async def _list_versions(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _list_versions(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._list_versions_sync, context, args)
 
-    def _list_versions_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _list_versions_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             rows, total = db.list_presentation_versions(
@@ -995,7 +995,7 @@ class SlidesModule(BaseModule):
                 offset=int(args.get("offset", 0)),
             )
             versions = [self._version_to_dict(r) for r in rows]
-            limit = int(args.get("limit", 20))
+            int(args.get("limit", 20))
             offset = int(args.get("offset", 0))
             has_more = offset + len(versions) < total
             return {
@@ -1007,10 +1007,10 @@ class SlidesModule(BaseModule):
         finally:
             db.close_connection()
 
-    async def _get_version(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _get_version(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._get_version_sync, context, args)
 
-    def _get_version_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_version_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             row = db.get_presentation_version(
@@ -1019,14 +1019,14 @@ class SlidesModule(BaseModule):
             )
             return {"version": self._version_to_dict(row)}
         except KeyError:
-            raise ValueError(f"Version not found")
+            raise ValueError("Version not found") from None
         finally:
             db.close_connection()
 
-    async def _restore_version(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _restore_version(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._restore_version_sync, context, args)
 
-    def _restore_version_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _restore_version_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
@@ -1058,7 +1058,7 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation or version not found")
+            raise ValueError("Presentation or version not found") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -1070,7 +1070,7 @@ class SlidesModule(BaseModule):
         from ....Slides.slides_generator import SlidesGenerator
         return SlidesGenerator()
 
-    async def _generate_from_prompt(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_from_prompt(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Generate slides from text prompt."""
         prompt = args.get("prompt")
         title_hint = args.get("title_hint")
@@ -1104,7 +1104,7 @@ class SlidesModule(BaseModule):
             source_query=prompt[:500],
         )
 
-    async def _generate_from_media(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_from_media(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Generate slides from media content."""
         media_id = args.get("media_id")
         title_hint = args.get("title_hint")
@@ -1144,7 +1144,7 @@ class SlidesModule(BaseModule):
             source_ref=str(media_id),
         )
 
-    async def _generate_from_notes(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_from_notes(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Generate slides from notes."""
         note_ids = args.get("note_ids", [])
         title_hint = args.get("title_hint")
@@ -1184,7 +1184,7 @@ class SlidesModule(BaseModule):
             source_ref=",".join(note_ids),
         )
 
-    async def _generate_from_chat(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_from_chat(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Generate slides from conversation."""
         conversation_id = args.get("conversation_id")
         title_hint = args.get("title_hint")
@@ -1224,7 +1224,7 @@ class SlidesModule(BaseModule):
             source_ref=conversation_id,
         )
 
-    async def _generate_from_rag(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _generate_from_rag(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         """Generate slides from RAG query results."""
         query = args.get("query")
         top_k = int(args.get("top_k", 5))
@@ -1266,12 +1266,12 @@ class SlidesModule(BaseModule):
     async def _save_generated_presentation(
         self,
         context: Any,
-        result: Dict[str, Any],
+        result: dict[str, Any],
         theme: str,
         source_type: str,
         source_ref: Optional[str] = None,
         source_query: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Save generated slides as a presentation."""
         return await asyncio.to_thread(
             self._save_generated_presentation_sync,
@@ -1281,12 +1281,12 @@ class SlidesModule(BaseModule):
     def _save_generated_presentation_sync(
         self,
         context: Any,
-        result: Dict[str, Any],
+        result: dict[str, Any],
         theme: str,
         source_type: str,
         source_ref: Optional[str],
         source_query: Optional[str],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             title = result.get("title", "Generated Presentation")
@@ -1333,11 +1333,11 @@ class SlidesModule(BaseModule):
                 return media.get("content") or media.get("transcript") or media.get("summary")
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get media content: {e}")
             return None
 
-    def _get_notes_content(self, context: Any, note_ids: List[str]) -> Optional[str]:
+    def _get_notes_content(self, context: Any, note_ids: list[str]) -> Optional[str]:
         """Get notes content for slide generation."""
         try:
             chacha_path = context.db_paths.get("chacha")
@@ -1354,7 +1354,7 @@ class SlidesModule(BaseModule):
                 return "\n\n".join(contents) if contents else None
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get notes content: {e}")
             return None
 
@@ -1378,7 +1378,7 @@ class SlidesModule(BaseModule):
                 return "\n\n".join(texts)
             finally:
                 db.close_all_connections()
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get chat content: {e}")
             return None
 
@@ -1412,12 +1412,12 @@ class SlidesModule(BaseModule):
             if not content and getattr(result, "generated_answer", None):
                 content = str(result.generated_answer)
             return content or None
-        except Exception as e:
+        except (ImportError, AttributeError, OSError, ValueError, TypeError, KeyError, RuntimeError) as e:
             logger.error(f"Failed to get RAG content: {e}")
             return None
 
     def _format_rag_documents(self, documents: Iterable[Any]) -> str:
-        parts: List[str] = []
+        parts: list[str] = []
         for doc in documents:
             metadata = getattr(doc, "metadata", {}) or {}
             title = metadata.get("title") or metadata.get("source_title") or getattr(doc, "id", "source")
@@ -1430,23 +1430,23 @@ class SlidesModule(BaseModule):
 
     # Export
 
-    async def _export_presentation(self, args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    async def _export_presentation(self, args: dict[str, Any], context: Any) -> dict[str, Any]:
         return await asyncio.to_thread(self._export_presentation_sync, context, args)
 
-    def _export_presentation_sync(self, context: Any, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _export_presentation_sync(self, context: Any, args: dict[str, Any]) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             pid = args.get("presentation_id")
             fmt = args.get("format", "reveal")
 
             from tldw_Server_API.app.core.Slides.slides_export import (
+                SlidesAssetsMissingError,
+                SlidesExportError,
+                SlidesExportInputError,
                 export_presentation_bundle,
                 export_presentation_json,
                 export_presentation_markdown,
                 export_presentation_pdf,
-                SlidesExportError,
-                SlidesExportInputError,
-                SlidesAssetsMissingError,
             )
 
             pres = db.get_presentation_by_id(pid)
@@ -1511,13 +1511,13 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         finally:
             db.close_connection()
 
-    def _parse_slides_for_export(self, pres: Any) -> List[Dict[str, Any]]:
+    def _parse_slides_for_export(self, pres: Any) -> list[dict[str, Any]]:
         raw = pres.slides
-        slides: List[Dict[str, Any]] = []
+        slides: list[dict[str, Any]] = []
         try:
             data = json.loads(raw)
             if isinstance(data, dict) and "slides" in data:
@@ -1529,16 +1529,13 @@ class SlidesModule(BaseModule):
         except json.JSONDecodeError:
             items = [{"content": raw}]
         for idx, item in enumerate(items):
-            if isinstance(item, dict):
-                slide = dict(item)
-            else:
-                slide = {"content": str(item)}
+            slide = dict(item) if isinstance(item, dict) else {"content": str(item)}
             if "order" not in slide or not isinstance(slide.get("order"), int):
                 slide["order"] = idx
             slides.append(slide)
         return slides
 
-    def _parse_settings(self, settings: Any) -> Optional[Dict[str, Any]]:
+    def _parse_settings(self, settings: Any) -> Optional[dict[str, Any]]:
         if settings is None:
             return None
         if isinstance(settings, dict):

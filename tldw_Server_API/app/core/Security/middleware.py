@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Callable, Mapping, Optional
+from collections.abc import Mapping
+from typing import Callable
 
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -9,7 +10,6 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-
 
 DEFAULT_CSP = (
     "default-src 'self'; "
@@ -84,14 +84,14 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         app,
         *,
         enabled: bool = True,
-        strict_transport_security: Optional[bool] = None,
+        strict_transport_security: bool | None = None,
         content_type_options: bool = True,
         frame_options: str | None = "DENY",
         xss_protection: bool = False,
         content_security_policy: str | None = None,
         referrer_policy: str = "strict-origin-when-cross-origin",
         permissions_policy: str | None = None,
-        custom_headers: Optional[Mapping[str, str]] = None,
+        custom_headers: Mapping[str, str] | None = None,
         remove_server_header: bool = True,
         ) -> None:
         super().__init__(app)

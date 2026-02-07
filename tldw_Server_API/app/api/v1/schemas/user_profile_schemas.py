@@ -2,7 +2,7 @@
 """Pydantic schemas for user profile endpoints."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,11 +14,11 @@ class UserProfileCatalogEntrySchema(BaseModel):
     label: str = Field(..., description="Human-readable label")
     description: Optional[str] = Field(None, description="Description for UI/help text")
     type: str = Field(..., description="Data type for the value")
-    enum: Optional[List[Any]] = Field(None, description="Allowed values for enum types")
+    enum: Optional[list[Any]] = Field(None, description="Allowed values for enum types")
     minimum: Optional[float] = Field(None, description="Minimum numeric value")
     maximum: Optional[float] = Field(None, description="Maximum numeric value")
     default: Optional[Any] = Field(None, description="Default value when unset")
-    editable_by: List[str] = Field(default_factory=list, description="Roles allowed to edit")
+    editable_by: list[str] = Field(default_factory=list, description="Roles allowed to edit")
     sensitivity: str = Field(..., description="Sensitivity level: public|internal|secret")
     ui: Optional[str] = Field(None, description="UI hint for rendering")
     deprecated: bool = Field(False, description="Whether the key is deprecated")
@@ -29,7 +29,7 @@ class UserProfileCatalogResponse(BaseModel):
 
     version: str = Field(..., description="Catalog version")
     updated_at: datetime = Field(..., description="Last update timestamp")
-    entries: List[UserProfileCatalogEntrySchema] = Field(default_factory=list)
+    entries: list[UserProfileCatalogEntrySchema] = Field(default_factory=list)
 
 
 class UserProfileIdentity(BaseModel):
@@ -52,7 +52,7 @@ class UserProfileOrgMembership(BaseModel):
 
     org_id: int = Field(..., description="Organization ID")
     role: str = Field(..., description="Membership role")
-    policy_summary: Optional[Dict[str, Any]] = Field(
+    policy_summary: Optional[dict[str, Any]] = Field(
         None,
         description="Organization policy summary",
     )
@@ -64,7 +64,7 @@ class UserProfileTeamMembership(BaseModel):
     team_id: int = Field(..., description="Team ID")
     role: str = Field(..., description="Membership role")
     org_id: Optional[int] = Field(None, description="Parent organization ID")
-    policy_summary: Optional[Dict[str, Any]] = Field(
+    policy_summary: Optional[dict[str, Any]] = Field(
         None,
         description="Team policy summary",
     )
@@ -73,8 +73,8 @@ class UserProfileTeamMembership(BaseModel):
 class UserProfileMemberships(BaseModel):
     """Memberships section of the profile response."""
 
-    orgs: List[UserProfileOrgMembership] = Field(default_factory=list)
-    teams: List[UserProfileTeamMembership] = Field(default_factory=list)
+    orgs: list[UserProfileOrgMembership] = Field(default_factory=list)
+    teams: list[UserProfileTeamMembership] = Field(default_factory=list)
 
 
 class UserProfileApiKeySummary(BaseModel):
@@ -97,8 +97,8 @@ class UserProfileSecurity(BaseModel):
 
     mfa_enabled: bool = Field(..., description="Whether MFA is enabled")
     active_sessions: int = Field(..., description="Active session count")
-    api_keys: List[UserProfileApiKeySummary] = Field(default_factory=list)
-    byok_keys: List[UserProfileByokSummary] = Field(default_factory=list)
+    api_keys: list[UserProfileApiKeySummary] = Field(default_factory=list)
+    byok_keys: list[UserProfileByokSummary] = Field(default_factory=list)
 
 
 class UserProfileQuotas(BaseModel):
@@ -106,15 +106,15 @@ class UserProfileQuotas(BaseModel):
 
     storage_quota_mb: int = Field(..., description="Storage quota in MB")
     storage_used_mb: float = Field(..., description="Storage used in MB")
-    audio: Optional[Dict[str, Any]] = Field(
+    audio: Optional[dict[str, Any]] = Field(
         None,
         description="Audio quota/usage summary (daily minutes, concurrency, file size)",
     )
-    evaluations: Optional[Dict[str, Any]] = Field(
+    evaluations: Optional[dict[str, Any]] = Field(
         None,
         description="Evaluations quota/usage summary",
     )
-    prompt_studio: Optional[Dict[str, Any]] = Field(
+    prompt_studio: Optional[dict[str, Any]] = Field(
         None,
         description="Prompt Studio quota summary",
     )
@@ -136,9 +136,9 @@ class UserProfileRawOverrideEntry(BaseModel):
 class UserProfileRawOverrides(BaseModel):
     """Raw overrides grouped by scope."""
 
-    user: List[UserProfileRawOverrideEntry] = Field(default_factory=list)
-    orgs: List[UserProfileRawOverrideEntry] = Field(default_factory=list)
-    teams: List[UserProfileRawOverrideEntry] = Field(default_factory=list)
+    user: list[UserProfileRawOverrideEntry] = Field(default_factory=list)
+    orgs: list[UserProfileRawOverrideEntry] = Field(default_factory=list)
+    teams: list[UserProfileRawOverrideEntry] = Field(default_factory=list)
 
 
 class UserProfileResponse(BaseModel):
@@ -150,10 +150,10 @@ class UserProfileResponse(BaseModel):
     memberships: Optional[UserProfileMemberships] = None
     security: Optional[UserProfileSecurity] = None
     quotas: Optional[UserProfileQuotas] = None
-    preferences: Optional[Dict[str, Any]] = None
-    effective_config: Optional[Dict[str, Any]] = None
+    preferences: Optional[dict[str, Any]] = None
+    effective_config: Optional[dict[str, Any]] = None
     raw_overrides: Optional[UserProfileRawOverrides] = None
-    section_errors: Optional[Dict[str, str]] = None
+    section_errors: Optional[dict[str, str]] = None
 
 
 class UserProfileUpdateEntry(BaseModel):
@@ -166,7 +166,7 @@ class UserProfileUpdateEntry(BaseModel):
 class UserProfileUpdateRequest(BaseModel):
     """Profile update request payload."""
 
-    updates: List[UserProfileUpdateEntry] = Field(default_factory=list)
+    updates: list[UserProfileUpdateEntry] = Field(default_factory=list)
     profile_version: Optional[datetime] = Field(
         None,
         description="Optional optimistic lock token from the last profile read",
@@ -193,8 +193,8 @@ class UserProfileUpdateResponse(BaseModel):
     """Profile update response payload."""
 
     profile_version: datetime = Field(..., description="Profile version timestamp")
-    applied: List[str] = Field(default_factory=list, description="Keys applied")
-    skipped: List[UserProfileUpdateError] = Field(default_factory=list, description="Skipped keys")
+    applied: list[str] = Field(default_factory=list, description="Keys applied")
+    skipped: list[UserProfileUpdateError] = Field(default_factory=list, description="Skipped keys")
 
 
 class UserProfileErrorDetail(BaseModel):
@@ -209,16 +209,16 @@ class UserProfileErrorResponse(BaseModel):
 
     error_code: str = Field(..., description="Machine-readable error identifier")
     detail: str = Field(..., description="Human-readable error detail")
-    errors: List[UserProfileErrorDetail] = Field(default_factory=list)
+    errors: list[UserProfileErrorDetail] = Field(default_factory=list)
 
 
 class UserProfileBulkUpdateRequest(BaseModel):
     """Bulk update payload for admin profile changes."""
 
-    updates: List[UserProfileUpdateEntry] = Field(default_factory=list)
+    updates: list[UserProfileUpdateEntry] = Field(default_factory=list)
     dry_run: bool = Field(False, description="Validate only, do not persist")
     confirm: bool = Field(False, description="Confirm large updates past the threshold")
-    user_ids: Optional[List[int]] = Field(None, description="Explicit list of user IDs to update")
+    user_ids: Optional[list[int]] = Field(None, description="Explicit list of user IDs to update")
     org_id: Optional[int] = Field(None, description="Restrict to a specific organization")
     team_id: Optional[int] = Field(None, description="Restrict to a specific team")
     role: Optional[str] = Field(None, description="Filter by role")
@@ -231,9 +231,9 @@ class UserProfileBulkUpdateUserResult(BaseModel):
 
     user_id: int = Field(..., description="Target user ID")
     profile_version: Optional[datetime] = Field(None, description="Resulting profile version")
-    applied: List[str] = Field(default_factory=list, description="Keys applied")
-    skipped: List[UserProfileUpdateError] = Field(default_factory=list, description="Skipped keys")
-    diffs: List[UserProfileBulkUpdateDiff] = Field(
+    applied: list[str] = Field(default_factory=list, description="Keys applied")
+    skipped: list[UserProfileUpdateError] = Field(default_factory=list, description="Skipped keys")
+    diffs: list[UserProfileBulkUpdateDiff] = Field(
         default_factory=list,
         description="Diff summary for applied updates",
     )
@@ -248,13 +248,13 @@ class UserProfileBulkUpdateResponse(BaseModel):
     skipped: int = Field(..., description="Users with no applied updates")
     failed: int = Field(..., description="Users that failed validation or scope checks")
     dry_run: bool = Field(..., description="Whether this was a dry run")
-    results: List[UserProfileBulkUpdateUserResult] = Field(default_factory=list)
+    results: list[UserProfileBulkUpdateUserResult] = Field(default_factory=list)
 
 
 class UserProfileBatchResponse(BaseModel):
     """Batch profile summary response payload."""
 
-    profiles: List[UserProfileResponse] = Field(default_factory=list)
+    profiles: list[UserProfileResponse] = Field(default_factory=list)
     total: int = Field(..., description="Total profiles matching the filters")
     page: int = Field(..., description="Current page number")
     limit: int = Field(..., description="Page size")

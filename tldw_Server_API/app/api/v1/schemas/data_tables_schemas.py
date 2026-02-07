@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+import os
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import FileExportInfo
+
 try:
     # Pydantic v2
     from pydantic import model_validator  # type: ignore
@@ -15,16 +17,17 @@ except ImportError:  # pragma: no cover - fallback for older environments
 ColumnType = Literal["text", "number", "date", "url", "boolean", "currency"]
 SourceType = Literal["chat", "document", "rag_query"]
 DataTableExportFormat = Literal["csv", "json", "xlsx"]
-DataTableRowData = Dict[str, Any] | List[Any]
+DataTableRowData = dict[str, Any] | list[Any]
+DATA_TABLES_MAX_ROWS_LIMIT = int(os.getenv("DATA_TABLES_MAX_ROWS", "2000") or "2000")
 
 
 class DataTableColumnHint(BaseModel):
     """Optional schema hint supplied during generation."""
 
     name: str = Field(..., min_length=1)
-    type: Optional[ColumnType] = None
-    description: Optional[str] = None
-    format: Optional[str] = None
+    type: ColumnType | None = None
+    description: str | None = None
+    format: str | None = None
 
 
 class DataTableSourceInput(BaseModel):
@@ -32,9 +35,9 @@ class DataTableSourceInput(BaseModel):
 
     source_type: SourceType
     source_id: str = Field(..., min_length=1)
-    title: Optional[str] = None
-    snapshot: Optional[Any] = None
-    retrieval_params: Optional[Dict[str, Any]] = None
+    title: str | None = None
+    snapshot: Any | None = None
+    retrieval_params: dict[str, Any] | None = None
 
 
 class DataTableGenerateRequest(BaseModel):
@@ -42,16 +45,16 @@ class DataTableGenerateRequest(BaseModel):
 
     name: str = Field(..., min_length=1)
     prompt: str = Field(..., min_length=1)
-    description: Optional[str] = None
-    workspace_tag: Optional[str] = Field(default=None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>') to associate this table.")
-    sources: List[DataTableSourceInput]
-    column_hints: Optional[List[DataTableColumnHint]] = None
-    model: Optional[str] = None
-    max_rows: Optional[int] = Field(default=None, ge=1, le=20000)
+    description: str | None = None
+    workspace_tag: str | None = Field(default=None, description="Optional workspace tag (e.g., 'workspace:<slug-or-id>') to associate this table.")
+    sources: list[DataTableSourceInput]
+    column_hints: list[DataTableColumnHint] | None = None
+    model: str | None = None
+    max_rows: int | None = Field(default=None, ge=1, le=DATA_TABLES_MAX_ROWS_LIMIT)
 
     if model_validator is not None:
         @model_validator(mode="after")
-        def _validate_payload(self) -> "DataTableGenerateRequest":
+        def _validate_payload(self) -> DataTableGenerateRequest:
             if not self.sources:
                 raise ValueError("sources are required")
             return self
@@ -59,7 +62,7 @@ class DataTableGenerateRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv
-        def _validate_payload(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_payload(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             sources = values.get("sources") or []
             if not sources:
                 raise ValueError("sources are required")
@@ -69,20 +72,20 @@ class DataTableGenerateRequest(BaseModel):
 class DataTableRegenerateRequest(BaseModel):
     """Optional overrides for table regeneration."""
 
-    prompt: Optional[str] = None
-    model: Optional[str] = None
-    max_rows: Optional[int] = Field(default=None, ge=1, le=20000)
+    prompt: str | None = None
+    model: str | None = None
+    max_rows: int | None = Field(default=None, ge=1, le=DATA_TABLES_MAX_ROWS_LIMIT)
 
 
 class DataTableUpdateRequest(BaseModel):
     """Patchable metadata fields for a data table."""
 
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
 
     if model_validator is not None:
         @model_validator(mode="after")
-        def _validate_payload(self) -> "DataTableUpdateRequest":
+        def _validate_payload(self) -> DataTableUpdateRequest:
             if self.name is None and self.description is None:
                 raise ValueError("at least one field is required")
             if self.name is not None and not self.name.strip():
@@ -92,7 +95,7 @@ class DataTableUpdateRequest(BaseModel):
         from pydantic import root_validator as _rv  # type: ignore
 
         @_rv
-        def _validate_payload(cls, values: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
+        def _validate_payload(cls, values: dict[str, Any]) -> dict[str, Any]:  # type: ignore[no-redef]
             if values.get("name") is None and values.get("description") is None:
                 raise ValueError("at least one field is required")
             name = values.get("name")
@@ -107,20 +110,20 @@ class DataTableColumn(BaseModel):
     column_id: str
     name: str
     type: ColumnType
-    description: Optional[str] = None
-    format: Optional[str] = None
+    description: str | None = None
+    format: str | None = None
     position: int
 
 
 class DataTableColumnInput(BaseModel):
     """Column definition used when updating table content."""
 
-    column_id: Optional[str] = None
+    column_id: str | None = None
     name: str = Field(..., min_length=1)
     type: ColumnType
-    description: Optional[str] = None
-    format: Optional[str] = None
-    position: Optional[int] = None
+    description: str | None = None
+    format: str | None = None
+    position: int | None = None
 
 
 class DataTableRow(BaseModel):
@@ -129,7 +132,7 @@ class DataTableRow(BaseModel):
     row_id: str
     row_index: int
     data: DataTableRowData
-    row_hash: Optional[str] = None
+    row_hash: str | None = None
 
 
 class DataTableSource(BaseModel):
@@ -137,9 +140,9 @@ class DataTableSource(BaseModel):
 
     source_type: SourceType
     source_id: str
-    title: Optional[str] = None
-    snapshot: Optional[Any] = None
-    retrieval_params: Optional[Any] = None
+    title: str | None = None
+    snapshot: Any | None = None
+    retrieval_params: Any | None = None
 
 
 class DataTableSummary(BaseModel):
@@ -147,39 +150,39 @@ class DataTableSummary(BaseModel):
 
     uuid: str
     name: str
-    description: Optional[str] = None
-    workspace_tag: Optional[str] = None
+    description: str | None = None
+    workspace_tag: str | None = None
     prompt: str
-    column_hints: Optional[Any] = None
+    column_hints: Any | None = None
     status: str
     row_count: int
-    column_count: Optional[int] = None
-    generation_model: Optional[str] = None
-    last_error: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    last_modified: Optional[str] = None
-    version: Optional[int] = None
-    source_count: Optional[int] = None
+    column_count: int | None = None
+    generation_model: str | None = None
+    last_error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    last_modified: str | None = None
+    version: int | None = None
+    source_count: int | None = None
 
 
 class DataTablesListResponse(BaseModel):
     """Paginated response containing data table summaries."""
 
-    tables: List[DataTableSummary]
+    tables: list[DataTableSummary]
     count: int
     limit: int
     offset: int
-    total: Optional[int] = None
+    total: int | None = None
 
 
 class DataTableDetailResponse(BaseModel):
     """Detailed response for a single data table."""
 
     table: DataTableSummary
-    columns: List[DataTableColumn]
-    rows: List[DataTableRow]
-    sources: List[DataTableSource]
+    columns: list[DataTableColumn]
+    rows: list[DataTableRow]
+    sources: list[DataTableSource]
     rows_limit: int
     rows_offset: int
 
@@ -187,15 +190,15 @@ class DataTableDetailResponse(BaseModel):
 class DataTableContentUpdateRequest(BaseModel):
     """Request payload for updating table columns and rows."""
 
-    columns: List[DataTableColumnInput]
-    rows: List[Dict[str, Any]]
+    columns: list[DataTableColumnInput]
+    rows: list[dict[str, Any]]
 
 
 class DataTableGenerateResponse(BaseModel):
     """Response payload for a table generation job submission."""
 
     job_id: int
-    job_uuid: Optional[str] = None
+    job_uuid: str | None = None
     status: str
     table: DataTableSummary
 
@@ -210,20 +213,20 @@ class DataTableJobStatus(BaseModel):
     """Status payload for a data table job."""
 
     id: int
-    uuid: Optional[str]
+    uuid: str | None
     status: str
     job_type: str
-    owner_user_id: Optional[str]
-    created_at: Optional[str]
-    started_at: Optional[str]
-    completed_at: Optional[str]
-    cancelled_at: Optional[str]
-    cancellation_reason: Optional[str]
-    progress_percent: Optional[float]
-    progress_message: Optional[str]
-    result: Optional[Dict[str, Any]]
-    error_message: Optional[str]
-    table_uuid: Optional[str] = None
+    owner_user_id: str | None
+    created_at: str | None
+    started_at: str | None
+    completed_at: str | None
+    cancelled_at: str | None
+    cancellation_reason: str | None
+    progress_percent: float | None
+    progress_message: str | None
+    result: dict[str, Any] | None
+    error_message: str | None
+    table_uuid: str | None = None
 
 
 class DataTableJobCancelResponse(BaseModel):
@@ -232,7 +235,7 @@ class DataTableJobCancelResponse(BaseModel):
     success: bool
     job_id: int
     status: str
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class DataTableExportResponse(BaseModel):

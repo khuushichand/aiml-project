@@ -45,20 +45,21 @@ Implementation status
   - Preview/dry-run: `POST /watchlists/jobs/{job_id}/preview` ships; respects include-only gating; returns decision per item; test-mode stubs for deterministic previews.
   - CSV exports (server-side): `GET /watchlists/runs/export.csv` (global or by job) and `GET /watchlists/runs/{run_id}/tallies.csv`.
   - Docs: API page updated (global runs endpoint, run-detail tallies toggle, OPML group filter, preview endpoint, CSV exports). Release notes added.
+  - Docs polish follow-up: expanded OPML examples + include-only semantics quick table.
+  - WebUI env behavior: `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD` now controls when the runs UI prefers server CSV exports (default 2000 rows).
+  - Runs UI polish: added richer metrics columns and wired server CSV/tallies CSV export actions in the runs experience.
+  - Preview tests follow-up: additional RSS/site preview coverage for empty filters and invalid-regex edge cases.
   - Migration notes: new page added (Docs/Operations/Watchlists_Migration_Notes.md) clarifying that no dedicated CLI is required; use OPML + filters. Linked from API/PRD.
   - DB hardening: schema migration guards added to avoid duplicate-column ALTER noise.
 
 Cross-links
 - Admin Items view: `/admin/watchlists-items` allows browsing items for a run with pagination and status filters; linked from Runs table.
-- CSV endpoints: see Docs/Published/API-related/Watchlists_API.md for `GET /api/v1/watchlists/runs/export.csv` (supports `include_tallies` and returns `X-Has-More` header for pagination parity) and `GET /api/v1/watchlists/runs/{run_id}/tallies.csv`.
+- CSV endpoints: see Docs/API-related/Watchlists_API.md for `GET /api/v1/watchlists/runs/export.csv` (supports `include_tallies` and returns `X-Has-More` header for pagination parity) and `GET /api/v1/watchlists/runs/{run_id}/tallies.csv`.
 
 - In Progress
-  - Docs polish (light): continue expanding OPML examples and include-only semantics quick table where helpful.
-  - WebUI env: `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD` controls when the UI prefers server CSV exports (default 2000 rows).
-  - Optional preview endpoint tests: additional RSS+site preview scenarios and edge cases (regex errors, empty filters).
+  - No blocking in-progress items for v1 wrap-up.
 
 - Remaining (Phase B / nice-to-have)
-  - Admin runs view polish: optional richer metrics columns; optionally integrate server CSV endpoints directly into the UI.
   - Optional: server-side YouTube resolver for `@handle`/vanity (policy remains 400; resolver out of scope for v1).
 
 ## 3) Goals and Non-Goals

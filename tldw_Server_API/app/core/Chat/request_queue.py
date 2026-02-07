@@ -3,16 +3,29 @@
 #
 # Imports
 import asyncio
+import contextlib
 import json
 import time
-from dataclasses import dataclass, field
-from enum import IntEnum
-from heapq import heappush, heappop
-from typing import Any, Dict, Optional, Callable, Tuple
-from loguru import logger
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import dataclass, field
+from enum import IntEnum
 from functools import partial
+from heapq import heappop, heappush
+from typing import Any, Callable, Optional
+
+from loguru import logger
+
+_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 #######################################################################################################################
 #
@@ -37,8 +50,8 @@ class QueuedRequest:
     estimated_tokens: int = field(compare=False, default=0)
     # Optional processor for actual work execution
     processor: Optional[Callable[..., Any]] = field(compare=False, default=None)
-    processor_args: Tuple[Any, ...] = field(compare=False, default_factory=tuple)
-    processor_kwargs: Dict[str, Any] = field(compare=False, default_factory=dict)
+    processor_args: tuple[Any, ...] = field(compare=False, default_factory=tuple)
+    processor_kwargs: dict[str, Any] = field(compare=False, default_factory=dict)
     streaming: bool = field(compare=False, default=False)
     # For streaming jobs, a channel to emit provider chunks (bytes or str). Sentinel None indicates end.
     stream_channel: Optional[asyncio.Queue] = field(compare=False, default=None)
@@ -81,6 +94,9 @@ class RequestQueue:
         self._processing_semaphore = asyncio.Semaphore(max_concurrent)
         self._workers = []
         self._running = False
+        # Lifecycle contract: queue instances are one-shot.
+        # After stop(), create a fresh instance via initialize_request_queue().
+        self._stopped = False
         # Rolling recent activity (last N jobs)
         self._recent_activity = deque(maxlen=200)
         # Event to wake workers when new items arrive (avoids polling delay)
@@ -98,6 +114,11 @@ class RequestQueue:
         """
         if self._running:
             return
+        if self._stopped:
+            raise RuntimeError(
+                "RequestQueue cannot be restarted after stop(); "
+                "initialize a new queue instance instead."
+            )
 
         self._running = True
         # Ensure event starts cleared
@@ -114,13 +135,15 @@ class RequestQueue:
                 loop.run_in_executor(self._executor, lambda: None)
                 for _ in range(warm_n)
             ])
-        except Exception:
+        except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
             pass
 
         logger.info("Started {} queue workers", num_workers)
 
     async def stop(self):
         """Stop the queue workers."""
+        if self._stopped:
+            return
         self._running = False
 
         # Cancel all workers
@@ -130,10 +153,9 @@ class RequestQueue:
         # Wait for workers to finish
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
-        try:
+        with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
             self._executor.shutdown(wait=True)
-        except Exception:
-            pass
+        self._stopped = True
 
         logger.info("Stopped queue workers")
 
@@ -147,7 +169,7 @@ class RequestQueue:
                 if not worker.done():
                     alive = True
                     break
-            except Exception:
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 alive = True
                 break
         if not alive:
@@ -226,7 +248,9 @@ class RequestQueue:
                         logger.info(f"Request {request.request_id} processing was cancelled")
                         process_succeeded = True
                         raise
-                    except Exception as e:
+                    except BaseException as e:
+                        if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                            raise
                         logger.error(f"Error processing request {request.request_id}: {e}")
                         try:
                             if not request.future.cancelled():
@@ -244,7 +268,9 @@ class RequestQueue:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except BaseException as e:
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
                 logger.error(f"Worker {worker_id} error: {e}")
                 await asyncio.sleep(1)
 
@@ -337,6 +363,34 @@ class RequestQueue:
             logger.error(f"Streaming job {request.request_id} missing stream_channel")
             raise RuntimeError("Streaming channel not provided for streaming job")
 
+        async def _put_async_with_backpressure(item: Any, *, terminal: bool = False) -> bool:
+            """Put an item onto the stream channel with cancellation-aware backpressure.
+
+            For terminal frames (DONE/sentinel), perform bounded retries so the
+            consumer can finish cleanly without risking indefinite hangs.
+            """
+            terminal_attempts = 0
+            while True:
+                if not terminal and (request.future.cancelled() or loop.is_closed() or not self._running):
+                    return False
+                if terminal and (loop.is_closed() or not self._running):
+                    return False
+                try:
+                    timeout_s = 0.25 if terminal else 1.0
+                    await asyncio.wait_for(request.stream_channel.put(item), timeout=timeout_s)
+                    return True
+                except asyncio.TimeoutError:
+                    if terminal:
+                        terminal_attempts += 1
+                        if terminal_attempts >= 3:
+                            return False
+                        continue
+                    # Keep waiting while consumer is alive; cancellation checks at loop top.
+                    continue
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
+                    logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
+                    return False
+
         async def _pump_async_iterator(async_iter):
             aiter = async_iter.__aiter__() if hasattr(async_iter, "__aiter__") else async_iter
             try:
@@ -349,10 +403,7 @@ class RequestQueue:
                         break
                     if request.future.cancelled() or loop.is_closed() or not self._running:
                         break
-                    try:
-                        await request.stream_channel.put(chunk)
-                    except Exception as ch_e:
-                        logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
+                    if not await _put_async_with_backpressure(chunk):
                         break
             finally:
                 # Ensure async iterators are closed on cancellation or early exit
@@ -360,19 +411,17 @@ class RequestQueue:
                     aclose = getattr(aiter, "aclose", None)
                     if callable(aclose):
                         await aclose()
-                except Exception:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Signal completion
-                try:
-                    await request.stream_channel.put(None)
-                except Exception:
-                    pass
+                with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
+                    await _put_async_with_backpressure(None, terminal=True)
 
         def _pump_sync_iterator(sync_iter):
             def _put_with_backpressure(item: Any) -> bool:
                 try:
                     fut = asyncio.run_coroutine_threadsafe(request.stream_channel.put(item), loop)
-                except Exception as ch_e:
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                     logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                     return False
                 while True:
@@ -381,12 +430,10 @@ class RequestQueue:
                         return True
                     except TimeoutError:
                         if request.future.cancelled() or loop.is_closed() or not self._running:
-                            try:
+                            with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
                                 fut.cancel()
-                            except Exception:
-                                pass
                             return False
-                    except Exception as ch_e:
+                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         return False
 
@@ -395,14 +442,12 @@ class RequestQueue:
                     try:
                         if not _put_with_backpressure(chunk):
                             break
-                    except Exception as ch_e:
+                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
                         logger.warning(f"Failed to enqueue stream chunk (sync) for {request.request_id}: {ch_e}")
                         break
             finally:
-                try:
+                with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
                     _put_with_backpressure(None)
-                except Exception:
-                    pass
 
         # Run the processor to obtain the stream (potentially blocking)
         try:
@@ -418,10 +463,10 @@ class RequestQueue:
             error_payload = json.dumps({"error": {"message": str(e)[:500]}})
             err_msg = f'data: {error_payload}\n\n'
             try:
-                await request.stream_channel.put(err_msg)
-                await request.stream_channel.put("data: [DONE]\n\n")
-                await request.stream_channel.put(None)
-            except Exception:
+                await _put_async_with_backpressure(err_msg, terminal=True)
+                await _put_async_with_backpressure("data: [DONE]\n\n", terminal=True)
+                await _put_async_with_backpressure(None, terminal=True)
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Processor error starting stream for {request.request_id}: {e}")
             self._recent_activity.append({
@@ -460,10 +505,10 @@ class RequestQueue:
             # Use json.dumps to properly escape the error message and prevent JSON injection
             error_payload = json.dumps({"error": {"message": f"Stream error: {str(e)[:500]}"}})
             try:
-                await request.stream_channel.put(f'data: {error_payload}\n\n')
-                await request.stream_channel.put("data: [DONE]\n\n")
-                await request.stream_channel.put(None)
-            except Exception:
+                await _put_async_with_backpressure(f'data: {error_payload}\n\n', terminal=True)
+                await _put_async_with_backpressure("data: [DONE]\n\n", terminal=True)
+                await _put_async_with_backpressure(None, terminal=True)
+            except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Streaming processor error for {request.request_id}: {e}")
             self._recent_activity.append({
@@ -487,8 +532,8 @@ class RequestQueue:
         estimated_tokens: int = 0,
         *,
         processor: Optional[Callable[..., Any]] = None,
-        processor_args: Tuple[Any, ...] = (),
-        processor_kwargs: Optional[Dict[str, Any]] = None,
+        processor_args: tuple[Any, ...] = (),
+        processor_kwargs: Optional[dict[str, Any]] = None,
         streaming: bool = False,
         stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:
@@ -553,7 +598,7 @@ class RequestQueue:
 
         return future
 
-    def get_queue_status(self) -> Dict[str, Any]:
+    def get_queue_status(self) -> dict[str, Any]:
         """
         Get current queue status.
 
@@ -671,15 +716,11 @@ class RateLimitedQueue(RequestQueue):
     async def _rollback_rate_limit(self, client_id: str, reservation_ts: float) -> None:
         """Rollback a previously reserved rate-limit slot."""
         async with self._rate_limit_lock:
-            try:
+            with contextlib.suppress(ValueError):
                 self.global_request_times.remove(reservation_ts)
-            except ValueError:
-                pass
             client_times = self.client_request_times.get(client_id, [])
-            try:
+            with contextlib.suppress(ValueError):
                 client_times.remove(reservation_ts)
-            except ValueError:
-                pass
             if client_times:
                 self.client_request_times[client_id] = client_times
             else:
@@ -694,8 +735,8 @@ class RateLimitedQueue(RequestQueue):
         estimated_tokens: int = 0,
         *,
         processor: Optional[Callable[..., Any]] = None,
-        processor_args: Tuple[Any, ...] = (),
-        processor_kwargs: Optional[Dict[str, Any]] = None,
+        processor_args: tuple[Any, ...] = (),
+        processor_kwargs: Optional[dict[str, Any]] = None,
         streaming: bool = False,
         stream_channel: Optional[asyncio.Queue] = None,
     ) -> asyncio.Future:

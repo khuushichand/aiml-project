@@ -1,6 +1,4 @@
-import io
 import json
-import os
 import tempfile
 from typing import Any
 
@@ -18,8 +16,8 @@ def test_ocr_pdf_endpoint_with_dots_backend_integration(monkeypatch):
 
     # Import app and endpoint module
     from tldw_Server_API.app.main import app
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_mod
-    from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
+     from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_mod
+     from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
         UnifiedEvaluationService,
     )
 

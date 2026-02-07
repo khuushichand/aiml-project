@@ -14,7 +14,6 @@ collections without changing the pipeline call site.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
 
 from loguru import logger
 
@@ -37,10 +36,10 @@ class PrecomputedSpanConfig:
 
 async def apply_precomputed_spans(
     query: str,
-    documents: List[Document],
-    config: Optional[PrecomputedSpanConfig] = None,
-    user_id: Optional[str] = None,
-) -> Optional[List[Document]]:
+    documents: list[Document],
+    config: PrecomputedSpanConfig | None = None,
+    user_id: str | None = None,
+) -> list[Document] | None:
     """
     Placeholder precomputed-span handler.
 

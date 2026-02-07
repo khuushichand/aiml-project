@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlencode
 
-from .connector_base import BaseConnector
 from tldw_Server_API.app.core.http_client import afetch
+
+from .connector_base import BaseConnector
 
 
 class GoogleDriveConnector(BaseConnector):
     name = "drive"
 
-    def __init__(self, client_id: Optional[str] = None, client_secret: Optional[str] = None, redirect_base: Optional[str] = None):
+    def __init__(self, client_id: str | None = None, client_secret: str | None = None, redirect_base: str | None = None):
         super().__init__(
             client_id=client_id or os.getenv("CONNECTOR_DRIVE_CLIENT_ID"),
             client_secret=client_secret or os.getenv("CONNECTOR_DRIVE_CLIENT_SECRET"),
             redirect_base=redirect_base or os.getenv("CONNECTOR_REDIRECT_BASE_URL"),
         )
 
-    def authorize_url(self, state: Optional[str] = None, scopes: Optional[List[str]] = None, redirect_path: str = "/api/v1/connectors/providers/drive/callback") -> str:
+    def authorize_url(self, state: str | None = None, scopes: list[str] | None = None, redirect_path: str = "/api/v1/connectors/providers/drive/callback") -> str:
         # Scaffold: generate a Google OAuth URL if client_id is provided; otherwise return placeholder
         redirect_uri = f"{self.redirect_base}{redirect_path}"
         if not self.client_id:
@@ -42,7 +43,7 @@ class GoogleDriveConnector(BaseConnector):
             params["state"] = state
         return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
-    async def exchange_code(self, code: str, redirect_uri: str) -> Dict[str, Any]:
+    async def exchange_code(self, code: str, redirect_uri: str) -> dict[str, Any]:
         token_url = "https://oauth2.googleapis.com/token"
         data = {
             "code": code,
@@ -71,7 +72,7 @@ class GoogleDriveConnector(BaseConnector):
             "email": None,
         }
 
-    async def refresh_access_token(self, refresh_token: str) -> Optional[Dict[str, Any]]:
+    async def refresh_access_token(self, refresh_token: str) -> dict[str, Any] | None:
         """Exchange a refresh_token for a new access_token."""
         if not (self.client_id and self.client_secret and refresh_token):
             return None
@@ -98,7 +99,7 @@ class GoogleDriveConnector(BaseConnector):
             "scope": tok.get("scope"),
         }
 
-    async def list_files(self, account: Dict[str, Any], parent_remote_id: str, *, page_size: int = 50, cursor: Optional[str] = None):
+    async def list_files(self, account: dict[str, Any], parent_remote_id: str, *, page_size: int = 50, cursor: str | None = None):
         """List files/folders under a parent. Returns (items, next_cursor)."""
         token = (account.get("tokens") or {}).get("access_token") or account.get("access_token")
         if not token:
@@ -142,7 +143,7 @@ class GoogleDriveConnector(BaseConnector):
             })
         return items, data.get("nextPageToken")
 
-    async def download_file(self, account: Dict[str, Any], file_id: str, *, mime_type: Optional[str] = None, export_mime: Optional[str] = None) -> bytes:
+    async def download_file(self, account: dict[str, Any], file_id: str, *, mime_type: str | None = None, export_mime: str | None = None) -> bytes:
         token = (account.get("tokens") or {}).get("access_token") or account.get("access_token")
         if not token:
             return b""

@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.api.v1.endpoints import media_embeddings as embeddings_endpoint
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ReprocessMediaRequest
 from tldw_Server_API.app.api.v1.schemas.media_response_models import ReprocessMediaResponse
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_UPDATE
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
+from tldw_Server_API.app.core.Chunking.chunker import Chunker
+from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
     ConflictError,
     DatabaseError,
@@ -22,24 +28,16 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import
     apply_chunking_template_if_any,
     prepare_chunking_options_dict,
 )
-from tldw_Server_API.app.core.Chunking import improved_chunking_process
-from tldw_Server_API.app.core.Chunking.chunker import Chunker
-from tldw_Server_API.app.core.config import settings
-
-from tldw_Server_API.app.api.v1.endpoints import media_embeddings as embeddings_endpoint
-from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier
-from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-
 
 router = APIRouter(tags=["Media Management"])
 
 
-def _normalize_chunks(raw_chunks: List[Any]) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
+def _normalize_chunks(raw_chunks: list[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for idx, chunk in enumerate(raw_chunks):
         if isinstance(chunk, str):
             text = chunk
-            meta: Optional[Dict[str, Any]] = None
+            meta: dict[str, Any] | None = None
             start_char = None
             end_char = None
             chunk_type = None
@@ -123,11 +121,11 @@ def _delete_embeddings_for_media(media_id: int, user_id: str) -> None:
 async def _generate_embeddings(
     *,
     media_id: int,
-    media_payload: Dict[str, Any],
+    media_payload: dict[str, Any],
     request: ReprocessMediaRequest,
     user_id: str,
     db: MediaDatabase,
-    cache_namespaces: Optional[List[str]] = None,
+    cache_namespaces: list[str] | None = None,
 ) -> None:
     try:
         embedding_model = request.embedding_model or settings.get(
@@ -202,7 +200,7 @@ async def reprocess_media_item(
             detail="Nothing to reprocess (chunking and embeddings both disabled).",
         )
 
-    chunks_created: Optional[int] = None
+    chunks_created: int | None = None
     if payload.perform_chunking:
         chunk_request = SimpleNamespace(**payload.model_dump())
         chunk_request.media_type = media_item.get("type")
@@ -289,7 +287,7 @@ async def reprocess_media_item(
         except DatabaseError as exc:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
-    cache_namespaces: List[str] = []
+    cache_namespaces: list[str] = []
     try:
         username = getattr(current_user, "username", None)
         if username:

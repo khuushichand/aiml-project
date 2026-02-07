@@ -15,6 +15,9 @@ from fastapi import status
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.config import settings
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
@@ -318,6 +321,59 @@ class TestTTSStreamingEndpoint:
             except Exception:
                 # Some Starlette versions propagate generator errors; accept as handled for test purposes
                 assert True
+
+    @pytest.mark.streaming
+    async def test_streaming_failure_writes_history(self, test_client, auth_headers, monkeypatch, tmp_path):
+        """Streaming failure should record a failed history row."""
+        user_db_base = tmp_path / "user_dbs"
+        monkeypatch.setenv("USER_DB_BASE_DIR", str(user_db_base))
+        monkeypatch.setenv("TTS_HISTORY_ENABLED", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_FAILED", "true")
+        monkeypatch.setenv("TTS_HISTORY_STORE_TEXT", "true")
+        monkeypatch.setenv("TTS_HISTORY_HASH_KEY", "test-history-key")
+
+        monkeypatch.setattr(settings, "TTS_HISTORY_ENABLED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_FAILED", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_STORE_TEXT", True, raising=False)
+        monkeypatch.setattr(settings, "TTS_HISTORY_HASH_KEY", "test-history-key", raising=False)
+
+        async def mock_error_stream():
+            yield b"chunk1"
+            raise Exception("Stream error")
+
+        with patch('tldw_Server_API.app.core.TTS.tts_service_v2.TTSServiceV2.generate_speech') as mock_stream:
+            mock_stream.return_value = mock_error_stream()
+
+            try:
+                response = test_client.post(
+                    "/api/v1/audio/speech",
+                    json={
+                        "input": "Error test history",
+                        "voice": "alloy",
+                        "response_format": "mp3",
+                        "stream": True
+                    },
+                    headers=auth_headers
+                )
+                try:
+                    list(response.iter_bytes())
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        db_path = DatabasePaths.get_media_db_path(1)
+        db = MediaDatabase(db_path=str(db_path), client_id="history_test")
+        row = db.execute_query(
+            "SELECT status, error_message, text FROM tts_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+            ("1",),
+        ).fetchone()
+        db.close_connection()
+
+        assert row is not None
+        assert row["status"] == "failed"
+        assert row["error_message"]
+        assert row["text"] == "Error test history"
 
     @pytest.mark.streaming
     async def test_streaming_quota_exceeded_maps_to_402(self, test_client, auth_headers):

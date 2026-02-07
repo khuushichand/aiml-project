@@ -2,8 +2,9 @@
 # Description: Custom exception hierarchy for TTS module
 #
 # Imports
-from typing import Optional, Dict, Any
 from datetime import datetime
+from typing import Any, Optional
+
 #
 #######################################################################################################################
 #
@@ -17,7 +18,7 @@ class TTSError(Exception):
         message: str,
         provider: Optional[str] = None,
         error_code: Optional[str] = None,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[dict[str, Any]] = None
     ):
         """
         Initialize TTS error.
@@ -35,7 +36,7 @@ class TTSError(Exception):
         self.details = details or {}
         self.timestamp = datetime.utcnow()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert exception to dictionary for API responses"""
         return {
             "error_type": self.__class__.__name__,
@@ -168,6 +169,11 @@ class TTSFormatConversionError(TTSAudioProcessingError):
 
 class TTSVoiceCloningError(TTSGenerationError):
     """Error during voice cloning process"""
+    pass
+
+
+class TTSAudioQualityError(TTSProviderError):
+    """Generated audio failed quality checks (silent/truncated)"""
     pass
 
 
@@ -319,6 +325,7 @@ ERROR_STATUS_CODES = {
     TTSRateLimitError: 429,
     TTSQuotaExceededError: 429,
     TTSProviderError: 502,
+    TTSAudioQualityError: 502,
     TTSProviderUnavailableError: 503,
     TTSProviderNotConfiguredError: 503,
     TTSResourceError: 503,
@@ -386,13 +393,9 @@ def is_retryable_error(error: Exception) -> bool:
         return False
 
     # Retryable errors
-    if isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError,
-                         TTSProviderError, TTSProviderUnavailableError,
-                         TTSResourceError)):
-        return True
-
-    # Unknown errors are not retryable by default
-    return False
+    return isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError,
+                              TTSProviderError, TTSProviderUnavailableError,
+                              TTSResourceError))
 
 
 def resource_error(provider: str, resource_type: str, required: Any = None,

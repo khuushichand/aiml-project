@@ -1,72 +1,90 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-
-from fastapi import APIRouter
-from loguru import logger
-
-from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
-    file_validator_instance,
+import aiofiles  # type: ignore  # pragma: no cover
+from fastapi import (
+    APIRouter,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
-from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
-    download_url_async as _download_url_async,
-)
-from tldw_Server_API.app.core.http_client import adownload as _m_adownload
-from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
-from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
-    TempDirManager as CoreTempDirManager,
-    save_uploaded_files as core_save_uploaded_files,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
-    validate_add_media_inputs as _validate_inputs,
-)
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version
 
 # Processing libraries re-exported for tests/monkeypatching
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Books.Book_Processing_Lib as books  # type: ignore  # pragma: no cover
 import tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib as pdf_lib  # type: ignore  # pragma: no cover
 import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs  # type: ignore  # pragma: no cover
-from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (
-    process_videos as _process_videos_core,  # type: ignore  # pragma: no cover
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user  # pragma: no cover
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger  # pragma: no cover
+from tldw_Server_API.app.api.v1.API_Deps.validations_deps import (
+    file_validator_instance,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
+from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier  # pragma: no cover
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+    MediaDatabase,  # pragma: no cover
+    get_document_version,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
     process_audio_files as _process_audio_files_core,  # type: ignore  # pragma: no cover
 )
-from tldw_Server_API.app.core.Chunking.templates import TemplateClassifier  # pragma: no cover
-import aiofiles  # type: ignore  # pragma: no cover
-from fastapi import Depends  # pragma: no cover
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user  # pragma: no cover
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger  # pragma: no cover
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase  # pragma: no cover
+from tldw_Server_API.app.core.Ingestion_Media_Processing.download_utils import (
+    download_url_async as _download_url_async,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+    TempDirManager as CoreTempDirManager,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
+    save_uploaded_files as core_save_uploaded_files,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.persistence import (
+    validate_add_media_inputs as _validate_inputs,
+)
+from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestion_Lib import (
+    process_videos as _process_videos_core,  # type: ignore  # pragma: no cover
+)
+from tldw_Server_API.app.core.Utils.Utils import smart_download as _smart_download
+
 try:
     # Optional shim so tests can monkeypatch media.process_web_scraping_task
     from tldw_Server_API.app.services.web_scraping_service import process_web_scraping_task  # pragma: no cover
-except Exception:  # pragma: no cover - keep import failures isolated during minimal start
+except ImportError:  # pragma: no cover - keep import failures isolated during minimal start
     process_web_scraping_task = None  # type: ignore[assignment]
 
 
 # Router wiring (modular endpoints only) - import modules explicitly to avoid
 # name collisions with core processing helpers that share similar names.
+import contextlib
+
 from tldw_Server_API.app.api.v1.endpoints.media import add as add_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import debug as debug_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import (
-    ingest_web_content as ingest_web_content_endpoint,  # noqa: E402
+    document_annotations as document_annotations_endpoint,  # noqa: E402
 )
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_figures as document_figures_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_insights as document_insights_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_outline as document_outline_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    document_references as document_references_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import file as file_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import (
     ingest_jobs as ingest_jobs_endpoint,  # noqa: E402
 )
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    ingest_web_content as ingest_web_content_endpoint,  # noqa: E402
+)
 from tldw_Server_API.app.api.v1.endpoints.media import item as item_endpoint  # noqa: E402
 from tldw_Server_API.app.api.v1.endpoints.media import listing as listing_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import versions as versions_endpoint  # noqa: E402
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    process_audios as process_audios_endpoint,  # noqa: E402
+)
 from tldw_Server_API.app.api.v1.endpoints.media import (
     process_code as process_code_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
     process_documents as process_documents_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_pdfs as process_pdfs_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
     process_ebooks as process_ebooks_endpoint,  # noqa: E402
@@ -75,16 +93,19 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
     process_emails as process_emails_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_videos as process_videos_endpoint,  # noqa: E402
+    process_mediawiki as process_mediawiki_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_audios as process_audios_endpoint,  # noqa: E402
+    process_pdfs as process_pdfs_endpoint,  # noqa: E402
+)
+from tldw_Server_API.app.api.v1.endpoints.media import (
+    process_videos as process_videos_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
     process_web_scraping as process_web_scraping_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
-    process_mediawiki as process_mediawiki_endpoint,  # noqa: E402
+    reading_progress as reading_progress_endpoint,  # noqa: E402
 )
 from tldw_Server_API.app.api.v1.endpoints.media import (
     reprocess as reprocess_endpoint,  # noqa: E402
@@ -92,26 +113,7 @@ from tldw_Server_API.app.api.v1.endpoints.media import (
 from tldw_Server_API.app.api.v1.endpoints.media import (
     transcription_models as transcription_models_endpoint,  # noqa: E402
 )
-from tldw_Server_API.app.api.v1.endpoints.media import file as file_endpoint  # noqa: E402
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_outline as document_outline_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_insights as document_insights_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_references as document_references_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_figures as document_figures_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    document_annotations as document_annotations_endpoint,  # noqa: E402
-)
-from tldw_Server_API.app.api.v1.endpoints.media import (
-    reading_progress as reading_progress_endpoint,  # noqa: E402
-)
-
+from tldw_Server_API.app.api.v1.endpoints.media import versions as versions_endpoint  # noqa: E402
 
 router = APIRouter()
 for _router in (
@@ -187,15 +189,22 @@ class _DummyCache(dict):
 cache = _DummyCache()
 _legacy_media = None  # Backwards-compat attribute for tests expecting it.
 smart_download = _smart_download  # Backwards-compat for tests monkeypatching media.smart_download
+MEDIA_CACHE_EXCEPTIONS = (
+    RuntimeError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    OSError,
+)
 
 
-def cache_response(key: str, response: Dict) -> None:
+def cache_response(key: str, response: dict) -> None:
     """Minimal cache impl so tests can monkeypatch `media.cache`."""
     if cache is None:
         return
     try:
-        import json as _json
         import hashlib as _hashlib
+        import json as _json
 
         content = _json.dumps(response)
         etag = _hashlib.md5(content.encode()).hexdigest()
@@ -207,16 +216,16 @@ def cache_response(key: str, response: Dict) -> None:
                 seg = path[len("/api/v1/media/"):].split("/", 1)[0]
                 try:
                     media_id_int = int(seg)
-                except Exception:
+                except (TypeError, ValueError):
                     media_id_int = None
                 if media_id_int is not None:
                     idx_key = f"cacheidx:/api/v1/media/{media_id_int}"
                     try:
                         cache.sadd(idx_key, key)
                         cache.expire(idx_key, 300)
-                    except Exception:
+                    except MEDIA_CACHE_EXCEPTIONS:
                         pass
-    except Exception:
+    except (ValueError, TypeError, AttributeError, RuntimeError, OSError):
         return
 
 
@@ -229,14 +238,12 @@ def invalidate_cache(media_id: int) -> None:
         keys = set()
         try:
             keys = cache.smembers(idx_key)  # type: ignore[attr-defined]
-        except Exception:
+        except MEDIA_CACHE_EXCEPTIONS:
             keys = set()
         for k in keys or []:
             cache.delete(k)
-        try:
+        with contextlib.suppress(MEDIA_CACHE_EXCEPTIONS):
             cache.delete(idx_key)
-        except Exception:
-            pass
         if not keys:
             try:
                 cursor = 0
@@ -247,9 +254,9 @@ def invalidate_cache(media_id: int) -> None:
                         cache.delete(k)
                     if not cursor:
                         break
-            except Exception:
+            except MEDIA_CACHE_EXCEPTIONS:
                 pass
-    except Exception:
+    except MEDIA_CACHE_EXCEPTIONS:
         return
 
 
@@ -259,7 +266,7 @@ async def _process_document_like_item(*args, **kwargs):  # type: ignore[override
         persistence as _persistence_mod,
     )
 
-    impl = getattr(_persistence_mod, "process_document_like_item")
+    impl = _persistence_mod.process_document_like_item
     return await impl(*args, **kwargs)
 
 

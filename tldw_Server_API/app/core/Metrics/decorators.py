@@ -7,24 +7,22 @@ traces, and performance for functions and methods.
 
 import asyncio
 import functools
+import threading
 import time
 import traceback
-from typing import Any, Callable, Dict, Optional, TypeVar, Union, List
 from dataclasses import dataclass
-import inspect
-import json
+from typing import Any, Callable, Optional, TypeVar
 
 from loguru import logger
 
 from .metrics_manager import (
+    MetricDefinition,
+    MetricType,
     get_metrics_registry,
     increment_counter,
     observe_histogram,
     set_gauge,
-    MetricDefinition,
-    MetricType,
 )
-from .traces import get_tracing_manager
 
 # Import OpenTelemetry types conditionally
 try:
@@ -35,6 +33,16 @@ except ImportError:
 
 # Type variable for decorators
 F = TypeVar('F', bound=Callable[..., Any])
+_METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass
@@ -48,7 +56,7 @@ class MetricConfig:
     call_metric: Optional[str] = None
     error_metric: Optional[str] = None
     success_metric: Optional[str] = None
-    labels: Optional[Dict[str, str]] = None
+    labels: Optional[dict[str, str]] = None
     label_extractor: Optional[Callable] = None
     include_args: bool = False
     include_result: bool = False
@@ -59,7 +67,7 @@ _DEFAULT_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5
 
 def track_metrics(
     name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     track_duration: bool = True,
     track_calls: bool = True,
     track_errors: bool = True,
@@ -124,7 +132,7 @@ def track_metrics(
                     description=f"Errors for {base_name}",
                     labels=list((labels or {}).keys()) + ["error_type"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             # Metrics must never break the application flow
             pass
 
@@ -138,7 +146,7 @@ def track_metrics(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Label extraction failed: {e}")
 
                 # Track call count
@@ -186,7 +194,7 @@ def track_metrics(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"Label extraction failed: {e}")
 
                 # Track call count
@@ -229,8 +237,8 @@ def track_metrics(
 
 def measure_latency(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
-    buckets: Optional[List[float]] = None
+    labels: Optional[dict[str, str]] = None,
+    buckets: Optional[list[float]] = None
 ) -> Callable[[F], F]:
     """
     Decorator to measure function latency.
@@ -258,7 +266,7 @@ def measure_latency(
                     unit="s",
                     buckets=resolved_buckets
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -289,7 +297,7 @@ def measure_latency(
 
 def count_calls(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     label_extractor: Optional[Callable] = None
 ) -> Callable[[F], F]:
     """
@@ -315,7 +323,7 @@ def count_calls(
                     type=MetricType.COUNTER,
                     description=f"Total calls to {func.__module__}.{func.__name__}"
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -327,7 +335,7 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"label_extractor failed (async): error={e}")
 
                 increment_counter(counter_name, labels=metric_labels)
@@ -343,7 +351,7 @@ def count_calls(
                         extracted = label_extractor(*args, **kwargs)
                         if isinstance(extracted, dict):
                             metric_labels.update(extracted)
-                    except Exception as e:
+                    except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS as e:
                         logger.debug(f"label_extractor failed (sync): error={e}")
 
                 increment_counter(counter_name, labels=metric_labels)
@@ -356,7 +364,7 @@ def count_calls(
 
 def track_errors(
     metric_name: Optional[str] = None,
-    labels: Optional[Dict[str, str]] = None,
+    labels: Optional[dict[str, str]] = None,
     include_traceback: bool = False
 ) -> Callable[[F], F]:
     """
@@ -383,7 +391,7 @@ def track_errors(
                     description=f"Errors for {func.__module__}.{func.__name__}",
                     labels=["function", "error_type"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):
@@ -473,20 +481,23 @@ def monitor_resource(
                         labels=["resource"],
                     )
                 )
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             # Never break call paths due to metrics
             pass
 
         # Maintain a local active counter per-decorated function to set the gauge robustly
         active_count = 0
+        active_count_lock = threading.Lock()
 
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 nonlocal active_count
                 if track_count:
-                    active_count += 1
-                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                    with active_count_lock:
+                        active_count += 1
+                        current = active_count
+                    set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                 start_time = time.monotonic() if track_usage else None
 
@@ -494,8 +505,10 @@ def monitor_resource(
                     return await func(*args, **kwargs)
                 finally:
                     if track_count:
-                        active_count = max(0, active_count - 1)
-                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                        with active_count_lock:
+                            active_count = max(0, active_count - 1)
+                            current = active_count
+                        set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                     if track_usage and start_time:
                         usage = time.monotonic() - start_time
@@ -507,8 +520,10 @@ def monitor_resource(
             def sync_wrapper(*args, **kwargs):
                 nonlocal active_count
                 if track_count:
-                    active_count += 1
-                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                    with active_count_lock:
+                        active_count += 1
+                        current = active_count
+                    set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                 start_time = time.monotonic() if track_usage else None
 
@@ -516,8 +531,10 @@ def monitor_resource(
                     return func(*args, **kwargs)
                 finally:
                     if track_count:
-                        active_count = max(0, active_count - 1)
-                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                        with active_count_lock:
+                            active_count = max(0, active_count - 1)
+                            current = active_count
+                        set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                     if track_usage and start_time:
                         usage = time.monotonic() - start_time
@@ -602,7 +619,7 @@ def track_llm_usage(
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
 
@@ -658,7 +675,7 @@ def track_llm_usage(
 
                     return result
 
-                except Exception as e:
+                except Exception:
                     increment_counter("llm_requests_total", labels={**labels, "status": "error"})
                     raise
 
@@ -709,7 +726,7 @@ def cache_metrics(
                     description="Cache hit ratio",
                     labels=["cache"]
                 ))
-        except Exception:
+        except _METRIC_DECORATOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         if asyncio.iscoroutinefunction(func):

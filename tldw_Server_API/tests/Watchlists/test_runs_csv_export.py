@@ -220,3 +220,94 @@ def test_global_runs_csv_export_with_tallies_column(client_with_user: TestClient
     assert len(run_row) == len(header)
     tallies = json.loads(run_row[-1])
     assert tallies.get("kw:alpha") == 3
+
+
+def test_global_runs_csv_export_with_aggregate_tallies_mode(client_with_user: TestClient):
+    c = client_with_user
+    # Create sources/jobs and seed runs with tallies so aggregation spans multiple jobs/runs.
+    s1 = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "AggFeedA", "url": "https://example.com/agg-a.xml", "source_type": "rss"},
+    )
+    assert s1.status_code == 200, s1.text
+    j1 = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "AggJobA", "scope": {"sources": [s1.json()["id"]]}},
+    )
+    assert j1.status_code == 200, j1.text
+    jid1 = j1.json()["id"]
+
+    s2 = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "AggFeedB", "url": "https://example.com/agg-b.xml", "source_type": "rss"},
+    )
+    assert s2.status_code == 200, s2.text
+    j2 = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "AggJobB", "scope": {"sources": [s2.json()["id"]]}},
+    )
+    assert j2.status_code == 200, j2.text
+    jid2 = j2.json()["id"]
+
+    _seed_run_with_stats(
+        jid1,
+        {
+            "items_found": 4,
+            "items_ingested": 3,
+            "filter_tallies": {"kw:alpha": 2, "kw:beta": 1},
+        },
+    )
+    _seed_run_with_stats(
+        jid2,
+        {
+            "items_found": 6,
+            "items_ingested": 5,
+            "filter_tallies": {"kw:alpha": 1, "regex:gamma": 4},
+        },
+    )
+
+    r = c.get(
+        "/api/v1/watchlists/runs/export.csv",
+        params={
+            "scope": "global",
+            "include_tallies": True,
+            "tallies_mode": "aggregate",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.headers.get("content-type", "").startswith("text/csv")
+    assert "watchlists_runs_global_tallies_" in r.headers.get("content-disposition", "")
+    assert r.headers.get("x-has-more") == "false"
+
+    rows = list(csv.reader(io.StringIO(r.text)))
+    assert rows[0] == ["filter_key", "count"]
+    # Expect sort by count desc, then key asc.
+    assert rows[1] == ["regex:gamma", "4"]
+    assert rows[2] == ["kw:alpha", "3"]
+    assert rows[3] == ["kw:beta", "1"]
+
+
+def test_aggregate_tallies_mode_requires_global_scope(client_with_user: TestClient):
+    c = client_with_user
+    s = c.post(
+        "/api/v1/watchlists/sources",
+        json={"name": "AggScopeFeed", "url": "https://example.com/agg-scope.xml", "source_type": "rss"},
+    )
+    assert s.status_code == 200, s.text
+    j = c.post(
+        "/api/v1/watchlists/jobs",
+        json={"name": "AggScopeJob", "scope": {"sources": [s.json()["id"]]}},
+    )
+    assert j.status_code == 200, j.text
+
+    r = c.get(
+        "/api/v1/watchlists/runs/export.csv",
+        params={
+            "scope": "job",
+            "job_id": j.json()["id"],
+            "include_tallies": True,
+            "tallies_mode": "aggregate",
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert r.json().get("detail") == "tallies_aggregation_global_only"

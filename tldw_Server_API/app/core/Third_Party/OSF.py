@@ -15,14 +15,14 @@ Notes:
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.osf.io/v2/preprints/"
 
 
-def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_item(item: dict[str, Any]) -> dict[str, Any]:
     osf_id = item.get("id") or ""
     attrs = item.get("attributes") or {}
     links = item.get("links") or {}
@@ -51,12 +51,12 @@ def _normalize_item(item: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_preprints(
-    term: Optional[str],
+    term: str | None,
     page: int,
     results_per_page: int,
-    provider: Optional[str] = None,
-    from_date: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    provider: str | None = None,
+    from_date: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     """Search OSF preprints, optionally narrowing to a specific provider.
 
     - `term` maps to OSF's `q` parameter
@@ -64,7 +64,7 @@ def search_preprints(
     - `from_date` maps to `filter[date_created][gte]`
     """
     try:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "page[size]": max(1, min(results_per_page, 100)),
             "page[number]": max(1, page),
         }
@@ -91,7 +91,7 @@ def search_preprints(
         return None, 0, f"OSF error: {str(e)}"
 
 
-def get_preprint_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_preprint_by_id(osf_id: str) -> tuple[dict[str, Any] | None, str | None]:
     r = None
     try:
         url = f"{BASE_URL}{osf_id}"
@@ -114,7 +114,7 @@ def get_preprint_by_id(osf_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[
             pass
 
 
-def get_preprint_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def get_preprint_by_doi(doi: str) -> tuple[dict[str, Any] | None, str | None]:
     """Lookup preprint by DOI using direct filter and fallback query."""
     try:
         if not doi or not doi.strip():
@@ -143,7 +143,7 @@ def get_preprint_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[st
         return None, f"OSF error: {str(e)}"
 
 
-def get_primary_file_download_url(osf_id: str) -> Tuple[Optional[str], Optional[str]]:
+def get_primary_file_download_url(osf_id: str) -> tuple[str | None, str | None]:
     """Resolve the primary file's direct download URL for a given preprint id.
 
     Returns (download_url, error).
@@ -176,7 +176,7 @@ def get_primary_file_download_url(osf_id: str) -> Tuple[Optional[str], Optional[
         return None, f"OSF error: {str(e)}"
 
 
-def raw_preprints(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def raw_preprints(params: dict[str, Any]) -> tuple[bytes | None, str | None, str | None]:
     """Raw passthrough for OSF preprints list endpoint.
 
     Accepts a dict of query parameters (e.g., q, filter[provider], page[size], page[number], filter[date_created][gte]).
@@ -192,7 +192,7 @@ def raw_preprints(params: Dict[str, Any]) -> Tuple[Optional[bytes], Optional[str
         return None, None, f"OSF error: {str(e)}"
 
 
-def raw_by_id(osf_id: str) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def raw_by_id(osf_id: str) -> tuple[bytes | None, str | None, str | None]:
     """Raw passthrough for a single OSF preprint by id."""
     try:
         r = fetch(method="GET", url=f"{BASE_URL}{osf_id}", headers={"Accept": "application/json"}, timeout=25)

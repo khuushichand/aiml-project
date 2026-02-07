@@ -4,7 +4,6 @@ Fixed-size chunking strategy.
 Splits text into fixed-length character windows with optional overlap.
 """
 
-from typing import List
 from loguru import logger
 
 from ..base import BaseChunkingStrategy
@@ -20,7 +19,7 @@ class FixedSizeChunkingStrategy(BaseChunkingStrategy):
         max_size: int,
         overlap: int = 0,
         **options,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Chunk text using fixed-size windows measured in characters.
 
@@ -44,7 +43,7 @@ class FixedSizeChunkingStrategy(BaseChunkingStrategy):
             return []
 
         step = max_size - overlap
-        chunks: List[str] = []
+        chunks: list[str] = []
         idx = 0
         text_length = len(text)
 

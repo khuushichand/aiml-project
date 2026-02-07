@@ -2,12 +2,14 @@
 # Description: Pydantic schemas for admin endpoints
 from __future__ import annotations
 
+from datetime import date, datetime
+
 # Imports
 from decimal import Decimal, InvalidOperation
-from typing import Optional, Dict, Any, List, Union, Literal
+from typing import Any, Literal
 from uuid import UUID
-from datetime import datetime, date
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, NonNegativeInt, field_validator
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, NonNegativeInt, field_validator
 
 #######################################################################################################################
 #
@@ -15,12 +17,12 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict, NonNegativeInt, fie
 
 class UserUpdateRequest(BaseModel):
     """Request to update user information"""
-    email: Optional[EmailStr] = None
-    role: Optional[str] = Field(None, pattern="^(user|admin|service)$")
-    is_active: Optional[bool] = None
-    is_verified: Optional[bool] = None
-    is_locked: Optional[bool] = None
-    storage_quota_mb: Optional[int] = Field(None, ge=100)
+    email: EmailStr | None = None
+    role: str | None = Field(None, pattern="^(user|admin|service)$")
+    is_active: bool | None = None
+    is_verified: bool | None = None
+    is_locked: bool | None = None
+    storage_quota_mb: int | None = Field(None, ge=100)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -38,7 +40,7 @@ class AdminUserCreateRequest(BaseModel):
     role: str = Field("user", pattern="^(user|admin|service)$")
     is_active: bool = True
     is_verified: bool = True
-    storage_quota_mb: Optional[int] = Field(None, ge=100)
+    storage_quota_mb: int | None = Field(None, ge=100)
 
     @field_validator("username")
     @classmethod
@@ -65,16 +67,41 @@ class UserSummary(BaseModel):
     is_active: bool
     is_verified: bool
     created_at: datetime
-    last_login: Optional[datetime] = None
+    last_login: datetime | None = None
     storage_quota_mb: int
     storage_used_mb: float
 
     model_config = ConfigDict(from_attributes=True)
 
 
+class UserDetailResponse(BaseModel):
+    """Detailed user information for admin endpoints."""
+
+    id: int
+    uuid: UUID | None = None
+    username: str
+    email: str
+    role: str | None = None
+    is_active: bool | None = None
+    is_superuser: bool | None = None
+    is_verified: bool | None = None
+    email_verified: bool | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    last_login: datetime | None = None
+    storage_quota_mb: int | None = None
+    storage_used_mb: float | None = None
+    is_locked: bool | None = None
+    failed_login_attempts: int | None = None
+    locked_until: datetime | None = None
+    metadata: Any | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserListResponse(BaseModel):
     """Response for user list endpoint"""
-    users: List[UserSummary]
+    users: list[UserSummary]
     total: int
     page: int
     limit: int
@@ -99,14 +126,14 @@ class RegistrationCodeRequest(BaseModel):
     max_uses: int = Field(1, ge=1, le=100)
     expiry_days: int = Field(7, ge=1, le=365)
     role_to_grant: str = Field("user", pattern="^(user|admin|service)$")
-    allowed_email_domain: Optional[str] = Field(
+    allowed_email_domain: str | None = Field(
         None,
         pattern=r"^@?[A-Za-z0-9.-]+$",
     )
-    metadata: Optional[Dict[str, Any]] = None
-    org_id: Optional[int] = Field(None, ge=1)
-    org_role: Optional[str] = Field(None, pattern=r"^(owner|admin|lead|member)$")
-    team_id: Optional[int] = Field(None, ge=1)
+    metadata: dict[str, Any] | None = None
+    org_id: int | None = Field(None, ge=1)
+    org_role: str | None = Field(None, pattern=r"^(owner|admin|lead|member)$")
+    team_id: int | None = Field(None, ge=1)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -119,16 +146,16 @@ class RegistrationCodeResponse(BaseModel):
     times_used: int
     expires_at: datetime
     created_at: datetime
-    created_by: Optional[int] = None
+    created_by: int | None = None
     role_to_grant: str
-    allowed_email_domain: Optional[str] = None
-    org_id: Optional[int] = None
-    org_role: Optional[str] = None
-    team_id: Optional[int] = None
-    org_name: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-    is_active: Optional[bool] = None
-    is_valid: Optional[bool] = None
+    allowed_email_domain: str | None = None
+    org_id: int | None = None
+    org_role: str | None = None
+    team_id: int | None = None
+    org_name: str | None = None
+    metadata: dict[str, Any] | None = None
+    is_active: bool | None = None
+    is_valid: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -142,7 +169,7 @@ class RegistrationCodeResponse(BaseModel):
 
 class RegistrationCodeListResponse(BaseModel):
     """Response for registration code list"""
-    codes: List[RegistrationCodeResponse]
+    codes: list[RegistrationCodeResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -151,17 +178,17 @@ class RegistrationSettingsResponse(BaseModel):
     """Registration configuration status for admin surfaces."""
     enable_registration: bool
     require_registration_code: bool
-    auth_mode: Optional[str] = None
-    profile: Optional[str] = None
-    self_registration_allowed: Optional[bool] = None
+    auth_mode: str | None = None
+    profile: str | None = None
+    self_registration_allowed: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class RegistrationSettingsUpdateRequest(BaseModel):
     """Request to update registration settings."""
-    enable_registration: Optional[bool] = None
-    require_registration_code: Optional[bool] = None
+    enable_registration: bool | None = None
+    require_registration_code: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -172,12 +199,12 @@ class RegistrationSettingsUpdateRequest(BaseModel):
 
 class LLMProviderOverrideRequest(BaseModel):
     """Request to upsert LLM provider overrides."""
-    is_enabled: Optional[bool] = None
-    allowed_models: Optional[List[str]] = None
-    config: Optional[Dict[str, Any]] = None
-    api_key: Optional[str] = None
-    credential_fields: Optional[Dict[str, Any]] = None
-    clear_api_key: Optional[bool] = None
+    is_enabled: bool | None = None
+    allowed_models: list[str] | None = None
+    config: dict[str, Any] | None = None
+    api_key: str | None = None
+    credential_fields: dict[str, Any] | None = None
+    clear_api_key: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -185,21 +212,21 @@ class LLMProviderOverrideRequest(BaseModel):
 class LLMProviderOverrideResponse(BaseModel):
     """Response payload for LLM provider overrides."""
     provider: str
-    is_enabled: Optional[bool] = None
-    allowed_models: Optional[List[str]] = None
-    config: Optional[Dict[str, Any]] = None
-    credential_fields: Optional[Dict[str, Any]] = None
+    is_enabled: bool | None = None
+    allowed_models: list[str] | None = None
+    config: dict[str, Any] | None = None
+    credential_fields: dict[str, Any] | None = None
     has_api_key: bool = False
-    api_key_hint: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    api_key_hint: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class LLMProviderOverrideListResponse(BaseModel):
     """Response payload for listing LLM provider overrides."""
-    items: List[LLMProviderOverrideResponse]
+    items: list[LLMProviderOverrideResponse]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -207,9 +234,9 @@ class LLMProviderOverrideListResponse(BaseModel):
 class LLMProviderTestRequest(BaseModel):
     """Request to test LLM provider connectivity."""
     provider: str
-    model: Optional[str] = None
-    api_key: Optional[str] = None
-    credential_fields: Optional[Dict[str, Any]] = None
+    model: str | None = None
+    api_key: str | None = None
+    credential_fields: dict[str, Any] | None = None
     use_override: bool = True
 
     model_config = ConfigDict(from_attributes=True)
@@ -219,7 +246,7 @@ class LLMProviderTestResponse(BaseModel):
     """Response payload for LLM provider test results."""
     provider: str
     status: str
-    model: Optional[str] = None
+    model: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -278,8 +305,8 @@ class ActivityPoint(BaseModel):
 class ActivitySummaryResponse(BaseModel):
     """Dashboard activity summary response."""
     days: int = Field(..., ge=0)
-    points: List[ActivityPoint]
-    warnings: Optional[List[str]] = None
+    points: list[ActivityPoint]
+    warnings: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -292,23 +319,23 @@ class SecurityAlertSinkStatus(BaseModel):
     """Represents the status of an individual security alert sink."""
     sink: str
     configured: bool
-    min_severity: Optional[str] = None
-    last_status: Optional[bool] = None
-    last_error: Optional[str] = None
-    backoff_until: Optional[datetime] = None
+    min_severity: str | None = None
+    last_status: bool | None = None
+    last_error: str | None = None
+    backoff_until: datetime | None = None
 
 
 class SecurityAlertStatusResponse(BaseModel):
     """Aggregated security alert configuration and health."""
     enabled: bool
     min_severity: str
-    last_dispatch_time: Optional[datetime]
-    last_dispatch_success: Optional[bool]
-    last_dispatch_error: Optional[str] = None
+    last_dispatch_time: datetime | None
+    last_dispatch_success: bool | None
+    last_dispatch_error: str | None = None
     dispatch_count: int
-    last_validation_time: Optional[datetime]
-    validation_errors: Optional[List[str]] = None
-    sinks: List[SecurityAlertSinkStatus]
+    last_validation_time: datetime | None
+    validation_errors: list[str] | None = None
+    sinks: list[SecurityAlertSinkStatus]
     health: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -321,12 +348,12 @@ class SecurityAlertStatusResponse(BaseModel):
 class AuditLogEntry(BaseModel):
     """Single audit log entry"""
     id: int
-    user_id: Optional[int] = None
-    username: Optional[str] = None
+    user_id: int | None = None
+    username: str | None = None
     action: str
-    resource: Optional[str] = None
-    details: Optional[Any] = None
-    ip_address: Optional[str] = None
+    resource: str | None = None
+    details: Any | None = None
+    ip_address: str | None = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -334,7 +361,7 @@ class AuditLogEntry(BaseModel):
 
 class AuditLogResponse(BaseModel):
     """Response for audit log endpoint"""
-    entries: List[AuditLogEntry]
+    entries: list[AuditLogEntry]
     total: int
     limit: int
     offset: int
@@ -350,7 +377,7 @@ class BackupItem(BaseModel):
     """Metadata for a backup artifact."""
     id: str
     dataset: str
-    user_id: Optional[int] = None
+    user_id: int | None = None
     status: str = "ready"
     size_bytes: int
     created_at: datetime
@@ -360,7 +387,7 @@ class BackupItem(BaseModel):
 
 class BackupListResponse(BaseModel):
     """Response for backup listing."""
-    items: List[BackupItem]
+    items: list[BackupItem]
     total: int
     limit: int
     offset: int
@@ -371,9 +398,9 @@ class BackupListResponse(BaseModel):
 class BackupCreateRequest(BaseModel):
     """Request to create a backup snapshot."""
     dataset: str
-    user_id: Optional[int] = None
-    backup_type: Optional[str] = Field("full", pattern="^(full|incremental)$")
-    max_backups: Optional[int] = Field(None, ge=1, le=1000)
+    user_id: int | None = None
+    backup_type: str | None = Field("full", pattern="^(full|incremental)$")
+    max_backups: int | None = Field(None, ge=1, le=1000)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -388,7 +415,7 @@ class BackupCreateResponse(BaseModel):
 class BackupRestoreRequest(BaseModel):
     """Request to restore a backup snapshot."""
     dataset: str
-    user_id: Optional[int] = None
+    user_id: int | None = None
     confirm: bool = False
 
     model_config = ConfigDict(from_attributes=True)
@@ -405,15 +432,15 @@ class BackupRestoreResponse(BaseModel):
 class RetentionPolicy(BaseModel):
     """Retention policy descriptor."""
     key: str
-    days: Optional[int] = None
-    description: Optional[str] = None
+    days: int | None = None
+    description: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class RetentionPoliciesResponse(BaseModel):
     """Response for retention policy listing."""
-    policies: List[RetentionPolicy]
+    policies: list[RetentionPolicy]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -431,27 +458,27 @@ class RetentionPolicyUpdateRequest(BaseModel):
 
 class SystemLogEntry(BaseModel):
     """Single system log entry."""
-    timestamp: Optional[datetime] = None
-    level: Optional[str] = None
-    message: Optional[str] = None
-    logger: Optional[str] = None
-    module: Optional[str] = None
-    function: Optional[str] = None
-    line: Optional[int] = None
-    request_id: Optional[str] = None
-    org_id: Optional[int] = None
-    user_id: Optional[int] = None
-    trace_id: Optional[str] = None
-    span_id: Optional[str] = None
-    correlation_id: Optional[str] = None
-    event: Optional[str] = None
+    timestamp: datetime | None = None
+    level: str | None = None
+    message: str | None = None
+    logger: str | None = None
+    module: str | None = None
+    function: str | None = None
+    line: int | None = None
+    request_id: str | None = None
+    org_id: int | None = None
+    user_id: int | None = None
+    trace_id: str | None = None
+    span_id: str | None = None
+    correlation_id: str | None = None
+    event: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class SystemLogsResponse(BaseModel):
     """Response for system log listing."""
-    items: List[SystemLogEntry]
+    items: list[SystemLogEntry]
     total: int
     limit: int
     offset: int
@@ -463,10 +490,10 @@ class MaintenanceState(BaseModel):
     """Maintenance mode state."""
     enabled: bool
     message: str = ""
-    allowlist_user_ids: List[int] = []
-    allowlist_emails: List[str] = []
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+    allowlist_user_ids: list[int] = []
+    allowlist_emails: list[str] = []
+    updated_at: datetime | None = None
+    updated_by: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -474,9 +501,9 @@ class MaintenanceState(BaseModel):
 class MaintenanceUpdateRequest(BaseModel):
     """Request to update maintenance mode."""
     enabled: bool
-    message: Optional[str] = None
-    allowlist_user_ids: Optional[List[int]] = None
-    allowlist_emails: Optional[List[str]] = None
+    message: str | None = None
+    allowlist_user_ids: list[int] | None = None
+    allowlist_emails: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -485,8 +512,8 @@ class FeatureFlagHistoryEntry(BaseModel):
     """Feature flag change history entry."""
     timestamp: datetime
     enabled: bool
-    actor: Optional[str] = None
-    note: Optional[str] = None
+    actor: str | None = None
+    note: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -496,20 +523,20 @@ class FeatureFlagItem(BaseModel):
     key: str
     scope: Literal["global", "org", "user"]
     enabled: bool
-    description: Optional[str] = None
-    org_id: Optional[int] = None
-    user_id: Optional[int] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
-    history: List[FeatureFlagHistoryEntry] = []
+    description: str | None = None
+    org_id: int | None = None
+    user_id: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    updated_by: str | None = None
+    history: list[FeatureFlagHistoryEntry] = []
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class FeatureFlagsResponse(BaseModel):
     """Response for feature flag listing."""
-    items: List[FeatureFlagItem]
+    items: list[FeatureFlagItem]
     total: int
 
     model_config = ConfigDict(from_attributes=True)
@@ -519,10 +546,10 @@ class FeatureFlagUpsertRequest(BaseModel):
     """Request to upsert a feature flag."""
     scope: Literal["global", "org", "user"]
     enabled: bool
-    description: Optional[str] = None
-    org_id: Optional[int] = None
-    user_id: Optional[int] = None
-    note: Optional[str] = None
+    description: str | None = None
+    org_id: int | None = None
+    user_id: int | None = None
+    note: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -532,7 +559,7 @@ class IncidentEvent(BaseModel):
     id: str
     message: str
     created_at: datetime
-    actor: Optional[str] = None
+    actor: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -543,21 +570,21 @@ class IncidentItem(BaseModel):
     title: str
     status: Literal["open", "investigating", "mitigating", "resolved"]
     severity: Literal["low", "medium", "high", "critical"]
-    summary: Optional[str] = None
-    tags: List[str] = []
+    summary: str | None = None
+    tags: list[str] = []
     created_at: datetime
     updated_at: datetime
-    resolved_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_by: Optional[str] = None
-    timeline: List[IncidentEvent] = []
+    resolved_at: datetime | None = None
+    created_by: str | None = None
+    updated_by: str | None = None
+    timeline: list[IncidentEvent] = []
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class IncidentListResponse(BaseModel):
     """Response for incident listing."""
-    items: List[IncidentItem]
+    items: list[IncidentItem]
     total: int
     limit: int
     offset: int
@@ -568,22 +595,22 @@ class IncidentListResponse(BaseModel):
 class IncidentCreateRequest(BaseModel):
     """Request to create an incident."""
     title: str
-    status: Optional[Literal["open", "investigating", "mitigating", "resolved"]] = None
-    severity: Optional[Literal["low", "medium", "high", "critical"]] = None
-    summary: Optional[str] = None
-    tags: Optional[List[str]] = None
+    status: Literal["open", "investigating", "mitigating", "resolved"] | None = None
+    severity: Literal["low", "medium", "high", "critical"] | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class IncidentUpdateRequest(BaseModel):
     """Request to update an incident."""
-    title: Optional[str] = None
-    status: Optional[Literal["open", "investigating", "mitigating", "resolved"]] = None
-    severity: Optional[Literal["low", "medium", "high", "critical"]] = None
-    summary: Optional[str] = None
-    tags: Optional[List[str]] = None
-    update_message: Optional[str] = None
+    title: str | None = None
+    status: Literal["open", "investigating", "mitigating", "resolved"] | None = None
+    severity: Literal["low", "medium", "high", "critical"] | None = None
+    summary: str | None = None
+    tags: list[str] | None = None
+    update_message: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -601,7 +628,7 @@ class IncidentEventCreateRequest(BaseModel):
 
 class BatchUserOperation(BaseModel):
     """Batch operation on multiple users"""
-    user_ids: List[int]
+    user_ids: list[int]
     operation: str = Field(..., pattern="^(activate|deactivate|verify|lock|unlock|delete)$")
 
     model_config = ConfigDict(from_attributes=True)
@@ -611,7 +638,7 @@ class BatchOperationResponse(BaseModel):
     """Response for batch operations"""
     success_count: int
     failed_count: int
-    failed_ids: List[int] = []
+    failed_ids: list[int] = []
     message: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -624,19 +651,19 @@ class BatchOperationResponse(BaseModel):
 class UsageDailyRow(BaseModel):
     """Single usage_daily record."""
     user_id: int
-    day: Union[date, str]
+    day: date | str
     requests: int
     errors: int
     bytes_total: int
-    bytes_in_total: Optional[int] = None
-    latency_avg_ms: Optional[float] = None
+    bytes_in_total: int | None = None
+    latency_avg_ms: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class UsageDailyResponse(BaseModel):
     """Response for daily usage query."""
-    items: List[UsageDailyRow]
+    items: list[UsageDailyRow]
     total: int
     page: int
     limit: int
@@ -650,14 +677,23 @@ class UsageTopRow(BaseModel):
     requests: int
     errors: int
     bytes_total: int
-    bytes_in_total: Optional[int] = None
-    latency_avg_ms: Optional[float] = None
+    bytes_in_total: int | None = None
+    latency_avg_ms: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class UsageTopResponse(BaseModel):
-    items: List[UsageTopRow]
+    items: list[UsageTopRow]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UsageAggregateResponse(BaseModel):
+    """Response for manual usage aggregation."""
+    status: str
+    day: str | None = None
+    reason: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -674,10 +710,10 @@ _BUDGET_FIELD_KEYS = {
 }
 
 
-def _normalize_threshold_list(values: List[Any]) -> List[int]:
+def _normalize_threshold_list(values: list[Any]) -> list[int]:
     if not values:
         raise ValueError("Alert thresholds must not be empty")
-    cleaned: List[int] = []
+    cleaned: list[int] = []
     for val in values:
         try:
             num = int(val)
@@ -689,7 +725,7 @@ def _normalize_threshold_list(values: List[Any]) -> List[int]:
     return sorted(set(cleaned))
 
 
-def _validate_usd_precision(value: Optional[Any]) -> Optional[float]:
+def _validate_usd_precision(value: Any | None) -> float | None:
     if value is None:
         return None
     try:
@@ -703,12 +739,12 @@ def _validate_usd_precision(value: Optional[Any]) -> Optional[float]:
 
 class BudgetAlertThresholds(BaseModel):
     """Alert thresholds for budgets (global + per-metric)."""
-    global_: Optional[List[int]] = Field(default=None, alias="global")
-    per_metric: Optional[Dict[str, Optional[List[int]]]] = None
+    global_: list[int] | None = Field(default=None, alias="global")
+    per_metric: dict[str, list[int] | None] | None = None
 
     @field_validator("global_")
     @classmethod
-    def validate_global_thresholds(cls, v: Optional[List[int]]) -> Optional[List[int]]:
+    def validate_global_thresholds(cls, v: list[int] | None) -> list[int] | None:
         if v is None:
             return v
         return _normalize_threshold_list(v)
@@ -716,13 +752,13 @@ class BudgetAlertThresholds(BaseModel):
     @field_validator("per_metric")
     @classmethod
     def validate_per_metric_thresholds(
-        cls, v: Optional[Dict[str, Optional[List[int]]]]
-    ) -> Optional[Dict[str, Optional[List[int]]]]:
+        cls, v: dict[str, list[int] | None] | None
+    ) -> dict[str, list[int] | None] | None:
         if v is None:
             return v
         if not isinstance(v, dict):
             raise ValueError("Per-metric thresholds must be a mapping")
-        cleaned: Dict[str, Optional[List[int]]] = {}
+        cleaned: dict[str, list[int] | None] = {}
         for key, values in v.items():
             if key not in _BUDGET_FIELD_KEYS:
                 raise ValueError("Unknown per-metric budget key")
@@ -737,19 +773,19 @@ class BudgetAlertThresholds(BaseModel):
 
 class BudgetEnforcementMode(BaseModel):
     """Enforcement mode for budgets (global + per-metric)."""
-    global_: Optional[Literal["none", "soft", "hard"]] = Field(default=None, alias="global")
-    per_metric: Optional[Dict[str, Optional[Literal["none", "soft", "hard"]]]] = None
+    global_: Literal["none", "soft", "hard"] | None = Field(default=None, alias="global")
+    per_metric: dict[str, Literal["none", "soft", "hard"] | None] | None = None
 
     @field_validator("per_metric")
     @classmethod
     def validate_per_metric_modes(
-        cls, v: Optional[Dict[str, Optional[Literal["none", "soft", "hard"]]]]
-    ) -> Optional[Dict[str, Optional[Literal["none", "soft", "hard"]]]]:
+        cls, v: dict[str, Literal["none", "soft", "hard"] | None] | None
+    ) -> dict[str, Literal["none", "soft", "hard"] | None] | None:
         if v is None:
             return v
         if not isinstance(v, dict):
             raise ValueError("Per-metric enforcement must be a mapping")
-        cleaned: Dict[str, Optional[Literal["none", "soft", "hard"]]] = {}
+        cleaned: dict[str, Literal["none", "soft", "hard"] | None] = {}
         for key, value in v.items():
             if key not in _BUDGET_FIELD_KEYS:
                 raise ValueError("Unknown per-metric budget key")
@@ -766,21 +802,21 @@ class BudgetEnforcementMode(BaseModel):
 
 class BudgetSettings(BaseModel):
     """Budget configuration for an organization."""
-    budget_day_usd: Optional[float] = Field(None, ge=0)
-    budget_month_usd: Optional[float] = Field(None, ge=0)
-    budget_day_tokens: Optional[int] = Field(None, ge=0)
-    budget_month_tokens: Optional[int] = Field(None, ge=0)
-    alert_thresholds: Optional[BudgetAlertThresholds] = None
-    enforcement_mode: Optional[BudgetEnforcementMode] = None
+    budget_day_usd: float | None = Field(None, ge=0)
+    budget_month_usd: float | None = Field(None, ge=0)
+    budget_day_tokens: int | None = Field(None, ge=0)
+    budget_month_tokens: int | None = Field(None, ge=0)
+    alert_thresholds: BudgetAlertThresholds | None = None
+    enforcement_mode: BudgetEnforcementMode | None = None
 
     @field_validator("budget_day_usd", "budget_month_usd", mode="before")
     @classmethod
-    def validate_usd_precision(cls, v: Optional[Any]) -> Optional[float]:
+    def validate_usd_precision(cls, v: Any | None) -> float | None:
         return _validate_usd_precision(v)
 
     @field_validator("alert_thresholds", mode="before")
     @classmethod
-    def coerce_alert_thresholds(cls, v: Optional[Any]) -> Optional[Any]:
+    def coerce_alert_thresholds(cls, v: Any | None) -> Any | None:
         if v is None:
             return v
         if isinstance(v, list):
@@ -789,7 +825,7 @@ class BudgetSettings(BaseModel):
 
     @field_validator("enforcement_mode", mode="before")
     @classmethod
-    def coerce_enforcement_mode(cls, v: Optional[Any]) -> Optional[Any]:
+    def coerce_enforcement_mode(cls, v: Any | None) -> Any | None:
         if v is None:
             return v
         if isinstance(v, str):
@@ -800,13 +836,13 @@ class BudgetSettings(BaseModel):
 class OrgBudgetUpdateRequest(BaseModel):
     """Upsert budget settings for an organization."""
     org_id: int = Field(..., ge=1)
-    budgets: Optional[BudgetSettings] = None
+    budgets: BudgetSettings | None = None
     clear_budgets: bool = False
 
 
 class OrgBudgetSelfUpdateRequest(BaseModel):
     """Upsert budget settings for the current organization context."""
-    budgets: Optional[BudgetSettings] = None
+    budgets: BudgetSettings | None = None
     clear_budgets: bool = False
 
 
@@ -814,19 +850,19 @@ class OrgBudgetItem(BaseModel):
     """Budget details for an organization."""
     org_id: int
     org_name: str
-    org_slug: Optional[str] = None
+    org_slug: str | None = None
     plan_name: str
     plan_display_name: str
     budgets: BudgetSettings = Field(default_factory=BudgetSettings)
-    custom_limits: Dict[str, Any] = Field(default_factory=dict)
-    effective_limits: Dict[str, Any] = Field(default_factory=dict)
-    updated_at: Optional[datetime] = None
+    custom_limits: dict[str, Any] = Field(default_factory=dict)
+    effective_limits: dict[str, Any] = Field(default_factory=dict)
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class OrgBudgetListResponse(BaseModel):
-    items: List[OrgBudgetItem]
+    items: list[OrgBudgetItem]
     total: int
     page: int
     limit: int
@@ -841,27 +877,27 @@ class OrgBudgetListResponse(BaseModel):
 class LLMUsageLogRow(BaseModel):
     id: int
     ts: datetime
-    user_id: Optional[int] = None
-    key_id: Optional[int] = None
-    endpoint: Optional[str] = None
-    operation: Optional[str] = None
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    status: Optional[int] = None
-    latency_ms: Optional[int] = None
-    prompt_tokens: Optional[int] = None
-    completion_tokens: Optional[int] = None
-    total_tokens: Optional[int] = None
-    total_cost_usd: Optional[float] = None
-    currency: Optional[str] = None
-    estimated: Optional[bool] = None
-    request_id: Optional[str] = None
+    user_id: int | None = None
+    key_id: int | None = None
+    endpoint: str | None = None
+    operation: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    status: int | None = None
+    latency_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    total_cost_usd: float | None = None
+    currency: str | None = None
+    estimated: bool | None = None
+    request_id: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class LLMUsageLogResponse(BaseModel):
-    items: List[LLMUsageLogRow]
+    items: list[LLMUsageLogRow]
     total: int
     page: int
     limit: int
@@ -877,13 +913,13 @@ class LLMUsageSummaryRow(BaseModel):
     output_tokens: int
     total_tokens: int
     total_cost_usd: float
-    latency_avg_ms: Optional[float] = None
+    latency_avg_ms: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class LLMUsageSummaryResponse(BaseModel):
-    items: List[LLMUsageSummaryRow]
+    items: list[LLMUsageSummaryRow]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -897,7 +933,7 @@ class LLMTopSpenderRow(BaseModel):
 
 
 class LLMTopSpendersResponse(BaseModel):
-    items: List[LLMTopSpenderRow]
+    items: list[LLMTopSpenderRow]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -912,13 +948,13 @@ class ToolPermissionCreateRequest(BaseModel):
     If tool_name is "*", creates tools.execute:* (wildcard).
     """
     tool_name: str = Field(..., min_length=1)
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class ToolPermissionResponse(BaseModel):
     name: str
-    description: Optional[str] = None
-    category: Optional[str] = None
+    description: str | None = None
+    category: str | None = None
 
 
 class ToolPermissionGrantRequest(BaseModel):
@@ -931,7 +967,7 @@ class ToolPermissionGrantRequest(BaseModel):
 
 class ToolPermissionBatchRequest(BaseModel):
     """Grant multiple tool execution permissions to a role in one call."""
-    tool_names: List[str] = Field(..., min_length=1)
+    tool_names: list[str] = Field(..., min_length=1)
 
 
 class ToolPermissionPrefixRequest(BaseModel):
@@ -950,21 +986,21 @@ class ToolPermissionPrefixRequest(BaseModel):
 class ToolCatalogCreateRequest(BaseModel):
     """Create a new MCP tool catalog."""
     name: str = Field(..., min_length=1, max_length=200)
-    description: Optional[str] = None
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
-    is_active: Optional[bool] = True
+    description: str | None = None
+    org_id: int | None = None
+    team_id: int | None = None
+    is_active: bool | None = True
 
 
 class ToolCatalogResponse(BaseModel):
     id: int
     name: str
-    description: Optional[str] = None
-    org_id: Optional[int] = None
-    team_id: Optional[int] = None
+    description: str | None = None
+    org_id: int | None = None
+    team_id: int | None = None
     is_active: bool
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -972,13 +1008,13 @@ class ToolCatalogResponse(BaseModel):
 class ToolCatalogEntryCreateRequest(BaseModel):
     """Add a tool entry to a catalog."""
     tool_name: str = Field(..., min_length=1, max_length=200)
-    module_id: Optional[str] = Field(None, max_length=200)
+    module_id: str | None = Field(None, max_length=200)
 
 
 class ToolCatalogEntryResponse(BaseModel):
     catalog_id: int
     tool_name: str
-    module_id: Optional[str] = None
+    module_id: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1004,8 +1040,19 @@ class NotesTitleSettingsUpdate(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
 
-    llm_enabled: Optional[bool] = Field(default=None)
-    default_strategy: Optional[Literal['heuristic', 'llm', 'llm_fallback']] = Field(default=None)
+    llm_enabled: bool | None = Field(default=None)
+    default_strategy: Literal['heuristic', 'llm', 'llm_fallback'] | None = Field(default=None)
+
+
+class NotesTitleSettingsResponse(BaseModel):
+    """Response payload for Notes auto-title settings."""
+    llm_enabled: bool
+    default_strategy: str
+    effective_strategy: str
+    strategies: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 #
 # Cleanup worker settings (admin)
@@ -1018,8 +1065,16 @@ class AdminCleanupSettingsUpdate(BaseModel):
     """
     model_config = ConfigDict(extra='forbid')
 
-    enabled: Optional[bool] = Field(default=None)
-    interval_sec: Optional[int] = Field(default=None, ge=60, le=604800)
+    enabled: bool | None = Field(default=None)
+    interval_sec: int | None = Field(default=None, ge=60, le=604800)
+
+
+class AdminCleanupSettingsResponse(BaseModel):
+    """Response payload for cleanup worker settings."""
+    enabled: bool
+    interval_sec: int
+
+    model_config = ConfigDict(from_attributes=True)
 
 #
 ## End of admin_schemas.py

@@ -4,33 +4,42 @@
 #
 # Imports
 from __future__ import annotations
+
 #
 import asyncio
 import configparser
-import os
-import time
-import threading
 import hashlib
+import json
+import os
 import re
+import threading
+import time
 import weakref
-from pathlib import Path
 from functools import wraps
-from typing import Any, Dict, List, Optional, Annotated, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Annotated, Any, Literal
+
 #
 # Third-party Libraries
 import numpy as np
 from loguru import logger
+from prometheus_client import REGISTRY, Counter, Gauge  # Assuming these are defined elsewhere or used directly
 from pydantic import BaseModel, Field
-from prometheus_client import Counter, Gauge, REGISTRY  # Assuming these are defined elsewhere or used directly
+
+if TYPE_CHECKING:
+    from transformers import AutoModel, AutoTokenizer
+
 # NOTE: Avoid importing heavy deps (torch, transformers) at module import time.
 # Import them lazily inside functions/methods when needed to keep app import light.
+
+_EMBEDDINGS_IMPORT_EXCEPTIONS = (ImportError, OSError, RuntimeError)
 
 def _import_torch():
     """Lazily import torch only when actually needed."""
     try:
         import torch  # type: ignore
         return torch
-    except Exception as e:
+    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
         # Defer error to call site with a clearer message
         raise ImportError("'torch' is required for this embeddings provider. Install torch to proceed.") from e
 
@@ -40,16 +49,16 @@ def _import_transformers():
     try:
         from transformers import AutoModel, AutoTokenizer  # type: ignore
         return AutoModel, AutoTokenizer
-    except Exception as e:
+    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
         raise ImportError(
             "'transformers' is required for this embeddings provider. Install transformers to proceed."
         ) from e
 
 
-_ORT_IMPORT_ERROR: Optional[Exception] = None
+_ORT_IMPORT_ERROR: Exception | None = None
 try:
     import onnxruntime as ort  # type: ignore
-except Exception as e:
+except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
     ort = None  # type: ignore[assignment]
     _ORT_IMPORT_ERROR = e
 
@@ -64,23 +73,42 @@ def _import_onnxruntime():
         ort = _ort
         _ORT_IMPORT_ERROR = None
         return _ort
-    except Exception as e:
+    except _EMBEDDINGS_IMPORT_EXCEPTIONS as e:
         _ORT_IMPORT_ERROR = e
         raise ImportError(
             "'onnxruntime' is required for the ONNX embeddings provider. Install onnxruntime to proceed."
         ) from e
 #
 # Local Imports
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
-from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
+import contextlib
+
+from tldw_Server_API.app.core.config import resolve_repo_relative_path, rg_policy_path
 from tldw_Server_API.app.core.Embeddings.audit_adapter import (
-    log_model_evicted,
     log_memory_limit_exceeded,
+    log_model_evicted,
 )
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, NetworkError, RetryExhaustedError
-from tldw_Server_API.app.core.config import rg_policy_path, resolve_repo_relative_path
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import get_openai_embeddings_batch
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram  # Keep your existing metrics
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
+from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
+
+_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    json.JSONDecodeError,
+    re.error,
+    InvalidStoragePathError,
+    NetworkError,
+    RetryExhaustedError,
+)
 
 #
 ########################################################################################################################
@@ -89,14 +117,14 @@ from tldw_Server_API.app.core.Utils.path_utils import safe_join
 try:
     from optimum.onnxruntime import ORTModelForFeatureExtraction
     OPTIMUM_AVAILABLE = True
-except Exception:
+except _EMBEDDINGS_IMPORT_EXCEPTIONS:
     # Catch broad exceptions to avoid import-time crashes in environments
     # where optional deps pull in heavy libs (e.g., transformers/torch) that
     # tests may stub out.
     ORTModelForFeatureExtraction = None
     OPTIMUM_AVAILABLE = False
 
-COMMIT_HASHES: Dict[str, str] = {
+COMMIT_HASHES: dict[str, str] = {
     "jinaai/jina-embeddings-v3": "4be32c2f5d65b95e4bcce473545b7883ec8d2edd",
     "Alibaba-NLP/gte-large-en-v1.5": "104333d6af6f97649377c2afbde10a7704870c7b",
     "dunzhang/setll_en_400M_v5": "2aa5579fcae1c579de199a3866b6e514bbbf5d10",
@@ -110,7 +138,7 @@ _EMBEDDINGS_STORAGE_ALLOWLIST_ROOT = Path(
 ).resolve(strict=False)
 
 
-def _get_http_status_from_exception(exc: Exception) -> Optional[int]:
+def _get_http_status_from_exception(exc: Exception) -> int | None:
     response = getattr(exc, "response", None)
     if response is None:
         return None
@@ -128,9 +156,7 @@ def _is_probable_network_error(exc: Exception) -> bool:
     if "Timeout" in name or "Connection" in name or "Connect" in name:
         return True
     msg = str(exc).lower()
-    if "timed out" in msg or "timeout" in msg or "connection" in msg or "dns" in msg:
-        return True
-    return False
+    return bool("timed out" in msg or "timeout" in msg or "connection" in msg or "dns" in msg)
 
 
 def _is_request_exception(exc: Exception) -> bool:
@@ -142,9 +168,7 @@ def _is_request_exception(exc: Exception) -> bool:
         return True
     if "HTTPError" in name:
         return True
-    if _get_http_status_from_exception(exc) is not None:
-        return True
-    return False
+    return _get_http_status_from_exception(exc) is not None
 
 
 def _model_cache_subdir_name(model_id: str) -> str:
@@ -172,8 +196,8 @@ def _log_rejected_path(
     value: str,
     reason: str,
     *,
-    resolved: Optional[str] = None,
-    base: Optional[str] = None,
+    resolved: str | None = None,
+    base: str | None = None,
 ) -> None:
     """Log and count a rejected storage path value with optional context."""
     trimmed = (value or "").strip()
@@ -235,7 +259,7 @@ def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
         candidate = ""
         try:
             candidate = os.path.abspath(os.path.join(base_dir, subpath))
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             candidate = ""
         _log_rejected_path(
             label,
@@ -252,8 +276,8 @@ def _safe_model_storage_subdir(base_dir: str, subpath: str, label: str) -> str:
 
 
 def resolve_model_storage_base_dir(
-    embedding_settings: Optional[Dict[str, Any]] = None,
-    default: Optional[str] = None,
+    embedding_settings: dict[str, Any] | None = None,
+    default: str | None = None,
 ) -> str:
     """
     Determine the base directory used to persist embedding model artifacts.
@@ -274,7 +298,7 @@ def resolve_model_storage_base_dir(
 
     try:
         configured_dir = settings.get("EMBEDDINGS_MODEL_STORAGE_DIR")
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Failed to read EMBEDDINGS_MODEL_STORAGE_DIR from settings: {}", exc)
         configured_dir = None
     if configured_dir:
@@ -367,11 +391,11 @@ MAX_MODELS_IN_MEMORY = RESOURCE_LIMITS['max_models']
 MAX_MODEL_MEMORY_GB = RESOURCE_LIMITS['max_memory_gb']
 MODEL_LRU_TTL_SECONDS = RESOURCE_LIMITS['lru_ttl_seconds']
 
-embedding_models: Dict[str, Any] = {}
+embedding_models: dict[str, Any] = {}
 embedding_models_lock = threading.RLock()  # Global reentrant lock for the embedding_models dictionary
-model_last_used: Dict[str, float] = {}  # Track last usage time for LRU eviction
-model_memory_usage: Dict[str, float] = {}  # Track estimated memory per model
-model_in_use_counts: Dict[str, int] = {}  # Track active users of cached models
+model_last_used: dict[str, float] = {}  # Track last usage time for LRU eviction
+model_memory_usage: dict[str, float] = {}  # Track estimated memory per model
+model_in_use_counts: dict[str, int] = {}  # Track active users of cached models
 
 
 def _mark_model_in_use(model_id: str) -> None:
@@ -402,10 +426,10 @@ def _get_or_create_metric(metric_cls, name: str, documentation: str, labelnames:
                 return existing
             try:
                 REGISTRY.unregister(existing)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 # If unregister fails, fall through and let metric creation raise with context.
                 pass
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Accessing registry internals is best-effort; metric creation will validate again.
         pass
     return metric_cls(name, documentation, labelnames=labelnames)
@@ -449,7 +473,7 @@ class BaseModelCfg(BaseModel):
     provider: str
     model_name_or_path: str
     trust_remote_code: bool = False
-    revision: Optional[str] = None
+    revision: str | None = None
     max_length: int = 512
     unload_timeout_seconds: int = 300
 
@@ -462,19 +486,19 @@ class HFModelCfg(BaseModelCfg):
 class ONNXModelCfg(BaseModelCfg):
     provider: Literal["onnx"] = "onnx"
     onnx_storage_dir_subpath: str = "onnx_models"
-    onnx_providers: List[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
+    onnx_providers: list[str] = Field(default_factory=lambda: ["CPUExecutionProvider"])
 
 
 class OpenAIModelCfg(BaseModelCfg):
     provider: Literal["openai"] = "openai"
-    api_key: Optional[str] = None
-    dimensions: Optional[int] = None
+    api_key: str | None = None
+    dimensions: int | None = None
 
 
 class LocalAPICfg(BaseModelCfg):
     provider: Literal["local_api"] = "local_api"
     api_url: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
     # Consider adding chunk_size for local_api batching
     # chunk_size: int = 100
 
@@ -487,22 +511,22 @@ ModelCfg = Annotated[
 
 class EmbeddingConfigSchema(BaseModel):
     default_model_id: str
-    model_storage_base_dir: Optional[str] = Field(default="./models/embedding_models_data/")
+    model_storage_base_dir: str | None = Field(default="./models/embedding_models_data/")
     # These are currently NOT used by the global decorators.
     # If dynamic configuration is needed, decorators must be applied differently.
     rate_limiter: RateLimiterCfg = RateLimiterCfg()
     retry_config: RetryCfg = RetryCfg()
-    models: Dict[str, ModelCfg]
+    models: dict[str, ModelCfg]
 
 
-def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) -> None:
+def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> None:
     if expected_sha is None:
         logger.debug(f"No revision SHA provided for {model_name_or_path}, skipping check.")
         return
     try:
         try:
             from huggingface_hub import model_info as _model_info  # type: ignore
-        except Exception as import_exc:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as import_exc:
             logger.warning(
                 "huggingface_hub not available; skipping revision verification for {}. "
                 "Install huggingface_hub to enable commit hash checks. Error: {}",
@@ -526,7 +550,7 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
             f"{os_err}. Proceeding without remote validation."
         )
         return
-    except Exception as e:  # Catch network errors or if model/revision not found
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:  # Catch network errors or if model/revision not found
         if _is_probable_network_error(e):
             logger.warning(
                 f"Skipping Hugging Face revision verification for {model_name_or_path} due to connectivity issue: "
@@ -542,7 +566,7 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: Optional[str]) ->
             f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {e}"
         )
         # Decide if this should be a fatal error. For now, we'll raise to prevent using a potentially wrong model.
-        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}")
+        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}") from e
 
 
 class TokenBucketLimiter:
@@ -608,7 +632,7 @@ class TokenBucketLimiter:
             try:
                 if isinstance(retry_after, (int, float)) and retry_after > 0:
                     wait_s = float(retry_after)
-            except Exception:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 wait_s = 1.0
             time.sleep(wait_s)
 
@@ -626,13 +650,13 @@ _rg_emb_server_governor = None
 _rg_emb_server_loader = None
 _rg_emb_server_log_lock = threading.Lock()
 _rg_emb_server_lock_guard = threading.Lock()
-_rg_emb_server_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
-_rg_emb_server_init_error: Optional[str] = None
+_rg_emb_server_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+_rg_emb_server_init_error: str | None = None
 _rg_emb_server_init_error_logged = False
 _rg_emb_server_fallback_logged = False
 
 
-def _rg_emb_server_context() -> Dict[str, str]:
+def _rg_emb_server_context() -> dict[str, str]:
     """
     Build RG context dictionary with environment variables and resolved paths.
 
@@ -704,6 +728,7 @@ def _log_rg_emb_server_fallback(reason: str) -> None:
     )
 
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -714,8 +739,7 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
-except Exception:  # pragma: no cover - safe fallback when RG not installed
+except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
@@ -759,7 +783,7 @@ def _assert_rg_enabled_in_production() -> None:
         )
     try:
         enabled = bool(rg_enabled(True))  # type: ignore[func-returns-value]
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         raise RuntimeError(
             "Resource Governor config check failed in production; embeddings rate limiting depends on RG."
         ) from exc
@@ -776,7 +800,7 @@ def _rg_embeddings_server_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -820,12 +844,12 @@ async def _get_embeddings_server_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_emb_server_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             _log_rg_emb_server_init_failure(exc)
             return None
 
 
-async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str, object]]:
+async def _maybe_enforce_with_rg_embeddings_server_async() -> dict[str, object] | None:
     """
     Attempt to enforce embeddings server request limits via ResourceGovernor.
 
@@ -852,7 +876,7 @@ async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str,
             if handle:
                 try:
                     await gov.commit(handle, None, op_id=op_id)
-                except Exception:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                     logger.opt(exception=True).debug("Embeddings server RG commit failed")
             return {"allowed": True, "retry_after": None, "policy_id": policy_id}
         return {
@@ -860,12 +884,12 @@ async def _maybe_enforce_with_rg_embeddings_server_async() -> Optional[Dict[str,
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Embeddings server RG reserve failed: {}", exc)
         return None
 
 
-def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object]]:
+def _maybe_enforce_with_rg_embeddings_server_sync() -> dict[str, object] | None:
     """
     Synchronous helper for RG enforcement around create_embeddings_batch.
 
@@ -882,8 +906,8 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
             # No running loop in this thread; safe to use asyncio.run.
             return asyncio.run(_maybe_enforce_with_rg_embeddings_server_async())
         # Running inside an event loop; execute RG check in a worker thread.
-        decision_holder: Dict[str, object] = {}
-        error_holder: Dict[str, Exception] = {}
+        decision_holder: dict[str, object] = {}
+        error_holder: dict[str, Exception] = {}
         done = threading.Event()
 
         def _run_in_thread() -> None:
@@ -891,7 +915,7 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
                 decision_holder["decision"] = asyncio.run(
                     _maybe_enforce_with_rg_embeddings_server_async()
                 )
-            except Exception as exc:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
                 error_holder["error"] = exc
             finally:
                 done.set()
@@ -912,7 +936,7 @@ def _maybe_enforce_with_rg_embeddings_server_sync() -> Optional[Dict[str, object
         if isinstance(decision, dict):
             return decision
         return None
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         # Best-effort: treat RG as unavailable on any unexpected error.
         return None
 
@@ -931,7 +955,7 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
             for attempt in range(max_retries + 1):  # +1 to include the initial attempt
                 try:
                     return fn(*args, **kwargs)
-                except Exception as e:
+                except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                     status = _get_http_status_from_exception(e)
                     is_retryable_http = (
                         status == 429
@@ -962,7 +986,7 @@ def exponential_backoff(max_retries: int = 3, base_delay: int = 1):
     return decorator
 
 
-def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
+def evict_lru_models(keep_model_id: str | None = None) -> None:
     """
     Evict least recently used models to maintain resource limits.
 
@@ -1006,14 +1030,12 @@ def evict_lru_models(keep_model_id: Optional[str] = None) -> None:
             if lru_model_id:
                 logger.info(f"Evicting LRU model: {lru_model_id}")
                 # Unified audit (non-blocking)
-                try:
+                with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                     log_model_evicted(
                         model_id=lru_model_id,
                         memory_usage_gb=model_memory_usage.get(lru_model_id, 0),
                         reason="lru_eviction",
                     )
-                except Exception:
-                    pass
                 removed = _remove_model(lru_model_id)
                 if not removed:
                     logger.debug(f"Unable to evict model '{lru_model_id}' because it is in use.")
@@ -1038,8 +1060,8 @@ def _remove_model(model_id: str) -> bool:
         provider_label = "onnx"
     elif model is not None and hasattr(model, "provider"):
         try:
-            provider_label = str(getattr(model, "provider") or "")
-        except Exception:
+            provider_label = str(model.provider or "")
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             provider_label = ""
 
     try:
@@ -1052,7 +1074,7 @@ def _remove_model(model_id: str) -> bool:
             del model.model
         elif hasattr(model, "session"):  # ONNX
             model.session = None
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Error cleaning up model {model_id}: {e}")
     finally:
         del embedding_models[model_id]
@@ -1060,10 +1082,8 @@ def _remove_model(model_id: str) -> bool:
         model_memory_usage.pop(model_id, None)
         model_in_use_counts.pop(model_id, None)
         if provider_label:
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 ACTIVE_EMBEDDERS.labels(provider=provider_label, model_id=model_id).set(0)
-            except Exception:
-                pass
         logger.info(f"Removed model {model_id} from memory")
     return True
 
@@ -1094,20 +1114,18 @@ def get_directory_size(path: str) -> float:
     """
     total_size = 0
     try:
-        for dirpath, dirnames, filenames in os.walk(path):
+        for dirpath, _dirnames, filenames in os.walk(path):
             for filename in filenames:
                 filepath = os.path.join(dirpath, filename)
-                try:
+                with contextlib.suppress(OSError):
                     total_size += os.path.getsize(filepath)
-                except (OSError, IOError):
-                    pass
-    except (OSError, IOError):
+    except OSError:
         pass
 
     return total_size / (1024 ** 3)  # Convert bytes to GB
 
 
-def estimate_model_size(model_name: str, model_path: Optional[str] = None) -> float:
+def estimate_model_size(model_name: str, model_path: str | None = None) -> float:
     """
     Estimate model size, preferring actual disk size when available.
 
@@ -1155,10 +1173,10 @@ class HuggingFaceEmbedder:
 
         # Initialize as Optional, to be populated by load_model
         # Type-only; actual classes are imported lazily at use time
-        self.tokenizer: Optional["AutoTokenizer"] = None
-        self.model: Optional["AutoModel"] = None  # AutoModel is a class that returns a model instance
+        self.tokenizer: AutoTokenizer | None = None
+        self.model: AutoModel | None = None  # AutoModel is a class that returns a model instance
 
-        self.unload_timer: Optional[threading.Timer] = None
+        self.unload_timer: threading.Timer | None = None
         self.last_used_time: float = 0.0
         log_counter("huggingface_embedder_init", labels={"model_id": self.model_identifier})
         logger.info(f"HuggingFaceEmbedder initialized for {model_identifier} (model: {config.model_name_or_path})")
@@ -1246,10 +1264,10 @@ class HuggingFaceEmbedder:
             with embedding_models_lock:
                 if self.model_identifier in model_memory_usage:
                     model_memory_usage[self.model_identifier] = 0.0
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
         self.load_model()
 
         # --- Start of critical section for using model and tokenizer ---
@@ -1278,7 +1296,7 @@ class HuggingFaceEmbedder:
             log_counter("huggingface_create_embeddings_attempt", labels={"model_id": self.model_identifier})
             start_time_embed = time.time()
             torch = _import_torch()
-            embeddings_tensor: Optional["torch.Tensor"] = None
+            embeddings_tensor: torch.Tensor | None = None
 
             def _mean_pool(hidden_state, attention_mask):
                 if attention_mask is None:
@@ -1400,7 +1418,7 @@ class HuggingFaceEmbedder:
                         f"RuntimeError during HuggingFace embedding for {self.model_identifier}: {e}"
                     )
                     raise
-            except Exception as e:
+            except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
                 log_counter("huggingface_create_embeddings_failure", labels={"model_id": self.model_identifier})
                 logger.exception(f"Unexpected error during HuggingFace embedding for {self.model_identifier}: {e}")
                 raise
@@ -1420,15 +1438,11 @@ class HuggingFaceEmbedder:
     def __del__(self):
         logger_debug = getattr(logger, "debug", None)
         if callable(logger_debug):
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 logger_debug(f"HuggingFaceEmbedder {self.model_identifier} is being deleted.")
-            except Exception:
-                pass
         if self.unload_timer:
-            try:
+            with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                 self.unload_timer.cancel()
-            except Exception:
-                pass
             self.unload_timer = None
 
 
@@ -1438,7 +1452,7 @@ class ONNXEmbedder:
         model_identifier: str,
         config: ONNXModelCfg,
         onnx_model_base_storage_dir: str,
-        model_storage_dir: Optional[str] = None,
+        model_storage_dir: str | None = None,
     ):
         self._lock = threading.RLock()  # Reentrant lock for this instance
         self.model_identifier = model_identifier
@@ -1458,8 +1472,8 @@ class ONNXEmbedder:
         self.onnx_model_file_path = os.path.join(self.model_specific_onnx_dir, "model.onnx")  # Standard name by optimum
 
         # Initialize critical attributes early so __del__/finalizers are safe even if setup fails
-        self.session: Optional[ort.InferenceSession] = None
-        self.unload_timer: Optional[threading.Timer] = None
+        self.session: ort.InferenceSession | None = None
+        self.unload_timer: threading.Timer | None = None
         self.last_used_time: float = 0.0
         self.device_providers = config.onnx_providers
 
@@ -1520,15 +1534,13 @@ class ONNXEmbedder:
                 f"ONNX model for {self.config.model_name_or_path} (ID: {self.model_identifier}) "
                 f"successfully exported and saved to {self.model_specific_onnx_dir}"
             )
-        except Exception as e:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.exception(f"Failed to export/download ONNX model for {self.model_identifier}: {e}")
             # Basic cleanup: if model.onnx was partially created, remove it.
             if os.path.exists(self.onnx_model_file_path):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(self.onnx_model_file_path)
-                except OSError:
-                    pass
-            raise RuntimeError(f"ONNX model conversion failed for {self.model_identifier}.")
+            raise RuntimeError(f"ONNX model conversion failed for {self.model_identifier}.") from e
 
     def _reset_timer(self) -> None:
         # This method must be thread-safe
@@ -1594,10 +1606,10 @@ class ONNXEmbedder:
             with embedding_models_lock:
                 if self.model_identifier in model_memory_usage:
                     model_memory_usage[self.model_identifier] = 0.0
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             pass
 
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
+    def create_embeddings(self, texts: list[str]) -> np.ndarray:
         self.load_model()  # Handles locking, model loading/conversion, and timer reset
 
         if self.session is None or self.tokenizer is None:
@@ -1649,7 +1661,7 @@ class ONNXEmbedder:
                 sum_mask = np.maximum(np.sum(input_mask_expanded, axis=1), 1e-9)  # Avoid division by zero
                 embeddings_np = sum_embeddings / sum_mask
 
-        except Exception as e:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             log_counter("onnx_create_embeddings_failure", labels={"model_id": self.model_identifier})
             logger.exception(f"Error creating embeddings with ONNX model {self.model_identifier}: {e}")
             raise
@@ -1666,17 +1678,17 @@ class ONNXEmbedder:
                 if timer is not None:
                     try:
                         timer.cancel()
-                    except Exception:
+                    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                         # Never raise from __del__
                         pass
-        except Exception:
+        except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             # Guard against any unexpected attribute/state issues during GC
             pass
 
 
 
 
-_LIMITER_CACHE: Dict[tuple[int, int], TokenBucketLimiter] = {}
+_LIMITER_CACHE: dict[tuple[int, int], TokenBucketLimiter] = {}
 _LIMITER_CACHE_LOCK = threading.Lock()
 
 
@@ -1696,10 +1708,10 @@ def _get_token_bucket_limiter(capacity: int, period: int) -> TokenBucketLimiter:
 # To make this dynamic per model_config, apply similarly to limiter.
 @exponential_backoff(max_retries=3, base_delay=1)
 def create_embeddings_batch(
-        texts: List[str],
-        user_app_config: Dict[str, Any],  # Renamed for clarity: this is the top-level app config
-        model_id_override: Optional[str] = None,
-) -> List[List[float]]:
+        texts: list[str],
+        user_app_config: dict[str, Any],  # Renamed for clarity: this is the top-level app config
+        model_id_override: str | None = None,
+) -> list[list[float]]:
     """
     Creates embeddings for a batch of texts.
 
@@ -1732,16 +1744,16 @@ def create_embeddings_batch(
 
         # Pydantic will parse and validate. If it fails, it raises a ValidationError.
         embedding_service_config = EmbeddingConfigSchema(**user_app_config["embedding_config"])
-    except Exception as e:  # Catch Pydantic ValidationError or other parsing issues
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:  # Catch Pydantic ValidationError or other parsing issues
         logger.exception(f"Failed to parse embedding_config: {str(e)}")
-        raise ValueError(f"Invalid embedding_config structure: {e}")
+        raise ValueError(f"Invalid embedding_config structure: {e}") from e
 
     model_id_to_use = model_id_override if model_id_override else embedding_service_config.default_model_id
     if not model_id_to_use:
         logger.error("No `model_id` specified and no `default_model_id` found in embedding_config.")
         raise ValueError("Embedding model ID not specified or configured as default.")
 
-    def _resolve_model_key(models_map: Dict[str, Any], mid: str) -> tuple[str, Any]:
+    def _resolve_model_key(models_map: dict[str, Any], mid: str) -> tuple[str, Any]:
         """Resolve a model key from models_map supporting bare or provider-prefixed IDs.
 
         Tries exact match first, then:
@@ -1769,7 +1781,7 @@ def create_embeddings_batch(
             if candidate in models_map:
                 return candidate, models_map[candidate]
         # 4) Unique suffix match (any key that ends with ":<bare>")
-        suffix_matches = [k for k in models_map.keys() if k.endswith(f":{bare}")]
+        suffix_matches = [k for k in models_map if k.endswith(f":{bare}")]
         if len(suffix_matches) == 1:
             k = suffix_matches[0]
             return k, models_map[k]
@@ -1789,7 +1801,7 @@ def create_embeddings_batch(
             getattr(limiter_cfg, "period", 60),
         )
         limiter.acquire()
-    except Exception as e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Rate limiter acquisition failed or skipped: {e}")
 
     # Ensure model_storage_base_dir exists and stays under the allowlist root
@@ -1798,7 +1810,7 @@ def create_embeddings_batch(
 
     EMBEDDINGS_REQUESTS.labels(provider=provider, model_id=model_id_to_use).inc()
     start_time_batch = time.time()
-    embeddings_list: List[List[float]] = []
+    embeddings_list: list[list[float]] = []
 
     try:
         embedder_instance: Any = None  # To hold HFEmbedder or ONNXEmbedder
@@ -1807,7 +1819,7 @@ def create_embeddings_batch(
             if not isinstance(model_spec, HFModelCfg):
                 raise ValueError(f"Model spec for {model_id_to_use} is not HFModelCfg.")
 
-            model_id_in_use: Optional[str] = None
+            model_id_in_use: str | None = None
             with embedding_models_lock:  # Protect access to the global embedding_models cache
                 if model_id_to_use not in embedding_models:
                     logger.info(f"HuggingFace model ID {model_id_to_use} not in cache. Initializing.")
@@ -1832,15 +1844,13 @@ def create_embeddings_batch(
 
                     if not check_memory_limit(estimated_size):
                         logger.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        try:
+                        with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             log_memory_limit_exceeded(
                                 model_id=model_id_to_use,
                                 memory_usage_gb=estimated_size,
                                 current_usage_gb=sum(model_memory_usage.values()),
                                 limit_gb=MAX_MODEL_MEMORY_GB,
                             )
-                        except Exception:
-                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                         if not check_memory_limit(estimated_size):
                             logger.error(
@@ -1915,15 +1925,13 @@ def create_embeddings_batch(
 
                     if not check_memory_limit(estimated_size):
                         logger.warning(f"Memory limit would be exceeded by loading {model_id_to_use} (size: {estimated_size:.2f} GB)")
-                        try:
+                        with contextlib.suppress(_EMBEDDINGS_NONCRITICAL_EXCEPTIONS):
                             log_memory_limit_exceeded(
                                 model_id=model_id_to_use,
                                 memory_usage_gb=estimated_size,
                                 current_usage_gb=sum(model_memory_usage.values()),
                                 limit_gb=MAX_MODEL_MEMORY_GB,
                             )
-                        except Exception:
-                            pass
                         evict_lru_models(keep_model_id=model_id_to_use)
                         if not check_memory_limit(estimated_size):
                             logger.error(
@@ -2053,7 +2061,7 @@ def create_embeddings_batch(
                             "error_type": type(req_e).__name__})
         logger.exception(f"Network error after retries in create_embeddings_batch: {req_e}")
         raise
-    except Exception as e:  # Catch-all for unexpected errors
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:  # Catch-all for unexpected errors
         log_counter("create_embeddings_batch_error",
                     labels={"provider": provider if 'provider' in locals() else 'unknown',
                             "model_id": model_id_to_use if 'model_id_to_use' in locals() else 'unknown',
@@ -2066,10 +2074,10 @@ def create_embeddings_batch(
 
 
 async def create_embeddings_batch_async(
-        texts: List[str],
-        user_app_config: Dict[str, Any],
-        model_id_override: Optional[str] = None,
-) -> List[List[float]]:
+        texts: list[str],
+        user_app_config: dict[str, Any],
+        model_id_override: str | None = None,
+) -> list[list[float]]:
     """
     Async wrapper for create_embeddings_batch.
     Creates embeddings for multiple texts asynchronously.
@@ -2097,9 +2105,9 @@ async def create_embeddings_batch_async(
 
 def create_embedding(
         text: str,
-        user_app_config: Dict[str, Any],
-        model_id_override: Optional[str] = None,
-) -> List[float]:
+        user_app_config: dict[str, Any],
+        model_id_override: str | None = None,
+) -> list[float]:
     """
     Creates an embedding for a single text using the batch function.
     `user_app_config` should contain an 'embedding_config' key.
@@ -2119,7 +2127,7 @@ def create_embedding(
             model_id_to_log = model_id_override or temp_config.default_model_id
             if model_id_to_log in temp_config.models:
                 provider_to_log = temp_config.models[model_id_to_log].provider
-    except Exception:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass  # Ignore parsing errors here, batch function will handle and log properly
 
     log_counter("create_embedding_attempt", labels={"provider": provider_to_log, "model_id": model_id_to_log})
@@ -2149,7 +2157,7 @@ def create_embedding(
     log_counter("create_embedding_success", labels={"provider": provider_to_log, "model_id": model_id_to_log})
     return embedding_data
 
-def get_embedding_config() -> Dict[str, Any]:
+def get_embedding_config() -> dict[str, Any]:
     """
     Get the default embedding configuration.
     Returns a configuration dictionary for use with embedding functions.
@@ -2237,7 +2245,7 @@ def get_embedding_config() -> Dict[str, Any]:
                 # Pydantic models allow attribute mutation by default
                 if hasattr(model_cfg, "unload_timeout_seconds"):
                     model_cfg.unload_timeout_seconds = timeout_val
-    except Exception as _e:
+    except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as _e:
         # Do not fail configuration if env var is malformed; ignore silently in production path
         pass
 

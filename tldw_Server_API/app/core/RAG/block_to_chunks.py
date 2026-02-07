@@ -2,14 +2,17 @@
 Adapter to normalize external Block payloads into {text, metadata} chunks.
 """
 
-from dataclasses import asdict as dataclass_asdict, is_dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from collections.abc import Sequence
+from dataclasses import asdict as dataclass_asdict
+from dataclasses import is_dataclass
+from typing import Any, Optional
 
 from tldw_Server_API.app.core.Chunking import Chunker
+
 from .chunk_metadata import CitationSpan, RAGChunkMetadata, model_dump_compat
 
 
-def _as_dict(value: Any) -> Dict[str, Any]:
+def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if is_dataclass(value):
@@ -17,29 +20,29 @@ def _as_dict(value: Any) -> Dict[str, Any]:
     if hasattr(value, "model_dump"):
         try:
             return value.model_dump()  # type: ignore[call-arg]
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(value, "dict"):
         try:
             return value.dict()  # type: ignore[call-arg]
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
     if hasattr(value, "__dict__"):
         try:
             return dict(value.__dict__)
-        except Exception:
+        except (TypeError, ValueError):
             pass
     return {}
 
 
-def _get_value(source: Dict[str, Any], *keys: str) -> Any:
+def _get_value(source: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in source and source.get(key) is not None:
             return source.get(key)
     return None
 
 
-def _get_dict(source: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+def _get_dict(source: dict[str, Any], *keys: str) -> dict[str, Any]:
     for key in keys:
         value = source.get(key)
         if value is None:
@@ -64,12 +67,12 @@ def _coerce_int(value: Any) -> Optional[int]:
         if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
             try:
                 return int(stripped)
-            except Exception:
+            except (OverflowError, ValueError):
                 return None
     return None
 
 
-def _coerce_str_list(value: Any) -> Optional[List[str]]:
+def _coerce_str_list(value: Any) -> Optional[list[str]]:
     if isinstance(value, list):
         return [str(v) for v in value if v is not None]
     if isinstance(value, tuple):
@@ -82,7 +85,7 @@ def _normalize_timestamp_ms(value: Any) -> Optional[int]:
         return None
     try:
         num = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if num < 0:
         return None
@@ -93,14 +96,14 @@ def _normalize_timestamp_ms(value: Any) -> Optional[int]:
     return int(num)
 
 
-def _normalize_bbox_quad(value: Any) -> Optional[List[Dict[str, float]]]:
+def _normalize_bbox_quad(value: Any) -> Optional[list[dict[str, float]]]:
     if value is None:
         return None
     if isinstance(value, dict):
         value = value.get("bbox_quad") or value.get("bbox") or value.get("points")
     if not isinstance(value, (list, tuple)):
         return None
-    points: List[Dict[str, float]] = []
+    points: list[dict[str, float]] = []
     if len(value) == 4 and all(isinstance(v, (int, float)) for v in value):
         x0, y0, x1, y1 = [float(v) for v in value]
         points = [
@@ -120,7 +123,7 @@ def _normalize_bbox_quad(value: Any) -> Optional[List[Dict[str, float]]]:
                 continue
             try:
                 points.append({"x": float(x), "y": float(y)})
-            except Exception:
+            except (TypeError, ValueError):
                 continue
     if not points:
         return None
@@ -132,7 +135,7 @@ def _normalize_block_type(value: Any) -> str:
         return "text"
     try:
         raw = str(value).strip().upper()
-    except Exception:
+    except (TypeError, ValueError):
         return "text"
     mapping = {
         "TEXT": "text",
@@ -159,7 +162,7 @@ def _normalize_block_type(value: Any) -> str:
     return Chunker.normalize_chunk_type(mapped) or "text"
 
 
-def _extract_text(payload: Dict[str, Any]) -> Optional[str]:
+def _extract_text(payload: dict[str, Any]) -> Optional[str]:
     text = _get_value(payload, "text", "content", "value", "chunk_text")
     if text is None:
         items = _get_value(payload, "items", "list_items")
@@ -180,7 +183,7 @@ def _extract_text(payload: Dict[str, Any]) -> Optional[str]:
     return str(text)
 
 
-def _build_citation_span(payload: Dict[str, Any], meta: Dict[str, Any]) -> Optional[CitationSpan]:
+def _build_citation_span(payload: dict[str, Any], meta: dict[str, Any]) -> Optional[CitationSpan]:
     def pick(*keys: str) -> Any:
         for key in keys:
             if key in payload and payload.get(key) is not None:
@@ -237,9 +240,9 @@ def _build_citation_span(payload: Dict[str, Any], meta: Dict[str, Any]) -> Optio
     )
 
 
-def block_to_chunks(blocks: Sequence[Any]) -> List[Dict[str, Any]]:
+def block_to_chunks(blocks: Sequence[Any]) -> list[dict[str, Any]]:
     """Convert external Block payloads into normalized chunks."""
-    output: List[Dict[str, Any]] = []
+    output: list[dict[str, Any]] = []
     for block in blocks or []:
         block_dict = _as_dict(block)
         if not block_dict:
@@ -258,7 +261,7 @@ def block_to_chunks(blocks: Sequence[Any]) -> List[Dict[str, Any]]:
         block_type_raw = _get_value(block_dict, "block_type", "blockType", "type", "kind")
         chunk_type = _normalize_block_type(block_type_raw)
 
-        metadata_payload: Dict[str, Any] = {
+        metadata_payload: dict[str, Any] = {
             "chunk_type": chunk_type,
             "media_id": _get_value(block_dict, "media_id", "mediaId"),
             "file_name": _get_value(block_dict, "file_name", "fileName"),
@@ -309,4 +312,3 @@ def block_to_chunks(blocks: Sequence[Any]) -> List[Dict[str, Any]]:
 
 
 __all__ = ["block_to_chunks"]
-

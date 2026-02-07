@@ -3,41 +3,41 @@
 #
 # Imports
 import os
-from typing import Optional, Dict, Any, AsyncGenerator, Set, List
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
 #
 # Third-party Imports
 from loguru import logger
+
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional import guard
+    httpx = None
+
 #
 # Local Imports
+import contextlib
+
 from tldw_Server_API.app.core.http_client import afetch, astream_bytes
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
+
 from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
     TTSAuthenticationError,
-    TTSRateLimitError,
-    TTSQuotaExceededError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    TTSProviderError,
-    TTSGenerationError,
-    TTSValidationError,
     TTSError,
-    auth_error,
+    TTSGenerationError,
+    TTSProviderError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
+    TTSQuotaExceededError,
+    TTSRateLimitError,
+    TTSTimeoutError,
+    TTSValidationError,
     rate_limit_error,
-    network_error,
-    timeout_error
 )
-from ..tts_validation import validate_tts_request
 from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import validate_tts_request
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -52,6 +52,23 @@ def _is_http_status_error(exc: Exception) -> bool:
     if not _is_httpx_exception(exc):
         return False
     return exc.__class__.__name__ == "HTTPStatusError"
+
+
+_ELEVENLABS_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if httpx is not None:
+    _ELEVENLABS_HTTP_EXCEPTIONS = (httpx.HTTPError,)
+
+_ELEVENLABS_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+) + _ELEVENLABS_HTTP_EXCEPTIONS
 
 class ElevenLabsAdapter(TTSAdapter):
     """Adapter for ElevenLabs TTS API"""
@@ -157,7 +174,7 @@ class ElevenLabsAdapter(TTSAdapter):
         }
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
 
         # API configuration
@@ -191,7 +208,7 @@ class ElevenLabsAdapter(TTSAdapter):
         self.client: Optional[Any] = None
 
         # Cache for user voices
-        self._user_voices: List[VoiceInfo] = []
+        self._user_voices: list[VoiceInfo] = []
 
     async def initialize(self) -> bool:
         """Initialize the ElevenLabs adapter"""
@@ -221,14 +238,14 @@ class ElevenLabsAdapter(TTSAdapter):
 
         except TTSProviderNotConfiguredError:
             return False
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
             self._status = ProviderStatus.ERROR
             raise TTSProviderInitializationError(
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e)}
-            )
+            ) from e
 
     async def _fetch_user_voices(self):
         """Fetch available voices from ElevenLabs API"""
@@ -260,7 +277,7 @@ class ElevenLabsAdapter(TTSAdapter):
             else:
                 logger.warning(f"{self.provider_name}: Failed to fetch voices: {response.status_code}")
 
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Error fetching voices: {e}")
 
     async def get_capabilities(self) -> TTSCapabilities:
@@ -358,13 +375,13 @@ class ElevenLabsAdapter(TTSAdapter):
 
         except (TTSProviderNotConfiguredError, TTSAuthenticationError, TTSRateLimitError, TTSQuotaExceededError, TTSValidationError):
             raise
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name} generation error: {e}")
             raise TTSGenerationError(
                 f"Failed to generate speech with {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "error_type": type(e).__name__}
-            )
+            ) from e
 
     async def _stream_audio_elevenlabs(
         self,
@@ -531,7 +548,7 @@ class ElevenLabsAdapter(TTSAdapter):
         status = getattr(response, "status_code", None) if response is not None else None
         try:
             text = response.text if response is not None else None
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             text = None
         if status in (401, 403):
             raise TTSAuthenticationError(f"{self.provider_name} authentication failed", provider=self.provider_name, details={"status": status, "body": text})
@@ -551,7 +568,7 @@ class ElevenLabsAdapter(TTSAdapter):
                 await self.client.aclose()
                 self.client = None
                 logger.debug(f"{self.provider_name}: HTTP client closed")
-            except Exception as e:
+            except (AttributeError, OSError, RuntimeError) as e:
                 logger.warning(f"{self.provider_name}: Error closing HTTP client: {e}")
 
     def map_voice(self, voice_id: str) -> str:
@@ -589,10 +606,10 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
 
     PROVIDER_KEY = "elevenlabs"
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         cfg = config.copy() if isinstance(config, dict) else {}
         # Map generic keys to adapter-specific keys used by the base class
-        mapped_cfg: Dict[str, Any] = {}
+        mapped_cfg: dict[str, Any] = {}
         if "api_key" in cfg:
             mapped_cfg["elevenlabs_api_key"] = cfg.get("api_key")
         if "base_url" in cfg:
@@ -620,11 +637,11 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         return bool(self.api_key)
 
     @property
-    def supported_models(self) -> List[str]:
+    def supported_models(self) -> list[str]:
         return list(self.MODELS.keys())
 
     # --- Convenience API ---
-    async def fetch_voices(self) -> List[Dict[str, Any]]:
+    async def fetch_voices(self) -> list[dict[str, Any]]:
         """Return available voices as a list of dicts from the public API."""
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
@@ -640,7 +657,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         data = resp.json() or {}
         return data.get("voices", [])
 
-    async def get_voice_info(self, voice_id: str) -> Dict[str, Any]:
+    async def get_voice_info(self, voice_id: str) -> dict[str, Any]:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
@@ -654,7 +671,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         resp.raise_for_status()
         return resp.json() or {}
 
-    async def clone_voice(self, name: str, samples: List[bytes]) -> str:
+    async def clone_voice(self, name: str, samples: list[bytes]) -> str:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
@@ -671,7 +688,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         data = resp.json() or {}
         return data.get("voice_id") or data.get("id") or ""
 
-    async def get_usage(self) -> Dict[str, Any]:
+    async def get_usage(self) -> dict[str, Any]:
         if not self.client:
             from tldw_Server_API.app.core.http_client import create_async_client
             self.client = create_async_client()
@@ -785,7 +802,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             ):
                 if chunk:
                     yield chunk
-        except Exception as e:
+        except _ELEVENLABS_NONCRITICAL_EXCEPTIONS as e:
             if _is_http_status_error(e):
                 self._raise_mapped_http_error(e)
             raise
@@ -796,7 +813,7 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
         status = getattr(response, "status_code", None) if response is not None else None
         try:
             data = response.json() if response is not None else {}
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             data = {}
         detail = data.get("detail", {}) if isinstance(data, dict) else {}
         code = detail.get("status") or detail.get("code")
@@ -810,21 +827,19 @@ class ElevenLabsTTSAdapter(ElevenLabsAdapter):
             retry = None
             try:
                 retry = int((response.headers or {}).get("retry-after", "0")) if response is not None else None
-            except Exception:
+            except (TypeError, ValueError):
                 retry = None
             err = rate_limit_error(self._provider_simple, retry_after=retry)
             # Expose retry_after directly for tests
-            try:
-                setattr(err, "retry_after", retry)
-            except Exception:
-                pass
+            with contextlib.suppress(AttributeError, TypeError):
+                err.retry_after = retry
             raise err
         if status and 400 <= status < 500 and code == "invalid_voice_id":
             from ..tts_exceptions import TTSValidationError
             message = None
             try:
                 message = (detail.get("message") if isinstance(detail, dict) else None) or "Invalid voice id"
-            except Exception:
+            except (AttributeError, TypeError):
                 message = "Invalid voice id"
             raise TTSValidationError(message, provider=self._provider_simple, details={"status": status})
 

@@ -11,13 +11,22 @@ Preference order:
   5) IP scope (trusted header via RG_CLIENT_IP_HEADER else request.client.host)
 """
 
-from typing import Optional
+import ipaddress
 import os
 
 from fastapi import Request
-import ipaddress
 
 from .tenant import hash_entity
+
+_RG_DEPS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _parse_trusted_proxies(env_val: str | None) -> list[ipaddress._BaseNetwork]:
@@ -37,7 +46,7 @@ def _parse_trusted_proxies(env_val: str | None) -> list[ipaddress._BaseNetwork]:
                 ip_obj = ipaddress.ip_address(s)
                 mask = 32 if ip_obj.version == 4 else 128
                 nets.append(ipaddress.ip_network(f"{s}/{mask}", strict=False))
-        except Exception:
+        except ValueError:
             continue
     return nets
 
@@ -48,7 +57,7 @@ def _is_trusted_proxy(remote_ip: str, trusted: list[ipaddress._BaseNetwork]) -> 
             return False
         ip_obj = ipaddress.ip_address(remote_ip)
         return any(ip_obj in n for n in trusted)
-    except Exception:
+    except ValueError:
         return False
 
 
@@ -65,7 +74,7 @@ def derive_client_ip(request: Request) -> str:
         client = request.client
         if client and client.host:
             remote_ip = client.host
-    except Exception:
+    except _RG_DEPS_NONCRITICAL_EXCEPTIONS:
         remote_ip = None
     # Normalize non-IP placeholders used by Starlette TestClient
     # Many tests see client.host == 'testclient'; treat as loopback
@@ -76,10 +85,10 @@ def derive_client_ip(request: Request) -> str:
         else:
             try:
                 _ip.ip_address(remote_ip)
-            except Exception:
+            except ValueError:
                 # Not a valid IP literal → assume loopback for local tests
                 remote_ip = "127.0.0.1"
-    except Exception:
+    except ImportError:
         # best-effort
         pass
 
@@ -96,7 +105,7 @@ def derive_client_ip(request: Request) -> str:
                 ipaddress.ip_address(candidate)
                 if candidate:
                     return candidate
-            except Exception:
+            except ValueError:
                 pass
 
     # Fallback: use direct peer address
@@ -111,7 +120,7 @@ def derive_entity_key(request: Request) -> str:
         uid = getattr(request.state, "user_id", None)
         if isinstance(uid, int) or (isinstance(uid, str) and uid):
             return f"user:{uid}"
-    except Exception:
+    except _RG_DEPS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Prefer API key id scope when available
@@ -119,7 +128,7 @@ def derive_entity_key(request: Request) -> str:
         kid = getattr(request.state, "api_key_id", None)
         if kid is not None:
             return f"api_key:{kid}"
-    except Exception:
+    except _RG_DEPS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Header-based API key fallback (hashed)
@@ -127,7 +136,7 @@ def derive_entity_key(request: Request) -> str:
         raw = request.headers.get("X-API-KEY")
         if raw:
             return f"api_key:{hash_entity(raw)}"
-    except Exception:
+    except _RG_DEPS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Authorization bearer fallback (hashed as api_key)
@@ -137,7 +146,7 @@ def derive_entity_key(request: Request) -> str:
             token = auth[len("Bearer "):].strip()
             if token:
                 return f"api_key:{hash_entity(token)}"
-    except Exception:
+    except _RG_DEPS_NONCRITICAL_EXCEPTIONS:
         pass
 
     # IP fallback

@@ -6,8 +6,8 @@ diagnostics such as density and average length. Designed to be dependency-light
 but can use scikit-learn TF-IDF for semantic matching when available.
 """
 
-from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
+
 from loguru import logger
 
 try:
@@ -29,14 +29,14 @@ class PropositionEvalResult:
     claim_density_per_100_tokens: float
     avg_prop_len_tokens: float
     dedup_rate: float
-    details: Dict[str, float]
+    details: dict[str, float]
 
 
-def simple_tokenize(s: str) -> List[str]:
+def simple_tokenize(s: str) -> list[str]:
     return [t for t in s.strip().split() if t]
 
 
-def _greedy_match_semantic(extracted: List[str], reference: List[str], threshold: float = 0.7) -> Tuple[int, List[int]]:
+def _greedy_match_semantic(extracted: list[str], reference: list[str], threshold: float = 0.7) -> tuple[int, list[int]]:
     """Greedy matching by cosine similarity over TF-IDF vectors.
     Returns number of matches and matched indices of reference.
     """
@@ -58,10 +58,10 @@ def _greedy_match_semantic(extracted: List[str], reference: List[str], threshold
         if sim[i, j] >= threshold and j not in matched_ref:
             matched_ref.add(j)
             matches += 1
-    return matches, sorted(list(matched_ref))
+    return matches, sorted(matched_ref)
 
 
-def _greedy_match_jaccard(extracted: List[str], reference: List[str], threshold: float = 0.6) -> Tuple[int, List[int]]:
+def _greedy_match_jaccard(extracted: list[str], reference: list[str], threshold: float = 0.6) -> tuple[int, list[int]]:
     def jaccard(a: str, b: str) -> float:
         A = set(simple_tokenize(a.lower()))
         B = set(simple_tokenize(b.lower()))
@@ -79,12 +79,12 @@ def _greedy_match_jaccard(extracted: List[str], reference: List[str], threshold:
         if scores[j] >= threshold and j not in matched_ref:
             matched_ref.add(j)
             matches += 1
-    return matches, sorted(list(matched_ref))
+    return matches, sorted(matched_ref)
 
 
 def evaluate_propositions(
-    extracted: List[str],
-    reference: List[str],
+    extracted: list[str],
+    reference: list[str],
     method: str = "semantic",
     threshold: float = 0.7,
 ) -> PropositionEvalResult:
@@ -120,7 +120,7 @@ def evaluate_propositions(
     avg_len = (token_count / len(ex)) if ex else 0.0
 
     # Dedup rate (exact string duplicates)
-    dedup_rate = 1 - (len(set([e.lower() for e in ex])) / len(ex)) if ex else 0.0
+    dedup_rate = 1 - (len({e.lower() for e in ex}) / len(ex)) if ex else 0.0
 
     details = {
         "matched_reference_indices": len(matched_indices),

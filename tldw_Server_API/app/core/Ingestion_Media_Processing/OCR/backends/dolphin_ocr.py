@@ -6,9 +6,9 @@ import io
 import json
 import os
 import tempfile
-from urllib.parse import urlparse
 import threading
-from typing import Any, Dict, Optional
+from typing import Any
+from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
@@ -17,13 +17,21 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
 )
 from tldw_Server_API.app.core.Utils.Utils import logging
 
-
 _TF_MODEL = None
 _TF_PROCESSOR = None
 _TF_TOKENIZER = None
 _TF_DEVICE = None
 _TF_DTYPE = None
 _TF_LOCK = threading.Lock()
+_DOLPHIN_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 def _resolve_mode() -> str:
@@ -46,7 +54,7 @@ def _resolve_remote_mode() -> str:
     return "dolphin_trt"
 
 
-_PROMPT_PRESETS: Dict[str, str] = {
+_PROMPT_PRESETS: dict[str, str] = {
     "general": "Extract all visible text from the image.",
     "doc": "Parse the document and return all text in Markdown. Render tables as Markdown.",
     "table": "Extract tables as Markdown. Return all other text in Markdown.",
@@ -95,22 +103,21 @@ class DolphinOCRBackend(OCRBackend):
     @classmethod
     def available(cls) -> bool:
         mode = _resolve_mode()
-        if mode in ("auto", "remote"):
-            if os.getenv("DOLPHIN_URL"):
-                return True
+        if mode in ("auto", "remote") and os.getenv("DOLPHIN_URL"):
+            return True
         if mode in ("auto", "transformers"):
             try:
                 has_tf = importlib.util.find_spec("transformers") is not None
                 has_torch = importlib.util.find_spec("torch") is not None
                 has_pil = importlib.util.find_spec("PIL") is not None
                 return bool(has_tf and has_torch and has_pil)
-            except Exception:
+            except _DOLPHIN_NONCRITICAL_EXCEPTIONS:
                 return False
         return False
 
     def describe(self) -> dict:
         mode = _resolve_mode()
-        info: Dict[str, Any] = {
+        info: dict[str, Any] = {
             "mode": mode,
             "remote_mode": _resolve_remote_mode(),
             "prompt": os.getenv("DOLPHIN_PROMPT"),
@@ -135,16 +142,16 @@ class DolphinOCRBackend(OCRBackend):
             )
         return info
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         result = self.ocr_image_structured(image_bytes, lang=lang, output_format="markdown")
         return result.text or ""
 
     def ocr_image_structured(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        output_format: Optional[str] = None,
-        prompt_preset: Optional[str] = None,
+        lang: str | None = None,
+        output_format: str | None = None,
+        prompt_preset: str | None = None,
     ) -> OCRResult:
         if not self.available():
             logging.warning("DolphinOCRBackend not available: set DOLPHIN_URL or install transformers+torch+Pillow.")
@@ -204,7 +211,7 @@ class DolphinOCRBackend(OCRBackend):
         return result
 
 
-def _resolve_prompt(prompt_preset: Optional[str], output_format: Optional[str]) -> str:
+def _resolve_prompt(prompt_preset: str | None, output_format: str | None) -> str:
     env_prompt = os.getenv("DOLPHIN_PROMPT")
     if env_prompt:
         return env_prompt
@@ -221,7 +228,7 @@ def _resolve_prompt(prompt_preset: Optional[str], output_format: Optional[str]) 
     return _PROMPT_PRESETS.get(preset, _PROMPT_PRESETS["doc"])
 
 
-def _resolve_json_prompt(prompt_preset: Optional[str], output_format: Optional[str]) -> str:
+def _resolve_json_prompt(prompt_preset: str | None, output_format: str | None) -> str:
     if _bool_env("DOLPHIN_DISABLE_JSON", False):
         return ""
 
@@ -254,13 +261,13 @@ def _run_prompt(image_bytes: bytes, prompt: str) -> str:
                 raw_text = _ocr_via_openai(image_bytes, prompt)
             else:
                 raw_text = _ocr_via_generate(image_bytes, prompt, remote_mode)
-        except Exception as exc:
+        except _DOLPHIN_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"Dolphin remote path failed: {exc}", exc_info=True)
 
     if not raw_text:
         try:
             raw_text = _ocr_via_transformers(image_bytes, prompt)
-        except Exception as exc:
+        except _DOLPHIN_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"Dolphin transformers path failed: {exc}", exc_info=True)
             raw_text = ""
 
@@ -275,7 +282,7 @@ def _ocr_via_generate(image_bytes: bytes, prompt: str, remote_mode: str) -> str:
     if not url.endswith("/generate"):
         url = f"{url}/generate"
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "image_base64": base64.b64encode(image_bytes).decode("ascii"),
         "stream": False,
     }
@@ -354,15 +361,12 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_PROCESSOR is not None and _TF_TOKENIZER is not None:
             return _TF_MODEL, _TF_PROCESSOR, _TF_TOKENIZER, _TF_DEVICE, _TF_DTYPE
 
-        from transformers import AutoProcessor, VisionEncoderDecoderModel
         import torch
+        from transformers import AutoProcessor, VisionEncoderDecoderModel
 
         model_path = os.getenv("DOLPHIN_MODEL_PATH", "ByteDance/Dolphin-v2")
         device_env = os.getenv("DOLPHIN_DEVICE")
-        if device_env:
-            device = device_env
-        else:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = device_env or ("cuda" if torch.cuda.is_available() else "cpu")
 
         dtype = torch.float16 if "cuda" in device else torch.float32
 
@@ -406,7 +410,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
     prompt_input_ids = prompt_inputs["input_ids"].to(device)
     prompt_attention_mask = prompt_inputs["attention_mask"].to(device)
 
-    generation_kwargs: Dict[str, Any] = {
+    generation_kwargs: dict[str, Any] = {
         "max_length": _getf("DOLPHIN_MAX_LENGTH", int, 4096),
         "max_new_tokens": _getf("DOLPHIN_MAX_NEW_TOKENS", int, 2048),
         "repetition_penalty": _getf("DOLPHIN_REPETITION_PENALTY", float, 1.0),
@@ -435,7 +439,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str) -> str:
     return sequence
 
 
-def _apply_generation_params(payload: Dict[str, Any]) -> None:
+def _apply_generation_params(payload: dict[str, Any]) -> None:
     payload["max_new_tokens"] = _getf("DOLPHIN_MAX_NEW_TOKENS", int, 2048)
     if "messages" in payload:
         payload["max_tokens"] = payload["max_new_tokens"]
@@ -449,7 +453,7 @@ def _apply_generation_params(payload: Dict[str, Any]) -> None:
 def _getf(env: str, cast, default):
     try:
         return cast(os.getenv(env, str(default)))
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -459,7 +463,7 @@ def _getf_optional(env: str, cast):
         return None
     try:
         return cast(val)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -475,11 +479,11 @@ def _is_local_url(url: str) -> bool:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         return host in ("localhost", "127.0.0.1", "::1")
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return False
 
 
-def _try_parse_json(raw_text: str) -> Optional[Any]:
+def _try_parse_json(raw_text: str) -> Any | None:
     if not raw_text:
         return None
     txt = raw_text.strip()
@@ -488,7 +492,7 @@ def _try_parse_json(raw_text: str) -> Optional[Any]:
 
     try:
         return json.loads(txt)
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         pass
 
     obj_start = txt.find("{")
@@ -496,7 +500,7 @@ def _try_parse_json(raw_text: str) -> Optional[Any]:
     if obj_start != -1 and obj_end != -1 and obj_end > obj_start:
         try:
             return json.loads(txt[obj_start : obj_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     arr_start = txt.find("[")
@@ -504,7 +508,7 @@ def _try_parse_json(raw_text: str) -> Optional[Any]:
     if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
         try:
             return json.loads(txt[arr_start : arr_end + 1])
-        except Exception:
+        except (TypeError, ValueError, json.JSONDecodeError):
             pass
 
     return None

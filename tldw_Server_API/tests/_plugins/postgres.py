@@ -46,6 +46,11 @@ except Exception:  # pragma: no cover - optional dependency
         _PG_DRIVER = None
 
 
+def _quote_ident(ident: str) -> str:
+    """Safely quote a Postgres identifier for dynamic DDL."""
+    return '"' + str(ident).replace('"', '""') + '"'
+
+
 def _tcp_reachable(host: str, port: int, timeout: float = 1.5) -> bool:
     try:
         with socket.create_connection((host, int(port)), timeout=timeout):
@@ -135,11 +140,13 @@ def _connect_admin(host: str, port: int, user: str, password: str):
 
 def _create_database(host: str, port: int, user: str, password: str, db_name: str) -> None:
     conn = _connect_admin(host, port, user, password)
+    q_db = _quote_ident(db_name)
+    q_owner = _quote_ident(user)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s", (db_name,))
-            cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
-            cur.execute(f"CREATE DATABASE {db_name} OWNER {user}")
+            cur.execute(f"DROP DATABASE IF EXISTS {q_db}")
+            cur.execute(f"CREATE DATABASE {q_db} OWNER {q_owner}")
     finally:
         conn.close()
 
@@ -149,10 +156,11 @@ def _drop_database(host: str, port: int, user: str, password: str, db_name: str)
         conn = _connect_admin(host, port, user, password)
     except Exception:
         return
+    q_db = _quote_ident(db_name)
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s", (db_name,))
-            cur.execute(f"DROP DATABASE IF EXISTS {db_name}")
+            cur.execute(f"DROP DATABASE IF EXISTS {q_db}")
     finally:
         try:
             conn.close()

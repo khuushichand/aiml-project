@@ -2,14 +2,16 @@
 # Description: Manages user-specific database instances based on application mode.
 #
 # Imports
-import threading
 import os
+import threading
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from loguru import logger
-from typing import Dict, Optional, AsyncGenerator
+from typing import Optional
 
 # 3rd-party Libraries
-from fastapi import Header, HTTPException, status, Depends, Request
+from fastapi import Depends, HTTPException, Request, status
+from loguru import logger
+
 try:
     from cachetools import LRUCache
     _HAS_CACHETOOLS = True
@@ -19,15 +21,20 @@ except ImportError:
 
 # Local Imports
 # Import the settings dictionary
-from tldw_Server_API.app.core.config import settings
 # Import the primary user identification dependency and User model
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-# Import the specific Database class
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, DatabaseError, SchemaError # Adjust import path
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
-from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.DB_Manager import get_content_backend_instance
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+# Import the specific Database class
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # Adjust import path
+    DatabaseError,
+    MediaDatabase,
+    SchemaError,
+)
+from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 
 #######################################################################################################################
 
@@ -43,7 +50,7 @@ if _HAS_CACHETOOLS:
     logger.info(f"Using LRUCache for user DB instances (maxsize={MAX_CACHED_DB_INSTANCES}).")
 else:
     # Keyed by user ID (int)
-    _user_db_instances: Dict[int, MediaDatabase] = {} # Fallback to standard dict
+    _user_db_instances: dict[int, MediaDatabase] = {} # Fallback to standard dict
 
 _user_db_lock = threading.Lock() # Protects access to _user_db_instances
 
@@ -60,17 +67,17 @@ def _get_db_path_for_user(user_id: int) -> Path:
     base_dir_env = os.environ.get("USER_DB_BASE_DIR")
     # Test-mode safety: isolate user DBs to a per-process temp dir unless explicitly overridden
     if not base_dir_env and str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        run_tag = (
+            os.getenv("TLDW_TEST_RUN_ID")
+            or os.getenv("PYTEST_XDIST_WORKER")
+            or "default"
+        )
+        safe_run_tag = "".join(
+            ch if ch.isalnum() or ch in "-_." else "_"
+            for ch in str(run_tag)
+        )
         try:
             import tempfile
-            run_tag = (
-                os.getenv("TLDW_TEST_RUN_ID")
-                or os.getenv("PYTEST_XDIST_WORKER")
-                or "default"
-            )
-            safe_run_tag = "".join(
-                ch if ch.isalnum() or ch in "-_." else "_"
-                for ch in str(run_tag)
-            )
             # Use project Databases/user_databases_test/<run_tag> to keep nearby but stable across processes
             project_root = settings.get("PROJECT_ROOT")  # type: ignore[attr-defined]
             if project_root:
@@ -83,21 +90,13 @@ def _get_db_path_for_user(user_id: int) -> Path:
                 )
             # Set env so subsequent calls use the same directory
             os.environ.setdefault("USER_DB_BASE_DIR", base_dir_env)
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(
                 "TESTING mode: failed to derive project-root user DB dir; falling back to temp dir. Error: %s",
                 e,
                 exc_info=True,
             )
-            run_tag = (
-                os.getenv("TLDW_TEST_RUN_ID")
-                or os.getenv("PYTEST_XDIST_WORKER")
-                or "default"
-            )
-            safe_run_tag = "".join(
-                ch if ch.isalnum() or ch in "-_." else "_"
-                for ch in str(run_tag)
-            )
+            import tempfile
             base_dir_env = str(
                 Path(tempfile.gettempdir()) / "tldw_user_databases_test" / safe_run_tag
             )
@@ -106,7 +105,7 @@ def _get_db_path_for_user(user_id: int) -> Path:
         return DatabasePaths.get_media_db_path(user_id)
     except Exception as e:
         logger.error(f"Could not resolve database directory for user_id {user_id}: {e}", exc_info=True)
-        raise IOError(f"Could not initialize storage directory for user {user_id}.") from e
+        raise OSError(f"Could not initialize storage directory for user {user_id}.") from e
 
 def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
     if not current_user or not isinstance(current_user.id, int):
@@ -136,8 +135,6 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         )
 
     use_shared_backend = shared_backend_type == BackendType.POSTGRESQL
-    if require_shared_backend:
-        use_shared_backend = True
 
     # --- Check Cache ---
     with _user_db_lock:
@@ -148,7 +145,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
             logger.warning(
                 f"TEST_MODE: DB_Deps cache {'hit' if db_instance else 'miss'} for user_id={user_id}"
             )
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         pass
 
     if db_instance:
@@ -165,7 +162,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps returning concurrently-created cached instance user_id={user_id} db_path={_dbp}")
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
             return db_instance
 
@@ -190,7 +187,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
                     _dbp = getattr(db_instance, 'db_path_str', getattr(db_instance, 'db_path', '?'))
                     logger.warning(f"TEST_MODE: DB_Deps cached new instance user_id={user_id} db_path={_dbp} shared_backend={use_shared_backend}")
-            except Exception:
+            except (OSError, RuntimeError, TypeError, ValueError):
                 pass
 
         except (DatabaseError, SchemaError) as e:
@@ -200,7 +197,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Could not initialize database for user: {e}"
             ) from e
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to get DB path for user {user_id}: {e}", exc_info=True)
             raise HTTPException(
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -219,7 +216,7 @@ def _resolve_media_db_for_user(current_user: User) -> MediaDatabase:
         if scope:
             db_instance.default_org_id = scope.effective_org_id
             db_instance.default_team_id = scope.effective_team_id
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         pass
     return db_instance
 
@@ -230,6 +227,11 @@ async def get_media_db_for_user(
     request: Request,
     current_user: User = Depends(get_request_user)
 ) -> AsyncGenerator[MediaDatabase, None]:
+    """
+    FastAPI dependency that provides a MediaDatabase instance for the current user.
+
+    Yields the database instance and ensures connection cleanup on exit.
+    """
     db_instance = _resolve_media_db_for_user(current_user)
     try:
         yield db_instance
@@ -237,7 +239,7 @@ async def get_media_db_for_user(
         try:
             if hasattr(db_instance, "release_context_connection"):
                 db_instance.release_context_connection()
-        except Exception:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -257,13 +259,13 @@ def reset_media_db_cache() -> None:
                         db.release_context_connection()
                     if hasattr(db, "close_connection"):
                         db.close_connection()
-                except Exception:
+                except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
         try:
             _user_db_instances.clear()  # type: ignore[attr-defined]
-        except Exception:
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -284,7 +286,7 @@ async def try_get_media_db_for_user(
         logger.warning(f"Optional Media DB unavailable for user {getattr(current_user, 'id', '?')}: {e.detail}")
         yield None
         return
-    except Exception as e:
+    except (DatabaseError, OSError, RuntimeError, SchemaError, TypeError, ValueError) as e:
         logger.warning(
             f"Optional Media DB unexpected error for user {getattr(current_user, 'id', '?')}: {e}",
             exc_info=True
@@ -297,7 +299,7 @@ async def try_get_media_db_for_user(
         try:
             if db_instance and hasattr(db_instance, "release_context_connection"):
                 db_instance.release_context_connection()
-        except Exception:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError):
             pass
 
 #

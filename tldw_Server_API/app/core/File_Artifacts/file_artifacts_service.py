@@ -8,7 +8,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import aiofiles
 from loguru import logger
@@ -21,22 +21,21 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
     FileExportRequest,
     FileValidationResult,
 )
+from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
+from tldw_Server_API.app.core.config import get_config_value
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
 from tldw_Server_API.app.core.File_Artifacts.adapter_registry import get_registry
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult, FileAdapter, ValidationIssue
 from tldw_Server_API.app.core.File_Artifacts.metrics import register_file_artifacts_metrics
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_utils import jobs_manager_from_env
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-from tldw_Server_API.app.core.config import get_config_value
-from tldw_Server_API.app.core.exceptions import FileArtifactsError, FileArtifactsValidationError
-from tldw_Server_API.app.core.AuthNZ.exceptions import QuotaExceededError, StorageError
 from tldw_Server_API.app.core.Storage.generated_file_helpers import (
     save_and_register_image,
     save_and_register_spreadsheet,
 )
-
 
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_ROWS = 5000
@@ -88,7 +87,7 @@ class FileArtifactsService:
         request: FileCreateRequest,
         *,
         request_id: str | None = None,
-    ) -> Tuple[FileArtifact, int]:
+    ) -> tuple[FileArtifact, int]:
         """Create a file artifact and optionally enqueue an export."""
         adapter = self.get_adapter(request.file_type)
         if adapter is None:
@@ -133,6 +132,14 @@ class FileArtifactsService:
             self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
             raise
 
+        if request.export is not None:
+            try:
+                self._validate_export_request(adapter=adapter, export_req=request.export)
+            except FileArtifactsValidationError as exc:
+                self._log_validation_failure(request_id, request.file_type, exc.code)
+                self._emit_metric("create", "failure", file_type=request.file_type, reason="validation")
+                raise
+
         validation = FileValidationResult(
             ok=True,
             warnings=[self._issue_to_payload(issue) for issue in warnings],
@@ -164,6 +171,7 @@ class FileArtifactsService:
                     request_id=request_id,
                 )
             except FileArtifactsError as exc:
+                self._rollback_artifact(row.id)
                 self._log_export_failure(request_id, request.file_type, request.export.format, exc.detail or exc.code)
                 self._emit_metric("create", "failure", file_type=request.file_type, reason="export")
                 self._emit_metric(
@@ -174,6 +182,7 @@ class FileArtifactsService:
                 )
                 raise
             except Exception as exc:
+                self._rollback_artifact(row.id)
                 self._log_export_failure(request_id, request.file_type, request.export.format, str(exc))
                 self._emit_metric("create", "failure", file_type=request.file_type, reason="export")
                 self._emit_metric(
@@ -198,7 +207,7 @@ class FileArtifactsService:
         self,
         *,
         adapter: FileAdapter,
-        structured: Dict[str, Any],
+        structured: dict[str, Any],
         file_id: int,
         export_format: str,
         options: FileCreateOptions,
@@ -214,23 +223,14 @@ class FileArtifactsService:
         self,
         *,
         adapter,
-        structured: Dict[str, Any],
+        structured: dict[str, Any],
         file_id: int,
         export_req: FileExportRequest,
         options: FileCreateOptions,
         request_id: str | None = None,
-    ) -> Tuple[FileExportInfo, int]:
-        if export_req.format not in adapter.export_formats:
-            raise FileArtifactsValidationError("unsupported_export_format")
-
+    ) -> tuple[FileExportInfo, int]:
+        self._validate_export_request(adapter=adapter, export_req=export_req)
         async_mode = export_req.async_mode
-        if async_mode not in {"auto", "sync", "async"}:
-            raise FileArtifactsValidationError("invalid_async_mode")
-        if adapter.file_type == "image":
-            if export_req.mode != "inline":
-                raise FileArtifactsValidationError("invalid_export_mode")
-            if async_mode != "sync":
-                raise FileArtifactsValidationError("invalid_async_mode")
 
         if async_mode == "async" or (
             async_mode == "auto"
@@ -289,8 +289,8 @@ class FileArtifactsService:
         self._emit_metric("export", "success", file_type=adapter.file_type, export_format=export_req.format)
         return export_info, HTTPStatus.OK
 
-    async def _export_sync(self, adapter, structured: Dict[str, Any], export_format: str) -> ExportResult:
-        if export_format == "xlsx":
+    async def _export_sync(self, adapter, structured: dict[str, Any], export_format: str) -> ExportResult:
+        if export_format == "xlsx" or getattr(adapter, "file_type", None) == "image":
             return await asyncio.to_thread(adapter.export, structured, format=export_format)
         return adapter.export(structured, format=export_format)
 
@@ -324,42 +324,67 @@ class FileArtifactsService:
             content_b64 = base64.b64encode(export_result.content).decode("ascii")
         url = None
         expires_at = None
-        if export_req.mode == "url" or not inline_ready:
-            storage_path, _ = await self._write_export_file(file_id, export_req.format, export_result.content)
-            ttl_seconds = self._resolve_export_ttl_seconds(options)
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-            self._cdb.update_file_artifact_export(
-                file_id,
-                export_status="ready",
-                export_format=export_req.format,
-                export_storage_path=storage_path,
-                export_bytes=byte_count,
-                export_content_type=content_type,
-                export_job_id=export_result.job_id,
-                export_expires_at=expires_at.replace(microsecond=0).isoformat(),
-                export_consumed_at=None,
-            )
-            url = self._build_export_url(file_id, export_req.format)
-        else:
-            consumed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-            self._cdb.update_file_artifact_export(
-                file_id,
-                export_status="none",
-                export_format=export_req.format,
-                export_storage_path=None,
-                export_bytes=byte_count,
-                export_content_type=content_type,
-                export_job_id=export_result.job_id,
-                export_expires_at=None,
-                export_consumed_at=consumed_at,
-            )
-        # Register generated files for storage/quota tracking (image + spreadsheet exports).
-        await self._register_generated_file_export(
-            file_id=file_id,
-            file_type=file_type,
-            export_format=export_req.format,
-            content=export_result.content,
-        )
+        storage_path: str | None = None
+        export_updated = False
+        try:
+            if export_req.mode == "url" or not inline_ready:
+                storage_path, _ = await self._write_export_file(file_id, export_req.format, export_result.content)
+                ttl_seconds = self._resolve_export_ttl_seconds(options)
+                expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+                self._cdb.update_file_artifact_export(
+                    file_id,
+                    export_status="ready",
+                    export_format=export_req.format,
+                    export_storage_path=storage_path,
+                    export_bytes=byte_count,
+                    export_content_type=content_type,
+                    export_job_id=export_result.job_id,
+                    export_expires_at=expires_at.replace(microsecond=0).isoformat(),
+                    export_consumed_at=None,
+                )
+                export_updated = True
+                url = self._build_export_url(file_id, export_req.format)
+            else:
+                consumed_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+                self._cdb.update_file_artifact_export(
+                    file_id,
+                    export_status="none",
+                    export_format=export_req.format,
+                    export_storage_path=None,
+                    export_bytes=byte_count,
+                    export_content_type=content_type,
+                    export_job_id=export_result.job_id,
+                    export_expires_at=None,
+                    export_consumed_at=consumed_at,
+                )
+                export_updated = True
+            if export_req.mode == "url" or not inline_ready:
+                # Register generated files for storage/quota tracking (image + spreadsheet exports).
+                await self._register_generated_file_export(
+                    file_id=file_id,
+                    file_type=file_type,
+                    export_format=export_req.format,
+                    content=export_result.content,
+                )
+        except Exception:
+            if storage_path:
+                self._delete_temp_export_file(storage_path)
+            if export_updated:
+                try:
+                    self._cdb.update_file_artifact_export(
+                        file_id,
+                        export_status="none",
+                        export_format=export_req.format,
+                        export_storage_path=None,
+                        export_bytes=byte_count,
+                        export_content_type=content_type,
+                        export_job_id=export_result.job_id,
+                        export_expires_at=None,
+                        export_consumed_at=None,
+                    )
+                except Exception as reset_exc:
+                    logger.warning("file_artifacts: failed to reset export state for %s: %s", file_id, reset_exc)
+            raise
         return FileExportInfo(
             status="ready" if export_req.mode == "url" or not inline_ready else "none",
             format=export_req.format,
@@ -404,7 +429,7 @@ class FileArtifactsService:
         except StorageError as exc:
             raise FileArtifactsError("storage_persist_failed", detail=str(exc)) from exc
 
-    async def _write_export_file(self, file_id: int, export_format: str, content: bytes) -> Tuple[str, int]:
+    async def _write_export_file(self, file_id: int, export_format: str, content: bytes) -> tuple[str, int]:
         filename = f"file_{file_id}.{export_format}"
         storage_path = self._cdb.resolve_temp_output_storage_path(filename)
         outputs_dir = DatabasePaths.get_user_temp_outputs_dir(self._user_id_int)
@@ -412,6 +437,16 @@ class FileArtifactsService:
         async with aiofiles.open(file_path, "wb") as handle:
             await handle.write(content)
         return storage_path, len(content)
+
+    def _delete_temp_export_file(self, storage_path: str) -> None:
+        try:
+            safe_name = self._cdb.resolve_temp_output_storage_path(storage_path)
+            outputs_dir = DatabasePaths.get_user_temp_outputs_dir(self._user_id_int)
+            file_path = outputs_dir / safe_name
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as exc:
+            logger.warning("file_artifacts: failed to delete export file %s: %s", storage_path, exc)
 
     @staticmethod
     def _default_title(file_type: str) -> str:
@@ -422,7 +457,7 @@ class FileArtifactsService:
         return f"/api/v1/files/{file_id}/export?format={export_format}"
 
     @staticmethod
-    def _issue_to_payload(issue: ValidationIssue) -> Dict[str, Any]:
+    def _issue_to_payload(issue: ValidationIssue) -> dict[str, Any]:
         return {
             "code": issue.code,
             "message": issue.message,
@@ -469,8 +504,33 @@ class FileArtifactsService:
         except Exception:
             logger.debug("metrics increment failed for file_artifacts_operations_total")
 
+    def _rollback_artifact(self, file_id: int) -> None:
+        try:
+            row = self._cdb.get_file_artifact(file_id, include_deleted=True)
+        except KeyError:
+            return
+        if getattr(row, "export_storage_path", None):
+            self._delete_temp_export_file(row.export_storage_path)
+        try:
+            self._cdb.delete_file_artifact(file_id, hard=True)
+        except Exception as exc:
+            logger.warning("file_artifacts: failed to rollback file artifact %s: %s", file_id, exc)
+
     @staticmethod
-    def _split_issues(issues: list[ValidationIssue]) -> Tuple[list[ValidationIssue], list[ValidationIssue]]:
+    def _validate_export_request(*, adapter: FileAdapter, export_req: FileExportRequest) -> None:
+        if export_req.format not in adapter.export_formats:
+            raise FileArtifactsValidationError("unsupported_export_format")
+        async_mode = export_req.async_mode
+        if async_mode not in {"auto", "sync", "async"}:
+            raise FileArtifactsValidationError("invalid_async_mode")
+        if adapter.file_type == "image":
+            if export_req.mode != "inline":
+                raise FileArtifactsValidationError("invalid_export_mode")
+            if async_mode != "sync":
+                raise FileArtifactsValidationError("invalid_async_mode")
+
+    @staticmethod
+    def _split_issues(issues: list[ValidationIssue]) -> tuple[list[ValidationIssue], list[ValidationIssue]]:
         errors: list[ValidationIssue] = []
         warnings: list[ValidationIssue] = []
         for issue in issues:
@@ -616,7 +676,7 @@ class FileArtifactsService:
             return FileExportInfo(status="pending", format=row.export_format, job_id=row.export_job_id)
         return FileExportInfo(status="none")
 
-    def _enforce_limits(self, file_type: str, structured: Dict[str, Any], options: FileCreateOptions) -> None:
+    def _enforce_limits(self, file_type: str, structured: dict[str, Any], options: FileCreateOptions) -> None:
         max_rows = options.max_rows or DEFAULT_MAX_ROWS
         max_cells = options.max_cells or DEFAULT_MAX_CELLS
         rows, cells = self._extract_table_shape(file_type, structured)
@@ -628,7 +688,7 @@ class FileArtifactsService:
     def _should_export_async(
         self,
         file_type: str,
-        structured: Dict[str, Any],
+        structured: dict[str, Any],
         options: FileCreateOptions,
         export_format: str,
     ) -> bool:
@@ -648,7 +708,7 @@ class FileArtifactsService:
     def _estimate_export_size(
         self,
         _file_type: str,
-        structured: Dict[str, Any],
+        structured: dict[str, Any],
         export_format: str,
     ) -> int | None:
         if export_format == "ics":
@@ -659,7 +719,7 @@ class FileArtifactsService:
             return self._estimate_table_bytes(structured, export_format)
         return None
 
-    def _estimate_table_bytes(self, structured: Dict[str, Any], export_format: str) -> int:
+    def _estimate_table_bytes(self, structured: dict[str, Any], export_format: str) -> int:
         tables = list(self._iter_tables(structured))
         total_bytes = 0
         if export_format == "csv":
@@ -718,10 +778,7 @@ class FileArtifactsService:
                 text = self._stringify_cell(cell)
                 total_chars += len(text)
                 escape_extra += text.count("|")
-        if columns:
-            sep_row_overhead = (3 * len(columns)) + 4 + 3 * (len(columns) - 1)
-        else:
-            sep_row_overhead = 0
+        sep_row_overhead = 3 * len(columns) + 4 + 3 * (len(columns) - 1) if columns else 0
         newline_count = len(rows_all) + (1 if columns else 0)
         return total_chars + escape_extra + row_overhead + sep_row_overhead + newline_count
 
@@ -767,7 +824,7 @@ class FileArtifactsService:
                 total += 1
         return total
 
-    def _estimate_xlsx_bytes(self, structured: Dict[str, Any]) -> int:
+    def _estimate_xlsx_bytes(self, structured: dict[str, Any]) -> int:
         tables = list(self._iter_tables(structured))
         total_chars = 0
         cell_count = 0
@@ -784,7 +841,7 @@ class FileArtifactsService:
         base_overhead = 2048 + sheet_count * 512
         return base_overhead + (cell_count * 12) + (total_chars * 2)
 
-    def _estimate_ical_bytes(self, structured: Dict[str, Any]) -> int:
+    def _estimate_ical_bytes(self, structured: dict[str, Any]) -> int:
         calendar = structured.get("calendar") or {}
         prodid = self._stringify_cell(calendar.get("prodid") or "-//tldw//files//EN")
         version = self._stringify_cell(calendar.get("version") or "2.0")
@@ -825,7 +882,7 @@ class FileArtifactsService:
         return sum(text.count(ch) * extra for ch, extra in extras.items())
 
     @staticmethod
-    def _iter_tables(structured: Dict[str, Any]):
+    def _iter_tables(structured: dict[str, Any]):
         if "sheets" in structured:
             for sheet in structured.get("sheets") or []:
                 yield sheet.get("columns") or [], sheet.get("rows") or []
@@ -833,7 +890,7 @@ class FileArtifactsService:
         yield structured.get("columns") or [], structured.get("rows") or []
 
     @staticmethod
-    def _extract_table_shape(file_type: str, structured: Dict[str, Any]) -> Tuple[int, int]:
+    def _extract_table_shape(file_type: str, structured: dict[str, Any]) -> tuple[int, int]:
         if "columns" in structured and "rows" in structured:
             rows = structured.get("rows") or []
             columns = structured.get("columns") or []

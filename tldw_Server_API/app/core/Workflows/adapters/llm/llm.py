@@ -8,19 +8,18 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
-    LLMConfig,
-    LLMWithToolsConfig,
     LLMCompareConfig,
+    LLMConfig,
     LLMCritiqueConfig,
+    LLMWithToolsConfig,
 )
 
 
@@ -32,7 +31,7 @@ from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
     tags=["core", "ai"],
     config_model=LLMConfig,
 )
-async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute an LLM chat completion via the adapter registry.
 
     Config (subset; additional keys passed through):
@@ -48,15 +47,15 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
       - metadata: token_usage/cost if available
       - response: raw provider response (optional)
     """
-    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
     from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+    from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     def _render_str(val: Any) -> Any:
         if isinstance(val, str):
             try:
                 return _tmpl(val, context) or val
-            except Exception as exc:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 snippet = val.strip().replace("\n", "\\n")
                 if len(snippet) > 120:
                     snippet = f"{snippet[:120]}..."
@@ -64,7 +63,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                 return val
         return val
 
-    def _render_message(msg: Any) -> Optional[Dict[str, Any]]:
+    def _render_message(msg: Any) -> dict[str, Any] | None:
         if isinstance(msg, dict):
             out = dict(msg)
             if isinstance(out.get("content"), str):
@@ -98,7 +97,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 
     messages_cfg = config.get("messages") or config.get("messages_payload")
     prompt = config.get("prompt") or config.get("input") or config.get("template")
-    messages: List[Dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
 
     if messages_cfg is None:
         if not prompt:
@@ -110,7 +109,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
         parsed = None
         try:
             parsed = json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             parsed = None
         if isinstance(parsed, list):
             for item in parsed:
@@ -141,7 +140,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
         if not preview:
             try:
                 preview = str(messages[-1].get("content") or "")
-            except Exception:
+            except (AttributeError, IndexError, TypeError, ValueError):
                 preview = ""
         return {
             "text": preview,
@@ -153,7 +152,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     stream = bool(config.get("stream", False))
     include_response = bool(config.get("include_response", False))
 
-    call_args: Dict[str, Any] = {
+    call_args: dict[str, Any] = {
         "api_endpoint": provider,
         "messages_payload": messages,
         "system_message": system_message,
@@ -192,7 +191,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                 payload = raw[5:].strip()
                 try:
                     data = json.loads(payload)
-                except Exception:
+                except json.JSONDecodeError:
                     data = None
                 if isinstance(data, dict):
                     choices = data.get("choices") or []
@@ -204,7 +203,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                             try:
                                 if callable(context.get("append_event")):
                                     context["append_event"]("llm_stream", {"delta": chunk})
-                            except Exception as e:
+                            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                                 logger.debug(f"LLM stream event dispatch failed: {e}")
                     continue
             # Fallback: treat as plain text chunk
@@ -213,8 +212,8 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
 
     response = await perform_chat_api_call_async(**call_args)
     text = extract_openai_content(response) or ""
-    out: Dict[str, Any] = {"text": text}
-    metadata: Dict[str, Any] = {}
+    out: dict[str, Any] = {"text": text}
+    metadata: dict[str, Any] = {}
     if isinstance(response, dict):
         usage = response.get("usage")
         if isinstance(usage, dict):
@@ -236,7 +235,7 @@ async def run_llm_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["ai", "tools", "agentic"],
     config_model=LLMWithToolsConfig,
 )
-async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_with_tools_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """LLM call that can invoke defined tools.
 
     Config:
@@ -277,7 +276,7 @@ async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, 
         final_response = None
         iteration = 0
 
-        for iteration in range(max_tool_calls + 1):
+        for _iteration in range(max_tool_calls + 1):
             if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                 return {"__status__": "cancelled"}
 
@@ -322,14 +321,14 @@ async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, 
 
                     messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                     messages.append({"role": "tool", "tool_call_id": tc.get("id"), "content": json.dumps(result, default=str)})
-                except Exception as e:
+                except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                     tool_results.append({"tool": tool_name, "error": str(e)})
                     messages.append({"role": "assistant", "content": None, "tool_calls": [tc]})
                     messages.append({"role": "tool", "tool_call_id": tc.get("id"), "content": f"Error: {e}"})
 
         return {"text": final_response or "", "tool_results": tool_results, "iterations": iteration + 1}
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM with tools error: {e}")
         return {"error": str(e), "text": "", "tool_results": []}
 
@@ -342,7 +341,7 @@ async def run_llm_with_tools_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["ai", "comparison"],
     config_model=LLMCompareConfig,
 )
-async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_compare_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run same prompt through multiple LLMs and compare.
 
     Config:
@@ -406,7 +405,7 @@ async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any
                     "elapsed_ms": elapsed_ms,
                     "char_count": len(text),
                 })
-            except Exception as e:
+            except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                 responses.append({
                     "provider": provider,
                     "model": model,
@@ -423,7 +422,7 @@ async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any
             },
         }
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM compare error: {e}")
         return {"responses": [], "error": str(e)}
 
@@ -436,7 +435,7 @@ async def run_llm_compare_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["ai", "evaluation"],
     config_model=LLMCritiqueConfig,
 )
-async def run_llm_critique_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_llm_critique_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run LLM critique on content (Constitutional AI pattern).
 
     Config:
@@ -518,6 +517,6 @@ Revise the content to address the critique while maintaining the original intent
 
         return {"critique": critique, "revised": revised, "criteria": criteria}
 
-    except Exception as e:
+    except (AdapterError, AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"LLM critique error: {e}")
         return {"error": str(e), "critique": "", "revised": ""}

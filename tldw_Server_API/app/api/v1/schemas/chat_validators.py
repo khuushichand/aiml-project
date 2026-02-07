@@ -3,12 +3,12 @@
 #
 # Imports
 import configparser
+import json
+import os
 import re
 import uuid
 from typing import Any, Optional
-import os
-import json
-from pydantic import field_validator, model_validator, ValidationError
+
 from loguru import logger
 
 #######################################################################################################################
@@ -282,7 +282,7 @@ def validate_max_tokens(max_tokens: Optional[int]) -> Optional[int]:
         try:
             max_tokens = int(max_tokens)
         except (ValueError, TypeError):
-            raise ValueError(f"max_tokens must be an integer, got {type(max_tokens)}")
+            raise ValueError(f"max_tokens must be an integer, got {type(max_tokens)}") from None
 
     if max_tokens < 1:
         raise ValueError(f"max_tokens must be at least 1, got {max_tokens}")
@@ -339,10 +339,7 @@ def validate_request_size(request_data: Any) -> bool:
             request_json = DATA_URI_REDACT_PATTERN.sub(r'\1<redacted>', request_data)
         else:
             # Convert to a serializable dict and sanitize recursively
-            if hasattr(request_data, 'model_dump'):
-                raw = request_data.model_dump()
-            else:
-                raw = request_data
+            raw = request_data.model_dump() if hasattr(request_data, 'model_dump') else request_data
             sanitized_obj = _sanitize_value_for_size(raw)
             request_json = json.dumps(sanitized_obj)
 

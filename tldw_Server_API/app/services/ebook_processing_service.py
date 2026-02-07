@@ -2,10 +2,11 @@
 
 # FIXME - File is dummy code, needs to be updated
 
-from tldw_Server_API.app.core.Utils.Utils import logger
-from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from fastapi import HTTPException
+
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.Utils.Utils import logger
+
 # from App_Function_Libraries.Books.Book_Ingestion_Lib import import_epub, ...
 
 async def process_ebook_task(

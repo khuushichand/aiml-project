@@ -12,7 +12,7 @@ def evals_crud_client() -> Tuple[TestClient, dict]:
     os.environ.setdefault("TEST_MODE", "true")
 
     from fastapi import FastAPI
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_crud import crud_router
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_crud import crud_router
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     app = FastAPI()
@@ -49,7 +49,7 @@ def test_create_run_uses_typed_model(evals_crud_client, monkeypatch):
                 "created": 1700000000,
             }
 
-    import tldw_Server_API.app.api.v1.endpoints.evaluations_crud as crud
+    import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_crud as crud
     monkeypatch.setattr(crud, "get_unified_evaluation_service_for_user", lambda uid: _SvcStub())
 
     payload = {

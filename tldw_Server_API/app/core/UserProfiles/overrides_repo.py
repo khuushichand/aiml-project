@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -41,7 +41,7 @@ class UserProfileOverridesRepo:
             logger.error(f"UserProfileOverridesRepo.ensure_tables failed: {exc}")
             raise
 
-    async def list_overrides_for_user(self, user_id: int) -> List[Dict[str, Any]]:
+    async def list_overrides_for_user(self, user_id: int) -> list[dict[str, Any]]:
         """List overrides for a user."""
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -86,7 +86,7 @@ class UserProfileOverridesRepo:
         user_id: int,
         key: str,
         value: Any,
-        updated_by: Optional[int],
+        updated_by: int | None,
     ) -> None:
         """Insert or update a config override."""
         payload = json.dumps(value)
@@ -155,7 +155,7 @@ class UserProfileOverridesRepo:
             logger.error(f"UserProfileOverridesRepo.delete_override failed: {exc}")
             raise
 
-    async def get_latest_update_for_user(self, user_id: int) -> Optional[Any]:
+    async def get_latest_update_for_user(self, user_id: int) -> Any | None:
         """Return the latest override update timestamp for a user."""
         try:
             if getattr(self.db_pool, "pool", None) is not None:
@@ -182,7 +182,7 @@ class UserProfileOverridesRepo:
             raise
 
     @staticmethod
-    def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         value_json = row.get("value_json")
         value: Any = None
         if value_json is not None:
@@ -223,7 +223,7 @@ class OrgProfileOverridesRepo:
             logger.error(f"OrgProfileOverridesRepo.ensure_tables failed: {exc}")
             raise
 
-    async def list_overrides_for_orgs(self, org_ids: List[int]) -> List[Dict[str, Any]]:
+    async def list_overrides_for_orgs(self, org_ids: list[int]) -> list[dict[str, Any]]:
         if not org_ids:
             return []
         try:
@@ -271,7 +271,7 @@ class OrgProfileOverridesRepo:
         org_id: int,
         key: str,
         value: Any,
-        updated_by: Optional[int],
+        updated_by: int | None,
     ) -> None:
         payload = json.dumps(value)
         ts = datetime.now(timezone.utc)
@@ -338,7 +338,7 @@ class OrgProfileOverridesRepo:
             logger.error(f"OrgProfileOverridesRepo.delete_override failed: {exc}")
             raise
 
-    async def get_latest_update_for_orgs(self, org_ids: List[int]) -> Optional[Any]:
+    async def get_latest_update_for_orgs(self, org_ids: list[int]) -> Any | None:
         if not org_ids:
             return None
         try:
@@ -367,7 +367,7 @@ class OrgProfileOverridesRepo:
             raise
 
     @staticmethod
-    def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         value_json = row.get("value_json")
         value: Any = None
         if value_json is not None:
@@ -409,7 +409,7 @@ class TeamProfileOverridesRepo:
             logger.error(f"TeamProfileOverridesRepo.ensure_tables failed: {exc}")
             raise
 
-    async def list_overrides_for_teams(self, team_ids: List[int]) -> List[Dict[str, Any]]:
+    async def list_overrides_for_teams(self, team_ids: list[int]) -> list[dict[str, Any]]:
         if not team_ids:
             return []
         try:
@@ -457,7 +457,7 @@ class TeamProfileOverridesRepo:
         team_id: int,
         key: str,
         value: Any,
-        updated_by: Optional[int],
+        updated_by: int | None,
     ) -> None:
         payload = json.dumps(value)
         ts = datetime.now(timezone.utc)
@@ -524,7 +524,7 @@ class TeamProfileOverridesRepo:
             logger.error(f"TeamProfileOverridesRepo.delete_override failed: {exc}")
             raise
 
-    async def get_latest_update_for_teams(self, team_ids: List[int]) -> Optional[Any]:
+    async def get_latest_update_for_teams(self, team_ids: list[int]) -> Any | None:
         if not team_ids:
             return None
         try:
@@ -553,7 +553,7 @@ class TeamProfileOverridesRepo:
             raise
 
     @staticmethod
-    def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+    def _row_to_dict(row: dict[str, Any]) -> dict[str, Any]:
         value_json = row.get("value_json")
         value: Any = None
         if value_json is not None:

@@ -6,10 +6,9 @@ Pydantic schemas for billing and subscription endpoints.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl, computed_field
-
 
 # =============================================================================
 # Plans
@@ -17,27 +16,27 @@ from pydantic import BaseModel, Field, HttpUrl, computed_field
 
 class PlanLimitsResponse(BaseModel):
     """Plan limits details."""
-    storage_mb: Optional[int] = None
-    api_calls_day: Optional[int] = None
-    llm_tokens_month: Optional[int] = None
-    team_members: Optional[int] = None
-    transcription_minutes_month: Optional[int] = None
-    rag_queries_day: Optional[int] = None
-    concurrent_jobs: Optional[int] = None
-    advanced_analytics: Optional[bool] = None
-    priority_support: Optional[bool] = None
-    custom_models: Optional[bool] = None
-    api_access: Optional[bool] = None
-    sso_enabled: Optional[bool] = None
-    audit_logs: Optional[bool] = None
+    storage_mb: int | None = None
+    api_calls_day: int | None = None
+    llm_tokens_month: int | None = None
+    team_members: int | None = None
+    transcription_minutes_month: int | None = None
+    rag_queries_day: int | None = None
+    concurrent_jobs: int | None = None
+    advanced_analytics: bool | None = None
+    priority_support: bool | None = None
+    custom_models: bool | None = None
+    api_access: bool | None = None
+    sso_enabled: bool | None = None
+    audit_logs: bool | None = None
 
 
 class SubscriptionPlanResponse(BaseModel):
     """Subscription plan details."""
-    id: Optional[int] = None
+    id: int | None = None
     name: str
     display_name: str
-    description: Optional[str] = None
+    description: str | None = None
     price_usd_monthly: float = 0
     price_usd_yearly: float = 0
     limits: PlanLimitsResponse = Field(default_factory=PlanLimitsResponse)
@@ -47,7 +46,7 @@ class SubscriptionPlanResponse(BaseModel):
 
 class PlanListResponse(BaseModel):
     """List of available plans."""
-    plans: List[SubscriptionPlanResponse]
+    plans: list[SubscriptionPlanResponse]
 
 
 # =============================================================================
@@ -60,20 +59,20 @@ class OrgSubscriptionResponse(BaseModel):
     plan_name: str
     plan_display_name: str
     status: str  # active, past_due, canceled, trialing, canceling
-    billing_cycle: Optional[str] = None  # monthly, yearly
-    current_period_end: Optional[str] = None
-    trial_end: Optional[str] = None
+    billing_cycle: str | None = None  # monthly, yearly
+    current_period_end: str | None = None
+    trial_end: str | None = None
     cancel_at_period_end: bool = False
-    limits: Dict[str, Any] = Field(default_factory=dict)
+    limits: dict[str, Any] = Field(default_factory=dict)
 
 
 class SubscriptionUsageResponse(BaseModel):
     """Usage vs limits status."""
     org_id: int
     plan_name: str
-    limits: Dict[str, Any]
-    usage: Dict[str, int]
-    limit_checks: Dict[str, Dict[str, Any]]
+    limits: dict[str, Any]
+    usage: dict[str, int]
+    limit_checks: dict[str, dict[str, Any]]
     has_warnings: bool
     has_exceeded: bool
 
@@ -82,7 +81,7 @@ class RagUsageDebugResponse(BaseModel):
     """Debug view of RAG query usage vs daily limit."""
     org_id: int
     rag_queries_today: int
-    rag_queries_day_limit: Optional[int] = None
+    rag_queries_day_limit: int | None = None
 
 
 # =============================================================================
@@ -133,7 +132,7 @@ class CancelSubscriptionRequest(BaseModel):
 class CancelSubscriptionResponse(BaseModel):
     """Cancellation result."""
     canceled: bool
-    current_period_end: Optional[str] = None
+    current_period_end: str | None = None
 
 
 class ResumeSubscriptionResponse(BaseModel):
@@ -149,13 +148,13 @@ class InvoiceResponse(BaseModel):
     """Invoice/payment record."""
     id: int
     org_id: int
-    stripe_invoice_id: Optional[str] = None
+    stripe_invoice_id: str | None = None
     amount_cents: int
     currency: str = "usd"
     status: str  # succeeded, failed, pending
-    description: Optional[str] = None
-    invoice_pdf_url: Optional[str] = None
-    created_at: Optional[datetime] = None
+    description: str | None = None
+    invoice_pdf_url: str | None = None
+    created_at: datetime | None = None
 
     @computed_field
     @property
@@ -166,7 +165,7 @@ class InvoiceResponse(BaseModel):
 
 class InvoiceListResponse(BaseModel):
     """List of invoices."""
-    items: List[InvoiceResponse]
+    items: list[InvoiceResponse]
     total: int
 
 
@@ -177,5 +176,5 @@ class InvoiceListResponse(BaseModel):
 class WebhookResponse(BaseModel):
     """Webhook processing result."""
     received: bool = True
-    event_type: Optional[str] = None
+    event_type: str | None = None
     handled: bool = False

@@ -18,55 +18,76 @@ import asyncio
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Callable
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from loguru import logger
 
-# Prefer RAG types if available, else fallback
-try:
-    from .types import Document, DataSource
-except Exception:  # pragma: no cover - fallback for isolated tests
+if TYPE_CHECKING:
+    from .claims import ClaimsEngine as ClaimsEngineType
+    from .database_retrievers import MultiDatabaseRetriever as MultiDatabaseRetrieverType
+    from .generation import AnswerGenerator as AnswerGeneratorType
+    from .types import DataSource, Document
+    GenerateHypoFn = Callable[[str, Optional[str], Optional[str]], str]
+    HydeEmbedFn = Callable[[str], Any]
+    MultiStrategyExpansionFn = Callable[..., Any]
+else:
     from dataclasses import dataclass as _dc
+
     @_dc
-    class Document:  # type: ignore
+    class Document:  # pragma: no cover - fallback for isolated tests
         id: str
         content: str
-        metadata: Dict[str, Any]
+        metadata: dict[str, Any]
         score: float = 0.0
-    class DataSource:  # type: ignore
+
+    class DataSource:  # pragma: no cover - fallback for isolated tests
         MEDIA_DB = "media_db"
 
+    ClaimsEngineType = Any
+    MultiDatabaseRetrieverType = Any
+    AnswerGeneratorType = Any
+    GenerateHypoFn = Any
+    HydeEmbedFn = Any
+    MultiStrategyExpansionFn = Any
+
+ClaimsEngine: type[ClaimsEngineType] | None = None
+MultiDatabaseRetriever: type[MultiDatabaseRetrieverType] | None = None
+AnswerGenerator: type[AnswerGeneratorType] | None = None
+generate_hypothetical_answer: GenerateHypoFn | None = None
+hyde_embed_text: HydeEmbedFn | None = None
+multi_strategy_expansion: MultiStrategyExpansionFn | None = None
 
 try:
-    # Claims engine used for extraction and verification
-    from .claims import ClaimsEngine
-except Exception:
-    ClaimsEngine = None  # type: ignore
+    from . import claims as _claims_mod
+    ClaimsEngine = cast(Optional[type[ClaimsEngineType]], getattr(_claims_mod, "ClaimsEngine", None))
+except ImportError:
+    ClaimsEngine = None
 
 try:
-    # Retrieval building blocks
-    from .database_retrievers import MultiDatabaseRetriever, RetrievalConfig
-except Exception:
-    MultiDatabaseRetriever = None  # type: ignore
-    RetrievalConfig = None  # type: ignore
+    from . import database_retrievers as _db_mod
+    MultiDatabaseRetriever = cast(Optional[type[MultiDatabaseRetrieverType]], getattr(_db_mod, "MultiDatabaseRetriever", None))
+except ImportError:
+    MultiDatabaseRetriever = None
 
 try:
-    # Answer generation used for repair regeneration
-    from .generation import AnswerGenerator
-except Exception:
-    AnswerGenerator = None  # type: ignore
-
-# Optional query rewrite tools
-try:
-    from .hyde import generate_hypothetical_answer, embed_text as hyde_embed_text
-except Exception:
-    generate_hypothetical_answer = None  # type: ignore
-    hyde_embed_text = None  # type: ignore
+    from . import generation as _gen_mod
+    AnswerGenerator = cast(Optional[type[AnswerGeneratorType]], getattr(_gen_mod, "AnswerGenerator", None))
+except ImportError:
+    AnswerGenerator = None
 
 try:
-    from .query_expansion import multi_strategy_expansion
-except Exception:
-    multi_strategy_expansion = None  # type: ignore
+    from . import hyde as _hyde_mod
+    generate_hypothetical_answer = cast(Optional[GenerateHypoFn], getattr(_hyde_mod, "generate_hypothetical_answer", None))
+    hyde_embed_text = cast(Optional[HydeEmbedFn], getattr(_hyde_mod, "embed_text", None))
+except ImportError:
+    generate_hypothetical_answer = None
+    hyde_embed_text = None
+
+try:
+    from . import query_expansion as _qe_mod
+    multi_strategy_expansion = cast(Optional[MultiStrategyExpansionFn], getattr(_qe_mod, "multi_strategy_expansion", None))
+except ImportError:
+    multi_strategy_expansion = None
 
 try:
     # Central metrics registry (Prometheus/OTel)
@@ -74,10 +95,10 @@ try:
         increment_counter,
         observe_histogram,
     )
-except Exception:  # pragma: no cover
-    def increment_counter(*args, **kwargs):  # type: ignore
+except Exception:  # noqa: BLE001 - metrics optional in test envs
+    def increment_counter(metric_name: str, value: float = 1.0, labels: dict[str, str] | None = None) -> Any:
         return None
-    def observe_histogram(*args, **kwargs):  # type: ignore
+    def observe_histogram(metric_name: str, value: float, labels: dict[str, str] | None = None) -> Any:
         return None
 
 
@@ -88,9 +109,9 @@ class VerificationOutcome:
     unsupported_count: int
     fixed: bool
     reason: str = ""
-    new_answer: Optional[str] = None
-    claims: Optional[List[Dict[str, Any]]] = None
-    summary: Optional[Dict[str, Any]] = None
+    new_answer: str | None = None
+    claims: list[dict[str, Any]] | None = None
+    summary: dict[str, Any] | None = None
 
 
 class PostGenerationVerifier:
@@ -98,18 +119,18 @@ class PostGenerationVerifier:
 
     def __init__(
         self,
-        claims_runner: Optional[Callable[..., Any]] = None,
+        claims_runner: Callable[..., Any] | None = None,
         max_retries: int = 1,
         unsupported_threshold: float = 0.15,
         max_claims: int = 20,
-        time_budget_sec: Optional[float] = None,
-        use_advanced_rewrites: Optional[bool] = None,
+        time_budget_sec: float | None = None,
+        use_advanced_rewrites: bool | None = None,
     ):
         self._claims_runner = claims_runner
         self._max_retries = max(0, int(max_retries or 0))
         try:
             self._threshold = float(unsupported_threshold)
-        except Exception:
+        except (TypeError, ValueError):
             self._threshold = 0.15
         self._max_claims = max(1, int(max_claims or 1))
         self._time_budget = float(time_budget_sec) if time_budget_sec is not None else None
@@ -118,7 +139,7 @@ class PostGenerationVerifier:
             try:
                 env_val = os.getenv("RAG_ADAPTIVE_ADVANCED_REWRITES", "true").strip().lower()
                 self._adv = env_val in {"1", "true", "yes", "on"}
-            except Exception:
+            except Exception:  # noqa: BLE001 - env parsing best-effort
                 self._adv = True
         else:
             self._adv = bool(use_advanced_rewrites)
@@ -126,16 +147,16 @@ class PostGenerationVerifier:
     async def verify_and_maybe_fix(
         self,
         query: str,
-        answer: Optional[str],
-        base_documents: List[Document],
+        answer: str | None,
+        base_documents: list[Document],
         *,
-        media_db_path: Optional[str] = None,
-        notes_db_path: Optional[str] = None,
-        character_db_path: Optional[str] = None,
-        user_id: Optional[str] = None,
-        generation_model: Optional[str] = None,
-        existing_claims: Optional[List[Dict[str, Any]]] = None,
-        existing_summary: Optional[Dict[str, Any]] = None,
+        media_db_path: str | None = None,
+        notes_db_path: str | None = None,
+        character_db_path: str | None = None,
+        user_id: str | None = None,
+        generation_model: str | None = None,
+        existing_claims: list[dict[str, Any]] | None = None,
+        existing_summary: dict[str, Any] | None = None,
         search_mode: str = "hybrid",
         hybrid_alpha: float = 0.7,
         top_k: int = 10,
@@ -162,8 +183,8 @@ class PostGenerationVerifier:
             return outcome
 
         # Run or reuse claims verification
-        claims_payload: Optional[List[Dict[str, Any]]] = existing_claims
-        summary_payload: Optional[Dict[str, Any]] = existing_summary
+        claims_payload: list[dict[str, Any]] | None = existing_claims
+        summary_payload: dict[str, Any] | None = existing_summary
         try:
             if (claims_payload is None or summary_payload is None):
                 if self._claims_runner is not None:
@@ -178,10 +199,10 @@ class PostGenerationVerifier:
                     summary_payload = (run or {}).get("summary")
                 elif ClaimsEngine is not None:
                     # Use default analyze function
-                    import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
-                    def _analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
-                                 api_key: Optional[str] = None, system_message: Optional[str] = None,
-                                 temp: Optional[float] = None, **kwargs):
+                    import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+                    def _analyze(api_name: str, input_data: Any, custom_prompt_arg: str | None = None,
+                                 api_key: str | None = None, system_message: str | None = None,
+                                 temp: float | None = None, **kwargs):
                         return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
 
                     engine = ClaimsEngine(_analyze)
@@ -202,8 +223,8 @@ class PostGenerationVerifier:
                                 db_paths,
                                 user_id=user_id or "0",
                             )
-                            med = mdr.retrievers.get(getattr(DataSource, "MEDIA_DB", "media_db"))
-                            docs: List[Document] = []
+                            med = mdr.retrievers.get(DataSource.MEDIA_DB)
+                            docs: list[Document] = []
                             if med is not None:
                                 rh = getattr(med, 'retrieve_hybrid', None)
                                 if rh is not None and asyncio.iscoroutinefunction(rh) and search_mode == "hybrid":
@@ -213,10 +234,10 @@ class PostGenerationVerifier:
                             # Other sources could be added similarly
                             docs = sorted(docs, key=lambda d: getattr(d, 'score', 0.0), reverse=True)
                             return docs[:top]
-                        except Exception:
+                        except Exception:  # noqa: BLE001 - retrieval fallback should be safe
                             return base_documents[:top]
 
-                    run = await engine.run_verification(
+                    run = await engine.run(
                         answer=answer,
                         query=query,
                         documents=base_documents,
@@ -231,7 +252,7 @@ class PostGenerationVerifier:
                     )
                     claims_payload = (run or {}).get("claims")
                     summary_payload = (run or {}).get("summary")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - claims verification best-effort
             logger.warning(f"Post-check claims verification failed: {e}")
 
         # Compute unsupported ratio
@@ -244,7 +265,7 @@ class PostGenerationVerifier:
                 nei = int(summary_payload.get("nei") or 0)
                 total = max(0, supported + refuted + nei)
                 unsupported = max(0, refuted + nei)
-        except Exception:
+        except (TypeError, ValueError):
             pass
         ratio = (unsupported / total) if total else 0.0
 
@@ -258,7 +279,7 @@ class PostGenerationVerifier:
         try:
             from tldw_Server_API.app.core.Claims_Extraction.monitoring import record_postcheck_metrics
             record_postcheck_metrics(total, unsupported)
-        except Exception:
+        except Exception:  # noqa: BLE001 - metrics best-effort
             pass
 
         # Decide if we should attempt a repair
@@ -270,7 +291,7 @@ class PostGenerationVerifier:
         # Attempt a single adaptive retrieval + regeneration pass (bounded)
         retries = 0
         fixed = False
-        new_answer: Optional[str] = None
+        new_answer: str | None = None
         while retries < self._max_retries:
             retries += 1
             increment_counter("rag_adaptive_retries_total", 1)
@@ -280,79 +301,82 @@ class PostGenerationVerifier:
                 break
 
             # Second-chance retrieval: use query rewrites (HyDE + multi-strategy) and apply diversity
-            new_docs: List[Document] = base_documents[:]
+            new_docs: list[Document] = base_documents[:]
             try:
                 if MultiDatabaseRetriever is not None and media_db_path:
                     mdr = MultiDatabaseRetriever({"media_db": media_db_path}, user_id=user_id or "0")
-                    med = mdr.retrievers.get(getattr(DataSource, "MEDIA_DB", "media_db"))
+                    med = mdr.retrievers.get(DataSource.MEDIA_DB)
                     if med is not None:
                         rh = getattr(med, 'retrieve_hybrid', None)
                         hybrid_supported = rh is not None and asyncio.iscoroutinefunction(rh)
+                        rh_fn = rh if hybrid_supported else None
                         if not self._adv:
                             # Simple path: single-query retrieval only
-                            if search_mode == "hybrid" and hybrid_supported:
-                                new_docs = await rh(query=query, alpha=min(max(hybrid_alpha, 0.1), 0.9))
+                            if search_mode == "hybrid" and rh_fn is not None:
+                                new_docs = await rh_fn(query=query, alpha=min(max(hybrid_alpha, 0.1), 0.9))
                             else:
                                 new_docs = await med.retrieve(query=query)
                             new_docs = new_docs[: max(5, min(15, top_k))]
                         else:
                             # Advanced path: rewrites + HyDE + diversity
-                            candidate_queries: List[str] = [query]
+                            candidate_queries: list[str] = [query]
                             try:
                                 if multi_strategy_expansion is not None:
-                                    expanded = await multi_strategy_expansion(query, strategies=["acronym", "synonym", "domain"])  # light expansion
+                                    expand_fn = multi_strategy_expansion
+                                    expanded = await expand_fn(query, strategies=["acronym", "synonym", "domain"])  # light expansion
                                     if isinstance(expanded, list):
                                         candidate_queries.extend([q for q in expanded if isinstance(q, str) and q.strip()])
-                            except Exception:
+                            except Exception:  # noqa: BLE001 - expansion best-effort
                                 pass
                             # Optional HyDE vector for the base query
                             hyde_vector = None
                             try:
-                                if generate_hypothetical_answer and hyde_embed_text:
+                                if generate_hypothetical_answer is not None and hyde_embed_text is not None:
                                     hypo = generate_hypothetical_answer(query, None, None)
                                     vec = await hyde_embed_text(hypo)
                                     if vec:
                                         hyde_vector = vec
-                            except Exception:
+                            except Exception:  # noqa: BLE001 - HyDE best-effort
                                 hyde_vector = None
 
                             # Aggregate retrieval across queries
-                            docs_union: Dict[str, Document] = {}
+                            docs_union: dict[str, Document] = {}
                             for cq in list(dict.fromkeys(candidate_queries))[:4]:  # bound rewrites
                                 try:
-                                    cur_docs: List[Document]
-                                    if search_mode == "hybrid" and hybrid_supported:
+                                    cur_docs: list[Document]
+                                    if search_mode == "hybrid" and rh_fn is not None:
                                         kwargs = {"query": cq, "alpha": min(max(hybrid_alpha, 0.1), 0.9)}
                                         if hyde_vector is not None and cq == query:
                                             kwargs["query_vector"] = hyde_vector
-                                        cur_docs = await rh(**kwargs)
+                                        cur_docs = await rh_fn(**kwargs)
                                     else:
                                         cur_docs = await med.retrieve(query=cq)
                                     for d in cur_docs or []:
                                         prev = docs_union.get(getattr(d, "id", ""))
                                         if prev is None or float(getattr(d, "score", 0.0)) > float(getattr(prev, "score", 0.0)):
                                             docs_union[getattr(d, "id", "")] = d
-                                except Exception:
+                                except Exception:  # noqa: BLE001 - per-query retrieval best-effort
                                     continue
 
                             merged_docs = sorted(docs_union.values(), key=lambda x: getattr(x, "score", 0.0), reverse=True)
                             merged_docs = merged_docs[: max(5, min(30, top_k * 2))]
                             # Apply simple diversity filter to reduce near-duplicates
                             new_docs = _select_diverse(merged_docs, k=max(5, min(15, top_k)))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fallback to base docs
                 logger.debug(f"Adaptive retrieval failed; using base docs. Reason: {e}")
                 new_docs = base_documents[:]
 
             # Regenerate if possible
             try:
                 if AnswerGenerator is not None:
-                    gen = AnswerGenerator(model=generation_model)
+                    gen_cls = AnswerGenerator
+                    gen = gen_cls(model=generation_model)
                     context = "\n\n".join([getattr(d, 'content', '') for d in new_docs[:5]])
                     maybe = await gen.generate(query=query, context=context, prompt_template=None, max_tokens=500)
                     new_answer = maybe.get("answer") if isinstance(maybe, dict) else str(maybe)
                 else:
                     new_answer = None
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - regeneration best-effort
                 logger.debug(f"Adaptive regeneration failed: {e}")
                 new_answer = None
 
@@ -373,13 +397,13 @@ class PostGenerationVerifier:
                     ))
                     sum2 = (run2 or {}).get("summary") or {}
                 elif ClaimsEngine is not None:
-                    import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
-                    def _analyze2(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None,
-                                   api_key: Optional[str] = None, system_message: Optional[str] = None,
-                                   temp: Optional[float] = None, **kwargs):
+                    import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+                    def _analyze2(api_name: str, input_data: Any, custom_prompt_arg: str | None = None,
+                                   api_key: str | None = None, system_message: str | None = None,
+                                   temp: float | None = None, **kwargs):
                         return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
                     eng2 = ClaimsEngine(_analyze2)
-                    run2 = await eng2.run_verification(
+                    run2 = await eng2.run(
                         answer=new_answer,
                         query=query,
                         documents=new_docs,
@@ -395,7 +419,7 @@ class PostGenerationVerifier:
                     sum2 = (run2 or {}).get("summary") or {}
                 else:
                     sum2 = {}
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - recheck best-effort
                 logger.debug(f"Adaptive recheck failed: {e}")
                 sum2 = {}
 
@@ -405,7 +429,7 @@ class PostGenerationVerifier:
                 s2_nei = int(sum2.get("nei") or 0)
                 s2_total = max(0, s2_supported + s2_refuted + s2_nei)
                 s2_ratio = ((s2_refuted + s2_nei) / s2_total) if s2_total else 0.0
-            except Exception:
+            except (TypeError, ValueError):
                 s2_ratio = 0.0
 
             if s2_ratio <= self._threshold:
@@ -420,7 +444,7 @@ class PostGenerationVerifier:
             outcome.new_answer = new_answer
             try:
                 increment_counter("rag_adaptive_fix_success_total", 1)
-            except Exception:
+            except Exception:  # noqa: BLE001 - metrics best-effort
                 pass
             observe_histogram("rag_postcheck_duration_seconds", time.time() - start_ts, labels={"outcome": "fixed"})
         else:
@@ -444,12 +468,12 @@ def _jaccard(a: str, b: str) -> float:
         inter = len(sa & sb)
         union = len(sa | sb)
         return float(inter) / float(union) if union else 0.0
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort similarity
         return 0.0
 
 
-def _select_diverse(docs: List[Document], k: int = 10, sim_threshold: float = 0.6) -> List[Document]:
-    selected: List[Document] = []
+def _select_diverse(docs: list[Document], k: int = 10, sim_threshold: float = 0.6) -> list[Document]:
+    selected: list[Document] = []
     for d in docs:
         if len(selected) >= k:
             break

@@ -5,23 +5,28 @@ This module provides a factory pattern for instantiating the appropriate
 vector store adapter based on configuration.
 """
 
-from typing import Dict, Type, Optional
 import inspect
+from typing import Any, Optional
+
 from loguru import logger
 
 from .base import VectorStoreAdapter, VectorStoreConfig, VectorStoreType
 from .chromadb_adapter import ChromaDBAdapter
+
+_PGVectorAdapter: Optional[type[VectorStoreAdapter]]
 try:
-    from .pgvector_adapter import PGVectorAdapter
-except Exception:
-    PGVectorAdapter = None  # Optional
+    from .pgvector_adapter import PGVectorAdapter as _PGVectorAdapter
+except ImportError:
+    _PGVectorAdapter = None  # Optional
+
+PGVectorAdapter: Optional[type[VectorStoreAdapter]] = _PGVectorAdapter
 
 
 class VectorStoreFactory:
     """Factory for creating vector store adapters."""
 
     # Registry of available adapters
-    _adapters: Dict[VectorStoreType, Type[VectorStoreAdapter]] = {
+    _adapters: dict[VectorStoreType, type[VectorStoreAdapter]] = {
         VectorStoreType.CHROMADB: ChromaDBAdapter,
         # Future adapters:
         # VectorStoreType.PINECONE: PineconeAdapter,
@@ -54,26 +59,32 @@ class VectorStoreFactory:
         adapter_class = cls._adapters.get(config.store_type)
 
         if not adapter_class:
-            available = ", ".join([t.value for t in cls._adapters.keys()])
-            raise ValueError(
-                f"Unsupported vector store type: {config.store_type}. "
-                f"Available types: {available}"
-            )
+            available = ", ".join([t.value for t in cls._adapters])
+            raise UnsupportedVectorStoreError(config.store_type, available)
 
         logger.info(f"Creating {config.store_type.value} adapter")
         adapter = adapter_class(config)
 
         if initialize:
             # If async initialization is needed, it should be done separately
-            logger.info(f"Adapter created (initialization pending)")
+            logger.info("Adapter created (initialization pending)")
 
         return adapter
+
+
+class UnsupportedVectorStoreError(ValueError):
+    """Raised when a requested vector store type is not supported."""
+
+    def __init__(self, store_type: VectorStoreType, available: str) -> None:
+        super().__init__(
+            f"Unsupported vector store type: {store_type}. Available types: {available}"
+        )
 
     @classmethod
     def register_adapter(
         cls,
         store_type: VectorStoreType,
-        adapter_class: Type[VectorStoreAdapter]
+        adapter_class: type[VectorStoreAdapter]
     ) -> None:
         """
         Register a new adapter type.
@@ -95,12 +106,12 @@ class VectorStoreFactory:
         Returns:
             List of available store type names
         """
-        return [store_type.value for store_type in cls._adapters.keys()]
+        return [store_type.value for store_type in cls._adapters]
 
     @classmethod
     def create_from_settings(
         cls,
-        settings: Dict,
+        settings: dict,
         user_id: str = "0"
     ) -> Optional[VectorStoreAdapter]:
         """
@@ -162,7 +173,7 @@ class VectorStoreFactory:
         return cls.create_adapter(config, initialize=False)
 
 
-def create_from_settings_for_user(settings: Dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:
+def create_from_settings_for_user(settings: dict, user_id: str = "0") -> Optional[VectorStoreAdapter]:
     """
     Helper that adapts to runtime monkeypatches of create_from_settings.
 
@@ -177,20 +188,20 @@ def create_from_settings_for_user(settings: Dict, user_id: str = "0") -> Optiona
     except (TypeError, ValueError):
         params = []
 
-    kwargs = {}
+    kwargs: dict[str, Any] = {}
     try:
         if params:
             kwargs[params[0].name] = settings
         if len(params) > 1:
             kwargs[params[1].name] = user_id
         if kwargs:
-            return bound(**kwargs)  # type: ignore[arg-type]
+            return bound(**kwargs)
     except TypeError:
         # Fall through to positional attempt
         pass
 
     # Fallback to positional invocation (best-effort)
     try:
-        return bound(settings, user_id)  # type: ignore[misc]
+        return bound(settings, user_id)
     except TypeError:
-        return bound(settings)  # type: ignore[misc]
+        return bound(settings)

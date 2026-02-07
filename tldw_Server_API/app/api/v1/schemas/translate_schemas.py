@@ -3,8 +3,6 @@
 #
 from __future__ import annotations
 
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 
@@ -21,15 +19,15 @@ class TranslateRequest(BaseModel):
         default="English",
         description="Target language for translation"
     )
-    source_language: Optional[str] = Field(
+    source_language: str | None = Field(
         default=None,
         description="Source language (auto-detect if None)"
     )
-    model: Optional[str] = Field(
+    model: str | None = Field(
         default=None,
         description="LLM model to use for translation"
     )
-    provider: Optional[str] = Field(
+    provider: str | None = Field(
         default=None,
         description="LLM provider to use (defaults to configured default)"
     )
@@ -42,7 +40,7 @@ class TranslateResponse(BaseModel):
         ...,
         description="The translated text"
     )
-    detected_source_language: Optional[str] = Field(
+    detected_source_language: str | None = Field(
         default=None,
         description="Detected source language (if auto-detected)"
     )

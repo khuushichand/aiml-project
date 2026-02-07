@@ -4,30 +4,55 @@ Media Module for Unified MCP
 Production-ready media management module with full MCP compliance.
 """
 
-import os
 import asyncio
-import threading
-import uuid
-import socket
-import ipaddress
+import contextlib
 import hashlib
+import ipaddress
 import json
+import os
+import socket
+import threading
+import time
+import uuid
 from collections import OrderedDict
-from urllib.parse import urlsplit
-from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import urlsplit
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition, create_resource_definition
+from ....DB_Management.db_path_utils import DatabasePaths
 from ....DB_Management.Media_DB_v2 import (
     MediaDatabase,
+    get_document_version,
     get_latest_transcription,
     get_media_transcripts,
-    get_document_version,
     permanently_delete_item,
 )
-from ....DB_Management.db_path_utils import DatabasePaths
+from ..base import BaseModule, create_resource_definition, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
+
+_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 class MediaModule(BaseModule):
@@ -67,15 +92,22 @@ class MediaModule(BaseModule):
             # Cache for frequently accessed data
             self._media_cache = {}
             self._cache_ttl = self.config.settings.get("cache_ttl", 300)  # 5 minutes
-            self._semantic_retrievers: Dict[Tuple[Optional[str], Optional[str]], Any] = {}
-            self._ingestion_jobs: Dict[str, Dict[str, Any]] = {}
+            self._semantic_retrievers: dict[tuple[Optional[str], Optional[str]], Any] = {}
+            self._ingestion_jobs: dict[str, dict[str, Any]] = {}
             self._ingestion_jobs_lock = asyncio.Lock()
-            self._user_db_cache: Dict[str, MediaDatabase] = {}
+            self._user_db_cache: OrderedDict[str, tuple[MediaDatabase, float]] = OrderedDict()
             self._user_db_cache_lock = threading.Lock()
+            # Per-user DB cache bounds (TTL + LRU)
+            self._user_db_cache_ttl_seconds = int(self.config.settings.get("user_db_cache_ttl_seconds", 900))
+            self._user_db_cache_max_size = int(self.config.settings.get("user_db_cache_max_size", 100))
+            if self._user_db_cache_ttl_seconds <= 0:
+                self._user_db_cache_ttl_seconds = 900
+            if self._user_db_cache_max_size <= 0:
+                self._user_db_cache_max_size = 1
 
             logger.info(f"Media module initialized with database: {db_path}")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize media module: {e}")
             raise
 
@@ -89,20 +121,19 @@ class MediaModule(BaseModule):
                     for retriever in self._semantic_retrievers.values():
                         close_fn = getattr(retriever, "close", None)
                         if callable(close_fn):
-                            try:
+                            with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
                                 close_fn()
-                            except Exception:
-                                pass
                     self._semantic_retrievers.clear()
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
             try:
                 if hasattr(self, "_user_db_cache"):
-                    for db in self._user_db_cache.values():
+                    for entry in self._user_db_cache.values():
+                        db = entry[0] if isinstance(entry, tuple) else entry
                         self._close_media_db_instance(db)
                     self._user_db_cache.clear()
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Close database connections
@@ -111,10 +142,10 @@ class MediaModule(BaseModule):
 
             logger.info("Media module shutdown complete")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during media module shutdown: {e}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         """Comprehensive health checks"""
         checks = {
             "database_connection": False,
@@ -129,7 +160,7 @@ class MediaModule(BaseModule):
                 cur = self.db.execute_query("SELECT 1")
                 _ = cur.fetchone()
                 checks["database_connection"] = True
-            except Exception as _db_e:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as _db_e:
                 logger.debug(f"Media DB connection check failed: {_db_e}")
                 checks["database_connection"] = False
 
@@ -141,28 +172,26 @@ class MediaModule(BaseModule):
                     self.db.execute_query("CREATE TABLE IF NOT EXISTS _mcp_healthcheck (k TEXT PRIMARY KEY, v TEXT)")
                     self.db.execute_query("INSERT OR REPLACE INTO _mcp_healthcheck(k, v) VALUES (?, ?)", ("ping", datetime.utcnow().isoformat()))
                     # Best-effort cleanup to keep DB tidy (ignore errors for non-SQLite backends)
-                    try:
+                    with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
                         self.db.execute_query("DELETE FROM _mcp_healthcheck WHERE k = ?", ("ping",))
-                    except Exception:
-                        pass
                 checks["database_writable"] = True
-            except Exception as _w_e:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as _w_e:
                 logger.debug(f"Media DB writable check failed: {_w_e}")
                 checks["database_writable"] = False
 
             # Check disk space
             default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             db_path = self.config.settings.get("db_path", default_db_path)
-            stat = os.statvfs(os.path.dirname(db_path))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            db_dir = os.path.dirname(db_path) or "."
+            free_gb = get_free_disk_space_gb(db_dir)
             checks["disk_space"] = free_gb > 1  # At least 1GB free
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Health check failed: {e}")
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         """Get available media tools"""
         tools = [
             # Context-search tools (FTS-only v1)
@@ -369,15 +398,15 @@ class MediaModule(BaseModule):
         ]
         return tools
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         """Execute media tool with validation and error handling"""
         # Validate and sanitize inputs
         arguments = self.sanitize_input(arguments)
         # High-risk operations: validate against stricter schema
         try:
             self.validate_tool_arguments(tool_name, arguments)
-        except Exception as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         # Log tool execution
         logger.info(f"Executing media tool: {tool_name}", extra={"audit": True})
@@ -408,47 +437,78 @@ class MediaModule(BaseModule):
             else:
                 raise ValueError(f"Unknown tool: {tool_name}")
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Tool execution failed: {tool_name} - {e}")
             raise
 
     def _allow_anonymous_access(self) -> bool:
         try:
             return bool(self.config.settings.get("allow_anonymous_access", False))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _close_media_db_instance(self, db: MediaDatabase) -> None:
-        try:
+        with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
             db.close_connection()
-        except Exception:
-            pass
         try:
             pool = db.backend.get_pool()
             pool.close_all()
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
-    def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
+    def _evict_user_db_cache_locked(self, now: Optional[float] = None) -> None:
         cache = getattr(self, "_user_db_cache", None)
-        if cache is None:
-            self._user_db_cache = {}
-            cache = self._user_db_cache
+        if not cache:
+            return
+        now_ts = now if now is not None else time.monotonic()
+        ttl = max(1, int(getattr(self, "_user_db_cache_ttl_seconds", 900)))
+        max_size = max(1, int(getattr(self, "_user_db_cache_max_size", 100)))
+
+        expired = [k for k, (_, last_used) in cache.items() if now_ts - last_used > ttl]
+        for key in expired:
+            try:
+                db, _ = cache.pop(key)
+                self._close_media_db_instance(db)
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
+                pass
+
+        while len(cache) > max_size:
+            try:
+                key, (db, _) = cache.popitem(last=False)
+                self._close_media_db_instance(db)
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
+                break
+
+    def _get_or_create_user_db(self, db_path: str) -> MediaDatabase:
         lock = getattr(self, "_user_db_cache_lock", None)
-        if lock:
-            with lock:
-                cached = cache.get(db_path)
-                if cached is not None:
-                    return cached
-                db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
-                cache[db_path] = db
-                return db
-        cached = cache.get(db_path)
-        if cached is not None:
-            return cached
-        db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
-        cache[db_path] = db
-        return db
+        if lock is None:
+            logger.warning("User DB cache lock not initialized; bypassing cache for {}", db_path)
+            return MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+        with lock:
+            cache = getattr(self, "_user_db_cache", None)
+            if cache is None:
+                self._user_db_cache = OrderedDict()
+                cache = self._user_db_cache
+            now_ts = time.monotonic()
+            self._evict_user_db_cache_locked(now_ts)
+            cached = cache.get(db_path)
+            if cached is not None:
+                db, last_used = cached
+                ttl = max(1, int(getattr(self, "_user_db_cache_ttl_seconds", 900)))
+                if now_ts - last_used <= ttl:
+                    cache[db_path] = (db, now_ts)
+                    cache.move_to_end(db_path)
+                    return db
+                try:
+                    cache.pop(db_path, None)
+                    self._close_media_db_instance(db)
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
+                    pass
+            db = MediaDatabase(db_path=db_path, client_id=f"mcp_media_{self.config.name}")
+            cache[db_path] = (db, now_ts)
+            cache.move_to_end(db_path)
+            self._evict_user_db_cache_locked(now_ts)
+            return db
 
     def _open_media_db(self, context: Any | None) -> MediaDatabase:
         """Open per-user media DB when context provides one; fallback to module DB."""
@@ -471,7 +531,7 @@ class MediaModule(BaseModule):
             return db
         return self._get_or_create_user_db(str(user_media_path))
 
-    def _normalize_scores(self, rows: List[Dict[str, Any]]) -> List[float]:
+    def _normalize_scores(self, rows: list[dict[str, Any]]) -> list[float]:
         if not rows:
             return []
         # If relevance_score present (bm25-like), lower is better
@@ -502,7 +562,7 @@ class MediaModule(BaseModule):
             start = max(0, idx - half)
             end = min(len(t), start + length)
             return t[start:end]
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return t[:length]
 
     def _get_latest_description(self, dbi: MediaDatabase, media_id: int) -> Optional[str]:
@@ -514,10 +574,10 @@ class MediaModule(BaseModule):
                 include_content=False,
             )
             return (latest or {}).get("analysis_content")
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return None
 
-    def _sanitize_media_metadata(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _sanitize_media_metadata(self, row: dict[str, Any]) -> dict[str, Any]:
         sanitized = dict(row)
         for key in ("content", "client_id", "vector_embedding"):
             sanitized.pop(key, None)
@@ -529,19 +589,44 @@ class MediaModule(BaseModule):
         limit: int = 10,
         offset: int = 0,
         snippet_length: int = 300,
-        media_types: Optional[List[str]] = None,
+        media_types: Optional[list[str]] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         order_by: str = "relevance",
         context: Any | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._media_search_normalized_sync,
+            query,
+            limit,
+            offset,
+            snippet_length,
+            media_types,
+            date_from,
+            date_to,
+            order_by,
+            context,
+        )
+
+    def _media_search_normalized_sync(
+        self,
+        query: str,
+        limit: int = 10,
+        offset: int = 0,
+        snippet_length: int = 300,
+        media_types: Optional[list[str]] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        order_by: str = "relevance",
+        context: Any | None = None,
+    ) -> dict[str, Any]:
         # Session defaults
         try:
             if context and getattr(context, "metadata", None):
                 sc = context.metadata.get("safe_config")
                 if isinstance(sc, dict):
                     snippet_length = int(sc.get("snippet_length", snippet_length))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Build date_range
@@ -554,7 +639,7 @@ class MediaModule(BaseModule):
                     date_range["start_date"] = _dt.fromisoformat(date_from)
                 if date_to:
                     date_range["end_date"] = _dt.fromisoformat(date_to)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             date_range = None
 
         # Map order
@@ -602,7 +687,7 @@ class MediaModule(BaseModule):
                 idx = content.lower().find(query.lower()) if query else -1
                 if idx >= 0:
                     approx_offset = idx
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 approx_offset = None
             # Try to map to prechunked chunk_index when available
             loc_hint = None
@@ -613,7 +698,7 @@ class MediaModule(BaseModule):
                         cidx = dbi.get_unvectorized_anchor_index_for_offset(mid_int, int(approx_offset))
                         if cidx is not None:
                             loc_hint = {"chunk_index": cidx}
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 loc_hint = None
             out.append({
                 "id": mid,
@@ -638,7 +723,15 @@ class MediaModule(BaseModule):
             "total_estimated": total,
         }
 
-    async def _media_get_normalized(self, media_id: int, retrieval: Optional[Dict[str, Any]] = None, context: Any | None = None) -> Dict[str, Any]:
+    async def _media_get_normalized(self, media_id: int, retrieval: Optional[dict[str, Any]] = None, context: Any | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._media_get_normalized_sync,
+            media_id,
+            retrieval,
+            context,
+        )
+
+    def _media_get_normalized_sync(self, media_id: int, retrieval: Optional[dict[str, Any]] = None, context: Any | None = None) -> dict[str, Any]:
         retrieval = retrieval or {}
         mode = retrieval.get("mode", "snippet")
         snippet_length = int(retrieval.get("snippet_length", 300))
@@ -659,7 +752,7 @@ class MediaModule(BaseModule):
                     snippet_length = int(sc.get("snippet_length", snippet_length))
                     if isinstance(sc.get("chars_per_token"), int):
                         cpt = int(sc.get("chars_per_token"))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
 
         dbi = self._open_media_db(context)
@@ -693,7 +786,7 @@ class MediaModule(BaseModule):
             return {"meta": item, "content": body, "attachments": None}
 
         # Helper for on-the-fly chunking
-        def _chunkify(text: str, size_chars: int) -> List[str]:
+        def _chunkify(text: str, size_chars: int) -> list[str]:
             if size_chars <= 0:
                 size_chars = 1000 * cpt
             chunks = []
@@ -724,7 +817,7 @@ class MediaModule(BaseModule):
             try:
                 if isinstance(loc, dict) and isinstance(loc.get("approx_offset"), int):
                     approx_offset = int(loc.get("approx_offset"))
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 approx_offset = None
             if isinstance(loc, dict) and isinstance(loc.get("chunk_index"), int):
                 anchor_index = int(loc.get("chunk_index"))
@@ -752,8 +845,8 @@ class MediaModule(BaseModule):
 
                     # chunk_with_siblings budgeted expansion
                     budget_tokens = int(max_tokens) if max_tokens else None
-                    selected_indexes: List[int] = [anchor_index]
-                    selected_texts: Dict[int, str] = {anchor_index: anchor_chunk.get("chunk_text") or ""}
+                    selected_indexes: list[int] = [anchor_index]
+                    selected_texts: dict[int, str] = {anchor_index: anchor_chunk.get("chunk_text") or ""}
                     if budget_tokens is None:
                         for d in range(1, max(1, sibling_window) + 1):
                             li = anchor_index - d
@@ -806,10 +899,7 @@ class MediaModule(BaseModule):
                 body = self._make_snippet(content, None, snippet_length)
                 return {"meta": item, "content": body, "attachments": None}
 
-            if approx_offset is None:
-                anchor_index = 0
-            else:
-                anchor_index = max(0, min(len(chunks) - 1, approx_offset // size_chars))
+            anchor_index = 0 if approx_offset is None else max(0, min(len(chunks) - 1, approx_offset // size_chars))
 
             if mode == "chunk":
                 body = chunks[anchor_index]
@@ -864,7 +954,7 @@ class MediaModule(BaseModule):
         offset: int = 0,
         context: Any | None = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Search media with caching and unified keyword/semantic support."""
         if not query or len(query) > 1000:
             raise ValueError("Invalid search query")
@@ -934,11 +1024,12 @@ class MediaModule(BaseModule):
 
         try:
             if search_type == "keyword":
-                rows, total = self._keyword_search(
-                    dbi=dbi,
-                    query=query,
-                    limit=limit,
-                    offset=offset,
+                rows, total = await asyncio.to_thread(
+                    self._keyword_search,
+                    dbi,
+                    query,
+                    limit,
+                    offset,
                     search_fields=search_fields,
                     media_types=media_types,
                     date_range=date_range,
@@ -1002,7 +1093,7 @@ class MediaModule(BaseModule):
             await self._clean_cache()
             return formatted_results
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Search failed: {e}")
             raise
 
@@ -1019,11 +1110,11 @@ class MediaModule(BaseModule):
             return value.hex()
         return value
 
-    def _make_cache_key(self, namespace: str, payload: Dict[str, Any]) -> str:
+    def _make_cache_key(self, namespace: str, payload: dict[str, Any]) -> str:
         try:
             normalised = self._serialize_for_cache(payload)
             raw = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             raw = repr(payload)
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         return f"{namespace}:{digest}"
@@ -1035,16 +1126,16 @@ class MediaModule(BaseModule):
         limit: int,
         offset: int,
         *,
-        search_fields: Optional[List[str]],
-        media_types: Optional[List[str]],
-        date_range: Optional[Dict[str, Any]],
-        must_have_keywords: Optional[List[str]],
-        must_not_have_keywords: Optional[List[str]],
+        search_fields: Optional[list[str]],
+        media_types: Optional[list[str]],
+        date_range: Optional[dict[str, Any]],
+        must_have_keywords: Optional[list[str]],
+        must_not_have_keywords: Optional[list[str]],
         sort_by_value: Optional[str],
-        media_ids_filter: Optional[List[Any]],
+        media_ids_filter: Optional[list[Any]],
         include_trash: bool,
         include_deleted: bool,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         page_size = max(1, limit)
         page = (offset // page_size) + 1
         local_offset = offset % page_size
@@ -1090,16 +1181,16 @@ class MediaModule(BaseModule):
         query: str,
         size: int,
         *,
-        search_fields: Optional[List[str]],
-        media_types: Optional[List[str]],
-        date_range: Optional[Dict[str, Any]],
-        must_have_keywords: Optional[List[str]],
-        must_not_have_keywords: Optional[List[str]],
+        search_fields: Optional[list[str]],
+        media_types: Optional[list[str]],
+        date_range: Optional[dict[str, Any]],
+        must_have_keywords: Optional[list[str]],
+        must_not_have_keywords: Optional[list[str]],
         sort_by_value: Optional[str],
-        media_ids_filter: Optional[List[Any]],
+        media_ids_filter: Optional[list[Any]],
         include_trash: bool,
         include_deleted: bool,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         fetch_ceiling = int(self.config.settings.get("hybrid_fetch_ceiling", 200))
         fetch_size = max(1, min(int(size), fetch_ceiling))
         rows, total = dbi.search_media_db(
@@ -1139,7 +1230,7 @@ class MediaModule(BaseModule):
                     media_db=dbi,
                 )
                 self._semantic_retrievers[retriever_key] = retriever
-            except Exception as exc:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Semantic retriever unavailable: {exc}")
                 self._semantic_retrievers[retriever_key] = False  # sentinel to avoid retries
                 return None
@@ -1152,21 +1243,19 @@ class MediaModule(BaseModule):
         limit: int,
         offset: int,
         dbi: MediaDatabase,
-        media_types: Optional[List[str]],
-        metadata_filter: Optional[Dict[str, Any]],
+        media_types: Optional[list[str]],
+        metadata_filter: Optional[dict[str, Any]],
         index_namespace: Any,
-        media_ids_filter: Optional[List[Any]],
+        media_ids_filter: Optional[list[Any]],
         context: Any | None,
         query_vector: Any,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         retriever = self._get_semantic_retriever(dbi, context)
         if retriever is None:
             return [], 0
         max_results = max(1, limit + offset)
-        try:
+        with contextlib.suppress(_MEDIA_MODULE_NONCRITICAL_EXCEPTIONS):
             retriever.config.max_results = max_results
-        except Exception:
-            pass
 
         media_type_arg: Optional[str] = None
         if isinstance(media_types, list) and len(media_types) == 1:
@@ -1181,12 +1270,12 @@ class MediaModule(BaseModule):
                 allowed_media_ids=media_ids_filter,
                 query_vector=query_vector,
             )
-        except Exception as exc:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Semantic retrieval failed, falling back to empty set: {exc}")
             docs = []
 
         allowed_types = {t.lower() for t in media_types} if media_types else None
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for doc in docs or []:
             meta = getattr(doc, "metadata", {}) or {}
             media_type_val = (
@@ -1229,25 +1318,26 @@ class MediaModule(BaseModule):
         limit: int,
         offset: int,
         dbi: MediaDatabase,
-        media_types: Optional[List[str]],
-        date_range: Optional[Dict[str, Any]],
-        must_have_keywords: Optional[List[str]],
-        must_not_have_keywords: Optional[List[str]],
+        media_types: Optional[list[str]],
+        date_range: Optional[dict[str, Any]],
+        must_have_keywords: Optional[list[str]],
+        must_not_have_keywords: Optional[list[str]],
         sort_by_value: Optional[str],
-        media_ids_filter: Optional[List[Any]],
+        media_ids_filter: Optional[list[Any]],
         include_trash: bool,
         include_deleted: bool,
-        search_fields: Optional[List[str]],
-        metadata_filter: Optional[Dict[str, Any]],
+        search_fields: Optional[list[str]],
+        metadata_filter: Optional[dict[str, Any]],
         index_namespace: Any,
         context: Any | None,
         query_vector: Any,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         fetch_size = limit + offset
-        keyword_rows_all, keyword_total = self._keyword_search_head(
-            dbi=dbi,
-            query=query,
-            size=fetch_size,
+        keyword_rows_all, keyword_total = await asyncio.to_thread(
+            self._keyword_search_head,
+            dbi,
+            query,
+            fetch_size,
             search_fields=search_fields,
             media_types=media_types,
             date_range=date_range,
@@ -1272,7 +1362,7 @@ class MediaModule(BaseModule):
             query_vector=query_vector,
         )
 
-        combined: "OrderedDict[Any, Dict[str, Any]]" = OrderedDict()
+        combined: OrderedDict[Any, dict[str, Any]] = OrderedDict()
         for row in keyword_rows_all:
             key = row.get("id")
             if key is None:
@@ -1308,7 +1398,24 @@ class MediaModule(BaseModule):
         format: str = "text",
         context: Any | None = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._get_transcript_sync,
+            media_id,
+            include_timestamps,
+            format,
+            context,
+            kwargs,
+        )
+
+    def _get_transcript_sync(
+        self,
+        media_id: int,
+        include_timestamps: bool = False,
+        format: str = "text",
+        context: Any | None = None,
+        _kwargs: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Get media transcript with formatting options"""
         try:
             # Ownership check first
@@ -1342,7 +1449,7 @@ class MediaModule(BaseModule):
                 "transcript": formatted,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get transcript: {e}")
             raise
 
@@ -1352,7 +1459,24 @@ class MediaModule(BaseModule):
         include_stats: bool = False,
         context: Any | None = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        metadata = await asyncio.to_thread(
+            self._get_media_metadata_sync,
+            media_id,
+            context,
+            kwargs,
+        )
+        if include_stats:
+            stats = await self._get_media_stats(media_id)
+            metadata["statistics"] = stats
+        return metadata
+
+    def _get_media_metadata_sync(
+        self,
+        media_id: int,
+        context: Any | None = None,
+        _kwargs: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Get comprehensive media metadata"""
         try:
             # Ownership check
@@ -1368,14 +1492,9 @@ class MediaModule(BaseModule):
             metadata = self._sanitize_media_metadata(metadata)
             metadata["description"] = description
 
-            # Add statistics if requested
-            if include_stats:
-                stats = await self._get_media_stats(media_id)
-                metadata["statistics"] = stats
-
             return metadata
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get metadata: {e}")
             raise
 
@@ -1384,10 +1503,10 @@ class MediaModule(BaseModule):
         url: str,
         title: Optional[str] = None,
         process_type: str = "transcribe",
-        tags: Optional[List[str]] = None,
+        tags: Optional[list[str]] = None,
         priority: str = "normal",
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Ingest new media with processing options"""
         try:
             # Validate URL
@@ -1429,17 +1548,32 @@ class MediaModule(BaseModule):
                 "process_type": process_type
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to ingest media: {e}")
             raise
 
     async def _update_media(
         self,
         media_id: int,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         context: Any | None = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._update_media_sync,
+            media_id,
+            updates,
+            context,
+            kwargs,
+        )
+
+    def _update_media_sync(
+        self,
+        media_id: int,
+        updates: dict[str, Any],
+        context: Any | None = None,
+        _kwargs: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Update media with validation"""
         try:
             # Ownership check
@@ -1450,7 +1584,7 @@ class MediaModule(BaseModule):
             if not existing:
                 raise ValueError(f"Media not found: {media_id}")
 
-            updated_fields: List[str] = []
+            updated_fields: list[str] = []
             new_title = updates.get("title")
             new_description = updates.get("description")
             new_tags = updates.get("tags")
@@ -1471,7 +1605,7 @@ class MediaModule(BaseModule):
                 new_version = current_version + 1
                 now = dbi._get_current_utc_timestamp_str()
                 set_parts = ["last_modified = ?", "version = ?", "client_id = ?"]
-                params: List[Any] = [now, new_version, dbi.client_id]
+                params: list[Any] = [now, new_version, dbi.client_id]
 
                 if new_title is not None:
                     set_parts.append("title = ?")
@@ -1518,7 +1652,7 @@ class MediaModule(BaseModule):
                 "success": True,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update media: {e}")
             raise
 
@@ -1528,7 +1662,22 @@ class MediaModule(BaseModule):
         permanent: bool = False,
         context: Any | None = None,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._delete_media_sync,
+            media_id,
+            permanent,
+            context,
+            kwargs,
+        )
+
+    def _delete_media_sync(
+        self,
+        media_id: int,
+        permanent: bool = False,
+        context: Any | None = None,
+        _kwargs: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         """Delete media with soft/hard delete options"""
         try:
             # Ownership check
@@ -1563,11 +1712,11 @@ class MediaModule(BaseModule):
                 "success": True,
             }
 
-        except Exception as e:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete media: {e}")
             raise
 
-    async def get_resources(self) -> List[Dict[str, Any]]:
+    async def get_resources(self) -> list[dict[str, Any]]:
         """Get available media resources"""
         return [
             create_resource_definition(
@@ -1590,10 +1739,14 @@ class MediaModule(BaseModule):
             ),
         ]
 
-    async def read_resource(self, uri: str, context: Any | None = None) -> Dict[str, Any]:
+    async def read_resource(self, uri: str, context: Any | None = None) -> dict[str, Any]:
         """Read media resource"""
+        return await asyncio.to_thread(self._read_resource_sync, uri, context)
+
+    def _read_resource_sync(self, uri: str, context: Any | None = None) -> dict[str, Any]:
         dbi = self._open_media_db(context)
-        def _rows_to_items(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+        def _rows_to_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             items = []
             for row in rows:
                 items.append({
@@ -1628,7 +1781,7 @@ class MediaModule(BaseModule):
                 "items": _rows_to_items(rows),
             }
 
-        elif uri == "media://popular":
+        if uri == "media://popular":
             rows, _ = dbi.search_media_db(
                 search_query=None,
                 search_fields=None,
@@ -1648,12 +1801,11 @@ class MediaModule(BaseModule):
                 "type": "media_list",
                 "items": _rows_to_items(rows),
             }
-        elif uri == "media://types":
+        if uri == "media://types":
             types = dbi.get_distinct_media_types()
             return {"uri": uri, "type": "media_types", "items": types}
 
-        else:
-            raise ValueError(f"Unknown resource URI: {uri}")
+        raise ValueError(f"Unknown resource URI: {uri}")
 
     # Helper methods
 
@@ -1713,7 +1865,7 @@ class MediaModule(BaseModule):
                 try:
                     if d and d.lower() in host.lower():
                         return False
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
 
             # Port allowlist (default http/https)
@@ -1725,7 +1877,7 @@ class MediaModule(BaseModule):
             # Resolve and reject private/bad ranges
             try:
                 addrinfos = socket.getaddrinfo(host, port or (80 if parts.scheme == "http" else 443))
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 return False
             if not addrinfos:
                 return False
@@ -1741,17 +1893,17 @@ class MediaModule(BaseModule):
                         or ip.is_multicast
                     ):
                         return False
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     return False
             return True
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _is_admin(self, context: Any | None) -> bool:
         try:
             roles = (getattr(context, "metadata", {}) or {}).get("roles")
             return isinstance(roles, list) and any(str(r).lower() == "admin" for r in roles)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _assert_media_access(self, media_id: int, context: Any | None, dbi: Optional[MediaDatabase] = None) -> None:
@@ -1759,7 +1911,7 @@ class MediaModule(BaseModule):
         try:
             from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
             strict_ownership = is_multi_user_mode()
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             strict_ownership = False
 
         if context is None or getattr(context, "user_id", None) is None:
@@ -1771,7 +1923,7 @@ class MediaModule(BaseModule):
         dbi = dbi or self._open_media_db(context)
         try:
             row = dbi.get_media_by_id(media_id, include_deleted=False, include_trash=False)
-        except Exception as exc:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as exc:
             if strict_ownership:
                 raise PermissionError("Access denied: ownership lookup failed") from exc
             raise
@@ -1785,7 +1937,7 @@ class MediaModule(BaseModule):
         if str(owner) != str(context.user_id):
             raise PermissionError("Access denied for this media item")
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         """Stricter validation for high-risk tools."""
         if tool_name == "media.search":
             q = arguments.get("query")
@@ -1893,7 +2045,7 @@ class MediaModule(BaseModule):
                     self._ingestion_jobs[job_id] = job_payload
             else:
                 self._ingestion_jobs[job_id] = job_payload
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             pass
         # Store job details (in production, use job queue)
         # For now, return job ID
@@ -1909,7 +2061,7 @@ class MediaModule(BaseModule):
                     job = self._ingestion_jobs.get(job_id)
             else:
                 job = self._ingestion_jobs.get(job_id)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             job = None
 
         if not job:
@@ -1930,7 +2082,7 @@ class MediaModule(BaseModule):
                         self._ingestion_jobs.pop(job_id, None)
                 else:
                     self._ingestion_jobs.pop(job_id, None)
-            except Exception:
+            except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _queue_media_job(self, job_id: str):
@@ -1944,7 +2096,7 @@ class MediaModule(BaseModule):
             raise RuntimeError("Ingestion queue not configured; set ingestion_queue to enable background jobs")
         raise RuntimeError(f"Ingestion queue backend '{queue_backend}' not implemented")
 
-    async def _get_media_stats(self, media_id: int) -> Dict[str, Any]:
+    async def _get_media_stats(self, media_id: int) -> dict[str, Any]:
         """Get media statistics"""
         return {
             "views": 0,
@@ -1956,7 +2108,7 @@ class MediaModule(BaseModule):
     def _format_timestamp(self, total_seconds: Any, ms_separator: str) -> str:
         try:
             total_ms = int(round(max(float(total_seconds or 0.0), 0.0) * 1000))
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             total_ms = 0
         seconds, ms = divmod(total_ms, 1000)
         hours, seconds = divmod(seconds, 3600)
@@ -1966,14 +2118,14 @@ class MediaModule(BaseModule):
     def _coerce_time_value(self, value: Any, *, is_ms: bool = False) -> float:
         try:
             val = float(value)
-        except Exception:
+        except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
             return 0.0
         if is_ms:
             val = val / 1000.0
         return max(val, 0.0)
 
-    def _normalize_segments(self, segments: Any) -> List[Dict[str, Any]]:
-        normalized: List[Dict[str, Any]] = []
+    def _normalize_segments(self, segments: Any) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
         if not isinstance(segments, list):
             return normalized
         for seg in segments:
@@ -2010,7 +2162,7 @@ class MediaModule(BaseModule):
             normalized.append({"text": text, "start": start_val, "end": end_val})
         return normalized
 
-    def _coerce_transcript_payload(self, transcript_data: Any) -> Tuple[str, List[Dict[str, Any]]]:
+    def _coerce_transcript_payload(self, transcript_data: Any) -> tuple[str, list[dict[str, Any]]]:
         if transcript_data is None:
             return "", []
         if isinstance(transcript_data, str):
@@ -2019,7 +2171,7 @@ class MediaModule(BaseModule):
                 try:
                     parsed = json.loads(stripped)
                     return self._coerce_transcript_payload(parsed)
-                except Exception:
+                except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS:
                     pass
             return transcript_data, []
         if isinstance(transcript_data, dict):
@@ -2043,7 +2195,7 @@ class MediaModule(BaseModule):
         text, segments = self._coerce_transcript_payload(transcript_data)
         if not segments:
             return text
-        lines: List[str] = []
+        lines: list[str] = []
         for seg in segments:
             seg_text = seg.get("text") or ""
             if not seg_text:
@@ -2056,7 +2208,7 @@ class MediaModule(BaseModule):
         """Convert transcript to SRT format."""
         text, segments = self._coerce_transcript_payload(transcript_data)
         if segments:
-            lines: List[str] = []
+            lines: list[str] = []
             idx = 1
             for seg in segments:
                 seg_text = seg.get("text") or ""
@@ -2079,7 +2231,7 @@ class MediaModule(BaseModule):
         """Convert transcript to WebVTT format."""
         text, segments = self._coerce_transcript_payload(transcript_data)
         if segments:
-            lines: List[str] = ["WEBVTT", ""]
+            lines: list[str] = ["WEBVTT", ""]
             for seg in segments:
                 seg_text = seg.get("text") or ""
                 if not seg_text:

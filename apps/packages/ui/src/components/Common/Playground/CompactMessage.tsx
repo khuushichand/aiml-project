@@ -392,7 +392,7 @@ export function CompactMessage({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-text-subtle">
+            <div className="flex items-center gap-2 text-xs text-text-subtle">
               {formattedTime && <span>{formattedTime}</span>}
               {/* Send status for user messages */}
               {!isBot && sendStatus && (

@@ -842,7 +842,7 @@ class TestSSENormalization:
 
         gen = chat_with_cohere(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="test", streaming=True
+        api_key="test", model="command-r", streaming=True
         )
         chunks = list(gen)
         # Expect two content chunks + DONE
@@ -881,6 +881,7 @@ class TestSSENormalization:
         gen = chat_with_cohere(
         input_data=[{"role": "user", "content": "Hi"}],
         api_key="test",
+        model="command-r",
         streaming=True,
         )
 
@@ -920,7 +921,7 @@ class TestSSENormalization:
 
         gen = chat_with_qwen(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="test", streaming=True
+        api_key="test", model="qwen-plus", streaming=True
         )
         chunks = list(gen)
         # 2 content chunks + normalized DONE
@@ -959,7 +960,7 @@ class TestSSENormalization:
 
         gen = chat_with_groq(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="test", streaming=True
+        api_key="test", model="llama-3.3-70b-versatile", streaming=True
         )
         chunks = list(gen)
         assert len(chunks) == 3
@@ -1275,7 +1276,7 @@ class TestSSENormalization:
 
         gen = chat_with_anthropic(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="key", streaming=True
+        api_key="key", model="claude-3-5-sonnet-latest", streaming=True
         )
         chunks = list(gen)
         assert any('"finish_reason": "stop"' in c for c in chunks)
@@ -1352,7 +1353,7 @@ class TestSSENormalization:
 
         gen = chat_with_openrouter(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="test", streaming=True
+        api_key="test", model="mistralai/mistral-7b-instruct:free", streaming=True
         )
         chunks = list(gen)
         assert len(chunks) == 3
@@ -1383,7 +1384,7 @@ class TestSSENormalization:
 
         gen = chat_with_deepseek(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="test", streaming=True
+        api_key="test", model="deepseek-chat", streaming=True
         )
         chunks = list(gen)
         assert len(chunks) == 3
@@ -1451,7 +1452,7 @@ class TestSSENormalization:
         )
         gen = chat_with_anthropic(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="key", streaming=True
+        api_key="key", model="claude-3-5-sonnet-latest", streaming=True
         )
         chunks = list(gen)
         assert any('[DONE]' in c for c in chunks)
@@ -1485,7 +1486,7 @@ class TestSSENormalization:
         )
         gen = chat_with_anthropic(
         input_data=[{"role": "user", "content": "Hi"}],
-        api_key="key", streaming=True
+        api_key="key", model="claude-3-5-sonnet-latest", streaming=True
         )
         chunks = list(gen)
         assert any('"tool_calls"' in c for c in chunks)
@@ -1520,7 +1521,7 @@ class TestSSENormalization:
         with pytest.raises(ChatBadRequestError):
             _ = list(chat_with_anthropic(
             input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+            api_key="key", model="claude-3-5-sonnet-latest", streaming=True
             ))
 
     def test_anthropic_payload_includes_image_url(self, monkeypatch):
@@ -1550,6 +1551,7 @@ class TestSSENormalization:
         "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}],
         }],
         api_key="key",
+        model="claude-3-5-sonnet-latest",
         streaming=False,
         )
         payload = captured["json"]
@@ -1584,6 +1586,7 @@ class TestSSENormalization:
         "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,QUJD"}}],
         }],
         api_key="key",
+        model="claude-3-5-sonnet-latest",
         streaming=False,
         )
         payload = captured["json"]
@@ -1615,7 +1618,7 @@ class TestSSENormalization:
         with pytest.raises(ChatProviderError):
             list(chat_with_mistral(
             input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+            api_key="key", model="mistral-small", streaming=True
             ))
 
     def test_openrouter_stream_error_chunked(self, monkeypatch):
@@ -1640,7 +1643,7 @@ class TestSSENormalization:
         with pytest.raises(ChatProviderError):
             list(chat_with_openrouter(
             input_data=[{"role": "user", "content": "Hi"}],
-            api_key="key", streaming=True
+            api_key="key", model="mistralai/mistral-7b-instruct:free", streaming=True
             ))
 
     @pytest.mark.asyncio
@@ -1685,11 +1688,13 @@ class TestSSENormalization:
         sync_result = chat_with_anthropic(
         input_data=[{"role": "user", "content": "Hi"}],
         api_key="key",
+        model="claude-haiku-4.5",
         streaming=False,
         )
         async_result = await chat_with_anthropic_async(
         [{"role": "user", "content": "Hi"}],
         api_key="key",
+        model="claude-haiku-4.5",
         streaming=False,
         )
         from tldw_Server_API.app.core.LLM_Calls.providers.anthropic_adapter import AnthropicAdapter
@@ -1943,6 +1948,7 @@ async def test_openai_async_non_streaming_preserves_payload(monkeypatch):
     result = await chat_with_openai_async(
     input_data=[{"role": "user", "content": "hi async"}],
     api_key="cfg-key",
+    model="gpt-4o-mini",
     streaming=False,
     )
 
@@ -2083,6 +2089,7 @@ async def test_groq_async_non_streaming_preserves_payload(monkeypatch):
     result = await chat_with_groq_async(
     input_data=[{"role": "user", "content": "groq async"}],
     api_key="groq-key",
+    model="llama-3.3-70b-versatile",
     streaming=False,
     )
 
@@ -2156,6 +2163,7 @@ async def test_openrouter_async_streaming_filters_control_lines(monkeypatch):
     gen = await chat_with_openrouter_async(
     input_data=[{"role": "user", "content": "hello"}],
     api_key="router-key",
+    model="mistralai/mistral-7b-instruct:free",
     streaming=True,
     )
 
@@ -2255,6 +2263,7 @@ def test_cohere_config_fallbacks(monkeypatch):
 
     result = chat_with_cohere(
     input_data=[{"role": "user", "content": "Hi there"}],
+    model="command-r",
     streaming=False,
     app_config=fake_config(),
     )
@@ -2329,6 +2338,7 @@ def test_google_config_fallbacks(monkeypatch):
 
     result = chat_with_google(
     input_data=[{"role": "user", "content": "Hi"}],
+    model="gemini-test",
     streaming=False,
     app_config=fake_config(),
     )

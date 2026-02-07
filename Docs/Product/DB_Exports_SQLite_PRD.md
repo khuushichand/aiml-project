@@ -138,7 +138,7 @@ Per-dataset snapshots remain available via `POST /api/v1/admin/backups`. All bun
    - Extend `admin_data_ops_service.py` with bundle orchestration that reuses `DB_Backups` for per-dataset snapshots.
    - Use `DatabasePaths` and existing dataset resolvers to keep paths consistent with Admin Data Ops.
 2. **API Layer**
-   - Add bundle endpoints in `tldw_Server_API/app/api/v1/endpoints/admin.py` alongside existing backup endpoints.
+   - Add bundle endpoints in `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` alongside existing backup endpoints.
    - Reuse admin auth + audit event emission.
 3. **Storage Layout**
    - Use `TLDW_DB_BACKUP_PATH` (default `./tldw_DB_Backups`) for staging artifacts.

@@ -6,6 +6,8 @@ with support for burst traffic and cost-based limits.
 """
 
 import asyncio
+import contextlib
+import json
 import os
 import sqlite3
 import threading
@@ -13,19 +15,35 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 # Import configuration management
 from tldw_Server_API.app.core.Evaluations.config_manager import (
-    get_config,
     get_rate_limit_config,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+# Narrowed exception tuple for BLE001 fixes
+_USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
 try:  # pragma: no cover - RG is optional
+    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
     from tldw_Server_API.app.core.Resource_Governance import (  # type: ignore
         MemoryResourceGovernor,
         RedisResourceGovernor,
@@ -36,8 +54,7 @@ try:  # pragma: no cover - RG is optional
         PolicyReloadConfig,
         default_policy_loader,
     )
-    from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
-except Exception:  # pragma: no cover - safe fallback when RG not installed
+except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safe fallback when RG not installed
     MemoryResourceGovernor = None  # type: ignore
     RedisResourceGovernor = None  # type: ignore
     RGRequest = None  # type: ignore
@@ -52,7 +69,7 @@ try:  # pragma: no cover - ledger is optional during upgrades/tests
         LedgerEntry,
         ResourceDailyLedger,
     )
-except Exception:  # pragma: no cover - safe fallback
+except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - safe fallback
     LedgerEntry = None  # type: ignore
     ResourceDailyLedger = None  # type: ignore
 
@@ -175,16 +192,14 @@ class UserRateLimiter:
         self._init_database()
 
         # In-memory cache for rate limit data (with TTL)
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._cache_ttl = 60  # seconds
 
     def _init_database(self):
         """Initialize rate limiting tables."""
         # Register explicit adapters to avoid deprecated defaults on Python 3.12+
-        try:
+        with contextlib.suppress(_USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS):
             sqlite3.register_adapter(datetime, lambda d: d.isoformat(sep=" "))
-        except Exception:
-            pass
         with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES) as conn:
             # User rate limits table (created in migration)
             conn.execute("""
@@ -244,7 +259,7 @@ class UserRateLimiter:
         is_batch: bool = False,
         tokens_requested: int = 0,
         estimated_cost: float = 0.0
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """
         Check if user can make request based on their tier limits.
 
@@ -290,11 +305,11 @@ class UserRateLimiter:
                 # Record the request (usage + ledger shadow writes).
                 try:
                     await self._record_request(user_id, endpoint, tokens_requested, estimated_cost)
-                except Exception:
+                except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                     # Best-effort only; never block allow path.
                     pass
 
-                metadata: Dict[str, Any] = {
+                metadata: dict[str, Any] = {
                     "policy_id": rg_decision.get("policy_id", policy_id),
                     "rate_limit_source": "resource_governor",
                 }
@@ -347,7 +362,7 @@ class UserRateLimiter:
                             expired = exp_dt < datetime.utcnow()
                         else:
                             expired = exp_dt < datetime.now(timezone.utc)
-                    except Exception:
+                    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                         expired = False
                 if expired:
                     # Reset to default tier
@@ -417,7 +432,7 @@ class UserRateLimiter:
                         ledger = ResourceDailyLedger()  # type: ignore[call-arg]
                         await ledger.initialize()
                         _evals_daily_ledger = ledger
-                    except Exception as exc:  # pragma: no cover - defensive
+                    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
                         logger.debug(f"Evaluations: ResourceDailyLedger init failed; using legacy daily_usage: {exc}")
                         _evals_daily_ledger = None
                         return None
@@ -429,7 +444,7 @@ class UserRateLimiter:
             if user_id not in _evals_legacy_backfill_done:
                 await self._backfill_legacy_daily_usage_to_ledger(ledger, user_id=user_id, day_utc=day)
                 _evals_legacy_backfill_done.add(user_id)
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             pass
         return ledger
 
@@ -481,7 +496,7 @@ class UserRateLimiter:
                     occurred_at=ts,
                 )
                 await ledger.add(entry)
-        except Exception as exc:  # pragma: no cover - defensive
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"Evaluations: legacy daily_usage backfill skipped: {exc}")
 
     async def _check_minute_limit(
@@ -490,7 +505,7 @@ class UserRateLimiter:
         endpoint: str,
         is_batch: bool,
         config: RateLimitConfig
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check per-minute rate limits."""
         now = datetime.now(timezone.utc)
         minute_ago = now - timedelta(minutes=1)
@@ -499,7 +514,7 @@ class UserRateLimiter:
             window_start = now.replace(second=0, microsecond=0)
             seconds_into_window = max(0, int((now - window_start).total_seconds()))
             reset_seconds = max(1, 60 - seconds_into_window)
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             reset_seconds = 60
 
         with sqlite3.connect(self.db_path) as conn:
@@ -552,7 +567,7 @@ class UserRateLimiter:
         tokens_requested: int,
         estimated_cost: float,
         config: RateLimitConfig
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check daily usage limits."""
         today = datetime.now(timezone.utc).date()
         day_str = str(today)
@@ -561,10 +576,10 @@ class UserRateLimiter:
         total_tokens = 0
         total_cost: float = 0.0
 
-        ledger: Optional["ResourceDailyLedger"] = None
+        ledger: Optional[ResourceDailyLedger] = None
         try:
             ledger = await self._get_daily_ledger(user_id)
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             ledger = None
 
         if ledger is not None:
@@ -581,7 +596,7 @@ class UserRateLimiter:
                     category="tokens",
                     day_utc=day_str,
                 )
-            except Exception as exc:  # pragma: no cover - defensive
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
                 logger.debug(f"Evaluations: ledger daily totals failed; falling back to legacy: {exc}")
                 ledger = None
 
@@ -649,11 +664,11 @@ class UserRateLimiter:
         user_id: str,
         estimated_cost: float,
         config: RateLimitConfig,
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> tuple[bool, dict[str, Any]]:
         """Check daily cost limits only (RG handles evaluations/tokens)."""
         try:
             cost = float(estimated_cost or 0.0)
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             cost = 0.0
         if cost <= 0:
             return True, {}
@@ -731,7 +746,7 @@ class UserRateLimiter:
                         occurred_at=now,
                     )
                     await ledger.add(entry_eval)
-                except Exception:
+                except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                     pass
                 if int(tokens_used or 0) > 0:
                     try:
@@ -744,18 +759,18 @@ class UserRateLimiter:
                             occurred_at=now,
                         )
                         await ledger.add(entry_tokens)
-                    except Exception:
+                    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                         pass
-        except Exception as exc:  # pragma: no cover - defensive
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
             logger.debug(f"Evaluations: ResourceDailyLedger shadow write failed; ignoring: {exc}")
 
     def _generate_rate_limit_headers(
         self,
         user_id: str,
         config: RateLimitConfig,
-        minute_metadata: Dict[str, Any],
-        daily_metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        minute_metadata: dict[str, Any],
+        daily_metadata: dict[str, Any]
+    ) -> dict[str, Any]:
         """Generate rate limit headers for response."""
         return {
             "headers": {
@@ -781,7 +796,7 @@ class UserRateLimiter:
         user_id: str,
         new_tier: UserTier,
         expires_at: Optional[datetime] = None,
-        custom_limits: Optional[Dict[str, Any]] = None
+        custom_limits: Optional[dict[str, Any]] = None
     ) -> bool:
         """
         Upgrade a user's tier.
@@ -849,11 +864,11 @@ class UserRateLimiter:
             logger.info(f"Upgraded user {user_id} to tier {new_tier.value}")
             return True
 
-        except Exception as e:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to upgrade user tier: {e}")
             return False
 
-    async def get_usage_summary(self, user_id: str) -> Dict[str, Any]:
+    async def get_usage_summary(self, user_id: str) -> dict[str, Any]:
         """
         Get usage summary for a user.
 
@@ -936,7 +951,7 @@ class UserRateLimiter:
         """
         try:
             await self._record_request(user_id, endpoint, max(0, int(tokens_used or 0)), float(cost or 0.0))
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             # Non-fatal; logging here could be noisy for hot paths
             pass
 
@@ -957,7 +972,7 @@ def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
         import os as _os
         if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") or "PYTEST_CURRENT_TEST" in _os.environ:
             return user_rate_limiter
-    except Exception:
+    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
         pass
     global _user_rate_limiter_lock
     if _user_rate_limiter_lock is None:
@@ -981,14 +996,14 @@ _rg_evals_init_error_logged = False
 _rg_evals_fallback_logged = False
 
 
-def _rg_evals_context() -> Dict[str, str]:
+def _rg_evals_context() -> dict[str, str]:
     policy_path = os.getenv(
         "RG_POLICY_PATH",
         "tldw_Server_API/Config_Files/resource_governor_policies.yaml",
     )
     try:
         policy_path_resolved = os.path.abspath(policy_path)
-    except Exception:
+    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
         policy_path_resolved = policy_path
     return {
         "backend": os.getenv("RG_BACKEND", "memory"),
@@ -1058,7 +1073,7 @@ def _rg_evaluations_enabled() -> bool:
     if rg_enabled is not None:
         try:
             return bool(rg_enabled(True))  # type: ignore[func-returns-value]
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             return False
     return False
 
@@ -1102,7 +1117,7 @@ async def _get_evaluations_rg_governor():
                 gov = MemoryResourceGovernor(policy_loader=loader)  # type: ignore[call-arg]
             _rg_evals_governor = gov
             return gov
-        except Exception as exc:  # pragma: no cover - optional path
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - optional path
             _log_rg_evals_init_failure(exc)
             return None
 
@@ -1114,7 +1129,7 @@ async def _maybe_enforce_with_rg_evaluations(
     tokens_requested: int,
     estimated_cost: float,
     policy_id: str,
-) -> Optional[Dict[str, object]]:
+) -> Optional[dict[str, object]]:
     """
     Optionally enforce Evaluations request limits via ResourceGovernor.
 
@@ -1126,12 +1141,12 @@ async def _maybe_enforce_with_rg_evaluations(
         return None
     op_id = f"evals-{user_id}-{time.time_ns()}"
     try:
-        categories: Dict[str, Dict[str, int]] = {
+        categories: dict[str, dict[str, int]] = {
             "evaluations": {"units": 1},
         }
         try:
             tu = int(tokens_requested or 0)
-        except Exception:
+        except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
             tu = 0
         if tu > 0:
             categories["tokens"] = {"units": tu}
@@ -1158,13 +1173,13 @@ async def _maybe_enforce_with_rg_evaluations(
             if handle:
                 try:
                     await gov.commit(handle, None, op_id=op_id)
-                except Exception:
+                except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                     logger.debug("Evaluations RG commit failed", exc_info=True)
             # Expose decision details for callers that want legacy-style headers.
             details = {}
             try:
                 details = dict(getattr(decision, "details", {}) or {})
-            except Exception:
+            except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
                 details = {}
             return {
                 "allowed": True,
@@ -1177,7 +1192,7 @@ async def _maybe_enforce_with_rg_evaluations(
             "retry_after": decision.retry_after or 1,
             "policy_id": policy_id,
         }
-    except Exception as exc:
+    except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Evaluations RG reserve failed: {}", exc
         )

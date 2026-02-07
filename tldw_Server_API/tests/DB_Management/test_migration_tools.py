@@ -44,6 +44,11 @@ class _StubBackend:
         self.executed_many.append((sql, params_list))
         return None
 
+    @staticmethod
+    def escape_identifier(identifier: str) -> str:
+        escaped = str(identifier).replace('"', '""')
+        return f'"{escaped}"'
+
     def get_pool(self) -> _StubPool:
 
         return _StubPool()
@@ -78,9 +83,9 @@ def test_migrate_sqlite_to_postgres_uses_backend(monkeypatch: pytest.MonkeyPatch
     migration_tools.migrate_sqlite_to_postgres(sqlite_db, config, batch_size=10, label="test")
 
     delete_statements = [sql for sql, _params in stub_backend.executed if sql.startswith("DELETE FROM")]
-    assert delete_statements == ["DELETE FROM child", "DELETE FROM parent"]
+    assert delete_statements == ['DELETE FROM "child"', 'DELETE FROM "parent"']
 
-    inserted_tables = [call[0].split()[2] for call in stub_backend.executed_many]
+    inserted_tables = [call[0].split()[2].strip('"') for call in stub_backend.executed_many]
     assert inserted_tables == ["parent", "child"]
 
     parent_rows = stub_backend.executed_many[0][1]
@@ -122,13 +127,71 @@ def test_migrate_sqlite_to_postgres_user_scoped_truncate(monkeypatch: pytest.Mon
 
     delete_statements = [(sql, params) for sql, params in stub_backend.executed if sql.startswith("DELETE FROM")]
     assert delete_statements == [
-        ("DELETE FROM child WHERE user_id = %s", ("u1",)),
-        ("DELETE FROM parent WHERE user_id = %s", ("u1",)),
+        ('DELETE FROM "child" WHERE "user_id" = %s', ("u1",)),
+        ('DELETE FROM "parent" WHERE "user_id" = %s', ("u1",)),
     ]
 
-    inserted_tables = [call[0].split()[2] for call in stub_backend.executed_many]
+    inserted_tables = [call[0].split()[2].strip('"') for call in stub_backend.executed_many]
     assert inserted_tables == ["parent", "child"]
     parent_rows = stub_backend.executed_many[0][1]
     assert parent_rows == [(1, "u1", "p1")]
     child_rows = stub_backend.executed_many[1][1]
     assert child_rows == [(1, "u1", 1)]
+
+
+def test_copy_table_escapes_double_quote_identifiers(tmp_path: Path) -> None:
+    table_name = 'odd"name'
+    col_name = 'col"name'
+    db_path = tmp_path / "source_identifiers.db"
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        'CREATE TABLE "odd""name" ("id" INTEGER PRIMARY KEY AUTOINCREMENT, "col""name" TEXT NOT NULL)'
+    )
+    conn.execute(
+        'INSERT INTO "odd""name" ("col""name") VALUES (?)',
+        ("value",),
+    )
+    conn.commit()
+    conn.close()
+
+    sqlite_conn = sqlite3.connect(str(db_path))
+    sqlite_conn.row_factory = sqlite3.Row
+
+    meta = migration_tools.TableMeta(
+        name=table_name,
+        source_name=table_name,
+        columns=["id", col_name],
+        pg_columns=["id", col_name],
+        pk_columns=["id"],
+        sequence_columns=["id"],
+    )
+
+    stub_backend = _StubBackend()
+    migration_tools._copy_table(sqlite_conn, stub_backend, object(), meta, batch_size=50)
+    sqlite_conn.close()
+
+    assert len(stub_backend.executed_many) == 1
+    insert_sql, inserted_rows = stub_backend.executed_many[0]
+    assert insert_sql.startswith('INSERT INTO "odd""name" ("id", "col""name") VALUES')
+    assert inserted_rows == [(1, "value")]
+
+
+def test_sync_sequences_escapes_single_quote_literals() -> None:
+    stub_backend = _StubBackend()
+    meta = migration_tools.TableMeta(
+        name="odd'name",
+        source_name="odd'name",
+        columns=["id'name"],
+        pg_columns=["id'name"],
+        pk_columns=["id'name"],
+        sequence_columns=["id'name"],
+    )
+
+    migration_tools._sync_sequences(stub_backend, object(), {meta.name: meta})
+
+    sequence_sql = [sql for sql, _params in stub_backend.executed if sql.startswith("SELECT setval")]
+    assert len(sequence_sql) == 1
+    sql = sequence_sql[0]
+    assert "pg_get_serial_sequence('odd''name', 'id''name')" in sql
+    assert 'MAX("id\'name") FROM "odd\'name"' in sql

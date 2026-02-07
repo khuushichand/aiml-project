@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 
 def detect_code_language(filename: str) -> str:
@@ -61,14 +61,14 @@ def chunk_code_lines(
     lines_per_chunk: int,
     overlap: int,
     language: str,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Simple line-based chunking used as a fallback for code processing.
 
     Mirrors the legacy `_chunk_code_lines` helper in `_legacy_media`.
     """
     lines = text.splitlines()
-    chunks: List[Dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
     if lines_per_chunk <= 0:
         return chunks
 

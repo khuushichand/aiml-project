@@ -1,22 +1,17 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, Field
-
 
 # -----------------------------------------------------------------------------
 # Agent Types
 # -----------------------------------------------------------------------------
 
 
-class ACPAgentType(str, Enum):
-    """Supported agent types for ACP sessions."""
-    CLAUDE_CODE = "claude_code"
-    CODEX = "codex"
-    OPENCODE = "opencode"
-    CUSTOM = "custom"
+# Agent type identifiers are user-configurable strings.
+ACPAgentType = str
 
 
 class ACPAgentInfo(BaseModel):
@@ -27,7 +22,7 @@ class ACPAgentInfo(BaseModel):
     is_configured: bool = Field(
         default=False, description="Whether the agent is properly configured"
     )
-    requires_api_key: Optional[str] = Field(
+    requires_api_key: str | None = Field(
         default=None,
         description="Name of required API key if not configured (e.g., 'ANTHROPIC_API_KEY')",
     )
@@ -35,8 +30,8 @@ class ACPAgentInfo(BaseModel):
 
 class ACPAgentListResponse(BaseModel):
     """Response for listing available agents."""
-    agents: List[ACPAgentInfo] = Field(default_factory=list)
-    default_agent: ACPAgentType = Field(default=ACPAgentType.CLAUDE_CODE)
+    agents: list[ACPAgentInfo] = Field(default_factory=list)
+    default_agent: ACPAgentType = Field(default="custom")
 
 
 # -----------------------------------------------------------------------------
@@ -54,10 +49,10 @@ class ACPMCPServerConfig(BaseModel):
     """Configuration for an MCP server."""
     name: str = Field(..., description="Server identifier/name")
     type: ACPMCPServerType = Field(..., description="Connection type")
-    url: Optional[str] = Field(default=None, description="WebSocket URL (for websocket type)")
-    command: Optional[str] = Field(default=None, description="Command to execute (for stdio type)")
-    args: Optional[List[str]] = Field(default=None, description="Command arguments (for stdio type)")
-    env: Optional[Dict[str, str]] = Field(default=None, description="Environment variables")
+    url: str | None = Field(default=None, description="WebSocket URL (for websocket type)")
+    command: str | None = Field(default=None, description="Command to execute (for stdio type)")
+    args: list[str] | None = Field(default=None, description="Command arguments (for stdio type)")
+    env: dict[str, str] | None = Field(default=None, description="Environment variables")
 
 
 # -----------------------------------------------------------------------------
@@ -86,7 +81,7 @@ class ACPWSConnectedMessage(BaseModel):
     """Sent when WebSocket connection is established."""
     type: Literal["connected"] = "connected"
     session_id: str
-    agent_capabilities: Optional[Dict[str, Any]] = None
+    agent_capabilities: dict[str, Any] | None = None
 
 
 class ACPWSUpdateMessage(BaseModel):
@@ -94,7 +89,7 @@ class ACPWSUpdateMessage(BaseModel):
     type: Literal["update"] = "update"
     session_id: str
     update_type: str = Field(..., description="Type of update (e.g., 'text', 'tool_call', 'tool_result')")
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 class ACPWSPermissionRequestMessage(BaseModel):
@@ -103,7 +98,7 @@ class ACPWSPermissionRequestMessage(BaseModel):
     request_id: str = Field(..., description="Unique ID for this permission request")
     session_id: str
     tool_name: str
-    tool_arguments: Dict[str, Any] = Field(default_factory=dict)
+    tool_arguments: dict[str, Any] = Field(default_factory=dict)
     tier: ACPPermissionTier = ACPPermissionTier.INDIVIDUAL
     timeout_seconds: int = Field(default=300, description="Seconds until auto-cancel if no response")
 
@@ -113,16 +108,16 @@ class ACPWSErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     code: str
     message: str
-    session_id: Optional[str] = None
-    data: Optional[Dict[str, Any]] = None
+    session_id: str | None = None
+    data: dict[str, Any] | None = None
 
 
 class ACPWSPromptCompleteMessage(BaseModel):
     """Sent when a prompt execution completes."""
     type: Literal["prompt_complete"] = "prompt_complete"
     session_id: str
-    stop_reason: Optional[str] = None
-    raw_result: Dict[str, Any] = Field(default_factory=dict)
+    stop_reason: str | None = None
+    raw_result: dict[str, Any] = Field(default_factory=dict)
 
 
 # -----------------------------------------------------------------------------
@@ -135,7 +130,7 @@ class ACPWSPermissionResponseMessage(BaseModel):
     type: Literal["permission_response"] = "permission_response"
     request_id: str
     approved: bool
-    batch_approve_tier: Optional[ACPPermissionTier] = Field(
+    batch_approve_tier: ACPPermissionTier | None = Field(
         default=None,
         description="If set, auto-approve all future requests of this tier"
     )
@@ -151,7 +146,7 @@ class ACPWSPromptMessage(BaseModel):
     """Send a prompt to the session via WebSocket."""
     type: Literal["prompt"] = "prompt"
     session_id: str
-    prompt: List[Dict[str, Any]]
+    prompt: list[dict[str, Any]]
 
 
 # -----------------------------------------------------------------------------
@@ -182,17 +177,17 @@ ACPWSClientMessage = Union[
 class ACPSessionNewRequest(BaseModel):
     """Request to create a new ACP session."""
     cwd: str = Field(..., description="Absolute working directory for the ACP session")
-    name: Optional[str] = Field(
+    name: str | None = Field(
         default=None,
         description="Optional session name. Auto-generated from cwd if not provided.",
     )
-    agent_type: ACPAgentType = Field(
-        default=ACPAgentType.CLAUDE_CODE, description="Type of agent to use"
+    agent_type: ACPAgentType | None = Field(
+        default=None, description="Type of agent to use"
     )
-    tags: Optional[List[str]] = Field(
+    tags: list[str] | None = Field(
         default=None, description="Optional tags for organizing sessions"
     )
-    mcp_servers: Optional[List[ACPMCPServerConfig]] = Field(
+    mcp_servers: list[ACPMCPServerConfig] | None = Field(
         default=None, description="Optional MCP server configurations"
     )
 
@@ -202,17 +197,21 @@ class ACPSessionNewResponse(BaseModel):
     session_id: str
     name: str = Field(..., description="Session name (user-provided or auto-generated)")
     agent_type: ACPAgentType = Field(..., description="Type of agent used")
-    agent_capabilities: Optional[Dict[str, Any]] = None
+    agent_capabilities: dict[str, Any] | None = None
+    sandbox_session_id: str | None = Field(default=None, description="Sandbox session backing this ACP session")
+    sandbox_run_id: str | None = Field(default=None, description="Sandbox run backing this ACP session")
+    ssh_ws_url: str | None = Field(default=None, description="WebSocket URL for browser-based SSH")
+    ssh_user: str | None = Field(default=None, description="SSH username for this session")
 
 
 class ACPSessionPromptRequest(BaseModel):
     session_id: str
-    prompt: List[Dict[str, Any]]
+    prompt: list[dict[str, Any]]
 
 
 class ACPSessionPromptResponse(BaseModel):
-    stop_reason: Optional[str] = None
-    raw_result: Dict[str, Any]
+    stop_reason: str | None = None
+    raw_result: dict[str, Any]
 
 
 class ACPSessionCancelRequest(BaseModel):
@@ -224,7 +223,7 @@ class ACPSessionCloseRequest(BaseModel):
 
 
 class ACPSessionUpdatesResponse(BaseModel):
-    updates: List[Dict[str, Any]]
+    updates: list[dict[str, Any]]
 
 
 # -----------------------------------------------------------------------------
@@ -235,16 +234,16 @@ class ACPSessionUpdatesResponse(BaseModel):
 class ACPErrorSuggestion(BaseModel):
     """A suggestion for resolving an error."""
     action: str = Field(..., description="Suggested action to take")
-    description: Optional[str] = Field(default=None, description="More details about the action")
+    description: str | None = Field(default=None, description="More details about the action")
 
 
 class ACPErrorResponse(BaseModel):
     """Structured error response with suggestions."""
     code: str = Field(..., description="Error code for programmatic handling")
     message: str = Field(..., description="Human-readable error message")
-    suggestions: List[ACPErrorSuggestion] = Field(
+    suggestions: list[ACPErrorSuggestion] = Field(
         default_factory=list, description="Suggestions for resolving the error"
     )
-    data: Optional[Dict[str, Any]] = Field(
+    data: dict[str, Any] | None = Field(
         default=None, description="Additional error context"
     )

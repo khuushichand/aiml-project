@@ -66,7 +66,8 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
       actorChatPosition: base.chatPosition,
       actorChatDepth: base.chatDepth,
       actorChatRole: base.chatRole,
-      actorTemplateMode: base.templateMode ?? "merge"
+      actorTemplateMode: base.templateMode ?? "merge",
+      actorAppendable: base.appendable ?? false
     }
     for (const aspect of base.aspects || []) {
       baseFields[`actor_${aspect.id}`] = aspect.value
@@ -97,7 +98,8 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
         actorChatPosition: actor.chatPosition,
         actorChatDepth: actor.chatDepth,
         actorChatRole: actor.chatRole,
-        actorTemplateMode: actor.templateMode ?? "merge"
+        actorTemplateMode: actor.templateMode ?? "merge",
+        actorAppendable: actor.appendable ?? false
       }
       for (const aspect of actor.aspects || []) {
         baseFields[`actor_${aspect.id}`] = aspect.value
@@ -198,6 +200,7 @@ export const ActorPopout: React.FC<Props> = ({ open, setOpen }) => {
                 k === "actorChatPosition" ||
                 k === "actorChatDepth" ||
                 k === "actorChatRole" ||
+                k === "actorAppendable" ||
                 k.startsWith("actor_")
             )
             if (shouldUpdate) {

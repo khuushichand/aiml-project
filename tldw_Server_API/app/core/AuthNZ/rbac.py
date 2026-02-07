@@ -6,12 +6,10 @@ aligns with AuthNZ/permissions.py which already exposes FastAPI dependencies
 and now uses the AuthnzRbacRepo facade for database access.
 """
 
-from typing import List
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
-
 
 _RBAC_REPO: AuthnzRbacRepo | None = None
 _RBAC_SETTINGS_GEN: int = -1
@@ -36,7 +34,7 @@ class RBACError(Exception):
     pass
 
 
-def get_effective_permissions(user_id: int) -> List[str]:
+def get_effective_permissions(user_id: int) -> list[str]:
     """Return the list of effective permissions for a user.
 
     Combines role-derived permissions with user overrides (allow/deny) using the

@@ -2,11 +2,11 @@
 # Chat-specific metrics integration for telemetry
 
 import time
-import asyncio
-from typing import Dict, Any, Optional, List
+import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -116,6 +116,7 @@ class ChatMetricsCollector:
         self.active_requests = 0
         self.active_streams = 0
         self.active_transactions = 0
+        self._active_lock = threading.Lock()
 
         # Cost tracking
         self.token_costs = {
@@ -373,7 +374,8 @@ class ChatMetricsCollector:
             "chat_request",
             attributes=labels
         ) as span:
-            self.active_requests += 1
+            with self._active_lock:
+                self.active_requests += 1
 
             try:
                 # Increment request counter
@@ -400,7 +402,8 @@ class ChatMetricsCollector:
                 duration = time.time() - start_time
                 self.metrics.request_duration.record(duration, labels)
 
-                self.active_requests -= 1
+                with self._active_lock:
+                    self.active_requests = max(0, self.active_requests - 1)
                 span.set_attribute("duration", duration)
 
     @asynccontextmanager
@@ -419,7 +422,8 @@ class ChatMetricsCollector:
             "streaming_response",
             attributes={"conversation_id": conversation_id}
         ) as span:
-            self.active_streams += 1
+            with self._active_lock:
+                self.active_streams += 1
 
             try:
                 # Provide tracking methods
@@ -458,7 +462,8 @@ class ChatMetricsCollector:
                     {ChatMetricLabels.CONVERSATION_ID.value: conversation_id}
                 )
 
-                self.active_streams -= 1
+                with self._active_lock:
+                    self.active_streams = max(0, self.active_streams - 1)
                 span.set_attributes({
                     "duration": duration,
                     "chunks": chunk_count,
@@ -475,7 +480,8 @@ class ChatMetricsCollector:
         """
         start_time = time.time()
         # Mark a transaction active while this context is open
-        self.active_transactions += 1
+        with self._active_lock:
+            self.active_transactions += 1
 
         with self.tracer.start_as_current_span(
             f"db_{operation_type}",
@@ -491,7 +497,8 @@ class ChatMetricsCollector:
                 )
                 span.set_attribute("duration", duration)
                 # Decrement active transaction count
-                self.active_transactions = max(0, self.active_transactions - 1)
+                with self._active_lock:
+                    self.active_transactions = max(0, self.active_transactions - 1)
 
     def track_validation_failure(self, validation_type: str, error_message: str):
         """
@@ -686,13 +693,21 @@ class ChatMetricsCollector:
             error_labels = {**labels, ChatMetricLabels.ERROR_TYPE.value: error_type}
             self.metrics.llm_errors.add(1, error_labels)
 
-    def get_active_metrics(self) -> Dict[str, int]:
+    def get_active_metrics(self) -> dict[str, int]:
         """Get counts of active operations."""
-        return {
-            "active_requests": self.active_requests,
-            "active_streams": self.active_streams,
-            "active_transactions": self.active_transactions
-        }
+        with self._active_lock:
+            return {
+                "active_requests": self.active_requests,
+                "active_streams": self.active_streams,
+                "active_transactions": self.active_transactions,
+            }
+
+    def reset_active_metrics(self) -> None:
+        """Reset active operation counters to zero."""
+        with self._active_lock:
+            self.active_requests = 0
+            self.active_streams = 0
+            self.active_transactions = 0
 
     def track_provider_fallback_success(
         self,
@@ -757,11 +772,14 @@ class ChatMetricsCollector:
 
 # Global instance
 _chat_metrics_collector: Optional[ChatMetricsCollector] = None
+_chat_metrics_collector_lock = threading.Lock()
 
 
 def get_chat_metrics() -> ChatMetricsCollector:
     """Get the global chat metrics collector instance."""
     global _chat_metrics_collector
     if _chat_metrics_collector is None:
-        _chat_metrics_collector = ChatMetricsCollector()
+        with _chat_metrics_collector_lock:
+            if _chat_metrics_collector is None:
+                _chat_metrics_collector = ChatMetricsCollector()
     return _chat_metrics_collector

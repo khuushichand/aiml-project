@@ -4,22 +4,62 @@ Token-based chunking strategy.
 Splits text into chunks based on token count using transformers or fallback methods.
 """
 
-from typing import List, Optional, Dict, Any, Generator, Protocol, Tuple
 import threading
+from collections.abc import Generator
+from typing import Optional, Protocol
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import TokenizerError
+
+_TOKENS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    UnicodeError,
+)
+
+_TOKENS_TIKTOKEN_RESOLUTION_EXCEPTIONS = (
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_TOKENS_TOKENIZATION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_TOKENS_DECODE_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    NotImplementedError,
+)
 
 
 class TokenizerProtocol(Protocol):
     """Protocol for tokenizer interface."""
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         """Encode text to token IDs."""
         ...
 
-    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
         """Decode token IDs back to text."""
         ...
 
@@ -43,7 +83,7 @@ class TransformersTokenizer:
             import transformers
             self._transformers = transformers
             self.available = True
-            logger.debug(f"transformers library available for tokenization")
+            logger.debug("transformers library available for tokenization")
         except ImportError:
             self.available = False
             logger.debug("transformers not available, will use fallback tokenization")
@@ -63,17 +103,17 @@ class TransformersTokenizer:
                 logger.info(f"Loading tokenizer: {self.model_name}")
                 self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
                 logger.debug(f"Tokenizer {self.model_name} loaded successfully")
-            except Exception as e:
+            except _TOKENS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load tokenizer '{self.model_name}': {e}")
-                raise TokenizerError(f"Failed to load tokenizer: {e}")
+                raise TokenizerError(f"Failed to load tokenizer: {e}") from e
 
         return self._tokenizer
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         """Encode text to token IDs."""
         return self.tokenizer.encode(text)
 
-    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
         """Decode token IDs back to text."""
         return self.tokenizer.decode(token_ids, skip_special_tokens=skip_special_tokens)
 
@@ -101,7 +141,7 @@ class TiktokenTokenizer:
             # Prefer model-specific encoding; fallback to cl100k_base
             try:
                 self._enc = tiktoken.encoding_for_model(model_name)
-            except Exception:
+            except _TOKENS_TIKTOKEN_RESOLUTION_EXCEPTIONS:
                 self._enc = tiktoken.get_encoding("cl100k_base")
             self.available = True
             logger.debug(f"tiktoken available for tokenization (model={model_name})")
@@ -109,12 +149,12 @@ class TiktokenTokenizer:
             self._tiktoken = None
             logger.debug("tiktoken not available, will try transformers or fallback")
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         if not self.available or self._enc is None:
             raise ImportError("tiktoken not available")
         return list(self._enc.encode(text))
 
-    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
         if not self.available or self._enc is None:
             raise ImportError("tiktoken not available")
         # tiktoken decode ignores skip_special_tokens; it's fine for chunking
@@ -151,7 +191,7 @@ class FallbackTokenizer:
             "Install transformers for accurate token-based chunking: pip install transformers"
         )
 
-    def encode(self, text: str) -> List[int]:
+    def encode(self, text: str) -> list[int]:
         """
         Simulate encoding by splitting into words and creating fake token IDs.
 
@@ -162,8 +202,8 @@ class FallbackTokenizer:
             List of fake token IDs
         """
         # Split into words and subwords
-        import re
         import hashlib
+        import re
 
         # Split on whitespace and punctuation
         tokens = re.findall(r'\w+|[^\w\s]', text)
@@ -187,7 +227,7 @@ class FallbackTokenizer:
 
         return token_ids
 
-    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+    def decode(self, token_ids: list[int], skip_special_tokens: bool = True) -> str:
         """
         Cannot accurately decode from fake token IDs.
 
@@ -306,7 +346,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text by token count.
 
@@ -341,8 +381,8 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             return self._chunk_with_fallback(text, max_size, overlap, **options)
 
         # Encode text to tokens (and capture offsets when available)
-        token_ids: List[int]
-        offsets: Optional[List[Tuple[int, int]]] = None
+        token_ids: list[int]
+        offsets: Optional[list[tuple[int, int]]] = None
         try:
             add_special = options.get('add_special_tokens', False)
             if hasattr(self.tokenizer, 'tokenizer'):
@@ -358,15 +398,15 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     )
                     token_ids = list(enc.get('input_ids') or enc['input_ids'])
                     offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
-                except Exception:
+                except _TOKENS_TOKENIZATION_EXCEPTIONS:
                     token_ids = tok.encode(text, add_special_tokens=add_special)
                     offsets = None
             else:
                 token_ids = self.tokenizer.encode(text)
 
-        except Exception as e:
+        except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
-            raise TokenizerError(f"Failed to tokenize text: {e}")
+            raise TokenizerError(f"Failed to tokenize text: {e}") from e
 
         if not token_ids:
             return []
@@ -416,7 +456,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             chunk_text = self.tokenizer.tokenizer.decode(chunk_tokens)
                     else:
                         raise AttributeError('No decode() available on tokenizer or underlying implementation')
-                except Exception as e:
+                except _TOKENS_DECODE_EXCEPTIONS as e:
                     logger.warning(f"Failed to decode chunk at position {i}: {e}; falling back to word approximation")
                     return self._chunk_with_fallback(text, max_size, overlap, **options)
 
@@ -430,7 +470,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int,
-                            **options) -> List[str]:
+                            **options) -> list[str]:
         """
         Chunk using fallback tokenizer (word-based approximation).
 
@@ -455,10 +495,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         # Calculate word counts
         max_words = max(1, int(max_size / ratio))
         raw_overlap_words = int(overlap / ratio)
-        if max_words == 1:
-            overlap_words = 0
-        else:
-            overlap_words = max(0, min(max_words - 1, raw_overlap_words))
+        overlap_words = 0 if max_words == 1 else max(0, min(max_words - 1, raw_overlap_words))
 
         logger.debug(f"Using fallback: {max_size} tokens ≈ {max_words} words")
 
@@ -500,7 +537,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
+                            **options) -> list[ChunkResult]:
         """Chunk text and return metadata with best-possible char offsets.
 
         - Transformers (fast) tokenizers: use offset mapping to compute spans.
@@ -527,8 +564,8 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
 
         add_special = bool(options.get('add_special_tokens', False))
 
-        token_ids: List[int]
-        offsets: Optional[List[Tuple[int, int]]] = None
+        token_ids: list[int]
+        offsets: Optional[list[tuple[int, int]]] = None
         decode_fn = None
 
         try:
@@ -537,9 +574,11 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 # Choose an available decode: prefer wrapper.decode if present,
                 # otherwise fall back to the underlying tokenizer's decode.
                 if hasattr(self.tokenizer, 'decode'):
-                    decode_fn = lambda ids: self.tokenizer.decode(ids, skip_special_tokens=True)
+                    def decode_fn(ids):
+                        return self.tokenizer.decode(ids, skip_special_tokens=True)
                 elif hasattr(tok, 'decode'):
-                    decode_fn = lambda ids: tok.decode(ids)
+                    def decode_fn(ids):
+                        return tok.decode(ids)
                 else:
                     decode_fn = None
                 try:
@@ -552,20 +591,17 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     )
                     token_ids = list(enc.get('input_ids') or enc['input_ids'])
                     offsets = list(enc.get('offset_mapping') or enc['offset_mapping'])
-                except Exception:
+                except _TOKENS_TOKENIZATION_EXCEPTIONS:
                     token_ids = tok.encode(text, add_special_tokens=add_special)
                     offsets = None
             else:
                 token_ids = self.tokenizer.encode(text)
                 # Generic tokenizer path (e.g., tiktoken or simple mocks): use plain decode(ids)
-                if hasattr(self.tokenizer, 'decode'):
-                    decode_fn = lambda ids: self.tokenizer.decode(ids)
-                else:
-                    decode_fn = None
+                decode_fn = (lambda ids: self.tokenizer.decode(ids)) if hasattr(self.tokenizer, 'decode') else None
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
-        except Exception as e:
+        except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
-            raise TokenizerError(f"Failed to tokenize text: {e}")
+            raise TokenizerError(f"Failed to tokenize text: {e}") from e
 
         if not token_ids:
             return []
@@ -574,10 +610,10 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         if offsets is not None and len(offsets) != len(token_ids):
             try:
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
-            except Exception:
+            except _TOKENS_TOKENIZATION_EXCEPTIONS:
                 offsets = None
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         step = max(1, max_size - overlap)
         # Rolling pointer for fallback bounds mapping when offsets are unavailable
         rolling_pos = 0
@@ -592,7 +628,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                     chunk_text = decode_fn(ids_window)
                 else:
                     chunk_text = self.tokenizer.decode(ids_window, skip_special_tokens=True)
-            except Exception as e:
+            except _TOKENS_DECODE_EXCEPTIONS as e:
                 logger.warning(f"Failed to decode token window at {i}: {e}")
                 continue
 
@@ -623,7 +659,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                             # Accept if either equals or one is a prefix of the other (ZWJ/vs16 tolerated)
                             if a == b or a.startswith(b) or b.startswith(a):
                                 end_char = expanded_end
-                    except Exception:
+                    except _TOKENS_NONCRITICAL_EXCEPTIONS:
                         pass
                 else:
                     start_char, end_char = self._bounds_via_rolling_pointer(text, chunk_text, start_from=rolling_pos)
@@ -658,7 +694,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         # Delegate to BaseChunkingStrategy implementation (config-aware)
         return super()._expand_end_to_grapheme_boundary(text, end)
 
-    def _reconstruct_offsets_by_decoding(self, token_ids: List[int], text: str) -> List[Tuple[int, int]]:
+    def _reconstruct_offsets_by_decoding(self, token_ids: list[int], text: str) -> list[tuple[int, int]]:
         """Rebuild per-token char spans using sequential decode with grapheme-safe clamping.
 
         Strategy:
@@ -673,28 +709,28 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             try:
                 # Prefer wrapper decode to ensure skip_special_tokens=True
                 return self.tokenizer.decode([tid], skip_special_tokens=True)
-            except Exception:
+            except _TOKENS_DECODE_EXCEPTIONS:
                 try:
                     if hasattr(self.tokenizer, 'tokenizer'):
                         return self.tokenizer.tokenizer.decode([tid], skip_special_tokens=True)
-                except Exception:
+                except _TOKENS_DECODE_EXCEPTIONS:
                     pass
                 return ''
 
-        def _decode_all(tids: List[int]) -> str:
+        def _decode_all(tids: list[int]) -> str:
             try:
                 return self.tokenizer.decode(tids, skip_special_tokens=True)
-            except Exception:
+            except _TOKENS_DECODE_EXCEPTIONS:
                 try:
                     if hasattr(self.tokenizer, 'tokenizer'):
                         return self.tokenizer.tokenizer.decode(tids, skip_special_tokens=True)
-                except Exception:
+                except _TOKENS_DECODE_EXCEPTIONS:
                     pass
                 return ''
 
         decoded_all = _decode_all(token_ids)
 
-        offsets: List[Tuple[int, int]] = []
+        offsets: list[tuple[int, int]] = []
         n = len(text)
 
         if decoded_all == text:
@@ -750,7 +786,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             pos = end
         return offsets
 
-    def _bounds_via_rolling_pointer(self, text: str, chunk_text: str, start_from: int = 0) -> Tuple[int, int]:
+    def _bounds_via_rolling_pointer(self, text: str, chunk_text: str, start_from: int = 0) -> tuple[int, int]:
         """Compute approximate bounds by scanning forward for the chunk text.
 
         Uses a rolling start to avoid mapping every repeated substring to its
@@ -766,7 +802,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
             end = idx
         return idx, end
 
-    def _chunk_with_metadata_fallback(self, text: str, max_size: int, overlap: int, **options) -> List[ChunkResult]:
+    def _chunk_with_metadata_fallback(self, text: str, max_size: int, overlap: int, **options) -> list[ChunkResult]:
         """Approximate token windows using words; precise char spans, approximate token counts."""
         ratio = getattr(self.tokenizer, 'tokens_per_word', {}).get(getattr(self.tokenizer, 'model_name', 'default'), 1.3)
         max_words = max(1, int(max_size / ratio))
@@ -774,8 +810,8 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         overlap_words = 0 if max_words == 1 else max(0, min(max_words - 1, raw_overlap_words))
 
         # Build word spans
-        spans: List[Tuple[int, int]] = []
-        words: List[str] = []
+        spans: list[tuple[int, int]] = []
+        words: list[str] = []
         pos = 0
         for part in text.split():
             idx = text.find(part, pos)
@@ -790,7 +826,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         if not words:
             return []
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         step = max(1, max_words - overlap_words)
         wi = 0
         while wi < len(words):
@@ -835,5 +871,4 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
         # For token-based chunking, we need to encode the full text
         # So we just use the regular chunk method
         chunks = self.chunk(text, max_size, overlap, **options)
-        for chunk in chunks:
-            yield chunk
+        yield from chunks

@@ -3,24 +3,29 @@
 
 import asyncio
 import json
-from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+from typing import Any, Optional
+
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.Logging.log_context import (
     log_context,
     new_request_id,
 )
+from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
+    EventBroadcaster,
+)
 
 from .job_types import JobType
-from .test_case_manager import TestCaseManager
 from .test_case_generator import TestCaseGenerator
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
-from tldw_Server_API.app.core.Prompt_Management.prompt_studio.event_broadcaster import (
-    EventBroadcaster, EventType,
-)
+from .test_case_manager import TestCaseManager
+
 try:
     # Import connection manager used by WebSocket endpoints
-    from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import connection_manager as ws_connection_manager
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
+        connection_manager as ws_connection_manager,
+    )
 except Exception:
     ws_connection_manager = None
 
@@ -42,10 +47,10 @@ class JobProcessor:
         self.job_manager = job_manager
         self.test_manager = TestCaseManager(db)
         self.test_generator = TestCaseGenerator(self.test_manager)
-        self._handlers: Dict[str, Any] = {}
+        self._handlers: dict[str, Any] = {}
         self._register_handlers()
 
-    async def process_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_job(self, job: dict[str, Any]) -> dict[str, Any]:
         """Process a single job dict (core Jobs or legacy shape)."""
         job_type = str(job.get("job_type") or "").lower()
         handler = self._handlers.get(job_type)
@@ -70,7 +75,7 @@ class JobProcessor:
         self._handlers[JobType.EVALUATION.value] = self.process_evaluation_job
         self._handlers[JobType.OPTIMIZATION.value] = self.process_optimization_job
 
-    def _resolve_entity_id(self, job_type: str, job: Dict[str, Any], payload: Dict[str, Any]) -> int:
+    def _resolve_entity_id(self, job_type: str, job: dict[str, Any], payload: dict[str, Any]) -> int:
         if job_type == JobType.OPTIMIZATION.value:
             value = payload.get("optimization_id") or payload.get("entity_id") or job.get("entity_id")
         elif job_type == JobType.EVALUATION.value:
@@ -111,7 +116,7 @@ class JobProcessor:
     ####################################################################################################################
     # Generation Jobs
 
-    async def process_generation_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
+    async def process_generation_job(self, payload: dict[str, Any], entity_id: int) -> dict[str, Any]:
         """
         Process a test case generation job.
 
@@ -177,7 +182,7 @@ class JobProcessor:
             )
             raise
 
-    async def _generate_diverse_cases(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _generate_diverse_cases(self, project_id: int, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """Generate diverse test cases."""
         signature_id = payload.get("signature_id")
         num_cases = payload.get("num_cases", 5)
@@ -193,7 +198,7 @@ class JobProcessor:
             project_id, signature_id, num_cases
         )
 
-    async def _generate_from_description(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _generate_from_description(self, project_id: int, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """Generate test cases from description."""
         description = payload.get("description")
         num_cases = payload.get("num_cases", 5)
@@ -211,7 +216,7 @@ class JobProcessor:
             project_id, description, num_cases, signature_id, prompt_id
         )
 
-    async def _generate_from_data(self, project_id: int, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _generate_from_data(self, project_id: int, payload: dict[str, Any]) -> list[dict[str, Any]]:
         """Generate test cases from existing data."""
         source_data = payload.get("source_data", [])
         signature_id = payload.get("signature_id")
@@ -230,7 +235,7 @@ class JobProcessor:
     ####################################################################################################################
     # Evaluation Jobs
 
-    async def process_evaluation_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
+    async def process_evaluation_job(self, payload: dict[str, Any], entity_id: int) -> dict[str, Any]:
         """
         Process an evaluation job.
 
@@ -356,7 +361,7 @@ class JobProcessor:
             raise
 
     async def _execute_test_case(self, prompt_id: int, test_case_id: int,
-                                 model_config: Dict[str, Any]) -> Dict[str, Any]:
+                                 model_config: dict[str, Any]) -> dict[str, Any]:
         """
         Execute a single test case (simulation).
 
@@ -417,7 +422,7 @@ class JobProcessor:
 
         return test_run
 
-    def _calculate_aggregate_metrics(self, test_runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _calculate_aggregate_metrics(self, test_runs: list[dict[str, Any]]) -> dict[str, Any]:
         """Calculate aggregate metrics from test runs."""
         if not test_runs:
             return {}
@@ -440,7 +445,7 @@ class JobProcessor:
     ####################################################################################################################
     # Optimization Jobs
 
-    async def process_optimization_job(self, payload: Dict[str, Any], entity_id: int) -> Dict[str, Any]:
+    async def process_optimization_job(self, payload: dict[str, Any], entity_id: int) -> dict[str, Any]:
         """
         Process an optimization job.
 
@@ -491,7 +496,7 @@ class JobProcessor:
 
             best_prompt_id = initial_prompt_id
             best_metric = 0.5
-            iterations: List[Dict[str, Any]] = []
+            iterations: list[dict[str, Any]] = []
             total_tokens = 0
             total_cost = 0.0
             iteration_limit = max(1, min(max_iterations, 5))
@@ -619,7 +624,7 @@ class JobProcessor:
             raise
 
     async def _run_optimization_iteration(self, optimization_id: int,
-                                         prompt_id: int, iteration: int) -> Dict[str, Any]:
+                                         prompt_id: int, iteration: int) -> dict[str, Any]:
         """
         Run a single optimization iteration (simulation).
 

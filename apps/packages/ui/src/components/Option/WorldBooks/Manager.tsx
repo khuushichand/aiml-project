@@ -643,7 +643,7 @@ export const WorldBooksManager: React.FC = () => {
         width={screens.md ? "60vw" : "100%"}
         open={!!openEntries}
         onClose={handleCloseEntries}
-        destroyOnClose
+        destroyOnHidden
       >
         {openEntries && (
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
@@ -845,11 +845,16 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
 
   const openEditModal = (entry: any) => {
     setEditingEntry(entry)
+    const appendableValue =
+      typeof entry?.appendable === "boolean"
+        ? entry.appendable
+        : Boolean(entry?.metadata?.appendable)
     editForm.setFieldsValue({
       keywords: (entry.keywords || []).join(', '),
       content: entry.content,
       priority: entry.priority,
       enabled: entry.enabled,
+      appendable: appendableValue,
       case_sensitive: entry.case_sensitive,
       regex_match: entry.regex_match,
       whole_word_match: entry.whole_word_match
@@ -1025,6 +1030,9 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
             <InputNumber style={{ width: '100%' }} min={0} max={100} />
           </Form.Item>
           <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch /></Form.Item>
+          <Form.Item name="appendable" label="Appendable" valuePropName="checked">
+            <Switch />
+          </Form.Item>
           <details className="mb-4">
             <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
             <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>
@@ -1077,6 +1085,9 @@ const EntryManager: React.FC<{ worldBookId: number; form: any }> = ({ worldBookI
               <InputNumber style={{ width: '100%' }} min={0} max={100} placeholder="Default: 50" />
             </Form.Item>
             <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch defaultChecked /></Form.Item>
+            <Form.Item name="appendable" label="Appendable" valuePropName="checked">
+              <Switch />
+            </Form.Item>
           <details className="mb-4">
             <summary className="cursor-pointer text-sm text-text-muted hover:text-text">Matching Options</summary>
             <p className="text-xs text-text-muted mt-1 mb-2">These options control how keywords are matched in chat messages.</p>

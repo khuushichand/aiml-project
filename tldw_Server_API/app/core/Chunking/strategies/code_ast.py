@@ -11,16 +11,16 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 @dataclass
 class _Block:
     kind: str  # 'imports' | 'class' | 'function'
-    name: Optional[str]
+    name: str | None
     start_line: int  # 0-based inclusive
     end_line: int    # 0-based exclusive
 
@@ -31,10 +31,10 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
     def __init__(self, language: str = 'python'):
         super().__init__(language='python')
 
-    def _line_starts(self, text: str) -> List[int]:
-        starts: List[int] = []
+    def _line_starts(self, text: str) -> list[int]:
+        starts: list[int] = []
         pos = 0
-        for idx, ln in enumerate(text.splitlines(keepends=True)):
+        for _idx, ln in enumerate(text.splitlines(keepends=True)):
             starts.append(pos)
             pos += len(ln)
         # Ensure at least one start
@@ -42,24 +42,18 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             starts.append(0)
         return starts
 
-    def _span_chars(self, line_starts: List[int], total_chars: int, s_line: int, e_line: int) -> Tuple[int, int]:
+    def _span_chars(self, line_starts: list[int], total_chars: int, s_line: int, e_line: int) -> tuple[int, int]:
         if s_line < 0:
             s_line = 0
         if e_line < 0:
             e_line = 0
-        if s_line >= len(line_starts):
-            s_char = total_chars
-        else:
-            s_char = line_starts[s_line]
-        if e_line >= len(line_starts):
-            e_char = total_chars
-        else:
-            e_char = line_starts[e_line]
+        s_char = total_chars if s_line >= len(line_starts) else line_starts[s_line]
+        e_char = total_chars if e_line >= len(line_starts) else line_starts[e_line]
         if e_char < s_char:
             e_char = s_char
         return s_char, e_char
 
-    def _extract_import_block(self, lines: List[str]) -> Tuple[int, int]:
+    def _extract_import_block(self, lines: list[str]) -> tuple[int, int]:
         # From file start until the first non-import/non-comment line (keep leading comments/docstring region contiguous)
         i = 0
         end = 0
@@ -79,11 +73,11 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             break
         return (0, end)
 
-    def _collect_blocks(self, text: str) -> List[_Block]:
-        blocks: List[_Block] = []
+    def _collect_blocks(self, text: str) -> list[_Block]:
+        blocks: list[_Block] = []
         try:
             tree = ast.parse(text)
-        except Exception as e:
+        except (SyntaxError, TypeError, ValueError) as e:
             logger.warning(f"AST parse failed; falling back to single block: {e}")
             return [_Block('module', None, 0, len(text.splitlines()))]
 
@@ -104,7 +98,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                     s = max(0, int(getattr(node, 'lineno', 1)) - 1)
                     e = int(getattr(node, 'end_lineno', s + 1))
                     blocks.append(_Block('class', node.name, s, e))
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 continue
 
         if not blocks:
@@ -113,7 +107,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
 
         # Ensure non-overlapping and sorted
         blocks.sort(key=lambda b: (b.start_line, b.end_line))
-        dedup: List[_Block] = []
+        dedup: list[_Block] = []
         for b in blocks:
             if not dedup:
                 dedup.append(b)
@@ -124,8 +118,8 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 dedup.append(_Block(b.kind, b.name, s, e))
         return dedup
 
-    def _pack_blocks(self, blocks: List[_Block], lines_ke: List[str], max_chars: int, overlap_chars: int) -> List[str]:
-        chunks: List[str] = []
+    def _pack_blocks(self, blocks: list[_Block], lines_ke: list[str], max_chars: int, overlap_chars: int) -> list[str]:
+        chunks: list[str] = []
         buf = ''
         current_len = 0
         line_starts = []
@@ -152,10 +146,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                     while t:
                         part = t[:max_chars]
                         chunks.append(part)
-                        if len(t) <= max_chars:
-                            t = ''
-                        else:
-                            t = t[max_chars:]
+                        t = '' if len(t) <= max_chars else t[max_chars:]
                     buf = ''
                     current_len = 0
                 else:
@@ -164,18 +155,20 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
         if buf:
             chunks.append(buf)
         if overlap_chars > 0 and len(chunks) > 1:
-            out: List[str] = []
+            out: list[str] = []
             prev = ''
             for i, ch in enumerate(chunks):
                 if i == 0:
-                    out.append(ch); prev = ch; continue
+                    out.append(ch)
+                    prev = ch
+                    continue
                 tail = prev[-overlap_chars:] if prev else ''
                 out.append(f"{tail}{ch}" if tail else ch)
                 prev = ch
             return out
         return chunks
 
-    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> List[str]:
+    def chunk(self, text: str, max_size: int, overlap: int = 0, **options) -> list[str]:
         if not self.validate_parameters(text, max_size, overlap):
             return []
         try:
@@ -184,11 +177,11 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             chunks = self._pack_blocks(blocks, lines_ke, max_chars=max_size, overlap_chars=overlap)
             logger.info(f"PythonASTCodeChunkingStrategy produced {len(chunks)} chunks")
             return chunks
-        except Exception as e:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"AST code chunking failed, returning whole text: {e}")
             return [text]
 
-    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> List[ChunkResult]:
+    def chunk_with_metadata(self, text: str, max_size: int, overlap: int = 0, **options) -> list[ChunkResult]:
         if not self.validate_parameters(text, max_size, overlap):
             return []
         lines_ke = text.splitlines(keepends=True)
@@ -199,12 +192,12 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             line_starts.append(pos)
             pos += len(ln)
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
         try:
             blocks = self._collect_blocks(text)
             buf_s = None
             buf_e = None
-            buf_blocks: List[_Block] = []
+            buf_blocks: list[_Block] = []
 
             def flush():
                 nonlocal buf_s, buf_e, buf_blocks
@@ -213,7 +206,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                 end_char = buf_e
                 try:
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char)
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     end_char = buf_e
                 ch_text = text[buf_s:end_char]
                 md = ChunkMetadata(
@@ -249,7 +242,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                             end = min(e_char, start + max_size)
                             try:
                                 end_expanded = self._expand_end_to_grapheme_boundary(text, end)
-                            except Exception:
+                            except (AttributeError, RuntimeError, TypeError, ValueError):
                                 end_expanded = end
                             piece = text[start:end_expanded]
                             md = ChunkMetadata(
@@ -282,7 +275,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                                 end = min(e_char, start + max_size)
                                 try:
                                     end_expanded = self._expand_end_to_grapheme_boundary(text, end)
-                                except Exception:
+                                except (AttributeError, RuntimeError, TypeError, ValueError):
                                     end_expanded = end
                                 piece = text[start:end_expanded]
                                 md = ChunkMetadata(
@@ -311,7 +304,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
                         prev_end = int(prev.metadata.end_char)
                         cur_start = int(cur.metadata.start_char)
                         cur_end = int(cur.metadata.end_char)
-                    except Exception:
+                    except (AttributeError, TypeError, ValueError):
                         prev = cur
                         continue
                     prev_len = max(0, prev_end - prev_start)
@@ -331,7 +324,7 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
 
             logger.info(f"PythonASTCodeChunkingStrategy produced {len(results)} chunks with metadata")
             return results
-        except Exception as e:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as e:
             logger.warning(f"AST code chunking with metadata failed: {e}")
             # fallback: single chunk
             md = ChunkMetadata(

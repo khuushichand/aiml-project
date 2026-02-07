@@ -17,21 +17,22 @@ API layer. Minutes/day ledger durability is left to a separate DAL; this
 memory governor implements only in-memory counting for the 'minutes' category.
 """
 
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable
 
 from loguru import logger
 
-from .metrics_rg import ensure_rg_metrics_registered, _labels, rg_metrics_entity_label_enabled
-from .tenant import hash_entity
 from .daily_caps import check_daily_cap
+from .metrics_rg import _labels, ensure_rg_metrics_registered, rg_metrics_entity_label_enabled
+from .tenant import hash_entity
 
 try:
     # Metrics are optional during early startup
     from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-except Exception:  # pragma: no cover - metrics optional
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - metrics optional
     get_metrics_registry = None  # type: ignore
 
 
@@ -41,28 +42,28 @@ TimeSource = Callable[[], float]
 @dataclass(frozen=True)
 class RGRequest:
     entity: str  # format: "scope:value" (e.g., "user:123")
-    categories: Dict[str, Dict[str, int]]  # e.g., {"requests": {"units": 1}}
-    tags: Dict[str, str] = field(default_factory=dict)  # endpoint, service, policy_id, etc.
+    categories: dict[str, dict[str, int]]  # e.g., {"requests": {"units": 1}}
+    tags: dict[str, str] = field(default_factory=dict)  # endpoint, service, policy_id, etc.
 
 
 @dataclass
 class RGDecision:
     allowed: bool
-    retry_after: Optional[int]
-    details: Dict[str, Any]
+    retry_after: int | None
+    details: dict[str, Any]
 
 
 class ResourceGovernor:
     async def check(self, req: RGRequest) -> RGDecision:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def reserve(self, req: RGRequest, op_id: Optional[str] = None) -> Tuple[RGDecision, Optional[str]]:  # pragma: no cover - interface
+    async def reserve(self, req: RGRequest, op_id: str | None = None) -> tuple[RGDecision, str | None]:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def commit(self, handle_id: str, actuals: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:  # pragma: no cover - interface
+    async def commit(self, handle_id: str, actuals: dict[str, int] | None = None, op_id: str | None = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def refund(self, handle_id: str, deltas: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:  # pragma: no cover - interface
+    async def refund(self, handle_id: str, deltas: dict[str, int] | None = None, op_id: str | None = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
     async def renew(self, handle_id: str, ttl_s: int) -> None:  # pragma: no cover - interface
@@ -71,16 +72,16 @@ class ResourceGovernor:
     async def release(self, handle_id: str) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def peek(self, entity: str, categories: list[str]) -> Dict[str, Any]:  # pragma: no cover - interface
+    async def peek(self, entity: str, categories: list[str]) -> dict[str, Any]:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def query(self, entity: str, category: str) -> Dict[str, Any]:  # pragma: no cover - interface
+    async def query(self, entity: str, category: str) -> dict[str, Any]:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def reset(self, entity: str, category: Optional[str] = None) -> None:  # pragma: no cover - interface
+    async def reset(self, entity: str, category: str | None = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def capabilities(self) -> Dict[str, Any]:  # pragma: no cover - interface
+    async def capabilities(self) -> dict[str, Any]:  # pragma: no cover - interface
         """Return backend capability diagnostics for debugging.
 
         Implementations should include at least:
@@ -147,7 +148,7 @@ class _ReservationHandle:
     handle_id: str
     entity: str
     policy_id: str
-    categories: Dict[str, int]  # reserved units by category
+    categories: dict[str, int]  # reserved units by category
     created_at: float
     expires_at: float
     state: str = "reserved"  # reserved|finalized
@@ -171,8 +172,8 @@ class MemoryResourceGovernor(ResourceGovernor):
     def __init__(
         self,
         *,
-        policies: Optional[Dict[str, Dict[str, Any]]] = None,
-        policy_loader: Optional[Any] = None,
+        policies: dict[str, dict[str, Any]] | None = None,
+        policy_loader: Any | None = None,
         time_source: TimeSource = time.monotonic,
         backend_label: str = "memory",
         default_handle_ttl: int = 120,
@@ -185,29 +186,29 @@ class MemoryResourceGovernor(ResourceGovernor):
         self._op_ttl = max(60, int(default_handle_ttl))
 
         # Keyed by (policy_id, category, scope, entity_value)
-        self._buckets: Dict[Tuple[str, str, str, str], _Bucket] = {}
+        self._buckets: dict[tuple[str, str, str, str], _Bucket] = {}
         # Concurrency: (policy_id, category, scope, entity_value) → {lease_id: _Lease}
-        self._leases: Dict[Tuple[str, str, str, str], Dict[str, _Lease]] = {}
+        self._leases: dict[tuple[str, str, str, str], dict[str, _Lease]] = {}
         # Handles and idempotency
-        self._handles: Dict[str, _ReservationHandle] = {}
-        self._ops: Dict[str, Dict[str, Any]] = {}  # op_id → {type, handle_id}
+        self._handles: dict[str, _ReservationHandle] = {}
+        self._ops: dict[str, dict[str, Any]] = {}  # op_id → {type, handle_id}
 
         # Metrics
         ensure_rg_metrics_registered()
 
     # --- Policy helpers ---
-    def _get_policy(self, policy_id: str) -> Dict[str, Any]:
+    def _get_policy(self, policy_id: str) -> dict[str, Any]:
         if self._policy_loader is not None:
             try:
                 pol = self._policy_loader.get_policy(policy_id)  # type: ignore[attr-defined]
                 if pol:
                     return pol
-            except Exception as e:
+            except (AttributeError, RuntimeError, TypeError, ValueError) as e:
                 logger.debug(f"Policy loader failed; falling back to static policies: {e}")
         return self._policies.get(policy_id, {})
 
     @staticmethod
-    def _parse_entity(entity: str) -> Tuple[str, str]:
+    def _parse_entity(entity: str) -> tuple[str, str]:
         # entity of the form "scope:value" → (scope, value)
         if ":" in entity:
             s, v = entity.split(":", 1)
@@ -215,7 +216,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         return "entity", entity
 
     # --- Buckets ---
-    def _bucket_key(self, policy_id: str, category: str, scope: str, entity_value: str) -> Tuple[str, str, str, str]:
+    def _bucket_key(self, policy_id: str, category: str, scope: str, entity_value: str) -> tuple[str, str, str, str]:
         return (policy_id, category, scope, entity_value)
 
     def _get_bucket(self, policy_id: str, category: str, scope: str, entity_value: str, *, capacity: float, refill_per_sec: float) -> _Bucket:
@@ -227,7 +228,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         return b
 
     # --- Leases ---
-    def _get_lease_map(self, policy_id: str, category: str, scope: str, entity_value: str) -> Dict[str, _Lease]:
+    def _get_lease_map(self, policy_id: str, category: str, scope: str, entity_value: str) -> dict[str, _Lease]:
         k = self._bucket_key(policy_id, category, scope, entity_value)
         m = self._leases.get(k)
         if m is None:
@@ -235,7 +236,7 @@ class MemoryResourceGovernor(ResourceGovernor):
             self._leases[k] = m
         return m
 
-    def _purge_expired_leases(self, m: Dict[str, _Lease], now: float) -> None:
+    def _purge_expired_leases(self, m: dict[str, _Lease], now: float) -> None:
         expired = [lid for lid, l in m.items() if l.expires_at <= now]
         for lid in expired:
             del m[lid]
@@ -243,10 +244,8 @@ class MemoryResourceGovernor(ResourceGovernor):
     def _purge_expired_handles(self, now: float) -> None:
         expired = [hid for hid, h in self._handles.items() if h.expires_at <= now]
         for hid in expired:
-            try:
+            with contextlib.suppress(KeyError):
                 del self._handles[hid]
-            except KeyError:
-                pass
 
     def _purge_expired_ops(self, now: float) -> None:
         ttl = self._op_ttl
@@ -258,19 +257,17 @@ class MemoryResourceGovernor(ResourceGovernor):
                     continue
                 if (now - float(created_at)) > float(ttl):
                     expired.append(op_id)
-            except Exception:
+            except (OverflowError, TypeError, ValueError):
                 continue
         for op_id in expired:
-            try:
+            with contextlib.suppress(KeyError):
                 del self._ops[op_id]
-            except KeyError:
-                pass
 
     # --- Core evaluation ---
-    def _category_limits(self, policy: Dict[str, Any], category: str) -> Dict[str, Any]:
+    def _category_limits(self, policy: dict[str, Any], category: str) -> dict[str, Any]:
         return dict(policy.get(category, {}))
 
-    def _scopes(self, policy: Dict[str, Any]) -> list[str]:
+    def _scopes(self, policy: dict[str, Any]) -> list[str]:
         s = policy.get("scopes")
         if isinstance(s, list) and s:
             return [str(x) for x in s]
@@ -280,13 +277,13 @@ class MemoryResourceGovernor(ResourceGovernor):
         self,
         *,
         policy_id: str,
-        policy: Dict[str, Any],
+        policy: dict[str, Any],
         category: str,
         entity_scope: str,
         entity_value: str,
         units: int,
         now: float,
-    ) -> Tuple[bool, int, Dict[str, Any]]:
+    ) -> tuple[bool, int, dict[str, Any]]:
         cfg = self._category_limits(policy, category)
         # Interpret RPM / per_min and burst
         if category == "requests":
@@ -318,7 +315,7 @@ class MemoryResourceGovernor(ResourceGovernor):
 
         # Evaluate strictest across scopes: global + entity scope
         scopes = self._scopes(policy)
-        scope_keys: list[Tuple[str, str]] = []
+        scope_keys: list[tuple[str, str]] = []
         if "global" in scopes:
             scope_keys.append(("global", "*"))
         if entity_scope in scopes or "entity" in scopes:
@@ -351,13 +348,13 @@ class MemoryResourceGovernor(ResourceGovernor):
         self,
         *,
         policy_id: str,
-        policy: Dict[str, Any],
+        policy: dict[str, Any],
         category: str,
         entity_scope: str,
         entity_value: str,
         units: int,
         now: float,
-    ) -> Tuple[bool, int, Dict[str, Any]]:
+    ) -> tuple[bool, int, dict[str, Any]]:
         cfg = self._category_limits(policy, category)
         limit = int(cfg.get("max_concurrent") or 0)
         ttl_sec = int(cfg.get("ttl_sec") or 60)
@@ -365,7 +362,7 @@ class MemoryResourceGovernor(ResourceGovernor):
             return False, 1, {"limit": 0, "remaining": 0}
 
         scopes = self._scopes(policy)
-        scope_keys: list[Tuple[str, str]] = []
+        scope_keys: list[tuple[str, str]] = []
         if "global" in scopes:
             scope_keys.append(("global", "*"))
         if entity_scope in scopes or "entity" in scopes:
@@ -396,7 +393,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         backend = self._backend_label
 
         overall_allowed = True
-        per_category: Dict[str, Any] = {}
+        per_category: dict[str, Any] = {}
         retry_after_overall = 0
 
         for category, cfg in req.categories.items():
@@ -429,7 +426,7 @@ class MemoryResourceGovernor(ResourceGovernor):
             try:
                 cat_cfg = self._category_limits(pol, category)
                 daily_cap = int(cat_cfg.get("daily_cap") or 0)
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 daily_cap = 0
             if daily_cap > 0:
                 daily_allowed, daily_ra, daily_details = await check_daily_cap(
@@ -442,25 +439,21 @@ class MemoryResourceGovernor(ResourceGovernor):
                 if not daily_allowed:
                     allowed = False
                 retry_after = max(int(retry_after or 0), int(daily_ra or 0))
-                try:
+                with contextlib.suppress(AttributeError, TypeError, ValueError):
                     details.update(daily_details or {})
-                except Exception:
-                    pass
                 # Provide limit/remaining for daily-only categories
                 try:
                     if not int(details.get("limit") or 0):
                         details["limit"] = int(daily_cap)
-                except Exception:
+                except (TypeError, ValueError):
                     details["limit"] = int(daily_cap)
                 try:
                     if details.get("remaining") is None:
                         details["remaining"] = int((daily_details or {}).get("daily_remaining") or 0)
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     pass
-                try:
+                with contextlib.suppress(TypeError, ValueError):
                     details["retry_after"] = int(retry_after or 0)
-                except Exception:
-                    pass
 
             per_category[category] = {"allowed": bool(allowed), **details}
             overall_allowed = overall_allowed and allowed
@@ -494,12 +487,12 @@ class MemoryResourceGovernor(ResourceGovernor):
                                 1,
                                 {"category": category, "scope": entity_scope, "reason": "insufficient_capacity", "policy_id": policy_id, "entity": ent_h},
                             )
-                except Exception:
+                except (AttributeError, RuntimeError, TypeError, ValueError):
                     pass
 
         return RGDecision(allowed=overall_allowed, retry_after=(retry_after_overall or None), details={"policy_id": policy_id, "categories": per_category})
 
-    async def reserve(self, req: RGRequest, op_id: Optional[str] = None) -> Tuple[RGDecision, Optional[str]]:
+    async def reserve(self, req: RGRequest, op_id: str | None = None) -> tuple[RGDecision, str | None]:
         now_purge = self._time()
         self._purge_expired_handles(now_purge)
         self._purge_expired_ops(now_purge)
@@ -594,7 +587,7 @@ class MemoryResourceGovernor(ResourceGovernor):
             self._ops[op_id] = {"type": "reserve", "decision": dec, "handle_id": handle_id, "created_at": now}
         return dec, handle_id
 
-    async def commit(self, handle_id: str, actuals: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+    async def commit(self, handle_id: str, actuals: dict[str, int] | None = None, op_id: str | None = None) -> None:
         now_purge = self._time()
         self._purge_expired_handles(now_purge)
         self._purge_expired_ops(now_purge)
@@ -652,7 +645,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                                     1,
                                     {"category": category, "scope": entity_scope, "reason": "commit_diff", "policy_id": h.policy_id, "entity": ent_h},
                                 )
-                        except Exception:
+                        except (AttributeError, RuntimeError, TypeError, ValueError):
                             pass
                 # concurrency: nothing to refund here
 
@@ -681,7 +674,7 @@ class MemoryResourceGovernor(ResourceGovernor):
         if op_id:
             self._ops[op_id] = {"type": "commit", "handle_id": handle_id, "created_at": now}
 
-    async def refund(self, handle_id: str, deltas: Optional[Dict[str, int]] = None, op_id: Optional[str] = None) -> None:
+    async def refund(self, handle_id: str, deltas: dict[str, int] | None = None, op_id: str | None = None) -> None:
         now_purge = self._time()
         self._purge_expired_handles(now_purge)
         self._purge_expired_ops(now_purge)
@@ -738,7 +731,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                                 1,
                                 {"category": category, "scope": entity_scope, "reason": "explicit_refund", "policy_id": h.policy_id, "entity": ent_h},
                             )
-                    except Exception:
+                    except (AttributeError, RuntimeError, TypeError, ValueError):
                         pass
 
         if op_id:
@@ -768,9 +761,9 @@ class MemoryResourceGovernor(ResourceGovernor):
         # Alias to commit with zero actuals for all categories
         await self.commit(handle_id, actuals={})
 
-    async def peek(self, entity: str, categories: list[str]) -> Dict[str, Any]:
+    async def peek(self, entity: str, categories: list[str]) -> dict[str, Any]:
         now = self._time()
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         # Peeks without policy context assume a synthetic policy_id 'default'
         policy_id = "default"
         entity_scope, entity_value = self._parse_entity(entity)
@@ -784,11 +777,11 @@ class MemoryResourceGovernor(ResourceGovernor):
             result[category] = {"remaining": (min(remainings) if remainings else None), "reset": 0}
         return result
 
-    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str) -> Dict[str, Any]:
+    async def peek_with_policy(self, entity: str, categories: list[str], policy_id: str) -> dict[str, Any]:
         now = self._time()
         entity_scope, entity_value = self._parse_entity(entity)
         pol = self._get_policy(policy_id)
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for category in categories:
             if category in ("requests", "tokens"):
                 cfg = self._category_limits(pol, category)
@@ -814,7 +807,7 @@ class MemoryResourceGovernor(ResourceGovernor):
                 out[category] = {"remaining": None, "reset": 0}
         return out
 
-    async def query(self, entity: str, category: str) -> Dict[str, Any]:
+    async def query(self, entity: str, category: str) -> dict[str, Any]:
         now = self._time()
         policy_id = "default"
         entity_scope, entity_value = self._parse_entity(entity)
@@ -825,19 +818,17 @@ class MemoryResourceGovernor(ResourceGovernor):
             "entity": {"available": int(b_entity.available(now))} if b_entity else None,
         }
 
-    async def reset(self, entity: str, category: Optional[str] = None) -> None:
+    async def reset(self, entity: str, category: str | None = None) -> None:
         entity_scope, entity_value = self._parse_entity(entity)
         keys = list(self._buckets.keys())
         for (pol, cat, sc, ev) in keys:
             if category and cat != category:
                 continue
             if sc == entity_scope and ev == entity_value:
-                try:
+                with contextlib.suppress(KeyError):
                     del self._buckets[(pol, cat, sc, ev)]
-                except KeyError:
-                    pass
 
-    async def capabilities(self) -> Dict[str, Any]:
+    async def capabilities(self) -> dict[str, Any]:
         return {
             "backend": self._backend_label,
             "real_redis": False,

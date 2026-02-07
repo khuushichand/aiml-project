@@ -1,30 +1,62 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
-import os
-import json
 import asyncio
+import json
+import os
 import threading
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    openai_delta_chunk,
-    sse_data,
-    sse_done,
-    normalize_provider_line,
-    is_done_line,
-    finalize_stream,
-)
 from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_data,
+    sse_done,
+)
+
+from .base import ChatProvider
+
+_ANTHROPIC_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    EOFError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
+try:
+    import httpx as _httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _httpx = None  # type: ignore
+else:
+    _ANTHROPIC_NONCRITICAL_EXCEPTIONS = _ANTHROPIC_NONCRITICAL_EXCEPTIONS + (
+        _httpx.DecodingError,
+        _httpx.HTTPError,
+        _httpx.ProtocolError,
+        _httpx.TimeoutException,
+        _httpx.TransportError,
+    )
 
 
 def _prefer_httpx_in_tests() -> bool:
     return bool(os.getenv("PYTEST_CURRENT_TEST"))
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
-    fetch as _hc_fetch,
-    RetryPolicy as _HC_RetryPolicy,
 )
 
 http_client_factory = _hc_create_client
@@ -33,7 +65,7 @@ http_client_factory = _hc_create_client
 class AnthropicAdapter(ChatProvider):
     name = "anthropic"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -56,7 +88,7 @@ class AnthropicAdapter(ChatProvider):
         import os
         return os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
 
-    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+    def _resolve_base_url(self, request: dict[str, Any]) -> str:
         """Resolve API base URL with precedence: app_config -> env -> default."""
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
@@ -67,11 +99,11 @@ class AnthropicAdapter(ChatProvider):
             base = anth_cfg.get("api_base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             pass
         return self._anthropic_base_url()
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         """Resolve request timeout seconds from request/app_config, else fallback/capability default."""
         try:
             cfg = (request or {}).get("app_config") or {}
@@ -81,19 +113,19 @@ class AnthropicAdapter(ChatProvider):
                 # Accept int/float/str that can be cast to float
                 try:
                     return float(t)
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     pass
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             pass
         if fallback is not None:
             return float(fallback)
         # Use adapter capability default
         try:
             return float(self.capabilities().get("default_timeout_seconds", 60))
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             return 60.0
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         return {
             "Content-Type": "application/json",
             "x-api-key": api_key or "",
@@ -101,14 +133,14 @@ class AnthropicAdapter(ChatProvider):
         }
 
     @staticmethod
-    def _to_anthropic_messages(messages: List[Dict[str, Any]], system: Optional[str]) -> Dict[str, Any]:
+    def _to_anthropic_messages(messages: list[dict[str, Any]], system: str | None) -> dict[str, Any]:
         # Anthropic expects a list of {role, content}; include system separately
         out = {"messages": messages}
         if system:
             out["system"] = system
         return out
 
-    def _parse_data_url_for_multimodal(self, url: str) -> Optional[tuple[str, str]]:
+    def _parse_data_url_for_multimodal(self, url: str) -> tuple[str, str] | None:
         try:
             if not isinstance(url, str) or not url.startswith("data:"):
                 return None
@@ -118,10 +150,10 @@ class AnthropicAdapter(ChatProvider):
             if ";base64" in mime:
                 mime = mime.replace(";base64", "").strip()
             return mime, b64
-        except Exception:
+        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
             return None
 
-    def _anthropic_image_source_from_part(self, image_url: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _anthropic_image_source_from_part(self, image_url: dict[str, Any]) -> dict[str, Any] | None:
         url_str = (image_url or {}).get("url")
         if not url_str:
             return None
@@ -133,12 +165,12 @@ class AnthropicAdapter(ChatProvider):
             return {"type": "url", "url": url_str}
         return None
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
         raw_messages = request.get("messages") or []
         system_message = request.get("system_message")
 
         # Convert OpenAI-style messages to Anthropic messages format
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         tool_result_counter = 0
         tool_use_counter = 0
 
@@ -148,7 +180,7 @@ class AnthropicAdapter(ChatProvider):
             if isinstance(value, str):
                 return value
             if isinstance(value, list):
-                text_parts: List[str] = []
+                text_parts: list[str] = []
                 for item in value:
                     if isinstance(item, dict) and item.get("type") == "text":
                         text_parts.append(str(item.get("text", "")))
@@ -158,7 +190,7 @@ class AnthropicAdapter(ChatProvider):
                     return "".join(text_parts)
             try:
                 return json.dumps(value, ensure_ascii=True)
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 return str(value)
 
         for msg in raw_messages:
@@ -170,7 +202,7 @@ class AnthropicAdapter(ChatProvider):
                 if not tool_use_id:
                     tool_use_id = f"tool_result_{tool_result_counter}"
                     tool_result_counter += 1
-                block: Dict[str, Any] = {
+                block: dict[str, Any] = {
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
                     "content": _tool_result_content(msg.get("content")),
@@ -182,7 +214,7 @@ class AnthropicAdapter(ChatProvider):
             if role not in ("user", "assistant"):
                 continue
             content = msg.get("content")
-            parts: List[Dict[str, Any]] = []
+            parts: list[dict[str, Any]] = []
             if isinstance(content, str):
                 parts.append({"type": "text", "text": content})
             elif isinstance(content, list):
@@ -211,7 +243,7 @@ class AnthropicAdapter(ChatProvider):
                         if isinstance(args, str):
                             try:
                                 input_obj = json.loads(args)
-                            except Exception:
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                 input_obj = args
                         elif args is not None:
                             input_obj = args
@@ -247,7 +279,7 @@ class AnthropicAdapter(ChatProvider):
             # Honor explicit none by omitting tools entirely
             tools = None
         if isinstance(tools, list) and tools:
-            converted: List[Dict[str, Any]] = []
+            converted: list[dict[str, Any]] = []
             for t in tools:
                 try:
                     if isinstance(t, dict) and (t.get("type") == "function") and isinstance(t.get("function"), dict):
@@ -269,7 +301,7 @@ class AnthropicAdapter(ChatProvider):
                             "description": desc,
                             "input_schema": schema,
                         })
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     continue
             # Only include tools if at least one valid entry exists.
             # Valid means function name is a non-empty string; malformed entries are skipped.
@@ -288,18 +320,18 @@ class AnthropicAdapter(ChatProvider):
                     name = tool_choice["function"].get("name")
                     if name:
                         payload["tool_choice"] = {"type": "tool", "name": str(name)}
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 pass
         return payload
 
     @staticmethod
-    def _normalize_to_openai_shape(data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_to_openai_shape(data: dict[str, Any]) -> dict[str, Any]:
         # Best-effort shaping of Anthropic "message" into OpenAI-like chat completion
         if not (isinstance(data, dict) and data.get("type") == "message"):
             return data
         parts = data.get("content") or []
-        text_parts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
         if isinstance(parts, list):
             for p in parts:
                 if not isinstance(p, dict):
@@ -311,14 +343,14 @@ class AnthropicAdapter(ChatProvider):
                     name = p.get("name") or ""
                     try:
                         args = __import__("json").dumps(p.get("input", {}))
-                    except Exception:
+                    except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                         args = str(p.get("input"))
                     tool_calls.append({
                         "id": tool_id,
                         "type": "function",
                         "function": {"name": name, "arguments": args},
                     })
-        message_payload: Dict[str, Any] = {"role": "assistant", "content": None}
+        message_payload: dict[str, Any] = {"role": "assistant", "content": None}
         content_text = "\n".join([t for t in text_parts if t]).strip()
         if content_text:
             message_payload["content"] = content_text
@@ -347,7 +379,7 @@ class AnthropicAdapter(ChatProvider):
         shaped["provider_response"] = data
         return shaped
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
@@ -364,8 +396,8 @@ class AnthropicAdapter(ChatProvider):
                     resp.raise_for_status()
                     data = resp.json()
                     return self._normalize_to_openai_shape(data)
-            except Exception as e:
-                raise self.normalize_error(e)
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
+                raise self.normalize_error(e) from e
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
@@ -374,9 +406,9 @@ class AnthropicAdapter(ChatProvider):
         self,
         tool_index: int,
         tool_id: str,
-        tool_name: Optional[str],
+        tool_name: str | None,
         arguments: str,
-        provider_response: Optional[Dict[str, Any]] = None,
+        provider_response: dict[str, Any] | None = None,
     ) -> str:
         payload = {
             "choices": [{
@@ -395,7 +427,7 @@ class AnthropicAdapter(ChatProvider):
             payload["provider_response"] = provider_response
         return sse_data(payload)
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
         if _prefer_httpx_in_tests() or os.getenv("PYTEST_CURRENT_TEST") or self._use_native_http():
             api_key = request.get("api_key")
@@ -410,18 +442,22 @@ class AnthropicAdapter(ChatProvider):
                 with http_client_factory(timeout=resolved_timeout) as client:
                     with client.stream("POST", url, headers=headers, json=payload) as resp:
                         resp.raise_for_status()
-                        tool_states: Dict[int, Dict[str, Any]] = {}
+                        tool_states: dict[int, dict[str, Any]] = {}
                         tool_counter = 0
                         done_sent = False
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
-                            if is_done_line(raw):
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
+                                line = str(raw)
+                            if is_done_line(line):
                                 if not done_sent:
                                     done_sent = True
                                     yield sse_done()
                                 continue
-                            ls = raw.strip()
+                            ls = line.strip()
                             if not ls or not ls.startswith("data:"):
                                 # Drop provider control lines/comments by default
                                 normalized = normalize_provider_line(ls)
@@ -433,7 +469,7 @@ class AnthropicAdapter(ChatProvider):
                                 continue
                             try:
                                 ev = __import__("json").loads(event_data)
-                            except Exception:
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                 continue
                             ev_type = ev.get("type")
                             if ev_type == "content_block_start":
@@ -447,7 +483,7 @@ class AnthropicAdapter(ChatProvider):
                                     if initial_input is not None:
                                         try:
                                             buf = __import__("json").dumps(initial_input)
-                                        except Exception:
+                                        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                             buf = str(initial_input)
                                     tool_states[idx] = {"id": tool_id, "name": tool_name, "buffer": buf, "position": tool_counter}
                                     tool_counter += 1
@@ -487,7 +523,7 @@ class AnthropicAdapter(ChatProvider):
                                     if "input" in delta and delta["input"] is not None:
                                         try:
                                             st["buffer"] = __import__("json").dumps(delta["input"])
-                                        except Exception:
+                                        except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                                             st["buffer"] = str(delta["input"])
                                     yield self._tool_delta_chunk(
                                         st["position"],
@@ -505,19 +541,18 @@ class AnthropicAdapter(ChatProvider):
                                         "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
                                         "provider_response": ev,
                                     })
-                        for tail in finalize_stream(response=resp, done_already=done_sent):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=done_sent)
                 return
-            except Exception as e:
-                raise self.normalize_error(e)
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
+                raise self.normalize_error(e) from e
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         gen = self.stream(request, timeout=timeout)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -536,7 +571,7 @@ class AnthropicAdapter(ChatProvider):
                 try:
                     if hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                     pass
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
@@ -556,25 +591,25 @@ class AnthropicAdapter(ChatProvider):
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None

@@ -1,30 +1,48 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List, Union
-import os
 import asyncio
+import os
 import threading
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from loguru import logger
+try:
+    import httpx
+except ImportError:  # pragma: no cover - optional for static analysis
+    httpx = None
 
-from .base import ChatProvider
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-)
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
-from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
-from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
-    fetch as _hc_fetch,
-    RetryPolicy as _HC_RetryPolicy,
 )
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
+from tldw_Server_API.app.core.LLM_Calls.chat_calls import _safe_cast
+from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
+
+from .base import ChatProvider
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
+
+_OPENAI_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if httpx is not None:
+    _OPENAI_HTTP_EXCEPTIONS = (httpx.HTTPError,)
+
+_OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+) + _OPENAI_HTTP_EXCEPTIONS
 
 # Reuse the existing, stable implementation to ensure behavior parity during migration
 # Do not import legacy handler at module import time to keep tests patchable.
@@ -35,7 +53,7 @@ http_client_factory = _hc_create_client
 class OpenAIAdapter(ChatProvider):
     name = "openai"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -43,7 +61,7 @@ class OpenAIAdapter(ChatProvider):
             "max_output_tokens_default": 4096,
         }
 
-    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_config_defaults(self, request: dict[str, Any]) -> dict[str, Any]:
         cfg = (request or {}).get("app_config") or {}
         oa = cfg.get("openai_api") or {}
         numeric_casts = {
@@ -79,7 +97,7 @@ class OpenAIAdapter(ChatProvider):
                 request[key] = value
         return request
 
-    def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any]) -> dict[str, Any]:
         """Translate OpenAI-like request dict to chat_with_openai kwargs."""
         messages = request.get("messages") or []
         model = request.get("model")
@@ -92,7 +110,7 @@ class OpenAIAdapter(ChatProvider):
         if streaming_raw is None:
             streaming_raw = request.get("streaming")
 
-        args: Dict[str, Any] = {
+        args: dict[str, Any] = {
             "input_data": messages,
             "model": model,
             "api_key": api_key,
@@ -121,19 +139,17 @@ class OpenAIAdapter(ChatProvider):
     def _use_native_http(self) -> bool:
         # Always use native HTTP for OpenAI adapter unless explicitly disabled
         v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_OPENAI") or "").lower()
-        if v in {"0", "false", "no", "off"}:
-            return False
-        return True
+        return v not in {"0", "false", "no", "off"}
 
-    def _build_openai_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_openai_payload(self, request: dict[str, Any]) -> dict[str, Any]:
         messages = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         # Assume messages are already OpenAI format
         payload_messages.extend(messages)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": request.get("model"),
             "messages": payload_messages,
         }
@@ -208,7 +224,7 @@ class OpenAIAdapter(ChatProvider):
         )
         return env_api_base or "https://api.openai.com/v1"
 
-    def _resolve_base_url(self, request: Dict[str, Any]) -> str:
+    def _resolve_base_url(self, request: dict[str, Any]) -> str:
         """Resolve API base URL: app_config.openai_api.api_base_url -> env -> default."""
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
@@ -219,11 +235,11 @@ class OpenAIAdapter(ChatProvider):
             base = oa.get("api_base_url") or oa.get("api_base") or oa.get("base_url")
             if isinstance(base, str) and base.strip():
                 return base.strip()
-        except Exception:
+        except (AttributeError, LookupError, TypeError):
             pass
         return self._openai_base_url()
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
             cfg = (request or {}).get("app_config") or {}
             oa = cfg.get("openai_api") or {}
@@ -231,21 +247,21 @@ class OpenAIAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, LookupError, TypeError):
             pass
         if fallback is not None:
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 60))
 
-    def _openai_headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _openai_headers(self, api_key: str | None) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
         request = validate_payload(self.name, request)
@@ -262,13 +278,13 @@ class OpenAIAdapter(ChatProvider):
                     resp = client.post(url, headers=headers, json=payload)
                     resp.raise_for_status()
                     return resp.json()
-            except Exception as e:
-                raise self.normalize_error(e)
+            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
+                raise self.normalize_error(e) from e
 
         # If disabled explicitly, raise clear error rather than falling back
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
         request = validate_payload(self.name, request)
@@ -288,29 +304,32 @@ class OpenAIAdapter(ChatProvider):
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except (AttributeError, TypeError, UnicodeError):
+                                line = str(raw)
                             # Canonicalize provider lines to OpenAI-style SSE
-                            if is_done_line(raw):
+                            if is_done_line(line):
                                 if not seen_done:
                                     seen_done = True
                                     yield sse_done()
                                 continue
-                            normalized = normalize_provider_line(raw)
+                            normalized = normalize_provider_line(line)
                             if normalized is not None:
                                 yield normalized
                         # Ensure a single terminal DONE marker
-                        for tail in finalize_stream(response=resp, done_already=seen_done):
-                            yield tail
+                        yield from finalize_stream(response=resp, done_already=seen_done)
                 return
-            except Exception as e:
-                raise self.normalize_error(e)
+            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
+                raise self.normalize_error(e) from e
 
         # If disabled explicitly, raise clear error rather than falling back
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         gen = self.stream(request, timeout=timeout)
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -329,7 +348,7 @@ class OpenAIAdapter(ChatProvider):
                 try:
                     if hasattr(gen, "close"):
                         gen.close()
-                except Exception:
+                except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS:
                     pass
                 loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
@@ -349,25 +368,25 @@ class OpenAIAdapter(ChatProvider):
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except (AttributeError, TypeError, ValueError):
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None
@@ -375,7 +394,7 @@ class OpenAIAdapter(ChatProvider):
                 eobj = body["error"]
                 msg = (eobj.get("message") or "").strip()
                 typ = (eobj.get("type") or "").strip()
-                code = eobj.get("code")
+                eobj.get("code")
                 detail = (f"{typ} {msg}" if typ else msg) or str(exc)
             else:
                 detail = get_http_error_text(exc)

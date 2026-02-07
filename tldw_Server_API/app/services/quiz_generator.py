@@ -3,19 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
-from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
-from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-from tldw_Server_API.app.core.config import load_and_log_configs
+from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
+from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 
 DEFAULT_QUESTION_TYPES = ["multiple_choice", "true_false", "fill_blank"]
 MAX_CONTENT_CHARS = 15000
@@ -55,7 +56,7 @@ Important:
 """
 
 
-def _resolve_model(provider: str, model: Optional[str], app_config: Dict[str, Any]) -> Optional[str]:
+def _resolve_model(provider: str, model: str | None, app_config: dict[str, Any]) -> str | None:
     if model:
         return model
     key = f"{provider.replace('-', '_').replace('.', '_')}_api"
@@ -70,7 +71,7 @@ def _get_adapter(provider: str):
     return adapter
 
 
-def _normalize_question_type(value: Any) -> Optional[str]:
+def _normalize_question_type(value: Any) -> str | None:
     if value is None:
         return None
     text = str(value).strip().lower()
@@ -85,10 +86,10 @@ def _normalize_question_type(value: Any) -> Optional[str]:
     return aliases.get(text, text)
 
 
-def _coerce_question_types(question_types: Optional[Sequence[Any]]) -> List[str]:
+def _coerce_question_types(question_types: Sequence[Any] | None) -> list[str]:
     if not question_types:
         return list(DEFAULT_QUESTION_TYPES)
-    normalized: List[str] = []
+    normalized: list[str] = []
     for item in question_types:
         raw = getattr(item, "value", item)
         q_type = _normalize_question_type(raw)
@@ -97,7 +98,7 @@ def _coerce_question_types(question_types: Optional[Sequence[Any]]) -> List[str]
     return normalized or list(DEFAULT_QUESTION_TYPES)
 
 
-def _coerce_options(raw: Any) -> List[str]:
+def _coerce_options(raw: Any) -> list[str]:
     if isinstance(raw, list):
         options = [str(opt).strip() for opt in raw if str(opt).strip()]
     elif isinstance(raw, str):
@@ -116,7 +117,7 @@ def _coerce_options(raw: Any) -> List[str]:
     return options
 
 
-def _normalize_mc_answer(raw: Any, options: List[str]) -> int:
+def _normalize_mc_answer(raw: Any, options: list[str]) -> int:
     if raw is None:
         return 0
     if isinstance(raw, (int, float)):
@@ -172,8 +173,8 @@ def _extract_json_payload(raw: Any) -> Any:
     raise ValueError("Failed to parse quiz JSON from LLM response")
 
 
-def _normalize_questions(raw_questions: Sequence[Any]) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
+def _normalize_questions(raw_questions: Sequence[Any]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for raw in raw_questions:
         if not isinstance(raw, dict):
             continue
@@ -189,7 +190,7 @@ def _normalize_questions(raw_questions: Sequence[Any]) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             points_val = 1
 
-        options: Optional[List[str]] = None
+        options: list[str] | None = None
         correct_answer: int | str
         if q_type == "multiple_choice":
             options = _coerce_options(raw.get("options"))
@@ -218,12 +219,12 @@ async def generate_quiz_from_media(
     media_db: MediaDatabase,
     media_id: int,
     num_questions: int = 10,
-    question_types: Optional[List[Any]] = None,
+    question_types: list[Any] | None = None,
     difficulty: str = "mixed",
-    focus_topics: Optional[List[str]] = None,
-    model: Optional[str] = None,
-    workspace_tag: Optional[str] = None,
-) -> Dict[str, Any]:
+    focus_topics: list[str] | None = None,
+    model: str | None = None,
+    workspace_tag: str | None = None,
+) -> dict[str, Any]:
     """
     Generate a quiz from media content using an LLM.
 
@@ -291,10 +292,7 @@ async def generate_quiz_from_media(
 
     content_text = extract_response_content(raw_response)
     payload = _extract_json_payload(content_text if content_text is not None else raw_response)
-    if isinstance(payload, dict):
-        raw_questions = payload.get("questions")
-    else:
-        raw_questions = payload
+    raw_questions = payload.get("questions") if isinstance(payload, dict) else payload
     if not isinstance(raw_questions, list):
         raise ValueError("LLM response did not include a questions list")
 

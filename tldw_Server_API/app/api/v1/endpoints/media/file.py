@@ -3,8 +3,6 @@
 #
 from __future__ import annotations
 
-import re
-from typing import Optional, Tuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Response, status
@@ -16,7 +14,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
-
 
 router = APIRouter(tags=["Media Files"])
 
@@ -50,7 +47,7 @@ def _build_content_disposition(disposition_type: str, filename: str) -> str:
     return f'{disposition_type}; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_filename}'
 
 
-def _parse_range_header(range_header: str, file_size: int) -> Optional[Tuple[int, int]]:
+def _parse_range_header(range_header: str, file_size: int) -> tuple[int, int] | None:
     """
     Parse RFC 7233 Range header.
 
@@ -134,8 +131,8 @@ async def get_media_file(
         "original",
         description="Type of file to retrieve (e.g., 'original', 'thumbnail')",
     ),
-    range_header: Optional[str] = Header(None, alias="Range"),
-    if_none_match: Optional[str] = Header(None, alias="If-None-Match"),
+    range_header: str | None = Header(None, alias="Range"),
+    if_none_match: str | None = Header(None, alias="If-None-Match"),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
@@ -348,7 +345,7 @@ async def get_media_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found on storage",
-        )
+        ) from None
     except StorageError as e:
         logger.error(
             "Storage error retrieving file {}: {}",
@@ -430,7 +427,7 @@ async def head_media_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Storage error",
-        )
+        ) from None
 
     mime_type = file_record.get("mime_type") or "application/octet-stream"
     original_filename = file_record.get("original_filename") or f"file_{media_id}"

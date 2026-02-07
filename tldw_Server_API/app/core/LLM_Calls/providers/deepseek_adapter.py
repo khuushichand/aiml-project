@@ -1,29 +1,34 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
+import asyncio
 import os
+import re
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
 
-from .base import ChatProvider
+from loguru import logger
+
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-)
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.error_utils import (
     get_http_error_text,
     get_http_status_from_exception,
     is_http_status_error,
     log_http_400_body,
 )
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_done,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
-from loguru import logger
-import re
+
+from .base import ChatProvider
+
 
 # Expose a patchable factory for tests; production uses the centralized client.
 # Important: make this a delegating function so that monkeypatching
@@ -32,10 +37,35 @@ def http_client_factory(*args, **kwargs):  # pragma: no cover - behavior verifie
     return _hc_create_client(*args, **kwargs)
 
 
+_DEEPSEEK_CONFIG_EXCEPTIONS = (AttributeError, KeyError, TypeError, ValueError)
+_DEEPSEEK_DECODE_EXCEPTIONS = (TypeError, UnicodeDecodeError, ValueError)
+_DEEPSEEK_REDACTION_EXCEPTIONS = (re.error, TypeError, ValueError)
+
+
+def _build_deepseek_client_exceptions() -> tuple[type[BaseException], ...]:
+    excs: list[type[BaseException]] = [
+        ConnectionError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        TypeError,
+        ValueError,
+    ]
+    try:
+        import httpx  # type: ignore
+        excs.append(httpx.HTTPError)
+    except (AttributeError, ImportError):
+        pass
+    return tuple(excs)
+
+
+_DEEPSEEK_CLIENT_EXCEPTIONS = _build_deepseek_client_exceptions()
+
+
 class DeepSeekAdapter(ChatProvider):
     name = "deepseek"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -43,7 +73,7 @@ class DeepSeekAdapter(ChatProvider):
             "max_output_tokens_default": 8192,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any]) -> dict[str, Any]:
         streaming_raw = request.get("stream")
         if streaming_raw is None:
             streaming_raw = request.get("streaming")
@@ -73,7 +103,7 @@ class DeepSeekAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_config_defaults(self, request: dict[str, Any]) -> dict[str, Any]:
         merged = dict(request)
         cfg = (merged.get("app_config") or {}).get("deepseek_api", {})
 
@@ -139,7 +169,7 @@ class DeepSeekAdapter(ChatProvider):
             merged["logit_bias"] = cfg.get("logit_bias")
         return merged
 
-    def _base_url(self, cfg: Optional[Dict[str, Any]], request: Optional[Dict[str, Any]] = None) -> str:
+    def _base_url(self, cfg: dict[str, Any] | None, request: dict[str, Any] | None = None) -> str:
         default_base = "https://api.deepseek.com"
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
@@ -149,7 +179,7 @@ class DeepSeekAdapter(ChatProvider):
             api_base = ((cfg.get("deepseek_api") or {}).get("api_base_url"))
         return (os.getenv("DEEPSEEK_BASE_URL") or api_base or default_base).rstrip("/")
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
             cfg = request.get("app_config") or {}
             dcfg = cfg.get("deepseek_api") or {}
@@ -157,28 +187,28 @@ class DeepSeekAdapter(ChatProvider):
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except _DEEPSEEK_CONFIG_EXCEPTIONS:
             pass
         if fallback is not None:
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 90))
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
-        payload_messages: List[Dict[str, Any]] = []
+        payload_messages: list[dict[str, Any]] = []
         if system_message:
             payload_messages.append({"role": "system", "content": system_message})
         payload_messages.extend(messages)
-        payload: Dict[str, Any] = {"model": request.get("model"), "messages": payload_messages}
+        payload: dict[str, Any] = {"model": request.get("model"), "messages": payload_messages}
         # OpenAI-style knobs
         for k in (
             "temperature",
@@ -204,12 +234,12 @@ class DeepSeekAdapter(ChatProvider):
             payload["logit_bias"] = request.get("logit_bias")
         return payload
 
-    def _payload_meta(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _payload_meta(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Return a sanitized summary of the payload for logging.
 
         Avoids logging raw message content or secrets. Only includes counts/flags.
         """
-        meta: Dict[str, Any] = {}
+        meta: dict[str, Any] = {}
         try:
             meta["model"] = payload.get("model")
             meta["stream"] = bool(payload.get("stream"))
@@ -223,11 +253,11 @@ class DeepSeekAdapter(ChatProvider):
             for k in ("temperature", "top_p", "max_tokens"):
                 if payload.get(k) is not None:
                     meta[k] = payload.get(k)
-        except Exception:
+        except _DEEPSEEK_CONFIG_EXCEPTIONS:
             pass
         return meta
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
         api_key = request.get("api_key")
@@ -252,7 +282,7 @@ class DeepSeekAdapter(ChatProvider):
                 resp = client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 return resp.json()
-        except Exception as e:
+        except _DEEPSEEK_CLIENT_EXCEPTIONS as e:
             # Try to log upstream response text if available
             if is_http_status_error(e):
                 status = get_http_status_from_exception(e) or "?"
@@ -264,9 +294,9 @@ class DeepSeekAdapter(ChatProvider):
                     status,
                     text,
                 )
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = self._apply_config_defaults(request or {})
         request = validate_payload(self.name, request or {})
         api_key = request.get("api_key")
@@ -296,7 +326,7 @@ class DeepSeekAdapter(ChatProvider):
                             continue
                         try:
                             line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                        except Exception:
+                        except _DEEPSEEK_DECODE_EXCEPTIONS:
                             line = str(raw)
                         if is_done_line(line):
                             if not seen_done:
@@ -306,10 +336,9 @@ class DeepSeekAdapter(ChatProvider):
                         normalized = normalize_provider_line(line)
                         if normalized is not None:
                             yield normalized
-                    for tail in finalize_stream(response=resp, done_already=seen_done):
-                        yield tail
+                    yield from finalize_stream(response=resp, done_already=seen_done)
             return
-        except Exception as e:
+        except _DEEPSEEK_CLIENT_EXCEPTIONS as e:
             # Try to log upstream response text if available
             if is_http_status_error(e):
                 status = get_http_status_from_exception(e) or "?"
@@ -321,7 +350,7 @@ class DeepSeekAdapter(ChatProvider):
                     status,
                     text,
                 )
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         def _redact_secrets(text: str) -> str:
@@ -331,16 +360,16 @@ class DeepSeekAdapter(ChatProvider):
                 text = re.sub(r"(?i)(Bearer)\s+[^\s,;]+", r"\1 [REDACTED]", text)
                 # Redact phrases like "api key: XYZ" or "api_key=XYZ"
                 text = re.sub(r"(?i)(api[ _-]?key\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", text)
-            except Exception:
+            except _DEEPSEEK_REDACTION_EXCEPTIONS:
                 pass
             return text
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
@@ -348,7 +377,7 @@ class DeepSeekAdapter(ChatProvider):
             if resp is not None:
                 try:
                     body = resp.json()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     body = None
             log_http_400_body(self.name, exc, body)
             detail = None
@@ -371,9 +400,9 @@ class DeepSeekAdapter(ChatProvider):
             return ChatAPIError(provider=self.name, message=str(detail), status_code=status or 500)
         return super().normalize_error(exc)
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item

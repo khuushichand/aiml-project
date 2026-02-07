@@ -3,12 +3,14 @@
 #
 # Imports
 import asyncio
+import contextlib
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
+
 from loguru import logger
 
 #######################################################################################################################
@@ -145,7 +147,7 @@ class ProviderManager:
     Manages LLM providers with health checks, circuit breakers, and fallback support.
     """
 
-    def __init__(self, providers: List[str], primary_provider: Optional[str] = None):
+    def __init__(self, providers: list[str], primary_provider: Optional[str] = None):
         """
         Initialize the provider manager.
 
@@ -170,8 +172,8 @@ class ProviderManager:
             )
             self.primary_provider = self.providers[0]
 
-        self.health_status: Dict[str, ProviderHealth] = {}
-        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
+        self.health_status: dict[str, ProviderHealth] = {}
+        self.circuit_breakers: dict[str, CircuitBreaker] = {}
 
         # Lock for thread-safe health metrics updates
         self._metrics_lock = threading.Lock()
@@ -196,10 +198,8 @@ class ProviderManager:
         """Stop background health monitoring."""
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
 
     async def _health_check_loop(self):
         """Background task to periodically check provider health."""
@@ -288,7 +288,7 @@ class ProviderManager:
 
         logger.warning(f"Provider {provider} failure recorded: {error}")
 
-    def get_available_provider(self, exclude: Optional[List[str]] = None) -> Optional[str]:
+    def get_available_provider(self, exclude: Optional[list[str]] = None) -> Optional[str]:
         """
         Get the best available provider.
 
@@ -338,7 +338,7 @@ class ProviderManager:
         logger.error("No available providers found")
         return None
 
-    def get_health_report(self) -> Dict[str, Dict[str, Any]]:
+    def get_health_report(self) -> dict[str, dict[str, Any]]:
         """
         Get a health report for all providers.
 
@@ -379,7 +379,7 @@ def get_provider_manager() -> Optional[ProviderManager]:
     """Get the global provider manager instance."""
     return _provider_manager
 
-def initialize_provider_manager(providers: List[str], primary_provider: Optional[str] = None):
+def initialize_provider_manager(providers: list[str], primary_provider: Optional[str] = None):
     """
     Initialize the global provider manager.
 

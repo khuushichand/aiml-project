@@ -34,28 +34,28 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
+    FALLBACK_EMBEDDING_MODEL,
+    _allow_zero_embeddings_for_media,
+    _resolve_model_provider,
+    chunk_media_content,
+    generate_embeddings_for_media,
+)
+from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
 from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     get_user_media_db_path,
 )
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
-from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import store_in_chroma
-from tldw_Server_API.app.api.v1.endpoints.media_embeddings import (
-    generate_embeddings_for_media,
-    _resolve_model_provider,
-    chunk_media_content,
-    _allow_zero_embeddings_for_media,
-    FALLBACK_EMBEDDING_MODEL,
-)
-from tldw_Server_API.app.api.v1.utils.rag_cache import invalidate_rag_caches
-
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
+from tldw_Server_API.app.core.config import settings
 
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
@@ -68,10 +68,19 @@ _STAGE_JOB_TYPES = {
     "embedding": _EMBEDDINGS_EMBEDDING_JOB_TYPE,
     "storage": _EMBEDDINGS_STORAGE_JOB_TYPE,
 }
+_EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
 class EmbeddingsJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
@@ -86,7 +95,7 @@ def _jobs_manager() -> JobManager:
     return JobManager(backend=backend, db_url=db_url)
 
 
-def _get_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> str:
+def _get_user_id(job: dict[str, Any], payload: dict[str, Any]) -> str:
     owner = job.get("owner_user_id") or payload.get("user_id")
     if owner is None or str(owner).strip() == "":
         return str(DatabasePaths.get_single_user_id())
@@ -110,7 +119,7 @@ def _coerce_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _root_job_uuid(payload: Dict[str, Any]) -> Optional[str]:
+def _root_job_uuid(payload: dict[str, Any]) -> str | None:
     root = payload.get("root_job_uuid") or payload.get("parent_job_uuid")
     if root is None:
         return None
@@ -118,18 +127,18 @@ def _root_job_uuid(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _update_root_job(
-    root_uuid: Optional[str],
+    root_uuid: str | None,
     *,
     status: str,
-    result: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
 ) -> None:
     if not root_uuid:
         return
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
@@ -142,7 +151,7 @@ def _update_root_job(
         jm.fail_job(root_id, error=message, retryable=False, enforce=False)
 
 
-def _load_media_content(media_id: int, user_id: str) -> Dict[str, Any]:
+def _load_media_content(media_id: int, user_id: str) -> dict[str, Any]:
     db_path = get_user_media_db_path(user_id)
     db = create_media_database(client_id="embeddings_jobs_worker", db_path=db_path)
 
@@ -158,7 +167,7 @@ def _load_media_content(media_id: int, user_id: str) -> Dict[str, Any]:
             if latest and latest.get("content"):
                 media_item = dict(media_item)
                 media_item["content"] = latest["content"]
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to load fallback document content for media {media_id}: {exc}")
 
     if not media_item:
@@ -171,17 +180,17 @@ def _load_media_content(media_id: int, user_id: str) -> Dict[str, Any]:
 
 
 def _update_root_progress(
-    root_uuid: Optional[str],
+    root_uuid: str | None,
     *,
-    progress_percent: Optional[float],
-    progress_message: Optional[str] = None,
+    progress_percent: float | None,
+    progress_message: str | None = None,
 ) -> None:
     if not root_uuid:
         return
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
@@ -194,31 +203,31 @@ def _update_root_progress(
 
 
 def _update_root_result(
-    root_uuid: Optional[str],
+    root_uuid: str | None,
     *,
-    result: Dict[str, Any],
+    result: dict[str, Any],
 ) -> None:
     if not root_uuid:
         return
     jm = _jobs_manager()
     try:
         root = jm.get_job_by_uuid(str(root_uuid))
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
     if not root:
         return
     root_id = int(root.get("id"))
     try:
         jm.update_job_result(root_id, result=result, merge=True)
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         return
 
 
 def _artifact_dir(
     user_id: str,
-    root_uuid: Optional[str],
+    root_uuid: str | None,
     media_id: int,
-    job_uuid: Optional[str],
+    job_uuid: str | None,
 ) -> Path:
     base_dir = DatabasePaths.get_user_vector_store_dir(user_id) / "embeddings_jobs"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -251,7 +260,7 @@ def _read_json(path: Path) -> Any:
         return json.load(handle)
 
 
-def _extract_content_text(media_content: Dict[str, Any]) -> str:
+def _extract_content_text(media_content: dict[str, Any]) -> str:
     content_payload = media_content.get("content")
     if isinstance(content_payload, dict):
         return content_payload.get("content") or content_payload.get("text") or ""
@@ -262,9 +271,9 @@ def _extract_content_text(media_content: Dict[str, Any]) -> str:
 
 def _config_version(
     embedding_model: str,
-    embedding_provider: Optional[str],
-    chunk_size: Optional[int],
-    chunk_overlap: Optional[int],
+    embedding_provider: str | None,
+    chunk_size: int | None,
+    chunk_overlap: int | None,
 ) -> str:
     return ":".join(
         [
@@ -276,11 +285,20 @@ def _config_version(
     )
 
 
+def _embedding_config_for_user() -> dict[str, Any]:
+    cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
+    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+    if not user_db_base_dir:
+        user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
+    cfg["USER_DB_BASE_DIR"] = user_db_base_dir
+    return cfg
+
+
 def _stage_idempotency_key(media_id: int, stage: str, version: str) -> str:
     return f"{media_id}:{stage}:{version}"
 
 
-def _map_priority(embedding_priority: Optional[int]) -> int:
+def _map_priority(embedding_priority: int | None) -> int:
     try:
         raw = int(embedding_priority) if embedding_priority is not None else 50
     except (TypeError, ValueError):
@@ -288,7 +306,7 @@ def _map_priority(embedding_priority: Optional[int]) -> int:
     return max(1, min(10, int(raw / 10)))
 
 
-def _normalize_embeddings(embeddings: Any) -> List[List[float]]:
+def _normalize_embeddings(embeddings: Any) -> list[list[float]]:
     if not embeddings:
         return []
     if hasattr(embeddings[0], "tolist"):
@@ -296,7 +314,7 @@ def _normalize_embeddings(embeddings: Any) -> List[List[float]]:
     return embeddings
 
 
-def _validate_embeddings_result(embeddings: Any, expected_count: int) -> Optional[str]:
+def _validate_embeddings_result(embeddings: Any, expected_count: int) -> str | None:
     if not embeddings:
         return "Embedding service returned no embeddings"
     if len(embeddings) != expected_count:
@@ -313,9 +331,9 @@ def _validate_embeddings_result(embeddings: Any, expected_count: int) -> Optiona
 
 
 def _resolve_config_version(
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     embedding_model: str,
-    embedding_provider: Optional[str],
+    embedding_provider: str | None,
     chunk_size: int,
     chunk_overlap: int,
 ) -> str:
@@ -327,17 +345,17 @@ def _resolve_config_version(
 
 def _enqueue_stage_job(
     *,
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     stage: str,
     media_id: int,
     user_id: str,
     embedding_model: str,
-    embedding_provider: Optional[str],
+    embedding_provider: str | None,
     chunk_size: int,
     chunk_overlap: int,
-    artifacts: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    artifacts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     jm = _jobs_manager()
     stage_queue = str(job.get("queue") or "").strip() or (os.getenv("EMBEDDINGS_JOBS_QUEUE") or "default").strip() or "default"
     root_uuid = _root_job_uuid(payload)
@@ -376,15 +394,15 @@ def _enqueue_stage_job(
 
 
 async def _handle_chunking_job(
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     *,
     media_id: int,
     user_id: str,
     chunk_size: int,
     chunk_overlap: int,
-    root_uuid: Optional[str],
-) -> Tuple[Dict[str, Any], bool]:
+    root_uuid: str | None,
+) -> tuple[dict[str, Any], bool]:
     force_regenerate = _coerce_bool(payload.get("force_regenerate"))
     artifact_dir = _artifact_dir(user_id, root_uuid, media_id, str(job.get("uuid") or job.get("id")))
     chunks_path = Path(payload.get("chunks_path") or _chunk_artifact_path(artifact_dir))
@@ -444,8 +462,8 @@ async def _handle_chunking_job(
 
 
 async def _handle_embedding_job(
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     *,
     media_id: int,
     user_id: str,
@@ -453,8 +471,8 @@ async def _handle_embedding_job(
     embedding_provider: str,
     chunk_size: int,
     chunk_overlap: int,
-    root_uuid: Optional[str],
-) -> Dict[str, Any]:
+    root_uuid: str | None,
+) -> dict[str, Any]:
     force_regenerate = _coerce_bool(payload.get("force_regenerate"))
     artifact_dir = _artifact_dir(user_id, root_uuid, media_id, str(job.get("uuid") or job.get("id")))
     chunks_path = Path(payload.get("chunks_path") or _chunk_artifact_path(artifact_dir))
@@ -529,7 +547,7 @@ async def _handle_embedding_job(
                 raise EmbeddingsJobError(str(fallback_exc), retryable=True) from fallback_exc
             validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
             if validation_error:
-                raise EmbeddingsJobError(validation_error, retryable=False)
+                raise EmbeddingsJobError(validation_error, retryable=False) from exc
             embedding_model = FALLBACK_EMBEDDING_MODEL
             embedding_provider = "huggingface"
         else:
@@ -554,15 +572,15 @@ async def _handle_embedding_job(
 
 
 async def _handle_storage_job(
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     *,
     media_id: int,
     user_id: str,
     embedding_model: str,
     embedding_provider: str,
-    root_uuid: Optional[str],
-) -> Dict[str, Any]:
+    root_uuid: str | None,
+) -> dict[str, Any]:
     force_regenerate = _coerce_bool(payload.get("force_regenerate"))
     artifact_dir = _artifact_dir(user_id, root_uuid, media_id, str(job.get("uuid") or job.get("id")))
     chunks_path = Path(payload.get("chunks_path") or _chunk_artifact_path(artifact_dir))
@@ -573,11 +591,10 @@ async def _handle_storage_job(
         stored = _read_json(storage_path)
         if isinstance(stored, dict):
             return stored
-        return {
-            "embedding_count": stored.get("embedding_count") if isinstance(stored, dict) else None,
-            "chunks_processed": stored.get("chunks_processed") if isinstance(stored, dict) else None,
-            "idempotent": True,
-        }
+        raise EmbeddingsJobError(
+            "Storage artifact invalid for idempotent reuse",
+            retryable=False,
+        )
 
     if not chunks_path.exists() or not embeddings_path.exists():
         raise EmbeddingsJobError("Embeddings artifacts missing for storage stage", retryable=False)
@@ -601,16 +618,16 @@ async def _handle_storage_job(
             retryable=False,
         )
 
-    chunk_texts: List[str] = []
-    metadatas: List[Dict[str, Any]] = []
+    chunk_texts: list[str] = []
+    metadatas: list[dict[str, Any]] = []
 
     media_content = _load_media_content(media_id, user_id)
-    extra_metadata: Dict[str, Any] = {}
+    extra_metadata: dict[str, Any] = {}
     try:
         media_item_meta = media_content.get("media_item", {})
         if isinstance(media_item_meta, dict):
             extra_metadata = media_item_meta.get("metadata") or {}
-    except Exception:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS:
         extra_metadata = {}
 
     for idx, chunk in enumerate(chunks):
@@ -635,17 +652,22 @@ async def _handle_storage_job(
         metadatas.append(metadata)
 
     ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
-    store_in_chroma(
+    manager = ChromaDBManager(
+        user_id=str(user_id),
+        user_embedding_config=_embedding_config_for_user(),
+    )
+    manager.store_in_chroma(
+        collection_name=f"user_{user_id}_media_embeddings",
         texts=chunk_texts,
         embeddings=embeddings,
         ids=ids,
         metadatas=metadatas,
-        collection_name=f"user_{user_id}_media_embeddings",
+        embedding_model_id_for_dim_check=embedding_model,
     )
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             f"Failed to invalidate RAG caches after embeddings storage "
             f"(user_id={user_id}, media_id={media_id}): {exc}"
@@ -663,8 +685,8 @@ async def _handle_storage_job(
 
 
 async def _handle_content_job(
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     *,
     media_id: int,
     user_id: str,
@@ -672,8 +694,8 @@ async def _handle_content_job(
     embedding_provider: str,
     chunk_size: int,
     chunk_overlap: int,
-    root_uuid: Optional[str],
-) -> Dict[str, Any]:
+    root_uuid: str | None,
+) -> dict[str, Any]:
     collection_name = payload.get("collection_name")
     document_id = payload.get("document_id")
     has_collection_name = bool(collection_name)
@@ -734,7 +756,7 @@ async def _handle_content_job(
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id], media_id=int(media_id))
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(
             f"Failed to invalidate RAG caches after content embeddings "
             f"(user_id={user_id}, media_id={media_id}): {exc}"
@@ -751,15 +773,15 @@ async def _handle_content_job(
 
 
 async def _handle_custom_content_job(
-    job: Dict[str, Any],
-    payload: Dict[str, Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
     *,
     media_id: int,
     user_id: str,
     embedding_model: str,
     embedding_provider: str,
-    root_uuid: Optional[str],
-) -> Dict[str, Any]:
+    root_uuid: str | None,
+) -> dict[str, Any]:
     """Generate embeddings for a single custom content payload and store in Chroma."""
     del job, media_id  # kept for signature compatibility; intentionally unused
     raw_content = payload.get("content") or payload.get("text")
@@ -847,7 +869,7 @@ async def _handle_custom_content_job(
                 raise EmbeddingsJobError(str(fallback_exc), retryable=True) from fallback_exc
             validation_error = _validate_embeddings_result(embeddings, 1)
             if validation_error:
-                raise EmbeddingsJobError(validation_error, retryable=False)
+                raise EmbeddingsJobError(validation_error, retryable=False) from exc
             embedding_model = FALLBACK_EMBEDDING_MODEL
             embedding_provider = "huggingface"
         else:
@@ -858,17 +880,22 @@ async def _handle_custom_content_job(
     metadata["embedding_model"] = embedding_model
     metadata["embedding_provider"] = embedding_provider
 
-    store_in_chroma(
+    manager = ChromaDBManager(
+        user_id=str(user_id),
+        user_embedding_config=_embedding_config_for_user(),
+    )
+    manager.store_in_chroma(
+        collection_name=str(collection_name),
         texts=[str(raw_content)],
         embeddings=embeddings_list,
         ids=[str(document_id)],
         metadatas=[metadata],
-        collection_name=str(collection_name),
+        embedding_model_id_for_dim_check=embedding_model,
     )
 
     try:
         invalidate_rag_caches(None, namespaces=[user_id])
-    except Exception as exc:
+    except _EMBEDDINGS_JOB_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to invalidate RAG caches for custom content (user={user_id}): {exc}")
 
     result = {
@@ -881,7 +908,7 @@ async def _handle_custom_content_job(
     return result
 
 
-async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("payload") or {}
     if not isinstance(payload, dict):
         payload = {}

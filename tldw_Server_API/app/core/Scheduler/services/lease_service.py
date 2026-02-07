@@ -4,12 +4,12 @@ All operations query the database directly.
 """
 
 import asyncio
-from typing import Optional, List
-from datetime import datetime, timedelta
+import contextlib
+from typing import Optional
+
 from loguru import logger
 
 from ..base.queue_backend import QueueBackend
-from ..base.exceptions import LeaseError
 
 
 class LeaseService:
@@ -55,10 +55,8 @@ class LeaseService:
         """
         if self._reaper_task:
             self._reaper_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._reaper_task
-            except asyncio.CancelledError:
-                pass
             self._reaper_task = None
             logger.info("Lease reaper stopped")
 
@@ -129,7 +127,7 @@ class LeaseService:
 
         return asyncio.create_task(renew_loop())
 
-    async def get_expired_tasks(self) -> List[str]:
+    async def get_expired_tasks(self) -> list[str]:
         """
         Get list of task IDs with expired leases.
 

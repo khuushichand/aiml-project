@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 # chatbook_service.py
 # Description: Service for creating and importing chatbooks with multi-user support
 # Adapted from single-user to multi-user architecture
@@ -17,66 +18,98 @@ Key Adaptations from Single-User:
 - No global state or singletons
 """
 
+import asyncio
 import base64
+import contextlib
+import hashlib
 import json
+import os
 import shutil
 import zipfile
-import hashlib
-import asyncio
-import aiofiles
-import aiofiles.os
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Set, Union
-from typing import Dict as _Dict
+from typing import Any
 from uuid import uuid4
+
+import aiofiles
+import aiofiles.os
 from loguru import logger
-from contextlib import asynccontextmanager
+
 from tldw_Server_API.app.core.config import settings as core_settings
 
-# Unified audit logging is handled at the API layer. The service no longer
-# imports or depends on legacy audit loggers.
-
-# Import custom exceptions
-from .exceptions import (
-    ChatbookException, ValidationError, FileOperationError,
-    DatabaseError, QuotaExceededError, SecurityError,
-    JobError, ChatbookImportError, ExportError, ArchiveError,
-    ConflictError, TemporaryError, ChatbookTimeoutError,
-    is_retryable, get_retry_delay
-)
-
-# Legacy job queue shim removed; using in-process task registry
-
-from .chatbook_models import (
-    ChatbookManifest, ChatbookContent, ContentItem, ContentType,
-    ChatbookVersion, Relationship, ExportJob, ImportJob,
-    ExportStatus, ImportStatus, ConflictResolution, ImportConflict,
-    ImportStatusData
-)
 from ..DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..DB_Management.db_path_utils import DatabasePaths
 
+# Legacy job queue shim removed; using in-process task registry
+from .chatbook_models import (
+    ChatbookContent,
+    ChatbookManifest,
+    ChatbookVersion,
+    ConflictResolution,
+    ContentItem,
+    ContentType,
+    ExportJob,
+    ExportStatus,
+    ImportJob,
+    ImportStatus,
+    ImportStatusData,
+)
+
+# Unified audit logging is handled at the API layer. The service no longer
+# imports or depends on legacy audit loggers.
+# Import custom exceptions
+from .exceptions import (
+    ArchiveError,
+    DatabaseError,
+    ExportError,
+    FileOperationError,
+    JobError,
+    SecurityError,
+    ValidationError,
+)
+
+_CHATBOOK_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ArchiveError,
+    DatabaseError,
+    ExportError,
+    FileOperationError,
+    JobError,
+    SecurityError,
+    ValidationError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    json.JSONDecodeError,
+    zipfile.BadZipFile,
+    asyncio.CancelledError,
+)
+
 try:  # Prompts database is optional in some deployments
     from ..DB_Management.Prompts_DB import PromptsDatabase  # type: ignore
-except Exception:  # pragma: no cover - defensive guard for stripped builds
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive guard for stripped builds
     PromptsDatabase = None  # type: ignore
 
 try:
     from ..DB_Management.Media_DB_v2 import (  # type: ignore
         MediaDatabase,
-        get_media_transcripts,
         get_media_prompts,
+        get_media_transcripts,
     )
-except Exception:  # pragma: no cover
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     MediaDatabase = None  # type: ignore
     get_media_transcripts = None  # type: ignore
     get_media_prompts = None  # type: ignore
 
 try:
     from ..DB_Management.Evaluations_DB import EvaluationsDatabase  # type: ignore
-except Exception:  # pragma: no cover
+except _CHATBOOK_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
     EvaluationsDatabase = None  # type: ignore
 
 
@@ -131,7 +164,7 @@ class ChatbookService:
             return default
 
     @classmethod
-    def _get_archive_limits(cls) -> Tuple[int, int]:
+    def _get_archive_limits(cls) -> tuple[int, int]:
         """Return per-file and total archive limits in bytes."""
         per_file_mb = cls._get_env_int("CHATBOOKS_MAX_FILE_IN_ARCHIVE_MB", 50)
         total_mb = cls._get_env_int("CHATBOOKS_MAX_UNCOMPRESSED_SIZE_MB", 500)
@@ -148,7 +181,7 @@ class ChatbookService:
         return size if size > 0 else 500
 
     @classmethod
-    def _get_conversation_export_max_messages(cls) -> Optional[int]:
+    def _get_conversation_export_max_messages(cls) -> int | None:
         """Optional cap on exported messages per conversation (0 means unlimited)."""
         max_messages = cls._get_env_int("CHATBOOKS_CONVERSATION_EXPORT_MAX_MESSAGES", 0)
         return max_messages if max_messages > 0 else None
@@ -158,7 +191,7 @@ class ChatbookService:
         """Return the maximum size for message images in bytes."""
         try:
             return int(core_settings.get("MAX_MESSAGE_IMAGE_BYTES", 5 * 1024 * 1024))
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             return 5 * 1024 * 1024
 
     @classmethod
@@ -207,7 +240,7 @@ class ChatbookService:
         return link_expires_at if link_expires_at <= export_expires_at else export_expires_at
 
     @classmethod
-    def _get_binary_limits_bytes(cls) -> Dict[str, int]:
+    def _get_binary_limits_bytes(cls) -> dict[str, int]:
         """Parse per-type binary size limits from env JSON (MB -> bytes)."""
         raw = os.getenv("CHATBOOKS_BINARY_LIMITS_MB", "").strip()
         if not raw:
@@ -220,7 +253,7 @@ class ChatbookService:
         if not isinstance(parsed, dict):
             logger.warning("CHATBOOKS_BINARY_LIMITS_MB must be a JSON object; ignoring")
             return {}
-        limits: Dict[str, int] = {}
+        limits: dict[str, int] = {}
         for key, value in parsed.items():
             try:
                 mb_value = float(value)
@@ -232,7 +265,7 @@ class ChatbookService:
         return limits
 
     @staticmethod
-    def _resolve_binary_limit(limits: Dict[str, int], *keys: str) -> Optional[int]:
+    def _resolve_binary_limit(limits: dict[str, int], *keys: str) -> int | None:
         """Return the first matching size limit for the provided keys."""
         for key in keys:
             limit = limits.get(key)
@@ -254,7 +287,7 @@ class ChatbookService:
                 safe_name = "chatbook"
         return f"{safe_name}{suffix}"
 
-    def __init__(self, user_id: Union[str, int], db: CharactersRAGDB, user_id_int: Optional[int] = None):
+    def __init__(self, user_id: str | int, db: CharactersRAGDB, user_id_int: int | None = None):
         """
         Initialize the chatbook service for a specific user.
 
@@ -270,7 +303,7 @@ class ChatbookService:
         if not self.user_id or self.user_id.strip() == "":
             raise ValueError("user_id cannot be empty or whitespace-only")
 
-        self.user_id_int: Optional[int] = user_id_int
+        self.user_id_int: int | None = user_id_int
         if self.user_id_int is None:
             try:
                 self.user_id_int = int(self.user_id)
@@ -279,13 +312,13 @@ class ChatbookService:
         self.db = db
 
         # Track TODOs once per session so we comply with PRD while exposing gaps
-        self._todo_messages: Set[str] = set()
+        self._todo_messages: set[str] = set()
 
         # In-process async task registry (best-effort cancellation)
-        self._tasks: _Dict[str, asyncio.Task] = {}
-        self._prompts_db: Optional["PromptsDatabase"] = None
-        self._media_db: Optional["MediaDatabase"] = None
-        self._evaluations_db: Optional["EvaluationsDatabase"] = None
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._prompts_db: PromptsDatabase | None = None
+        self._media_db: MediaDatabase | None = None
+        self._evaluations_db: EvaluationsDatabase | None = None
 
         # Secure user-specific directory under the configured user DB base.
         user_id_value = self.user_id_int if self.user_id_int is not None else self.user_id
@@ -308,16 +341,16 @@ class ChatbookService:
         # Legacy Prompt Studio adapter placeholder (no longer used; core Jobs only)
         self._ps_job_adapter = None
         self._jobs_adapter = None
-        self._jobs_db_path: Optional[Path] = None
+        self._jobs_db_path: Path | None = None
         try:
             from tldw_Server_API.app.core.Jobs.migrations import ensure_jobs_tables
             self._jobs_db_path = ensure_jobs_tables()
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Jobs core backend migrations skipped: {exc}")
         try:
             from .jobs_adapter import ChatbooksJobsAdapter
             self._jobs_adapter = ChatbooksJobsAdapter(owner_user_id=self.user_id)
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"Chatbooks: core Jobs adapter unavailable: {exc}")
 
         # Initialize job tracking tables
@@ -333,7 +366,7 @@ class ChatbookService:
             logger.warning(f"TODO(chatbooks): {message}")
             self._todo_messages.add(message)
 
-    def _resolve_import_archive_path(self, file_ref: Union[str, Path]) -> Path:
+    def _resolve_import_archive_path(self, file_ref: str | Path) -> Path:
         """Resolve and validate a chatbook archive path within temp/imports directories."""
         ref = str(file_ref or "").strip()
         if not ref:
@@ -342,7 +375,7 @@ class ChatbookService:
         base_dirs = [("import", self.import_dir.resolve()), ("temp", self.temp_dir.resolve())]
         base_map = dict(base_dirs)
         ref_path = Path(ref)
-        base_hint: Optional[str] = None
+        base_hint: str | None = None
 
         if not (ref_path.is_absolute() or (ref_path.drive and ref_path.root)):
             token_parts = ref.split("/", 1)
@@ -356,7 +389,7 @@ class ChatbookService:
         if base_hint is not None:
             bases_to_check = [(base_hint, base_map[base_hint])]
 
-        candidates: List[Tuple[str, Path, Path]] = []
+        candidates: list[tuple[str, Path, Path]] = []
         if ref_path.is_absolute() or (ref_path.drive and ref_path.root):
             for base_name, base in bases_to_check:
                 candidates.append((base_name, base, ref_path))
@@ -392,7 +425,10 @@ class ChatbookService:
             except ValueError:
                 continue
 
-        raise SecurityError("Chatbook file path is outside allowed import directories")
+        raise SecurityError(
+            "Chatbook file path is outside allowed import directories",
+            violation_type="import_path_outside_allowed_directories",
+        )
 
     def _build_import_file_token(self, resolved_path: Path) -> str:
         """Return a tokenized relative path for import job payloads."""
@@ -400,7 +436,7 @@ class ChatbookService:
         for base_name, base in base_dirs:
             try:
                 return f"{base_name}/{resolved_path.relative_to(base).as_posix()}"
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 continue
         logger.debug(
             "Chatbooks: path {} not under import/temp dirs; using filename only",
@@ -408,7 +444,7 @@ class ChatbookService:
         )
         return resolved_path.name
 
-    def _get_prompts_db(self) -> Optional["PromptsDatabase"]:
+    def _get_prompts_db(self) -> PromptsDatabase | None:
         """Lazily initialize and cache the prompts database."""
         if PromptsDatabase is None:
             self._note_todo("Prompts export/import requires PromptsDatabase module; skipping for current build.")
@@ -421,13 +457,13 @@ class ChatbookService:
         try:
             db_path = DatabasePaths.get_prompts_db_path(self.user_id_int)
             self._prompts_db = PromptsDatabase(db_path, client_id=self.user_id)
-        except Exception as exc:  # pragma: no cover - defensive guard
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive guard
             logger.warning(f"Failed to initialize PromptsDatabase for chatbooks export: {exc}")
             self._note_todo("Prompts export/import initialization failed; inspect logs for details.")
             self._prompts_db = None
         return self._prompts_db
 
-    def _get_media_db(self) -> Optional["MediaDatabase"]:
+    def _get_media_db(self) -> MediaDatabase | None:
         """Lazily initialize and cache the media database."""
         if MediaDatabase is None:
             self._note_todo("Media export/import requires MediaDatabase module; skipping media coverage.")
@@ -440,13 +476,13 @@ class ChatbookService:
         try:
             db_path = DatabasePaths.get_media_db_path(self.user_id_int)
             self._media_db = MediaDatabase(db_path, client_id=self.user_id)
-        except Exception as exc:  # pragma: no cover
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
             logger.warning(f"Failed to initialize MediaDatabase for chatbooks export: {exc}")
             self._note_todo("Media export/import initialization failed; inspect logs for details.")
             self._media_db = None
         return self._media_db
 
-    def _get_evaluations_db(self) -> Optional["EvaluationsDatabase"]:
+    def _get_evaluations_db(self) -> EvaluationsDatabase | None:
         """Lazily initialize and cache the evaluations database."""
         if EvaluationsDatabase is None:
             self._note_todo("Evaluations export/import requires EvaluationsDatabase module; skipping evaluations coverage.")
@@ -460,7 +496,7 @@ class ChatbookService:
             db_path = DatabasePaths.get_evaluations_db_path(self.user_id_int)
             # EvaluationsDatabase handles backend resolution internally
             self._evaluations_db = EvaluationsDatabase(str(db_path))
-        except Exception as exc:  # pragma: no cover
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover
             logger.warning(f"Failed to initialize EvaluationsDatabase for chatbooks export: {exc}")
             self._note_todo("Evaluations export/import initialization failed; inspect logs for details.")
             self._evaluations_db = None
@@ -485,7 +521,7 @@ class ChatbookService:
         return obj
 
     @staticmethod
-    def _parse_timestamp(value: Any) -> Optional[datetime]:
+    def _parse_timestamp(value: Any) -> datetime | None:
         """Robust timestamp parser for database rows."""
         if value is None or value == "":
             return None
@@ -525,7 +561,7 @@ class ChatbookService:
         return None
 
     @staticmethod
-    def _normalize_timestamp_to_naive(value: Optional[datetime]) -> Optional[datetime]:
+    def _normalize_timestamp_to_naive(value: datetime | None) -> datetime | None:
         """Convert aware timestamps to naive UTC for consistent downstream handling."""
         if value is None:
             return None
@@ -533,13 +569,13 @@ class ChatbookService:
             return value
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
-    def _get_fallback_character_id(self) -> Optional[int]:
+    def _get_fallback_character_id(self) -> int | None:
         """Return a fallback character id (default assistant) if available."""
         try:
             record = self.db.get_character_card_by_id(1)
             if record and record.get("id"):
                 return int(record["id"])
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             cursor = self.db.execute_query(
@@ -552,15 +588,15 @@ class ChatbookService:
                     return int(row["id"])
                 if isinstance(row, (list, tuple)) and row:
                     return int(row[0])
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             pass
         return None
 
     def _resolve_import_character_id(
         self,
         original_id: Any,
-        character_id_map: Optional[Dict[str, int]] = None
-    ) -> Tuple[Optional[int], Optional[str]]:
+        character_id_map: dict[str, int] | None = None
+    ) -> tuple[int | None, str | None]:
         """Resolve a character_id for imported conversations, falling back when needed."""
         if original_id is None or str(original_id).strip() == "":
             fallback = self._get_fallback_character_id()
@@ -572,7 +608,7 @@ class ChatbookService:
         if character_id_map and key in character_id_map:
             return character_id_map[key], None
 
-        char_id_int: Optional[int] = None
+        char_id_int: int | None = None
         try:
             char_id_int = int(original_id)
         except (TypeError, ValueError):
@@ -582,7 +618,7 @@ class ChatbookService:
                 record = self.db.get_character_card_by_id(char_id_int)
                 if record:
                     return char_id_int, None
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
 
         fallback = self._get_fallback_character_id()
@@ -590,32 +626,32 @@ class ChatbookService:
             return None, f"Character {original_id} not found and no fallback character is available."
         return fallback, f"Character {original_id} not found; using default character."
 
-    def _normalize_prompt_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_prompt_record(self, record: dict[str, Any]) -> dict[str, Any]:
         """Normalize prompt record for JSON export."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for key, value in record.items():
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _fetch_media_record(self, media_db: "MediaDatabase", identifier: str) -> Optional[Dict[str, Any]]:
+    def _fetch_media_record(self, media_db: MediaDatabase, identifier: str) -> dict[str, Any] | None:
         """Retrieve a media row by integer id or uuid."""
-        record: Optional[Dict[str, Any]] = None
+        record: dict[str, Any] | None = None
         try:
             record = media_db.get_media_by_id(int(identifier))
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             record = None
         if not record:
             try:
                 record = media_db.get_media_by_uuid(str(identifier))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 record = None
         if record and isinstance(record, dict):
             return dict(record)
         return record
 
-    def _normalize_media_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_media_record(self, record: dict[str, Any]) -> dict[str, Any]:
         """Normalize media row for JSON export."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for key, value in record.items():
             if key == "vector_embedding":
                 # handled separately when include_embeddings is true
@@ -628,16 +664,16 @@ class ChatbookService:
                 payload[key] = value
         return payload
 
-    def _normalize_transcript_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_transcript_row(self, row: dict[str, Any]) -> dict[str, Any]:
         """Normalize transcript row from Media DB helpers."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for key, value in row.items():
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _normalize_evaluation_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_evaluation_record(self, record: dict[str, Any]) -> dict[str, Any]:
         """Normalize evaluation definition for export."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for key, value in record.items():
             if key in {"eval_spec", "metadata"} and isinstance(value, str):
                 try:
@@ -648,9 +684,9 @@ class ChatbookService:
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _normalize_evaluation_run(self, run: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_evaluation_run(self, run: dict[str, Any]) -> dict[str, Any]:
         """Normalize evaluation run for export."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for key, value in run.items():
             if key in {"config"} and isinstance(value, str):
                 try:
@@ -661,12 +697,12 @@ class ChatbookService:
             payload[key] = self._normalize_datetime(value)
         return payload
 
-    def _get_conversation_messages_paged(self, conversation_id: str) -> Tuple[List[Dict[str, Any]], bool, Optional[int]]:
+    def _get_conversation_messages_paged(self, conversation_id: str) -> tuple[list[dict[str, Any]], bool, int | None]:
         """Fetch all messages for a conversation using paging."""
         page_size = self._get_conversation_export_page_size()
         max_messages = self._get_conversation_export_max_messages()
         offset = 0
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         truncated = False
 
         while True:
@@ -696,7 +732,7 @@ class ChatbookService:
         return messages, truncated, max_messages
 
     @staticmethod
-    def _extension_from_mime(mime_type: Optional[str]) -> str:
+    def _extension_from_mime(mime_type: str | None) -> str:
         """Infer a safe file extension for an attachment mime type."""
         if not mime_type:
             return ".bin"
@@ -722,13 +758,13 @@ class ChatbookService:
 
             # sqlite3.Row objects can be converted directly to dict
             # but we need to handle different cases
-            first_row = results[0]
+            results[0]
 
             # Try the simplest approach first - direct dict conversion
             try:
                 # This works for sqlite3.Row objects
                 return [dict(row) for row in results]
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 # If that fails, use cursor description
                 if hasattr(cursor_or_list, 'description') and cursor_or_list.description:
                     columns = [desc[0] for desc in cursor_or_list.description]
@@ -740,7 +776,7 @@ class ChatbookService:
             # It's already a list (from mocked tests)
             return cursor_or_list
 
-    def _get_conversation_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def _get_conversation_by_name(self, name: str) -> dict[str, Any] | None:
         """Get conversation by name/title - wrapper for search method."""
         try:
             # First try FTS search
@@ -757,7 +793,7 @@ class ChatbookService:
                     conv_name = conv.get('name')
                     logger.debug(f"  Checking: title='{conv_title}', name='{conv_name}'")
                     if conv_title == name or conv_name == name:
-                        logger.debug(f"  Found exact match via FTS!")
+                        logger.debug("  Found exact match via FTS!")
                         return conv
 
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
@@ -779,15 +815,15 @@ class ChatbookService:
                             return {'id': results[0][0], 'title': results[0][1] if len(results[0]) > 1 else name}
                         return results[0]
                 else:
-                    logger.debug(f"Direct query returned None/empty cursor")
+                    logger.debug("Direct query returned None/empty cursor")
 
             logger.debug(f"No match found for '{name}' via FTS or direct query")
             return None
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Error searching for conversation by name: {e}")
             return None
 
-    def _get_note_by_title(self, title: str) -> Optional[Dict[str, Any]]:
+    def _get_note_by_title(self, title: str) -> dict[str, Any] | None:
         """Get note by title - wrapper for search method."""
         try:
             # First try FTS search
@@ -799,7 +835,7 @@ class ChatbookService:
                     note_title = note.get('title')
                     logger.debug(f"  Checking note: title='{note_title}'")
                     if note_title == title:
-                        logger.debug(f"  Found exact match via FTS!")
+                        logger.debug("  Found exact match via FTS!")
                         return note
 
             # If FTS didn't find it, try direct query (FTS might not be updated yet)
@@ -821,11 +857,11 @@ class ChatbookService:
                             return {'id': results[0][0], 'title': results[0][1] if len(results[0]) > 1 else title}
                         return results[0]
                 else:
-                    logger.debug(f"Direct query returned None/empty cursor for note")
+                    logger.debug("Direct query returned None/empty cursor for note")
 
             logger.debug(f"No match found for note '{title}' via FTS or direct query")
             return None
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Error searching for note by title: {e}")
             return None
 
@@ -878,14 +914,14 @@ class ChatbookService:
                     warnings TEXT    -- JSON array
                 )
             """)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error initializing job tables: {e}")
 
     # Alias for compatibility with tests
     async def export_chatbook(self, **kwargs):
         """Alias for create_chatbook to match test expectations."""
         # Extract user_id for internal use but don't pass it to create_chatbook
-        user_id = kwargs.pop('user_id', None)
+        kwargs.pop('user_id', None)
 
         # Extract chatbook_name and use it as 'name'
         if 'chatbook_name' in kwargs:
@@ -915,7 +951,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting conversations for export: {e}")
                     content_selections[ContentType.CONVERSATION] = conv_ids
                 elif ct == "characters":
@@ -931,7 +967,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting characters for export: {e}")
                     content_selections[ContentType.CHARACTER] = char_ids
                 elif ct == "notes":
@@ -947,7 +983,7 @@ class ChatbookService:
                             for row in (rows or [])
                             if row is not None
                         ]
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting notes for export: {e}")
                     content_selections[ContentType.NOTE] = note_ids
                 elif ct == "world_books":
@@ -960,7 +996,7 @@ class ChatbookService:
                         else:
                             # Fallback to direct database query
                             logger.debug("WorldBookService not available, using direct query")
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting world books for export: {e}")
                     content_selections[ContentType.WORLD_BOOK] = wb_ids
                 elif ct == "dictionaries":
@@ -973,7 +1009,7 @@ class ChatbookService:
                         else:
                             # Fallback to direct database query
                             logger.debug("ChatDictionary not available, using direct query")
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.warning(f"Error getting dictionaries for export: {e}")
                     content_selections[ContentType.DICTIONARY] = dict_ids
             kwargs['content_selections'] = content_selections
@@ -996,7 +1032,7 @@ class ChatbookService:
             is_async = bool(kwargs.get('async_mode'))
             file_path = None if is_async else payload
             job_id = payload if is_async else None
-            content_summary: Dict[str, int] = {}
+            content_summary: dict[str, int] = {}
 
             # If we have a file path (sync export), read manifest to populate summary
             if file_path:
@@ -1018,7 +1054,7 @@ class ChatbookService:
                             }
                             # Only include non-zero entries to keep it tidy
                             content_summary = {k: v for k, v in totals.items() if isinstance(v, int) and v >= 0}
-                except Exception as _e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                     # Fallback to empty summary on any error
                     logger.debug(f"Could not read manifest for content summary: {_e}")
 
@@ -1036,17 +1072,17 @@ class ChatbookService:
         self,
         name: str,
         description: str,
-        content_selections: Dict[ContentType, List[str]],
-        author: Optional[str] = None,
+        content_selections: dict[ContentType, list[str]],
+        author: str | None = None,
         include_media: bool = False,
         media_quality: str = "compressed",
         include_embeddings: bool = False,
         include_generated_content: bool = True,
-        tags: Optional[List[str]] = None,
-        categories: Optional[List[str]] = None,
+        tags: list[str] | None = None,
+        categories: list[str] | None = None,
         async_mode: bool = False,
-        request_id: Optional[str] = None
-    ) -> Tuple[bool, str, Optional[str]]:
+        request_id: str | None = None
+    ) -> tuple[bool, str, str | None]:
         """
         Create a chatbook from selected content.
 
@@ -1086,7 +1122,7 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_export_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create PS export job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
@@ -1105,7 +1141,7 @@ class ChatbookService:
             if self._jobs_backend == "core":
                 # Enqueue into core Jobs and start worker if needed
                 job_created = None
-                enqueue_error: Optional[str] = None
+                enqueue_error: str | None = None
                 try:
                     from tldw_Server_API.app.core.Jobs.manager import JobManager
                     if not hasattr(self, "_core_jobs"):
@@ -1134,7 +1170,7 @@ class ChatbookService:
                         max_retries=3,
                         request_id=request_id,
                     )
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue export job into core Jobs: {e}")
                 if not job_created:
@@ -1144,7 +1180,7 @@ class ChatbookService:
                     job.error_message = err_msg
                     try:
                         self._save_export_job(job)
-                    except Exception as save_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as save_err:
                         logger.warning(f"Failed to persist failed export job state: {save_err}")
                     return False, f"Export job failed to enqueue: {err_msg}", job_id
             elif self._jobs_backend == "prompt_studio":
@@ -1179,12 +1215,12 @@ class ChatbookService:
 
             return result
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             # Rollback on error
             if conn:
                 try:
                     conn.execute("ROLLBACK")
-                except Exception as e2:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e2:
                     logger.warning(f"Transaction rollback failed: error={e2}")
             logger.error(f"Transaction rolled back: {e}")
             raise
@@ -1193,31 +1229,30 @@ class ChatbookService:
             if conn:
                 try:
                     conn.close()
-                except Exception as e3:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e3:
                     logger.warning(f"Connection close failed after transaction: error={e3}")
 
     async def _create_chatbook_sync_wrapper(
         self,
         name: str,
         description: str,
-        content_selections: Dict[ContentType, List[str]],
-        author: Optional[str] = None,
+        content_selections: dict[ContentType, list[str]],
+        author: str | None = None,
         include_media: bool = False,
         media_quality: str = "compressed",
         include_embeddings: bool = False,
         include_generated_content: bool = True,
-        tags: Optional[List[str]] = None,
-        categories: Optional[List[str]] = None
-    ) -> Tuple[bool, str, Optional[str]]:
+        tags: list[str] | None = None,
+        categories: list[str] | None = None
+    ) -> tuple[bool, str, str | None]:
         """
         Wrapper for synchronous chatbook creation.
 
         Returns:
             Tuple of (success, message, file_path)
         """
-        work_dir: Optional[Path] = None
-        output_path: Optional[Path] = None
-        success = False
+        work_dir: Path | None = None
+        output_path: Path | None = None
         try:
             # Create working directory in secure temp location
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1342,27 +1377,25 @@ class ChatbookService:
                 manifest.total_size_bytes = archive_size
                 await _write_manifest()
                 await self._create_zip_archive_async(work_dir, output_path)
-            success = True
 
             # Store file path in job record (will be retrieved by job_id)
             # No direct filename access for security
-            download_url = None  # Will be generated from job_id
 
-            return True, f"Chatbook created successfully", str(output_path)
+            return True, "Chatbook created successfully", str(output_path)
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error creating chatbook: {e}")
             if output_path and output_path.exists():
                 try:
                     await asyncio.to_thread(output_path.unlink)
-                except Exception as cleanup_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logger.warning(f"Failed to remove partial archive {output_path}: {cleanup_err}")
             return False, f"Error creating chatbook: {str(e)}", None
         finally:
             if work_dir and work_dir.exists():
                 try:
                     await asyncio.to_thread(shutil.rmtree, work_dir)
-                except Exception as cleanup_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logger.warning(f"Failed to remove work directory {work_dir}: {cleanup_err}")
 
     async def _create_chatbook_job_async(
@@ -1370,14 +1403,14 @@ class ChatbookService:
         job_id: str,
         name: str,
         description: str,
-        content_selections: Dict[ContentType, List[str]],
-        author: Optional[str],
+        content_selections: dict[ContentType, list[str]],
+        author: str | None,
         include_media: bool,
         media_quality: str,
         include_embeddings: bool,
         include_generated_content: bool,
-        tags: List[str],
-        categories: List[str]
+        tags: list[str],
+        categories: list[str]
     ):
         """
         Asynchronously create a chatbook with job tracking.
@@ -1396,7 +1429,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status failed for export job {job.job_id}: {e}")
 
             # Create chatbook using the sync wrapper (could be made truly async)
@@ -1414,7 +1447,7 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"PS adapter update_status (cancelled) failed for export job {job.job_id}: {e}")
                     return
                 job.status = ExportStatus.COMPLETED
@@ -1438,11 +1471,11 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed", result={"path": job.output_path})
                     elif job.status == ExportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status (completion) failed for export job {job.job_id}: {e}")
             self._save_export_job(job)
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             # Update job with error
             job.status = ExportStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
@@ -1451,21 +1484,21 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception as ps_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as ps_err:
                     logger.debug(f"PS adapter update_status (failed) failed for export job {job.job_id}: {ps_err}")
 
     async def import_chatbook(
         self,
         file_path: str,
-        content_selections: Optional[Dict[ContentType, List[str]]] = None,
-        conflict_resolution: Optional[Union[ConflictResolution, str]] = None,
-        conflict_strategy: Optional[str] = None,  # Alias for conflict_resolution (for test compatibility)
+        content_selections: dict[ContentType, list[str]] | None = None,
+        conflict_resolution: ConflictResolution | str | None = None,
+        conflict_strategy: str | None = None,  # Alias for conflict_resolution (for test compatibility)
         prefix_imported: bool = False,
         import_media: bool = False,
         import_embeddings: bool = False,
         async_mode: bool = False,
-        request_id: Optional[str] = None
-    ) -> Tuple[bool, str, Optional[Union[str, List[str]]]]:
+        request_id: str | None = None
+    ) -> tuple[bool, str, str | list[str] | None]:
         """
         Import a chatbook.
 
@@ -1539,7 +1572,7 @@ class ChatbookService:
 
         try:
             resolved_path = self._resolve_import_archive_path(file_path)
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Chatbooks import rejected file path: {exc}")
             return False, "Invalid or potentially malicious archive file", None
         file_token = self._build_import_file_token(resolved_path)
@@ -1562,7 +1595,7 @@ class ChatbookService:
                     ps_job = self._ps_job_adapter.create_import_job(payload, request_id=request_id)
                     if ps_job and ps_job.get("id") is not None:
                         job_id = str(ps_job["id"])  # mirror PS id
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Failed to create PS import job, falling back to core: {e}")
                     job_id = None
             if job_id is None:
@@ -1580,7 +1613,7 @@ class ChatbookService:
             # Start async task
             if self._jobs_backend == "core":
                 job_created = None
-                enqueue_error: Optional[str] = None
+                enqueue_error: str | None = None
                 try:
                     from tldw_Server_API.app.core.Jobs.manager import JobManager
                     if not hasattr(self, "_core_jobs"):
@@ -1605,7 +1638,7 @@ class ChatbookService:
                         max_retries=3,
                         request_id=request_id,
                     )
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     enqueue_error = str(e)
                     logger.warning(f"Failed to enqueue import job into core Jobs: {e}")
                 if not job_created:
@@ -1615,7 +1648,7 @@ class ChatbookService:
                     job.error_message = err_msg
                     try:
                         self._save_import_job(job)
-                    except Exception as save_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as save_err:
                         logger.warning(f"Failed to persist failed import job state: {save_err}")
                     return False, f"Import job failed to enqueue: {err_msg}", job_id
             else:
@@ -1641,20 +1674,20 @@ class ChatbookService:
     def _import_chatbook_sync(
         self,
         file_path: str,
-        content_selections: Optional[Dict[ContentType, List[str]]],
+        content_selections: dict[ContentType, list[str]] | None,
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         import_media: bool,
         import_embeddings: bool
-    ) -> Tuple[bool, str, Optional[List[str]]]:
+    ) -> tuple[bool, str, list[str] | None]:
         """
         Synchronously import a chatbook.
         """
-        extract_dir: Optional[Path] = None
+        extract_dir: Path | None = None
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Chatbooks import rejected file path: {exc}")
                 return False, "Invalid or potentially malicious archive file", None
             file_path = str(resolved_path)
@@ -1699,7 +1732,7 @@ class ChatbookService:
                         return False, "Unsafe path in archive detected", None
 
                     # Additional check: ensure the normalized target stays within extract_dir
-                    normalized_path = os.path.normpath(member)
+                    os.path.normpath(member)
                     # Use normpath + commonpath instead of realpath to avoid race conditions
                     # (realpath would try to resolve symlinks on paths that don't exist yet)
                     target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
@@ -1719,7 +1752,7 @@ class ChatbookService:
             if not manifest_path.exists():
                 return False, "Invalid chatbook - manifest.json not found", None
 
-            with open(manifest_path, 'r', encoding='utf-8') as f:
+            with open(manifest_path, encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
             manifest = ChatbookManifest.from_dict(manifest_data)
@@ -1768,7 +1801,7 @@ class ChatbookService:
                     )
                 content_selections.pop(ct, None)
 
-            character_id_map: Dict[str, int] = {}
+            character_id_map: dict[str, int] = {}
 
             # Import characters first (they may be dependencies)
             if ContentType.CHARACTER in content_selections:
@@ -1834,10 +1867,10 @@ class ChatbookService:
                 # All items were skipped (e.g., due to conflicts)
                 return True, f"Import completed: All {import_status.skipped_items} items were skipped", list(import_status.warnings or [])
             else:
-                logger.debug(f"Import failed: No items were successfully imported or skipped")
+                logger.debug("Import failed: No items were successfully imported or skipped")
                 return False, "No items were imported", list(import_status.warnings or [])
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error importing chatbook: {e}")
             return False, f"Error importing chatbook: {str(e)}", None
         finally:
@@ -1848,7 +1881,7 @@ class ChatbookService:
         self,
         job_id: str,
         file_path: str,
-        content_selections: Optional[Dict[ContentType, List[str]]],
+        content_selections: dict[ContentType, list[str]] | None,
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         import_media: bool,
@@ -1870,7 +1903,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "in_progress")
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status failed for import job {job.job_id}: {e}")
 
             # Import chatbook synchronously using thread pool
@@ -1887,7 +1920,7 @@ class ChatbookService:
                     if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                         try:
                             self._ps_job_adapter.update_status(int(job.job_id), "cancelled")
-                        except Exception as e:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"PS adapter update_status (cancelled) failed for import job {job.job_id}: {e}")
                     return
                 job.status = ImportStatus.COMPLETED
@@ -1903,10 +1936,10 @@ class ChatbookService:
                         self._ps_job_adapter.update_status(int(job.job_id), "completed")
                     elif job.status == ImportStatus.FAILED:
                         self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=job.error_message)
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PS adapter update_status (completion) failed for import job {job.job_id}: {e}")
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             job.status = ImportStatus.FAILED
             job.completed_at = datetime.now(timezone.utc)
             job.error_message = str(e)
@@ -1914,7 +1947,7 @@ class ChatbookService:
             if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
                 try:
                     self._ps_job_adapter.update_status(int(job.job_id), "failed", error_message=str(e))
-                except Exception as ps_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as ps_err:
                     logger.debug(f"PS adapter update_status (failed) failed for import job {job.job_id}: {ps_err}")
         finally:
             # Ensure original import archive is removed for async mode
@@ -1922,10 +1955,10 @@ class ChatbookService:
                 fp = self._resolve_import_archive_path(file_path)
                 if fp.exists() and fp.is_file():
                     fp.unlink()
-            except Exception as _e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                 logger.warning(f"Could not remove import archive (async) {file_path}: {_e}")
 
-    def preview_chatbook(self, file_path: str) -> Tuple[Optional[ChatbookManifest], Optional[str]]:
+    def preview_chatbook(self, file_path: str) -> tuple[ChatbookManifest | None, str | None]:
         """
         Preview a chatbook without importing it.
 
@@ -1935,11 +1968,11 @@ class ChatbookService:
         Returns:
             Tuple of (manifest, error_message)
         """
-        extract_dir: Optional[Path] = None
+        extract_dir: Path | None = None
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Chatbooks preview rejected file path: {exc}")
                 return None, "Invalid or potentially malicious archive file"
             file_path = str(resolved_path)
@@ -1950,7 +1983,7 @@ class ChatbookService:
                 ok, err = ChatbookValidator.validate_zip_file(file_path)
                 if not ok:
                     return None, err or "Invalid archive"
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 # If validator import fails, continue with cautious extraction guards
                 pass
             # Extract to temporary directory with UUID to prevent collisions
@@ -1969,7 +2002,7 @@ class ChatbookService:
                         return None, "Unsafe path in archive detected"
 
                     # Additional check: ensure the normalized target stays within extract_dir
-                    normalized_path = os.path.normpath(member)
+                    os.path.normpath(member)
                     # Use normpath + commonpath instead of realpath to avoid race conditions
                     target_path = os.path.normpath(os.path.join(extract_dir_resolved, member))
                     try:
@@ -1988,34 +2021,35 @@ class ChatbookService:
             if not manifest_path.exists():
                 return None, "Invalid chatbook: manifest.json not found"
 
-            with open(manifest_path, 'r', encoding='utf-8') as f:
+            with open(manifest_path, encoding='utf-8') as f:
                 manifest_data = json.load(f)
 
             manifest = ChatbookManifest.from_dict(manifest_data)
 
             return manifest, None
 
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error previewing chatbook: {e}")
             return None, f"Error previewing chatbook: {str(e)}"
         finally:
             if extract_dir and extract_dir.exists():
                 shutil.rmtree(extract_dir, ignore_errors=True)
 
-    def _build_download_url(self, job_id: str, expires_at: Optional[datetime]) -> str:
+    def _build_download_url(self, job_id: str, expires_at: datetime | None) -> str:
         """Build a (possibly signed) download URL for a job."""
         base = f"/api/v1/chatbooks/download/{job_id}"
         use_signed = str(os.getenv("CHATBOOKS_SIGNED_URLS", "false")).lower() in {"1","true","yes"}
         secret = os.getenv("CHATBOOKS_SIGNING_SECRET", "")
         if use_signed and secret and expires_at:
-            import hmac, hashlib
+            import hashlib
+            import hmac
             exp = int(expires_at.timestamp())
-            msg = f"{job_id}:{exp}".encode("utf-8")
+            msg = f"{job_id}:{exp}".encode()
             sig = hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
             return f"{base}?exp={exp}&token={sig}"
         return base
 
-    def get_export_job(self, job_id: str) -> Optional[ExportJob]:
+    def get_export_job(self, job_id: str) -> ExportJob | None:
         """Get export job status."""
         job = self._get_export_job(job_id)
         # If using PS backend, reflect PS status for live view
@@ -2035,16 +2069,14 @@ class ChatbookService:
                     mapped = status_map.get(ps_status)
                     if mapped and job.status not in {ExportStatus.COMPLETED, ExportStatus.FAILED}:
                         job.status = mapped
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._jobs_adapter.apply_export_status(job)
-            except Exception:
-                pass
         return job
 
-    def get_import_job(self, job_id: str) -> Optional[ImportJob]:
+    def get_import_job(self, job_id: str) -> ImportJob | None:
         """Get import job status."""
         job = self._get_import_job(job_id)
         if job and getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
@@ -2063,16 +2095,14 @@ class ChatbookService:
                     mapped = status_map.get(ps_status)
                     if mapped and job.status not in {ImportStatus.COMPLETED, ImportStatus.FAILED}:
                         job.status = mapped
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         if job and getattr(self, "_jobs_backend", "core") == "core" and getattr(self, "_jobs_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._jobs_adapter.apply_import_status(job)
-            except Exception:
-                pass
         return job
 
-    def list_export_jobs(self, status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[ExportJob]:
+    def list_export_jobs(self, status: str | None = None, limit: int = 100, offset: int = 0) -> list[ExportJob]:
         """List all export jobs for this user.
 
         Args:
@@ -2122,7 +2152,7 @@ class ChatbookService:
             if not results:
                 return []
 
-            jobs: List[ExportJob] = []
+            jobs: list[ExportJob] = []
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
                 if isinstance(row, dict):
@@ -2185,7 +2215,7 @@ class ChatbookService:
                             mapped = status_map.get(ps_status)
                             if mapped and job.status not in {ExportStatus.COMPLETED, ExportStatus.FAILED}:
                                 job.status = mapped
-                    except Exception:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                         pass
                 jobs.append(job)
 
@@ -2197,15 +2227,15 @@ class ChatbookService:
                         row = job_map.get(job.job_id)
                         if row:
                             self._jobs_adapter.apply_export_status(job, job_row=row)
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return jobs
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing export jobs: {e}")
             return []
 
-    def list_import_jobs(self, status: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[ImportJob]:
+    def list_import_jobs(self, status: str | None = None, limit: int = 100, offset: int = 0) -> list[ImportJob]:
         """List all import jobs for this user.
 
         Args:
@@ -2255,7 +2285,7 @@ class ChatbookService:
             if not results:
                 return []
 
-            jobs: List[ImportJob] = []
+            jobs: list[ImportJob] = []
             for row in results:
                 # Handle both dict and tuple formats (for test compatibility)
                 if isinstance(row, dict):
@@ -2318,7 +2348,7 @@ class ChatbookService:
                             mapped = status_map.get(ps_status)
                             if mapped and job.status not in {ImportStatus.COMPLETED, ImportStatus.FAILED}:
                                 job.status = mapped
-                    except Exception:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                         pass
                 jobs.append(job)
 
@@ -2330,15 +2360,15 @@ class ChatbookService:
                         row = job_map.get(job.job_id)
                         if row:
                             self._jobs_adapter.apply_import_status(job, job_row=row)
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     pass
 
             return jobs
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing import jobs: {e}")
             return []
 
-    def count_export_jobs(self, status: Optional[str] = None) -> int:
+    def count_export_jobs(self, status: str | None = None) -> int:
         """Count export jobs for this user."""
         if not self.user_id:
             logger.warning("count_export_jobs called with empty user_id")
@@ -2359,11 +2389,11 @@ class ChatbookService:
             if isinstance(row, dict):
                 return int(row.get("c") or 0)
             return int(row[0]) if row else 0
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error counting export jobs: {e}")
             return 0
 
-    def count_import_jobs(self, status: Optional[str] = None) -> int:
+    def count_import_jobs(self, status: str | None = None) -> int:
         """Count import jobs for this user."""
         if not self.user_id:
             logger.warning("count_import_jobs called with empty user_id")
@@ -2384,7 +2414,7 @@ class ChatbookService:
             if isinstance(row, dict):
                 return int(row.get("c") or 0)
             return int(row[0]) if row else 0
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error counting import jobs: {e}")
             return 0
 
@@ -2400,6 +2430,7 @@ class ChatbookService:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             now_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')
             deleted_count = 0
+            no_progress_batches = 0
 
             while True:
                 cursor = self.db.execute_query(
@@ -2411,6 +2442,7 @@ class ChatbookService:
                 if not results:
                     break
 
+                updated_status_count = 0
                 for row in results:
                     # Support both dict and tuple rows
                     if isinstance(row, dict):
@@ -2421,34 +2453,57 @@ class ChatbookService:
                         output_path = row[4] if len(row) > 4 else None
                         job_id = row[0]
 
-                    if output_path and Path(output_path).exists():
+                    if output_path:
                         try:
-                            Path(output_path).unlink()
-                            deleted_count += 1
-                        except Exception as e:
+                            file_path = Path(output_path).resolve()
+                            expected_base = Path(self.export_dir).resolve()
+                            if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                                logger.warning(f"Refusing to delete export outside export dir: {file_path}")
+                            elif file_path.exists() and file_path.is_file():
+                                file_path.unlink()
+                                deleted_count += 1
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.error(f"Error deleting expired export: {e}")
 
                     # Update job status
                     try:
                         self.db.execute_query(
                             "UPDATE export_jobs SET status = ? WHERE job_id = ?",
-                            ('expired', job_id)
+                            ('expired', job_id),
+                            commit=True,
                         )
-                    except Exception as _e:
+                        updated_status_count += 1
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                         logger.warning(f"Failed to mark job {job_id} expired: {_e}")
+
+                if updated_status_count == 0:
+                    no_progress_batches += 1
+                    logger.warning(
+                        f"cleanup_expired_exports made no progress for user={self.user_id} "
+                        f"(batch_size={len(results)}, attempt={no_progress_batches})"
+                    )
+                else:
+                    no_progress_batches = 0
+
+                if no_progress_batches >= 2:
+                    logger.warning(
+                        f"Aborting cleanup_expired_exports loop for user={self.user_id} "
+                        "after repeated no-progress batches"
+                    )
+                    break
 
                 # If we got fewer results than batch_size, we're done
                 if len(results) < batch_size:
                     break
 
             return deleted_count
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cleaning up expired exports: {e}")
             return 0
 
     def _collect_prompts(
         self,
-        prompt_ids: List[str],
+        prompt_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -2464,16 +2519,16 @@ class ChatbookService:
         prompts_dir.mkdir(parents=True, exist_ok=True)
 
         for prompt_identifier in prompt_ids:
-            prompt_record: Optional[Dict[str, Any]] = None
+            prompt_record: dict[str, Any] | None = None
             # Attempt ID lookup (int) first, then UUID
             try:
                 prompt_record = prompts_db.get_prompt_by_id(int(prompt_identifier))
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 prompt_record = None
             if not prompt_record:
                 try:
                     prompt_record = prompts_db.get_prompt_by_uuid(str(prompt_identifier))
-                except Exception:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                     prompt_record = None
             if not prompt_record:
                 logger.debug(f"Prompt {prompt_identifier} not found; skipping.")
@@ -2497,7 +2552,7 @@ class ChatbookService:
 
     def _collect_media_items(
         self,
-        media_ids: List[str],
+        media_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent,
@@ -2513,7 +2568,7 @@ class ChatbookService:
             return
         media_dir = work_dir / "content" / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
-        embeddings_dir: Optional[Path] = None
+        embeddings_dir: Path | None = None
 
         if include_media:
             self._note_todo("Binary media asset export is not yet implemented; exporting metadata only.")
@@ -2528,22 +2583,22 @@ class ChatbookService:
             media_id = str(normalized.get("id", media_identifier))
 
             # Attach transcripts when helper is available
-            transcripts: List[Dict[str, Any]] = []
+            transcripts: list[dict[str, Any]] = []
             if get_media_transcripts is not None:
                 try:
                     transcripts_raw = get_media_transcripts(media_db, int(media_record["id"]))
                     transcripts = [self._normalize_transcript_row(row) for row in transcripts_raw]
-                except Exception as exc:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to fetch transcripts for media {media_id}: {exc}")
                     self._note_todo("Media transcripts export failed for some items; inspect logs.")
             normalized["transcripts"] = transcripts
 
             # Attach prompts linked to media when helper available
-            media_prompts: List[Dict[str, Any]] = []
+            media_prompts: list[dict[str, Any]] = []
             if get_media_prompts is not None:
                 try:
                     media_prompts = get_media_prompts(media_db, int(media_record["id"]))
-                except Exception as exc:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to fetch media prompts for media {media_id}: {exc}")
                     self._note_todo("Media prompts export encountered failures; inspect logs.")
             normalized["related_prompts"] = media_prompts
@@ -2600,7 +2655,7 @@ class ChatbookService:
 
     def _collect_evaluations(
         self,
-        evaluation_ids: List[str],
+        evaluation_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -2619,14 +2674,14 @@ class ChatbookService:
             record = None
             try:
                 record = evals_db.get_evaluation(str(eval_id))
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to fetch evaluation {eval_id}: {exc}")
                 record = None
             if not record:
                 continue
 
             normalized = self._normalize_evaluation_record(record)
-            runs_payload: List[Dict[str, Any]] = []
+            runs_payload: list[dict[str, Any]] = []
             try:
                 raw_max_rows = os.getenv("CHATBOOKS_EVAL_EXPORT_MAX_ROWS", "200")
                 try:
@@ -2651,7 +2706,7 @@ class ChatbookService:
                                 "continuation_token": str(last_run_id)
                             })
                     self._note_todo("Evaluation export limited to max rows; add resumable export support.")
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to list evaluation runs for {eval_id}: {exc}")
                 self._note_todo("Evaluation runs export failed for some items; inspect logs.")
             normalized["runs"] = runs_payload
@@ -2673,7 +2728,7 @@ class ChatbookService:
 
     def _collect_conversations(
         self,
-        conversation_ids: List[str],
+        conversation_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -2703,10 +2758,10 @@ class ChatbookService:
                     if str(conv_id) not in conv_ids:
                         conv_ids.append(str(conv_id))
 
-                attachments_dir: Optional[Path] = None
-                conversation_messages: List[Dict[str, Any]] = []
+                attachments_dir: Path | None = None
+                conversation_messages: list[dict[str, Any]] = []
                 for msg in (messages or []):
-                    message_payload: Dict[str, Any] = {
+                    message_payload: dict[str, Any] = {
                         "id": msg['id'],
                         "role": msg['sender'],
                         "content": msg.get('message', msg.get('content', '')),
@@ -2740,7 +2795,7 @@ class ChatbookService:
                             try:
                                 with open(attachment_path, "wb") as af:
                                     af.write(bytes(primary_bytes))
-                            except Exception as exc:
+                            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                                 logger.debug(f"Failed to persist primary image attachment for message {msg['id']}: {exc}")
                                 self._note_todo("Failed to export some conversation image attachments; inspect logs.")
                             else:
@@ -2781,7 +2836,7 @@ class ChatbookService:
                         try:
                             with open(attachment_path, "wb") as af:
                                 af.write(bytes(image_bytes))
-                        except Exception as exc:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug(f"Failed to persist image attachment for message {msg['id']}: {exc}")
                             self._note_todo("Failed to export some conversation image attachments; inspect logs.")
                             continue
@@ -2795,7 +2850,7 @@ class ChatbookService:
 
                     # Extract citations from RAG context if available
                     try:
-                        rag_context = self._db.get_message_rag_context(msg['id'])
+                        rag_context = self.db.get_message_rag_context(msg['id'])
                         if rag_context:
                             # Include retrieved documents as citations
                             retrieved_docs = rag_context.get('retrieved_documents', [])
@@ -2832,7 +2887,7 @@ class ChatbookService:
                             # Include search query for context
                             if rag_context.get('search_query'):
                                 message_payload["rag_search_query"] = rag_context.get('search_query')
-                    except Exception as cite_err:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as cite_err:
                         logger.debug(f"Failed to extract citations for message {msg['id']}: {cite_err}")
 
                     conversation_messages.append(message_payload)
@@ -2862,12 +2917,12 @@ class ChatbookService:
                     file_path=f"content/conversations/conversation_{conv_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting conversation {conv_id}: {e}")
 
     def _collect_notes(
         self,
-        note_ids: List[str],
+        note_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -2927,12 +2982,12 @@ class ChatbookService:
                     file_path=f"content/notes/note_{note_id}.md"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting note {note_id}: {e}")
 
     def _collect_characters(
         self,
-        character_ids: List[str],
+        character_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -2964,12 +3019,12 @@ class ChatbookService:
                     file_path=f"content/characters/character_{char_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting character {char_id}: {e}")
 
     def _collect_world_books(
         self,
-        world_book_ids: List[str],
+        world_book_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -3007,12 +3062,12 @@ class ChatbookService:
                     file_path=f"content/world_books/world_book_{wb_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting world book {wb_id}: {e}")
 
     def _collect_dictionaries(
         self,
-        dictionary_ids: List[str],
+        dictionary_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -3056,12 +3111,12 @@ class ChatbookService:
                     file_path=f"content/dictionaries/dictionary_{dict_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting dictionary {dict_id}: {e}")
 
     def _collect_generated_documents(
         self,
-        document_ids: List[str],
+        document_ids: list[str],
         work_dir: Path,
         manifest: ChatbookManifest,
         content: ChatbookContent
@@ -3098,7 +3153,7 @@ class ChatbookService:
                     file_path=f"content/generated_documents/document_{doc_id}.json"
                 ))
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error collecting document {doc_id}: {e}")
 
     # Helper methods for importing content
@@ -3107,11 +3162,11 @@ class ChatbookService:
         self,
         extract_dir: Path,
         manifest: ChatbookManifest,
-        conversation_ids: List[str],
+        conversation_ids: list[str],
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         status: ImportJob,
-        character_id_map: Optional[Dict[str, int]] = None
+        character_id_map: dict[str, int] | None = None
     ):
         """Import conversations from chatbook."""
         conv_dir = extract_dir / "content" / "conversations"
@@ -3128,11 +3183,16 @@ class ChatbookService:
                     status.warnings.append(f"Conversation file not found: {conv_file.name}")
                     continue
 
-                with open(conv_file, 'r', encoding='utf-8') as f:
+                with open(conv_file, encoding='utf-8') as f:
                     conv_data = json.load(f)
 
                 # Check for existing conversation
-                conv_name = conv_data['name']
+                conv_name = (
+                    conv_data.get('name')
+                    or conv_data.get('title')
+                    or conv_data.get('conversation_title')
+                    or 'Untitled'
+                )
                 if prefix_imported:
                     conv_name = f"[Imported] {conv_name}"
 
@@ -3158,7 +3218,7 @@ class ChatbookService:
                 with self.db.transaction():
                     conv_dict = {
                         'title': conv_name,
-                        'created_at': conv_data.get('created_at'),
+                        'created_at': conv_data.get('created_at') or conv_data.get('created') or conv_data.get('timestamp'),
                         'character_id': resolved_char_id
                     }
                     new_conv_id = self.db.add_conversation(conv_dict)
@@ -3167,16 +3227,22 @@ class ChatbookService:
                         # Import messages
                         base_path = extract_dir.resolve()
                         for msg in conv_data.get('messages', []):
+                            raw_role = msg.get('role') or msg.get('sender') or msg.get('author') or msg.get('from')
+                            raw_content = msg.get('content')
+                            if raw_content is None:
+                                raw_content = msg.get('message')
+                            if raw_content is None:
+                                raw_content = msg.get('text')
                             msg_dict = {
                                 'conversation_id': new_conv_id,
-                                'sender': msg['role'],
-                                'content': msg['content'],
-                                'timestamp': msg.get('timestamp')
+                                'sender': raw_role or 'user',
+                                'content': raw_content if raw_content is not None else '',
+                                'timestamp': msg.get('timestamp') or msg.get('created_at')
                             }
 
                             attachments = msg.get('attachments') or []
-                            images_payload: List[Dict[str, Any]] = []
-                            primary_payload: Optional[Tuple[bytes, str]] = None
+                            images_payload: list[dict[str, Any]] = []
+                            primary_payload: tuple[bytes, str] | None = None
                             for attachment in attachments:
                                 if not isinstance(attachment, dict):
                                     continue
@@ -3187,17 +3253,17 @@ class ChatbookService:
                                     continue
                                 try:
                                     attachment_rel = Path(rel_path)
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     continue
                                 candidate_path = (base_path / attachment_rel).resolve()
                                 try:
                                     candidate_path.relative_to(base_path)
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     status.warnings.append(f"Skipped attachment outside extract dir: {rel_path}")
                                     continue
                                 try:
                                     size_bytes = candidate_path.stat().st_size
-                                except Exception:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                                     size_bytes = None
                                 if size_bytes is not None and size_bytes > max_img_bytes:
                                     status.warnings.append(
@@ -3206,7 +3272,7 @@ class ChatbookService:
                                     continue
                                 try:
                                     image_bytes = candidate_path.read_bytes()
-                                except Exception as read_exc:
+                                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as read_exc:
                                     status.warnings.append(f"Failed to read attachment {rel_path}: {read_exc}")
                                     continue
                                 if len(image_bytes) > max_img_bytes:
@@ -3245,7 +3311,7 @@ class ChatbookService:
                         else:
                             status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing conversation {conv_id}: {str(e)}")
 
@@ -3253,7 +3319,7 @@ class ChatbookService:
         self,
         extract_dir: Path,
         manifest: ChatbookManifest,
-        note_ids: List[str],
+        note_ids: list[str],
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         status: ImportJob
@@ -3296,7 +3362,7 @@ class ChatbookService:
                     continue
 
                 # Parse markdown with frontmatter
-                with open(note_file, 'r', encoding='utf-8') as f:
+                with open(note_file, encoding='utf-8') as f:
                     content = f.read()
 
                 # Extract frontmatter
@@ -3315,7 +3381,7 @@ class ChatbookService:
                                 note_title = str(parsed.get('title'))
                             else:
                                 note_title = _extract_title_frontmatter(frontmatter, note_title)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             note_title = _extract_title_frontmatter(frontmatter, note_title)
                         note_content = parts[2].strip()
 
@@ -3343,7 +3409,7 @@ class ChatbookService:
                     else:
                         status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing note {note_id}: {str(e)}")
 
@@ -3351,11 +3417,11 @@ class ChatbookService:
         self,
         extract_dir: Path,
         manifest: ChatbookManifest,
-        character_ids: List[str],
+        character_ids: list[str],
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         status: ImportJob,
-        character_id_map: Optional[Dict[str, int]] = None
+        character_id_map: dict[str, int] | None = None
     ):
         """Import character cards from chatbook."""
         chars_dir = extract_dir / "content" / "characters"
@@ -3371,7 +3437,7 @@ class ChatbookService:
                     status.warnings.append(f"Character file not found: {char_file.name}")
                     continue
 
-                with open(char_file, 'r', encoding='utf-8') as f:
+                with open(char_file, encoding='utf-8') as f:
                     char_data = json.load(f)
 
                 # Check for existing character
@@ -3397,7 +3463,7 @@ class ChatbookService:
                     if character_id_map is not None:
                         try:
                             character_id_map[str(char_id)] = int(new_char_id)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             character_id_map[str(char_id)] = new_char_id
                     status.successful_items += 1
                 else:
@@ -3408,7 +3474,7 @@ class ChatbookService:
                     else:
                         status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing character {char_id}: {str(e)}")
 
@@ -3416,7 +3482,7 @@ class ChatbookService:
         self,
         extract_dir: Path,
         manifest: ChatbookManifest,
-        world_book_ids: List[str],
+        world_book_ids: list[str],
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         status: ImportJob
@@ -3439,7 +3505,7 @@ class ChatbookService:
                     status.warnings.append(f"World book file not found: {wb_file.name}")
                     continue
 
-                with open(wb_file, 'r', encoding='utf-8') as f:
+                with open(wb_file, encoding='utf-8') as f:
                     wb_data = json.load(f)
 
                 # Handle import with conflict resolution
@@ -3465,7 +3531,7 @@ class ChatbookService:
                 else:
                     status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing world book {wb_id}: {str(e)}")
 
@@ -3473,7 +3539,7 @@ class ChatbookService:
         self,
         extract_dir: Path,
         manifest: ChatbookManifest,
-        dictionary_ids: List[str],
+        dictionary_ids: list[str],
         conflict_resolution: ConflictResolution,
         prefix_imported: bool,
         status: ImportJob
@@ -3496,7 +3562,7 @@ class ChatbookService:
                     status.warnings.append(f"Dictionary file not found: {dict_file.name}")
                     continue
 
-                with open(dict_file, 'r', encoding='utf-8') as f:
+                with open(dict_file, encoding='utf-8') as f:
                     dict_data = json.load(f)
 
                 # Handle import with conflict resolution
@@ -3532,7 +3598,7 @@ class ChatbookService:
                         prob = e.get('probability', 1.0)
                         try:
                             prob = float(prob)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             prob = 1.0
                         norm_entries.append({
                             'type': str(typ_val).lower(),
@@ -3558,7 +3624,7 @@ class ChatbookService:
                         status.warnings.append(
                             f"Dictionary '{dict_name}' validation warnings: {', '.join(wc)}"
                         )
-                except Exception as _ve:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _ve:
                     # Non-fatal: surface as a warning and continue with import
                     status.warnings.append(f"Dictionary '{dict_name}' validation failed: {_ve}")
 
@@ -3584,12 +3650,12 @@ class ChatbookService:
                             pf = float(p_raw)
                             if pf > 1.0:
                                 pf = max(0.0, min(1.0, pf / 100.0))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pf = 1.0
                         max_rep_raw = entry.get("max_replacements", 1)
                         try:
                             max_rep_val = int(max_rep_raw)
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             max_rep_val = 1
                         group = entry.get("group") or entry.get("group_name")
                         timed_effects = entry.get("timed_effects")
@@ -3611,7 +3677,7 @@ class ChatbookService:
                 else:
                     status.failed_items += 1
 
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Error importing dictionary {dict_id}: {str(e)}")
 
@@ -3642,7 +3708,7 @@ class ChatbookService:
                 job.processed_items, job.file_size_bytes, job.download_url,
                 job.expires_at.strftime('%Y-%m-%d %H:%M:%S.%f') if job.expires_at else None
             ), commit=True)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving export job: {e}")
             raise
 
@@ -3675,7 +3741,7 @@ class ChatbookService:
             else:
                 logger.debug(f"Export job {job_id} was already claimed or not found")
                 return False
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error claiming export job {job_id}: {e}")
             return False
 
@@ -3708,11 +3774,11 @@ class ChatbookService:
             else:
                 logger.debug(f"Import job {job_id} was already claimed or not found")
                 return False
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error claiming import job {job_id}: {e}")
             return False
 
-    def _get_export_job(self, job_id: str) -> Optional[ExportJob]:
+    def _get_export_job(self, job_id: str) -> ExportJob | None:
         """Get export job from database."""
         try:
             cursor = self.db.execute_query(
@@ -3783,7 +3849,7 @@ class ChatbookService:
                 expires_at=self._parse_timestamp(row.get('expires_at')),
                 metadata=metadata
             )
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting export job: {e}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
@@ -3814,11 +3880,11 @@ class ChatbookService:
                 job.processed_items, job.successful_items, job.failed_items,
                 job.skipped_items, json.dumps(job.conflicts), json.dumps(job.warnings)
             ), commit=True)
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving import job: {e}")
             raise
 
-    def _get_import_job(self, job_id: str) -> Optional[ImportJob]:
+    def _get_import_job(self, job_id: str) -> ImportJob | None:
         """Get import job from database."""
         try:
             cursor = self.db.execute_query(
@@ -3874,7 +3940,7 @@ class ChatbookService:
                 conflicts=json.loads(row['conflicts']) if row['conflicts'] else [],
                 warnings=json.loads(row['warnings']) if row['warnings'] else []
             )
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting import job: {e}")
             return None
 
@@ -3937,7 +4003,7 @@ class ChatbookService:
 
     # Additional methods for test compatibility
 
-    def create_export_job(self, name: str, description: str, content_types: List[str]) -> Dict[str, Any]:
+    def create_export_job(self, name: str, description: str, content_types: list[str]) -> dict[str, Any]:
         """
         Create an export job (synchronous wrapper for tests).
 
@@ -3969,10 +4035,10 @@ class ChatbookService:
                 "name": name,
                 "description": description
             }
-        except Exception as e:
-            raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e)
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e) from e
 
-    def get_export_job_status(self, job_id: str) -> Dict[str, Any]:
+    def get_export_job_status(self, job_id: str) -> dict[str, Any]:
         """Get export job status."""
         job = self.get_export_job(job_id)
         if not job:
@@ -4016,16 +4082,12 @@ class ChatbookService:
         # Best-effort cancel of in-process task
         task = self._tasks.pop(job_id, None)
         if task:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 task.cancel()
-            except Exception:
-                pass
         # PS backend cancel
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._ps_job_adapter.cancel(int(job_id))
-            except Exception:
-                pass
         # Core backend: cancel queued or request cancel for processing in core Jobs
         if getattr(self, "_jobs_backend", "core") == "core":
             try:
@@ -4040,9 +4102,9 @@ class ChatbookService:
                             job_uuid = str(j.get("uuid") or j.get("id"))
                             if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pass
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
 
         # Audit is performed at the API layer.
@@ -4060,15 +4122,11 @@ class ChatbookService:
         self._save_import_job(job)
         task = self._tasks.pop(job_id, None)
         if task:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 task.cancel()
-            except Exception:
-                pass
         if getattr(self, "_jobs_backend", "core") == "prompt_studio" and getattr(self, "_ps_job_adapter", None) is not None:
-            try:
+            with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
                 self._ps_job_adapter.cancel(int(job_id))
-            except Exception:
-                pass
         if getattr(self, "_jobs_backend", "core") == "core":
             try:
                 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -4081,9 +4139,9 @@ class ChatbookService:
                             job_uuid = str(j.get("uuid") or j.get("id"))
                             if payload.get("chatbooks_job_id") == job_id or job_uuid == job_id:
                                 jm.cancel_job(int(j["id"]))
-                        except Exception:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             pass
-            except Exception:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                 pass
         return True
 
@@ -4105,7 +4163,7 @@ class ChatbookService:
                     logger.warning(f"Refusing to delete export outside export dir: {file_path}")
                 elif file_path.exists() and file_path.is_file():
                     file_path.unlink()
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to delete export file for job {job_id}: {exc}")
 
         try:
@@ -4114,7 +4172,7 @@ class ChatbookService:
                 (job_id, self.user_id),
                 commit=True,
             )
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to delete export job {job_id}: {exc}")
             raise
 
@@ -4136,13 +4194,13 @@ class ChatbookService:
                 (job_id, self.user_id),
                 commit=True,
             )
-        except Exception as exc:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to delete import job {job_id}: {exc}")
             raise
 
         return True
 
-    def create_import_job(self, file_path: str, conflict_strategy: str = "skip") -> Dict[str, Any]:
+    def create_import_job(self, file_path: str, conflict_strategy: str = "skip") -> dict[str, Any]:
         """
         Create an import job (synchronous wrapper for tests).
 
@@ -4170,10 +4228,10 @@ class ChatbookService:
                 "status": "pending",
                 "file_path": file_path
             }
-        except Exception as e:
-            raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e)
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e) from e
 
-    def get_import_job_status(self, job_id: str) -> Dict[str, Any]:
+    def get_import_job_status(self, job_id: str) -> dict[str, Any]:
         """Get import job status."""
         job = self.get_import_job(job_id)
         if not job:
@@ -4197,7 +4255,7 @@ class ChatbookService:
 
         return result
 
-    def preview_export(self, content_types: List[str]) -> Dict[str, Any]:
+    def preview_export(self, content_types: list[str]) -> dict[str, Any]:
         """
         Preview what would be exported.
 
@@ -4246,7 +4304,7 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist or have different schema
                             logger.debug(f"world_books count query failed (no user filter): error={q_err}")
                             items = []
@@ -4259,7 +4317,7 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist
                             logger.debug(f"dictionaries count query failed: error={q_err}")
                             items = []
@@ -4272,19 +4330,19 @@ class ChatbookService:
                                 ()
                             )
                             items = self._fetch_results(cursor)
-                        except Exception as q_err:
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as q_err:
                             # Table might not exist
                             logger.debug(f"prompts count query failed: error={q_err}")
                             items = []
                         result["prompts"] = len(items) if items else 0
-                except Exception as e:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                     # If query fails for any type, just set to 0
                     logger.debug(f"Query failed for {content_type}: {e}")
                     result[content_type] = 0
 
             return result
-        except Exception as e:
-            raise DatabaseError(f"Failed to preview export: {e}", cause=e)
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            raise DatabaseError(f"Failed to preview export: {e}", cause=e) from e
 
     def clean_old_exports(self, days_old: int = 7) -> int:
         """
@@ -4320,12 +4378,17 @@ class ChatbookService:
                         job_id = row[0] if len(row) > 0 else None
                         output_path = row[1] if len(row) > 1 else None
 
-                    if output_path and os.path.exists(output_path):
+                    if output_path:
                         try:
-                            os.unlink(output_path)
-                            deleted_count += 1
-                            logger.info(f"Deleted old export: {output_path}")
-                        except Exception as e:
+                            file_path = Path(output_path).resolve()
+                            expected_base = Path(self.export_dir).resolve()
+                            if os.path.commonpath([str(file_path), str(expected_base)]) != str(expected_base):
+                                logger.warning(f"Refusing to delete export outside export dir: {file_path}")
+                            elif file_path.exists() and file_path.is_file():
+                                file_path.unlink()
+                                deleted_count += 1
+                                logger.info(f"Deleted old export: {output_path}")
+                        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                             logger.error(f"Failed to delete {output_path}: {e}")
 
                     # Delete from database
@@ -4335,14 +4398,14 @@ class ChatbookService:
                             (job_id,),
                             commit=True
                         )
-                    except Exception as e:
+                    except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to delete job record {job_id}: {e}")
 
             # Audit is performed at the API layer.
 
             return deleted_count
-        except Exception as e:
-            raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e)
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
+            raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e) from e
 
     def validate_chatbook(self, file_path: str) -> bool:
         """
@@ -4357,7 +4420,7 @@ class ChatbookService:
         try:
             try:
                 resolved_path = self._resolve_import_archive_path(file_path)
-            except Exception as exc:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as exc:
                 raise ValidationError("Invalid or potentially malicious archive file", field="file_path") from exc
             file_path = str(resolved_path)
 
@@ -4378,13 +4441,13 @@ class ChatbookService:
 
                 return True
         except zipfile.BadZipFile:
-            raise ArchiveError("Invalid ZIP file", archive_path=file_path)
-        except Exception as e:
+            raise ArchiveError("Invalid ZIP file", archive_path=file_path) from None
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             if isinstance(e, (ValidationError, ArchiveError)):
                 raise
-            raise ValidationError(f"Validation failed: {e}", cause=e)
+            raise ValidationError(f"Validation failed: {e}", cause=e) from e
 
-    def validate_chatbook_file(self, file_path: str) -> Dict[str, Any]:
+    def validate_chatbook_file(self, file_path: str) -> dict[str, Any]:
         """
         Validate a chatbook file (test compatibility method).
 
@@ -4406,7 +4469,7 @@ class ChatbookService:
                     with zipfile.ZipFile(resolved_path, 'r') as zf:
                         manifest_data = zf.read('manifest.json')
                         manifest = json.loads(manifest_data)
-                except Exception as mf_err:
+                except _CHATBOOK_NONCRITICAL_EXCEPTIONS as mf_err:
                     logger.debug(f"Failed to read chatbook manifest.json: path={file_path}, error={mf_err}")
 
             return {
@@ -4414,14 +4477,14 @@ class ChatbookService:
                 "manifest": manifest,
                 "error": None
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             return {
                 "is_valid": False,
                 "manifest": None,
                 "error": str(e)
             }
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """Get import/export statistics."""
         try:
             # Get export stats
@@ -4461,7 +4524,7 @@ class ChatbookService:
                 "total_exports": sum(export_stats.values()),
                 "total_imports": sum(import_stats.values())
             }
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get statistics: {e}")
             return {
                 "exports": {},
@@ -4484,11 +4547,11 @@ class ChatbookService:
                         else:
                             zf.write(file_path, arcname)
             return True
-        except Exception as e:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create archive: {e}")
             return False
 
-    def _write_content_to_archive(self, zf: zipfile.ZipFile, content_items: List[ContentItem], base_dir: str = "content"):
+    def _write_content_to_archive(self, zf: zipfile.ZipFile, content_items: list[ContentItem], base_dir: str = "content"):
         """Write content items to archive."""
         for item in content_items:
             # Create item directory
@@ -4502,7 +4565,7 @@ class ChatbookService:
             if item.metadata:
                 zf.writestr(f"{item_dir}/content.json", json.dumps(item.metadata, indent=2))
 
-    def _process_import_items(self, items: List[ContentItem], conflict_resolution: str = "skip") -> ImportStatusData:
+    def _process_import_items(self, items: list[ContentItem], conflict_resolution: str = "skip") -> ImportStatusData:
         """Process import items with conflict resolution."""
         status = ImportStatusData()
         status.total_items = len(items)
@@ -4527,7 +4590,7 @@ class ChatbookService:
                 else:
                     # Import new item
                     status.successful_items += 1
-            except Exception as e:
+            except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
                 status.failed_items += 1
                 status.warnings.append(f"Failed to import {item.id}: {str(e)}")
 
@@ -4609,7 +4672,7 @@ class ChatbookService:
             from .chatbook_validators import ChatbookValidator
             ok, _ = ChatbookValidator.validate_zip_file(file_path)
             return bool(ok)
-        except Exception:
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
             return False
 
     async def _create_zip_archive_async(self, work_dir: Path, output_path: Path):

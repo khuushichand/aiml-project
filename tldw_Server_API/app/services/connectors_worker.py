@@ -1,25 +1,37 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import hashlib
 import os
-from typing import Optional
+from typing import Any
 
 from loguru import logger
-import hashlib
-import tempfile
-from pathlib import Path
-from typing import Dict, Any, List
 
 try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
-except Exception:  # pragma: no cover - optional
+except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
+
+_CONNECTOR_NONCRITICAL_EXCEPTIONS = (
+    ArithmeticError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 DOMAIN = "connectors"
 
 
-async def run_connectors_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_connectors_worker(stop_event: asyncio.Event | None = None) -> None:
     """Minimal worker that acknowledges and completes connector jobs.
 
     Scaffold behavior: picks up jobs with domain 'connectors' and completes them
@@ -45,19 +57,19 @@ async def run_connectors_worker(stop_event: Optional[asyncio.Event] = None) -> N
             lease_id = str(job.get("lease_id")) if job.get("lease_id") else None
             try:
                 # Process import job
-                payload: Dict[str, Any] = job.get("payload") or {}
+                payload: dict[str, Any] = job.get("payload") or {}
                 source_id = int(payload.get("source_id")) if payload.get("source_id") is not None else None
                 user_id = int(payload.get("user_id")) if payload.get("user_id") is not None else None
                 if not source_id or not user_id:
                     raise ValueError("invalid job payload")
                 await _process_import_job(jm, jid, lease_id, worker_id, source_id, user_id)
-            except Exception as _e:
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
                 jm.fail_job(jid, error=str(_e), retryable=False, worker_id=worker_id, lease_id=lease_id, completion_token=lease_id)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             await asyncio.sleep(poll_sleep)
 
 
-async def start_connectors_worker() -> Optional[asyncio.Task]:
+async def start_connectors_worker() -> asyncio.Task | None:
     enabled = os.getenv("CONNECTORS_WORKER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -66,20 +78,20 @@ async def start_connectors_worker() -> Optional[asyncio.Task]:
     return task
 
 
-async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: str, source_id: int, user_id: int) -> None:
+async def _process_import_job(jm, jid: int, lease_id: str | None, worker_id: str, source_id: int, user_id: int) -> None:
     """Fetch source/account, enumerate items, and ingest into Media DB."""
     # DB access
     from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+    from tldw_Server_API.app.core.External_Sources import get_connector_by_name
     from tldw_Server_API.app.core.External_Sources.connectors_service import (
         get_account_tokens,
         get_source_by_id,
-        should_ingest_item,
         record_ingested_item,
+        should_ingest_item,
         update_account_tokens,
     )
-    from tldw_Server_API.app.core.External_Sources import get_connector_by_name
-    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
     pool = await get_db_pool()
     async with pool.transaction() as db:
@@ -95,14 +107,14 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
         # Load org policy for this user (best-effort)
         try:
             from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
-            from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy as get_org_policy
+            from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             memberships = await list_memberships_for_user(user_id)
             org_id = int((memberships[0] or {}).get("org_id") if memberships else 1)
             policy = await get_org_policy(db, org_id)
             if not policy:
                 policy = get_default_policy_from_env(org_id)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
             policy = get_default_policy_from_env(1)
 
@@ -123,7 +135,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 status = getattr(err, "status", None)
             if status is not None and int(status) == 401:
                 return True
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         # Fallback: inspect message
         msg = str(err).lower()
@@ -133,7 +145,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
         nonlocal acct
         try:
             return await call_coro(*args, **kwargs)
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             if not _is_unauthorized(e):
                 raise
             # Try refresh if possible
@@ -142,28 +154,26 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 raise
             try:
                 new_toks = None
-                if provider == 'drive' and hasattr(conn, 'refresh_access_token'):
-                    new_toks = await conn.refresh_access_token(rtok)
-                elif provider == 'notion' and hasattr(conn, 'refresh_access_token'):
+                if provider == 'drive' and hasattr(conn, 'refresh_access_token') or provider == 'notion' and hasattr(conn, 'refresh_access_token'):
                     new_toks = await conn.refresh_access_token(rtok)
                 if not new_toks or not new_toks.get('access_token'):
-                    raise e
+                    raise
                 # Persist and update local token cache
                 async with pool.transaction() as db:
                     await update_account_tokens(db, user_id, account_id, new_toks)
                 acct['tokens'].update(new_toks)
                 # Retry once
                 return await call_coro(*args, **kwargs)
-            except Exception:
+            except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                 raise
     # Determine listing function
-    async def _enumerate_items() -> List[Dict[str, Any]]:
-        items: List[Dict[str, Any]] = []
+    async def _enumerate_items() -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         page_size = 100
         recursive = bool(options.get("recursive", True))
         if provider == "drive":
             # BFS traversal when recursive; otherwise single level
-            queue: List[str] = [remote_id or "root"]
+            queue: list[str] = [remote_id or "root"]
             visited: set[str] = set()
             while queue:
                 parent = queue.pop(0)
@@ -211,6 +221,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
     processed = 0
     # Policy helpers
     from fnmatch import fnmatch
+
     from tldw_Server_API.app.core.External_Sources.policy import is_file_type_allowed
     allowed_export_formats = [str(f).lower() for f in (policy.get("allowed_export_formats") or [])]
     allowed_export_set = set(allowed_export_formats)
@@ -225,7 +236,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
             # Renew lease with progress
             pct = int((idx / total) * 100)
             jm.renew_job_lease(jid, seconds=120, worker_id=worker_id, lease_id=lease_id, progress_percent=pct)
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             pass
         # Skip folders
         if (it.get("is_folder") is True) or (str(it.get("mimeType") or "").startswith("application/vnd.google-apps.folder")):
@@ -245,7 +256,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 ext = name.lower().rsplit(".", 1)[-1] if "." in name else ""
                 if ext not in include_types:
                     continue
-        except Exception:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Enforce policy: file type and size
@@ -255,7 +266,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
             try:
                 if int(size) > max_bytes:
                     continue
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         # Determine desired export for Drive Google types according to policy/overrides
@@ -279,7 +290,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 raw = await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime, export_mime=export_mime)
             else:
                 raw = await _attempt_with_refresh(conn.download_file, acct, fid) if provider == "notion" else await _attempt_with_refresh(conn.download_file, acct, fid, mime_type=mime)
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"download failed for {provider}:{fid}: {e}")
             raw = b""
 
@@ -292,7 +303,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
                 try:
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
                     res = process_pdf(file_input=raw, filename=name, parser="docling")
-                except Exception:
+                except _CONNECTOR_NONCRITICAL_EXCEPTIONS:
                     from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib import process_pdf
                     res = process_pdf(file_input=raw, filename=name, parser="pymupdf4llm")
                 if isinstance(res, dict):
@@ -300,7 +311,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
             else:
                 if raw:
                     content_text = raw.decode("utf-8", errors="replace")
-        except Exception as _e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as _e:
             logger.warning(f"content conversion failed for {provider}:{fid}: {_e}")
         # Hash for dedup
         content_hash = hashlib.sha256(content_text.encode()).hexdigest() if content_text else None
@@ -324,7 +335,7 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
             )
             processed += 1
             ingested = True
-        except Exception as e:
+        except _CONNECTOR_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"add_media_with_keywords failed: {e}")
         if ingested:
             # Record ingestion cache
@@ -335,7 +346,5 @@ async def _process_import_job(jm, jid: int, lease_id: Optional[str], worker_id: 
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_connectors_worker())
-    except KeyboardInterrupt:
-        pass

@@ -42,3 +42,55 @@ def test_process_audio_files_uses_check_transcription_model_status(monkeypatch, 
     item = result["results"][0]
     warnings = item.get("warnings") or []
     assert any("Model large-v3 is not available locally" in w for w in warnings)
+
+
+@pytest.mark.unit
+def test_default_title_from_audio_path_strips_hex_suffix():
+    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd34.wav")
+    assert title == "My_Clip"
+
+
+@pytest.mark.unit
+def test_default_title_from_audio_path_keeps_non_hex_suffix():
+    title = audio_files._default_title_from_audio_path("/tmp/My_Clip_ab12cd3g.wav")
+    assert title == "My_Clip_ab12cd3g"
+
+
+@pytest.mark.unit
+def test_process_audio_files_url_uses_sanitized_default_title(monkeypatch, tmp_path):
+    downloaded_wav = tmp_path / "session_ab12cd34.wav"
+    downloaded_wav.write_bytes(b"\x00" * 2048)
+
+    monkeypatch.setattr(
+        audio_files,
+        "download_audio_file",
+        lambda *args, **kwargs: str(downloaded_wav),
+    )
+    monkeypatch.setattr(
+        audio_files,
+        "check_transcription_model_status",
+        lambda _model_name: {
+            "available": True,
+            "message": "ok",
+            "model": "base",
+        },
+    )
+
+    def fake_speech_to_text(**_kwargs):
+        return [{"start_seconds": 0.0, "end_seconds": 1.0, "Text": "hello"}]
+
+    monkeypatch.setattr(audio_files, "speech_to_text", fake_speech_to_text)
+
+    result = audio_files.process_audio_files(
+        inputs=["https://example.com/audio.mp3"],
+        transcription_model="base",
+        transcription_language="en",
+        perform_chunking=False,
+        perform_analysis=False,
+        temp_dir=str(tmp_path),
+    )
+
+    assert result["processed_count"] == 1
+    item = result["results"][0]
+    assert item["status"] == "Success"
+    assert item["metadata"]["title"] == "session"

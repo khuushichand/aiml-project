@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Spin, Alert } from "antd"
-import type { Book, Rendition, NavItem, Location } from "epubjs"
+import type { Book, Rendition, NavItem } from "epubjs"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { TextSelectionPopover } from "../TextSelectionPopover"
 import { EpubSearch } from "./EpubSearch"
-import { EPUB_THEMES } from "@/hooks/document-workspace/useEpubSettings"
+import { EPUB_THEMES, FONT_FAMILY_CSS } from "@/hooks/document-workspace/useEpubSettings"
 import type { EpubLocation } from "@/hooks/document-workspace/useEpubReader"
-import type { TocItem, Annotation, AnnotationColor, EpubTheme, EpubScrollMode } from "../../types"
+import type { TocItem, Annotation, AnnotationColor, EpubTheme, EpubScrollMode, EpubSpreadMode, EpubFontFamily } from "../../types"
 
 // Color mapping for EPUB highlights
 const HIGHLIGHT_COLORS: Record<AnnotationColor, string> = {
@@ -15,6 +15,36 @@ const HIGHLIGHT_COLORS: Record<AnnotationColor, string> = {
   green: "rgba(187, 247, 208, 0.4)",
   blue: "rgba(191, 219, 254, 0.4)",
   pink: "rgba(251, 207, 232, 0.4)"
+}
+
+type RelocatedLocation = {
+  start?: {
+    cfi?: string
+  }
+}
+
+type RelocatedSetters = {
+  setCurrentCfi: (cfi: string) => void
+  setCurrentPercentage: (percentage: number) => void
+  setCurrentPage: (page: number) => void
+}
+
+const applyRelocatedLocation = (
+  book: Book,
+  location: RelocatedLocation | null | undefined,
+  setters: RelocatedSetters
+): { cfi: string; percentage: number; locationIndex: number } | null => {
+  const cfi = location?.start?.cfi
+  if (!cfi) return null
+
+  const percentage = book.locations.percentageFromCfi(cfi) || 0
+  const locationIndex = Number(book.locations.locationFromCfi(cfi) ?? 0)
+
+  setters.setCurrentCfi(cfi)
+  setters.setCurrentPercentage(percentage * 100)
+  setters.setCurrentPage(locationIndex + 1) // 1-indexed for UI consistency
+
+  return { cfi, percentage, locationIndex }
 }
 
 /**
@@ -29,6 +59,20 @@ function convertNavToTocItems(nav: NavItem[], level: number = 0): TocItem[] {
     children: item.subitems ? convertNavToTocItems(item.subitems, level + 1) : undefined
   }))
 }
+
+/**
+ * Build theme body overrides from typography settings
+ */
+const buildTypographyOverrides = (
+  fontFamily: EpubFontFamily,
+  fontSize: number,
+  lineHeight: number
+): Record<string, string> => ({
+  "font-family": FONT_FAMILY_CSS[fontFamily],
+  "font-size": fontSize === 100 ? "1em" : `${fontSize}%`,
+  "line-height": String(lineHeight),
+  "padding": "20px"
+})
 
 interface EpubViewerProps {
   url: string
@@ -78,6 +122,10 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
   const annotations = useDocumentWorkspaceStore((s) => s.annotations)
   const epubTheme = useDocumentWorkspaceStore((s) => s.epubTheme)
   const epubScrollMode = useDocumentWorkspaceStore((s) => s.epubScrollMode)
+  const epubSpreadMode = useDocumentWorkspaceStore((s) => s.epubSpreadMode)
+  const epubFontSize = useDocumentWorkspaceStore((s) => s.epubFontSize)
+  const epubFontFamily = useDocumentWorkspaceStore((s) => s.epubFontFamily)
+  const epubLineHeight = useDocumentWorkspaceStore((s) => s.epubLineHeight)
 
   // Dispatch loading event when starting
   useEffect(() => {
@@ -120,15 +168,20 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           return
         }
 
-        // Get initial scroll mode from store
-        const initialScrollMode = useDocumentWorkspaceStore.getState().epubScrollMode
-        const initialTheme = useDocumentWorkspaceStore.getState().epubTheme
+        // Get initial settings from store
+        const initialState = useDocumentWorkspaceStore.getState()
+        const initialScrollMode = initialState.epubScrollMode
+        const initialTheme = initialState.epubTheme
+        const initialSpreadMode = initialState.epubSpreadMode
+        const initialFontSize = initialState.epubFontSize
+        const initialFontFamily = initialState.epubFontFamily
+        const initialLineHeight = initialState.epubLineHeight
 
-        // Create rendition with current scroll mode
+        // Create rendition with current scroll mode and spread
         const rendition = book.renderTo(containerRef.current, {
           width: "100%",
           height: "100%",
-          spread: "none",
+          spread: initialSpreadMode,
           flow: initialScrollMode === "continuous" ? "scrolled" : "paginated"
         })
 
@@ -170,23 +223,24 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         }
 
         // Set up location change handler
-        rendition.on("relocated", (location: Location) => {
+        rendition.on("relocated", (location: any) => {
           if (!mounted) return
 
-          const cfi = location.start.cfi
-          const percentage = book.locations.percentageFromCfi(cfi) || 0
-          const locationIndex = book.locations.locationFromCfi(cfi) || 0
-
-          setCurrentCfi(cfi)
-          setCurrentPercentage(percentage * 100)
-          setCurrentPage(locationIndex + 1) // 1-indexed for UI consistency
+          const relocated = applyRelocatedLocation(book, location, {
+            setCurrentCfi,
+            setCurrentPercentage,
+            setCurrentPage
+          })
+          if (!relocated) return
+          const { cfi, percentage } = relocated
 
           // Find chapter info
           let chapterTitle: string | undefined
           let chapterIndex: number | undefined
 
-          const spine = book.spine
-          const chapter = spine.get(location.start.href)
+          const spine = book.spine as any
+          const href = location?.start?.href
+          const chapter = href ? spine?.get?.(href) : null
           if (chapter) {
             chapterIndex = chapter.index
           }
@@ -194,7 +248,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           // Find chapter title from TOC
           const findTocItem = (items: NavItem[]): NavItem | undefined => {
             for (const item of items) {
-              if (item.href && location.start.href.includes(item.href.split("#")[0])) {
+              if (item.href && location?.start?.href?.includes(item.href.split("#")[0])) {
                 return item
               }
               if (item.subitems) {
@@ -249,15 +303,14 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
           setSelection(null)
         })
 
-        // Register all themes
+        // Register all themes with typography overrides
+        const typographyOverrides = buildTypographyOverrides(initialFontFamily, initialFontSize, initialLineHeight)
         Object.entries(EPUB_THEMES).forEach(([name, styles]) => {
           rendition.themes.register(name, {
             ...styles,
             body: {
               ...styles.body,
-              "font-family": "'Inter', system-ui, sans-serif",
-              "line-height": "1.6",
-              "padding": "20px"
+              ...typographyOverrides
             }
           })
         })
@@ -266,8 +319,9 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
         rendition.themes.select(initialTheme)
 
         setIsLoading(false)
+        const spineCount = (book.spine as any)?.length ?? 0
         onLoadSuccess?.({
-          chapterCount: book.spine.length,
+          chapterCount: spineCount,
           toc: navigation.toc
         })
       } catch (err) {
@@ -435,7 +489,8 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     rendition.themes.select(epubTheme)
   }, [epubTheme, isLoading])
 
-  // Handle scroll mode changes - requires re-rendering the book
+  // Handle layout changes that require re-rendering the book
+  // (scroll mode, spread mode, font size, font family, line height)
   useEffect(() => {
     const book = bookRef.current
     const rendition = renditionRef.current
@@ -448,25 +503,24 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     // Destroy current rendition
     rendition.destroy()
 
-    // Create new rendition with updated flow
+    // Create new rendition with updated settings
     const newRendition = book.renderTo(containerRef.current, {
       width: "100%",
       height: "100%",
-      spread: "none",
+      spread: epubSpreadMode,
       flow: epubScrollMode === "continuous" ? "scrolled" : "paginated"
     })
 
     renditionRef.current = newRendition
 
-    // Re-register themes
+    // Re-register themes with current typography
+    const typographyOverrides = buildTypographyOverrides(epubFontFamily, epubFontSize, epubLineHeight)
     Object.entries(EPUB_THEMES).forEach(([name, styles]) => {
       newRendition.themes.register(name, {
         ...styles,
         body: {
           ...styles.body,
-          "font-family": "'Inter', system-ui, sans-serif",
-          "line-height": "1.6",
-          "padding": "20px"
+          ...typographyOverrides
         }
       })
     })
@@ -475,7 +529,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     newRendition.themes.select(epubTheme)
 
     // Display at previous location
-    const targetCfi = currentCfiFromStore || (currentLocation?.start?.cfi)
+    const targetCfi = currentCfiFromStore || ((currentLocation as any)?.start?.cfi)
     if (targetCfi) {
       newRendition.display(targetCfi)
     } else {
@@ -483,14 +537,13 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     }
 
     // Re-setup event handlers
-    newRendition.on("relocated", (location: Location) => {
-      const cfi = location.start.cfi
-      const percentage = book.locations.percentageFromCfi(cfi) || 0
-      const locationIndex = book.locations.locationFromCfi(cfi) || 0
-
-      useDocumentWorkspaceStore.getState().setCurrentCfi(cfi)
-      useDocumentWorkspaceStore.getState().setCurrentPercentage(percentage * 100)
-      useDocumentWorkspaceStore.getState().setCurrentPage(locationIndex + 1)
+    newRendition.on("relocated", (location: any) => {
+      const store = useDocumentWorkspaceStore.getState()
+      applyRelocatedLocation(book, location, {
+        setCurrentCfi: store.setCurrentCfi,
+        setCurrentPercentage: store.setCurrentPercentage,
+        setCurrentPage: store.setCurrentPage
+      })
     })
 
     newRendition.on("selected", (cfiRange: string) => {
@@ -511,7 +564,7 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
     newRendition.on("click", () => {
       setSelection(null)
     })
-  }, [epubScrollMode]) // Only re-run when scroll mode changes
+  }, [epubScrollMode, epubSpreadMode, epubFontSize, epubFontFamily, epubLineHeight])
 
   const clearSelection = useCallback(() => {
     setSelection(null)
@@ -551,7 +604,12 @@ export const EpubViewer: React.FC<EpubViewerProps> = ({
       {/* Loading overlay */}
       {isLoading && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface/80">
-          <Spin size="large" tip={t("option:documentWorkspace.loading", "Loading...")} />
+          <div className="flex flex-col items-center gap-2">
+            <Spin size="large" />
+            <div className="text-sm text-text-muted">
+              {t("option:documentWorkspace.loading", "Loading...")}
+            </div>
+          </div>
         </div>
       )}
 

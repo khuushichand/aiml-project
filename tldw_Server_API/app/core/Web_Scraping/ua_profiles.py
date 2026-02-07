@@ -24,9 +24,8 @@ Notes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, Optional, List
 import random
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -36,11 +35,11 @@ class UAProfile:
     sec_ch_ua: str
     sec_ch_ua_mobile: str
     sec_ch_ua_platform: str
-    impersonate: Optional[str]  # curl_cffi impersonate token
+    impersonate: str | None  # curl_cffi impersonate token
 
 
 # Curated UA profiles (static but periodically updatable)
-_UA_PROFILES: Dict[str, UAProfile] = {
+_UA_PROFILES: dict[str, UAProfile] = {
     # Chrome 120 on Windows 10/11
     "chrome_120_win": UAProfile(
         name="chrome_120_win",
@@ -82,14 +81,14 @@ _UA_PROFILES: Dict[str, UAProfile] = {
 }
 
 
-_DEFAULT_PROFILE_ORDER: List[str] = [
+_DEFAULT_PROFILE_ORDER: list[str] = [
     "chrome_120_win",
     "firefox_120_win",
     "safari_17_mac",
 ]
 
 
-def pick_ua_profile(mode: str = "fixed", domain: Optional[str] = None) -> str:
+def pick_ua_profile(mode: str = "fixed", domain: str | None = None) -> str:
     """Pick a UA profile name.
 
     - mode: 'fixed' or 'rotate'
@@ -100,7 +99,7 @@ def pick_ua_profile(mode: str = "fixed", domain: Optional[str] = None) -> str:
     return _DEFAULT_PROFILE_ORDER[0]
 
 
-def profile_to_impersonate(profile: str) -> Optional[str]:
+def profile_to_impersonate(profile: str) -> str | None:
     p = _UA_PROFILES.get(profile)
     return p.impersonate if p else None
 
@@ -114,7 +113,7 @@ def build_browser_headers(
     sec_fetch_dest: str = "document",
     upgrade_insecure_requests: bool = True,
     accept_encoding: str = "gzip, deflate, br, zstd",
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Construct realistic browser headers for top-level navigation.
 
     Includes:
@@ -128,7 +127,7 @@ def build_browser_headers(
     if not p:
         p = _UA_PROFILES[_DEFAULT_PROFILE_ORDER[0]]
 
-    headers: Dict[str, str] = {
+    headers: dict[str, str] = {
         "User-Agent": p.user_agent,
         "sec-ch-ua": p.sec_ch_ua,
         "sec-ch-ua-mobile": p.sec_ch_ua_mobile,

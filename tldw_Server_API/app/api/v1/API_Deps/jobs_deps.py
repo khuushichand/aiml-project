@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Dict
 
 from loguru import logger
 
@@ -20,13 +19,12 @@ except ImportError:
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
-
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 
 if _HAS_CACHETOOLS:
     _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 else:
-    _job_manager_cache: Dict[str, JobManager] = {}
+    _job_manager_cache: dict[str, JobManager] = {}
 
 _job_manager_lock = threading.Lock()
 

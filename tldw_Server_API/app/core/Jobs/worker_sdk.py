@@ -1,18 +1,33 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import random
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import Any, Callable
 
 from loguru import logger
 
 from .manager import JobManager
 
+CancelCheck = Callable[[dict[str, Any]], Awaitable[bool]]
+JobHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]
 
-CancelCheck = Callable[[Dict[str, Any]], Awaitable[bool]]
-JobHandler = Callable[[Dict[str, Any]], Awaitable[Dict[str, Any] | None]]
+_WORKER_SDK_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass
@@ -51,11 +66,11 @@ class WorkerSDK:
                 str(os.getenv(k, "")).strip().lower() in {"1", "true", "yes", "on"}
                 for k in ("TEST_MODE", "TLDW_TEST_MODE")
             )
-        except Exception:
+        except (TypeError, ValueError):
             self._test_mode = False
         try:
             self._max_iters = int(os.getenv("JOBS_WORKER_MAX_ITERATIONS", "0") or "0")
-        except Exception:
+        except (TypeError, ValueError):
             self._max_iters = 0
 
     async def _sleep_chunked(self, total_seconds: float) -> None:
@@ -69,7 +84,7 @@ class WorkerSDK:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _auto_renew(self, job: Dict[str, Any], progress_cb: Optional[Callable[[], Dict[str, Any]]] = None) -> None:
+    async def _auto_renew(self, job: dict[str, Any], progress_cb: Callable[[], dict[str, Any]] | None = None) -> None:
         lease = int(max(1, self.cfg.lease_seconds))
         jitter = max(0, int(self.cfg.renew_jitter_seconds))
         threshold = max(1, int(self.cfg.renew_threshold_seconds))
@@ -90,14 +105,14 @@ class WorkerSDK:
                         kwargs['progress_percent'] = float(upd['progress_percent'])
                     if 'progress_message' in upd:
                         kwargs['progress_message'] = str(upd['progress_message'])
-                except Exception:
+                except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
                     pass
             try:
                 ok = self.jm.renew_job_lease(**kwargs)
                 if not ok:
                     logger.debug(f"Auto-renew failed for job {job_id}; stopping renew loop")
                     return
-            except Exception as e:
+            except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Auto-renew error for job {job_id}: {e}")
                 return
             iters += 1
@@ -109,10 +124,10 @@ class WorkerSDK:
         self,
         *,
         handler: JobHandler,
-        cancel_check: Optional[CancelCheck] = None,
-        progress_cb: Optional[Callable[[], Dict[str, Any]]] = None,
-        acquire_guard: Optional[Callable[[Dict[str, Any]], Awaitable[bool]]] = None,
-        owner_user_id: Optional[str] = None,
+        cancel_check: CancelCheck | None = None,
+        progress_cb: Callable[[], dict[str, Any]] | None = None,
+        acquire_guard: Callable[[dict[str, Any]], Awaitable[bool]] | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         """Run the worker loop until stop() is called.
 
@@ -130,7 +145,7 @@ class WorkerSDK:
                     worker_id=self.cfg.worker_id,
                     owner_user_id=owner_user_id,
                 )
-            except Exception as e:
+            except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Acquire error: {e}")
                 job = None
             if not job:
@@ -149,7 +164,7 @@ class WorkerSDK:
                 if acquire_guard is not None:
                     try:
                         guard_ok = await acquire_guard(job)
-                    except Exception as exc:
+                    except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug("Acquire guard failed for job {}: {}", job_id, exc)
                         guard_ok = True
                     if not guard_ok:
@@ -161,12 +176,10 @@ class WorkerSDK:
                                 reason="guard_reject",
                                 enforce=enforce,
                             )
-                        except Exception as exc:
+                        except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as exc:
                             logger.debug("Release job failed for {}: {}", job_id, exc)
-                        try:
+                        with contextlib.suppress(_WORKER_SDK_NONCRITICAL_EXCEPTIONS):
                             await self._sleep(0)
-                        except Exception:
-                            pass
                         continue
                 # Cancellation check (optional)
                 if cancel_check is not None:
@@ -174,12 +187,10 @@ class WorkerSDK:
                         if await cancel_check(job):
                             # Respect cancellation request; finalize and yield once to avoid tight spin
                             self.jm.cancel_job(job_id, reason="requested")
-                            try:
+                            with contextlib.suppress(_WORKER_SDK_NONCRITICAL_EXCEPTIONS):
                                 await self._sleep(0)
-                            except Exception:
-                                pass
                             continue
-                    except Exception:
+                    except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
                         pass
                 # Start auto-renew task only if not cancelled
                 renew_task = asyncio.create_task(self._auto_renew(job, progress_cb=progress_cb))
@@ -198,7 +209,7 @@ class WorkerSDK:
                 )
                 if not ok:
                     logger.debug(f"Complete returned False for job {job_id}")
-            except Exception as e:
+            except _WORKER_SDK_NONCRITICAL_EXCEPTIONS as e:
                 # Retryable failure by default; allow exception to override via .retryable attribute
                 retryable = self.cfg.retry_on_exception and bool(getattr(e, "retryable", True))
                 backoff_s = int(getattr(e, "backoff_seconds", self.cfg.retry_backoff_seconds))
@@ -214,11 +225,11 @@ class WorkerSDK:
                         enforce=enforce,
                         error_code="worker_exception",
                     )
-                except Exception:
+                except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
                     logger.debug(f"Fail finalize error for job {job_id}")
             finally:
                 try:
                     if renew_task is not None:
                         renew_task.cancel()
-                except Exception:
+                except _WORKER_SDK_NONCRITICAL_EXCEPTIONS:
                     pass

@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
 class ImageGenRequest:
     backend: str
     prompt: str
-    negative_prompt: Optional[str]
-    width: Optional[int]
-    height: Optional[int]
-    steps: Optional[int]
-    cfg_scale: Optional[float]
-    seed: Optional[int]
-    sampler: Optional[str]
-    model: Optional[str]
+    negative_prompt: str | None
+    width: int | None
+    height: int | None
+    steps: int | None
+    cfg_scale: float | None
+    seed: int | None
+    sampler: str | None
+    model: str | None
     format: str
-    extra_params: Dict[str, Any]
-    request_id: Optional[str] = None
+    extra_params: dict[str, Any]
+    request_id: str | None = None
 
 
 @dataclass(frozen=True)

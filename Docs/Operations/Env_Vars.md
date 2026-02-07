@@ -71,6 +71,8 @@ Config file overrides (`Config_Files/config.txt`)
 - `RAG_LLM_RERANK_TOTAL_BUDGET_SEC`: Total time budget for LLM reranking per query (seconds). Default `20`.
 - `RAG_LLM_RERANK_MAX_DOCS`: Cap on number of documents scored by LLM reranker per query. Default `20`.
 - `RAG_TRANSFORMERS_RERANKER_MODEL`: Cross-encoder model id for fast reranking (stage 1). Default `BAAI/bge-reranker-v2-m3`.
+- `RAG_FLASHRANK_CACHE_DIR`: Cache directory for FlashRank model bundles. Default resolves to repo-local `models/flashrank`.
+- `RAG_FLASHRANK_MODEL_NAME`: FlashRank model directory name. Default `ms-marco-TinyBERT-L-2-v2`.
 - `RAG_REWRITE_CACHE_PATH`: Optional override for query→rewrite cache JSONL. When unset, cache is per-user under `<USER_DB_BASE_DIR>/<user_id>/Rewrite_Cache/rewrite_cache.jsonl` (deprecated alias: `USER_DB_BASE`).
 - `RAG_PRECOMPUTED_SPANS_MAX_VECTORS_PER_CORPUS`: Cap on stored span vectors per corpus (default `200000`). Config key: `[RAG] precomputed_spans_max_vectors_per_corpus`.
 - `RAG_PRECOMPUTED_SPANS_MAX_MB_PER_CORPUS`: Cap on precomputed span storage per corpus in MB (default `512`). Config key: `[RAG] precomputed_spans_max_mb_per_corpus`.

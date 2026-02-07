@@ -5,30 +5,58 @@ Handles WebSocket and HTTP connections with production-ready features.
 """
 
 import asyncio
+import ipaddress
 import json
-from typing import Dict, Any, Optional, Set, List, Deque
-from datetime import datetime, timezone, timedelta
-from dataclasses import dataclass, field
 from collections import deque
-from contextlib import asynccontextmanager
-from fastapi import WebSocket, WebSocketDisconnect, HTTPException
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from loguru import logger
 
-from .config import get_config, validate_config
-from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
-from .modules.registry import get_module_registry
-from .auth.jwt_manager import get_jwt_manager, JWTManager
-from .auth.authnz_rbac import get_rbac_policy
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
-from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
-from .auth.rate_limiter import get_rate_limiter, RateLimitExceeded
-from .monitoring.metrics import get_metrics_collector
-from .security.ip_filter import get_ip_access_controller
-from .security.request_guards import enforce_client_certificate_headers
-import ipaddress
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+
+from .auth.authnz_rbac import get_rbac_policy
+from .auth.jwt_manager import JWTManager, get_jwt_manager
+from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
+from .config import get_config, validate_config
+from .modules.registry import get_module_registry
+from .monitoring.metrics import get_metrics_collector
+from .protocol import MCPProtocol, MCPRequest, MCPResponse, RequestContext
+from .security.ip_filter import get_ip_access_controller
+from .security.request_guards import enforce_client_certificate_headers
+
+_MCP_SERVER_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    HTTPException,
+    WebSocketDisconnect,
+    InvalidTokenError,
+    TokenExpiredError,
+    RateLimitExceeded,
+)
 
 
 def _is_authnz_access_token(token: str) -> bool:
@@ -41,17 +69,17 @@ def _is_authnz_access_token(token: str) -> bool:
         return True
     except InvalidTokenError:
         return False
-    except Exception:
+    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
         return False
 
 
-def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
     """Normalize API key scopes into MCP permissions."""
     if not info:
         return []
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
-    except Exception:
+    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
         return []
 
     raw_scopes = info.get("scopes")
@@ -60,7 +88,7 @@ def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
 
     try:
         scopes = normalize_scope(raw_scopes)
-    except Exception:
+    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
         scopes = set()
 
     return sorted(scopes) if scopes else []
@@ -85,7 +113,7 @@ class WebSocketConnection:
         connection_id: str,
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ):
         self.websocket = websocket
         self.connection_id = connection_id
@@ -96,26 +124,26 @@ class WebSocketConnection:
         self.last_activity = self.connected_at
         self.message_count = 0
         self.error_count = 0
-        self.request_times: Deque[float] = deque(maxlen=1000)
+        self.request_times: deque[float] = deque(maxlen=1000)
 
-    async def send_json(self, data: Dict[str, Any]):
+    async def send_json(self, data: dict[str, Any]):
         """Send JSON data to client"""
         try:
             await self.websocket.send_json(data)
             self.last_activity = datetime.now(timezone.utc)
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.bind(connection_id=self.connection_id).error(f"Error sending to WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
 
-    async def receive_json(self) -> Dict[str, Any]:
+    async def receive_json(self) -> dict[str, Any]:
         """Receive JSON data from client"""
         try:
             data = await self.websocket.receive_json()
             self.last_activity = datetime.now(timezone.utc)
             self.message_count += 1
             return data
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.bind(connection_id=self.connection_id).error(f"Error receiving from WebSocket {self.connection_id}: {e}")
             self.error_count += 1
             raise
@@ -124,7 +152,7 @@ class WebSocketConnection:
         """Close the WebSocket connection"""
         try:
             await self.websocket.close(code=code, reason=reason)
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.bind(connection_id=self.connection_id).error(f"Error closing WebSocket {self.connection_id}: {e}")
 
 
@@ -135,10 +163,10 @@ class SessionData:
     user_id: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    uris_seen: Deque[str] = field(default_factory=lambda: deque(maxlen=500))
-    uris_index: Set[str] = field(default_factory=set)
-    client_info: Dict[str, Any] = field(default_factory=dict)
-    safe_config: Dict[str, Any] = field(default_factory=dict)
+    uris_seen: deque[str] = field(default_factory=lambda: deque(maxlen=500))
+    uris_index: set[str] = field(default_factory=set)
+    client_info: dict[str, Any] = field(default_factory=dict)
+    safe_config: dict[str, Any] = field(default_factory=dict)
 
     def touch(self):
         self.last_activity = datetime.now(timezone.utc)
@@ -177,21 +205,22 @@ class MCPServer:
         self._ws_auth_required_initial = self.config.ws_auth_required
 
         # Connection management
-        self.connections: Dict[str, WebSocketConnection] = {}
+        self.connections: dict[str, WebSocketConnection] = {}
         self.connection_lock = asyncio.Lock()
-        self._ip_connection_counts: Dict[str, int] = {}
+        self._ip_connection_counts: dict[str, int] = {}
 
         # Session management (HTTP/WS)
-        self.sessions: Dict[str, SessionData] = {}
+        self.sessions: dict[str, SessionData] = {}
         self.session_lock = asyncio.Lock()
 
         # Server state
         self.initialized = False
+        self._initialize_lock = asyncio.Lock()
         self.startup_time = datetime.now(timezone.utc)
         self.shutdown_event = asyncio.Event()
 
         # Background tasks
-        self.background_tasks: Set[asyncio.Task] = set()
+        self.background_tasks: set[asyncio.Task] = set()
 
         logger.info("MCP Server created")
 
@@ -212,7 +241,7 @@ class MCPServer:
             for p in patterns:
                 text = _re.sub(p, lambda m: f"{m.group(1)}=****", text, flags=_re.IGNORECASE)
             return text
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             return text
 
     async def initialize(self):
@@ -220,56 +249,59 @@ class MCPServer:
         if self.initialized:
             logger.warning("Server already initialized")
             return
+        async with self._initialize_lock:
+            if self.initialized:
+                logger.warning("Server already initialized")
+                return
+            logger.info("Initializing MCP Server")
 
-        logger.info("Initializing MCP Server")
-
-        try:
-            # Fail fast on insecure production configurations
             try:
-                import os as _os
-                _test_mode = (
-                    _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
-                    or bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                )
-                if not self.config.debug_mode and not _test_mode:
-                    ok = validate_config()
-                    if not ok:
-                        raise RuntimeError("MCP configuration validation failed; refusing to start in production")
-            except Exception:
-                # If validation fails, propagate to abort startup
-                raise
-            # Warn if demo auth is enabled in a non-debug environment
-            try:
-                import os as _os
-                if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
-                    logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
-            except Exception:
-                pass
-            # Start module health monitoring
-            await self.module_registry.start_health_monitoring()
-
-            # Start metrics collection
-            if self.config.metrics_enabled:
+                # Fail fast on insecure production configurations
                 try:
-                    await get_metrics_collector().start_collection()
-                except Exception as e:
-                    logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
+                    import os as _os
+                    _test_mode = (
+                        _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+                        or bool(_os.getenv("PYTEST_CURRENT_TEST"))
+                    )
+                    if not self.config.debug_mode and not _test_mode:
+                        ok = validate_config()
+                        if not ok:
+                            raise RuntimeError("MCP configuration validation failed; refusing to start in production")
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
+                    # If validation fails, propagate to abort startup
+                    raise
+                # Warn if demo auth is enabled in a non-debug environment
+                try:
+                    import os as _os
+                    if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
+                        logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
+                    pass
+                # Start module health monitoring
+                await self.module_registry.start_health_monitoring()
 
-            # Register default modules (will be implemented when migrating modules)
-            await self._register_default_modules()
+                # Start metrics collection
+                if self.config.metrics_enabled:
+                    try:
+                        await get_metrics_collector().start_collection()
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
 
-            # Ensure default tool permissions exist (wildcard)
-            await self._ensure_default_tool_permissions()
+                # Register default modules (will be implemented when migrating modules)
+                await self._register_default_modules()
 
-            # Start background tasks
-            self._start_background_tasks()
+                # Ensure default tool permissions exist (wildcard)
+                await self._ensure_default_tool_permissions()
 
-            self.initialized = True
-            logger.info("MCP Server initialized successfully")
+                # Start background tasks
+                self._start_background_tasks()
 
-        except Exception as e:
-            logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
-            raise
+                self.initialized = True
+                logger.info("MCP Server initialized successfully")
+
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
+                raise
 
     async def _ensure_default_tool_permissions(self):
         """Seed wildcard tool permission tools.execute:* if missing."""
@@ -289,7 +321,7 @@ class MCPServer:
                         "INSERT INTO permissions (name, description, category) VALUES (?, ?, ?)",
                         name, desc, 'tools'
                     )
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Seed wildcard tool permission failed: {self._mask_secrets(str(e))}")
 
     async def shutdown(self):
@@ -320,12 +352,12 @@ class MCPServer:
         """Register default modules via config/env-driven loader"""
         # Autoload modules from YAML config and/or MCP_MODULES env var
         try:
-            import os
             import importlib
+            import os
             # Lazy import yaml to avoid hard dependency during tests if not installed
             try:
                 import yaml  # type: ignore
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 yaml = None  # type: ignore
 
             modules_to_load = []
@@ -337,13 +369,13 @@ class MCPServer:
             )
             if os.path.exists(cfg_path) and yaml is not None:
                 try:
-                    with open(cfg_path, "r") as f:
+                    with open(cfg_path) as f:
                         data = yaml.safe_load(f) or {}
                     modules_cfg = data.get("modules", [])
                     if isinstance(modules_cfg, list):
                         modules_to_load.extend(modules_cfg)
                     logger.info(f"Loaded {len(modules_cfg)} MCP modules from {cfg_path}")
-                except Exception as e:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to read MCP modules YAML {cfg_path}: {e}")
             elif os.path.exists(cfg_path) and yaml is None:
                 logger.warning(
@@ -455,10 +487,10 @@ class MCPServer:
                     )
                     await self.module_registry.register_module(module_id, cls, mc)
                     logger.info(f"Registered MCP module: {module_id} ({class_ref})")
-                except Exception as e:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to register module {m}: {self._mask_secrets(str(e))}")
 
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Default modules registration failed: {self._mask_secrets(str(e))}")
 
     def _start_background_tasks(self):
@@ -485,7 +517,7 @@ class MCPServer:
             try:
                 await asyncio.sleep(60)  # Check every minute
                 await self._cleanup_stale_connections()
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in connection cleanup: {e}")
 
     async def _cleanup_stale_connections(self):
@@ -496,11 +528,7 @@ class MCPServer:
 
             for conn_id, connection in self.connections.items():
                 # Check for stale connections (no activity for 5 minutes)
-                if (current_time - connection.last_activity).total_seconds() > 300:
-                    stale_connections.append(conn_id)
-
-                # Check for error threshold
-                elif connection.error_count > 10:
+                if (current_time - connection.last_activity).total_seconds() > 300 or connection.error_count > 10:
                     stale_connections.append(conn_id)
 
             # Close stale connections
@@ -510,10 +538,8 @@ class MCPServer:
                 await connection.close(code=1001, reason="Connection timeout")
                 del self.connections[conn_id]
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except Exception:
-                pass
 
     async def _metrics_collection_loop(self):
         """Periodically collect and log metrics"""
@@ -521,7 +547,7 @@ class MCPServer:
             try:
                 await asyncio.sleep(300)  # Every 5 minutes
                 await self._log_metrics()
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in metrics collection: {e}")
 
     async def _log_metrics(self):
@@ -539,7 +565,7 @@ class MCPServer:
             try:
                 await asyncio.sleep(60)
                 await self._cleanup_stale_sessions()
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in session cleanup: {e}")
 
     async def _cleanup_stale_sessions(self):
@@ -574,7 +600,7 @@ class MCPServer:
             s.touch()
             return s
 
-    def _merge_safe_config(self, current: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_safe_config(self, current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
         """Merge allowlisted safe config keys with clamping."""
         if not incoming:
             return current
@@ -590,9 +616,7 @@ class MCPServer:
         allow_bool = {"aliasMode", "compactShape"}
         allow_str = {"order_by"}
         for k, v in incoming.items():
-            if k in allow_bool and isinstance(v, bool):
-                out[k] = v
-            elif k in allow_str and isinstance(v, str):
+            if k in allow_bool and isinstance(v, bool) or k in allow_str and isinstance(v, str):
                 out[k] = v
             elif k in allow_int and isinstance(v, (int, float)):
                 lo, hi = allow_int[k]
@@ -618,7 +642,7 @@ class MCPServer:
         user_id = None
 
         controller = get_ip_access_controller()
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         forwarded_for = websocket.headers.get("x-forwarded-for") or websocket.headers.get("X-Forwarded-For")
         real_ip = websocket.headers.get("x-real-ip") or websocket.headers.get("X-Real-IP")
         raw_remote_ip = None
@@ -626,7 +650,7 @@ class MCPServer:
             raw_remote_ip = getattr(websocket.client, "host", None) or (
                 websocket.client[0] if isinstance(websocket.client, (list, tuple)) else None
             )
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             raw_remote_ip = None
 
         resolved_ip = controller.resolve_client_ip(raw_remote_ip, forwarded_for, real_ip)
@@ -636,21 +660,17 @@ class MCPServer:
             _is_test_env = bool(
                 _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
             )
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             _is_test_env = False
-        if resolved_ip == "testclient":
-            resolved_ip = "127.0.0.1"
-        elif resolved_ip is None and _is_test_env:
+        if resolved_ip == "testclient" or resolved_ip is None and _is_test_env:
             resolved_ip = "127.0.0.1"
 
         if not controller.is_allowed(resolved_ip) and not _is_test_env:
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 logger.warning(
                     "Rejecting MCP WebSocket connection from disallowed IP",
                     extra={"audit": True, "ip": resolved_ip or "unknown", "client_id": client_id},
                 )
-            except Exception:
-                pass
             await websocket.close(code=1008, reason="IP not allowed")
             return
 
@@ -673,7 +693,7 @@ class MCPServer:
                     if origin and origin not in allowed:
                         await websocket.close(code=1008, reason="Origin not allowed")
                         return
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             # Fail-safe: do not block if config parsing fails
             pass
 
@@ -682,7 +702,7 @@ class MCPServer:
             try:
                 # Emit a deprecation warning; ignore query tokens unless explicitly allowed
                 logger.warning("WS query-parameter authentication is disabled; pass Authorization bearer token or X-API-KEY header instead")
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
             auth_token = None
             api_key = None
@@ -693,14 +713,14 @@ class MCPServer:
             _authz = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
             if _authz and _authz.lower().startswith("bearer "):
                 auth_token = _authz.split(" ", 1)[1].strip()
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             # X-API-KEY header
             _xkey = websocket.headers.get("x-api-key") or websocket.headers.get("X-API-KEY")
             if _xkey:
                 api_key = _xkey.strip()
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             # Sec-WebSocket-Protocol: bearer,<token>
@@ -710,7 +730,7 @@ class MCPServer:
                 parts = [p.strip() for p in _proto.split(",")]
                 if len(parts) >= 2 and parts[0].lower() == "bearer" and parts[1]:
                     auth_token = parts[1]
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Authenticate if token provided (prefer AuthNZ JWT, then MCP JWT)
@@ -720,6 +740,7 @@ class MCPServer:
             try:
                 # Try AuthNZ JWT first for consistency with HTTP endpoints
                 from starlette.requests import Request as _Request
+
                 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
 
                 scope = {
@@ -737,7 +758,7 @@ class MCPServer:
                         scope["client"] = (client[0], client[1])
                     elif client is not None and getattr(client, "host", None) is not None:
                         scope["client"] = (client.host, getattr(client, "port", 0))
-                except Exception:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                     pass
 
                 req = _Request(scope)
@@ -752,7 +773,7 @@ class MCPServer:
                         metadata["roles"] = roles
                     if perms:
                         metadata["permissions"] = perms
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"AuthNZ JWT auth failed: {self._mask_secrets(str(e))}")
                 if _is_authnz_access_token(auth_token):
                     authnz_token_failed = True
@@ -770,7 +791,7 @@ class MCPServer:
                         metadata["roles"] = token_data.roles
                     if token_data.permissions:
                         metadata["permissions"] = token_data.permissions
-                except Exception as _e:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"MCP JWT auth failed: {self._mask_secrets(str(_e))}")
             if auth_token and not ok and not api_key:
                 await websocket.close(code=1008, reason="Authentication failed")
@@ -802,13 +823,13 @@ class MCPServer:
                             for scope in scopes:
                                 if scope not in perms:
                                     perms.append(scope)
-                    except Exception:
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                         pass
                     logger.info(f"WebSocket authenticated via API key for user: {user_id}")
                 else:
                     await websocket.close(code=1008, reason="Authentication failed")
                     return
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"WebSocket API key authentication failed: {self._mask_secrets(str(e))}")
                 await websocket.close(code=1008, reason="Authentication failed")
                 return
@@ -824,7 +845,7 @@ class MCPServer:
                     override_val = override.strip().lower() in {"1", "true", "yes", "on"}
                     if self.config.ws_auth_required == self._ws_auth_required_initial:
                         ws_auth_required = override_val
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
         if ws_auth_required and not user_id:
             await websocket.close(code=1008, reason="Authentication required")
@@ -844,7 +865,7 @@ class MCPServer:
                     try:
                         bucket = self._ip_bucket(client_ip)
                         get_metrics_collector().record_ws_rejection("per_ip_cap", bucket)
-                    except Exception:
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                         pass
                     await websocket.close(code=1013, reason="Too many connections from IP")
                     return
@@ -864,10 +885,8 @@ class MCPServer:
             self.connections[connection_id] = connection
             # per-IP count already reserved; nothing to do here
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except Exception:
-                pass
 
         logger.bind(connection_id=connection_id, user_id=user_id, client_id=client_id, client_ip=client_ip).info(
             f"WebSocket connected: {connection_id} (client={client_id}, user={user_id}, ip={client_ip})"
@@ -888,25 +907,19 @@ class MCPServer:
 
         except WebSocketDisconnect:
             logger.bind(connection_id=connection_id).info(f"WebSocket disconnected: {connection_id}")
-        except Exception as e:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.bind(connection_id=connection_id).error(f"WebSocket error for {connection_id}: {e}")
             # Preserve JSON-RPC transport semantics: do not emit non-JSON-RPC error frames here.
             # Close the socket with 1011 (internal error).
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 await connection.close(code=1011, reason="Internal error")
-            except Exception:
-                pass
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().record_connection_error("websocket", "exception")
-            except Exception:
-                pass
         finally:
             # Stop WS background tasks (ping/idle loops) to avoid leaks
             if stream is not None:
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.stop()
-                except Exception:
-                    pass
             # Remove connection
             async with self.connection_lock:
                 if connection_id in self.connections:
@@ -917,15 +930,13 @@ class MCPServer:
                         self._ip_connection_counts[client_ip] -= 1
                         if self._ip_connection_counts[client_ip] == 0:
                             del self._ip_connection_counts[client_ip]
-                except Exception:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                     pass
 
             logger.bind(connection_id=connection_id).info(f"WebSocket cleanup complete: {connection_id}")
             # Update connection gauge
-            try:
+            with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                 get_metrics_collector().update_connection_count("websocket", len(self.connections))
-            except Exception:
-                pass
 
     async def _handle_websocket_messages(self, connection: WebSocketConnection, stream: WebSocketStream):
         """Handle incoming WebSocket messages"""
@@ -935,10 +946,8 @@ class MCPServer:
             try:
                 data = await connection.receive_json()
                 # Mark activity for idle timer on receive
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     stream.mark_activity()
-                except Exception:
-                    pass
             except json.JSONDecodeError as e:
                 await stream.send_json({
                     "jsonrpc": "2.0",
@@ -984,20 +993,16 @@ class MCPServer:
                         },
                         "id": data.get("id") if isinstance(data, dict) else None
                     })
-                    try:
+                    with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                         get_metrics_collector().record_ws_session_closure("session_rate")
-                    except Exception:
-                        pass
                     # Close with 1013 (try again later), matching prior behavior
                     try:
                         await stream.ws.close(code=1013, reason="Session rate limit exceeded")
-                    except Exception:
-                        try:
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
+                        with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                             await connection.close(code=1013, reason="Session rate limit exceeded")
-                        except Exception:
-                            pass
                     break
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Ensure session exists and update with client/safe config if applicable
@@ -1012,24 +1017,25 @@ class MCPServer:
                             sess.client_info.update(client_info)
                         # Optional config param for WS (either dict or base64-encoded JSON)
                         cfg = params.get("config")
-                        safe_incoming: Dict[str, Any] = {}
+                        safe_incoming: dict[str, Any] = {}
                         if isinstance(cfg, dict):
                             safe_incoming = cfg
                         elif isinstance(cfg, str):
-                            import base64, json as _json
+                            import base64
+                            import json as _json
                             try:
                                 decoded = base64.b64decode(cfg).decode("utf-8")
                                 safe_incoming = _json.loads(decoded)
-                            except Exception:
+                            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                                 safe_incoming = {}
                         if safe_incoming:
                             sess.safe_config = self._merge_safe_config(sess.safe_config, safe_incoming)
-                    except Exception:
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                         pass
                 sess.touch()
             except PermissionError:
                 # Session ownership mismatch - return authorization error and close
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.send_json({
                         "jsonrpc": "2.0",
                         "error": {
@@ -1038,14 +1044,10 @@ class MCPServer:
                         },
                         "id": data.get("id") if isinstance(data, dict) else None
                     })
-                except Exception:
-                    pass
-                try:
+                with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
                     await stream.ws.close(code=1008, reason="Session ownership mismatch")
-                except Exception:
-                    pass
                 break
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
 
             # Create request context
@@ -1055,7 +1057,7 @@ class MCPServer:
                     context_metadata["safe_config"] = dict(sess.safe_config)
                 if sess:
                     context_metadata["seen_uris"] = list(sess.uris_seen)
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
             context = RequestContext(
                 request_id=data.get("id", "unknown") if isinstance(data, dict) else "unknown",
@@ -1077,7 +1079,7 @@ class MCPServer:
                             for uri in seen:
                                 if isinstance(uri, str) and uri:
                                     sess.add_seen_uri(uri, max_len)
-                except Exception:
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                     pass
                 if response is None:
                     # Notification - no reply
@@ -1098,7 +1100,7 @@ class MCPServer:
                     },
                     "id": data.get("id") if isinstance(data, dict) else None
                 })
-            except Exception as e:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error processing WebSocket message: {self._mask_secrets(str(e))}")
                 await stream.send_json({
                     "jsonrpc": "2.0",
@@ -1122,7 +1124,7 @@ class MCPServer:
             if ip_obj.is_reserved:
                 return "reserved"
             return "public"
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             return "unknown"
 
     async def handle_http_request(
@@ -1130,7 +1132,7 @@ class MCPServer:
         request: MCPRequest,
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[dict[str, Any]] = None
     ) -> MCPResponse:
         """
         Handle an HTTP MCP request.
@@ -1145,7 +1147,7 @@ class MCPServer:
         """
         # Pull session_id and safe_config from metadata when present
         session_id: Optional[str] = None
-        safe_cfg: Dict[str, Any] = {}
+        safe_cfg: dict[str, Any] = {}
         try:
             if metadata:
                 raw_sid = metadata.get("session_id")
@@ -1154,14 +1156,14 @@ class MCPServer:
                 sc = metadata.get("safe_config")
                 if isinstance(sc, dict):
                     safe_cfg = sc
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             session_id = None
             safe_cfg = {}
         # Always clamp safe_config with allowlist, even without a session.
         try:
             if safe_cfg:
                 safe_cfg = self._merge_safe_config({}, safe_cfg)
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             safe_cfg = {}
 
         # If we have a session id, ensure session exists and merge safe config
@@ -1178,8 +1180,8 @@ class MCPServer:
                         sess.client_info.update(ci)
                 sess.touch()
         except PermissionError as e:
-            raise HTTPException(status_code=403, detail=str(e))
-        except Exception:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Create request context
@@ -1191,7 +1193,7 @@ class MCPServer:
                 metadata_map["safe_config"] = safe_cfg
             if sess:
                 metadata_map["seen_uris"] = list(sess.uris_seen)
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
         context = RequestContext(
             request_id=request.id or "http_request",
@@ -1212,7 +1214,7 @@ class MCPServer:
                         for uri in seen:
                             if isinstance(uri, str) and uri:
                                 sess.add_seen_uri(uri, max_len)
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
             return response
         except RateLimitExceeded as e:
@@ -1222,24 +1224,24 @@ class MCPServer:
                     "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
                     "hint": "Throttle tool calls or wait for the cooldown before retrying."
                 }
-            )
-        except Exception as e:
+            ) from e
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error processing HTTP request: {self._mask_secrets(str(e))}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
     async def handle_http_batch(
         self,
-        requests: List[MCPRequest],
+        requests: list[MCPRequest],
         client_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Optional[List[MCPResponse]]:
+        metadata: Optional[dict[str, Any]] = None
+    ) -> Optional[list[MCPResponse]]:
         """
         Handle a batch of HTTP MCP requests with consistent session semantics.
         """
         # Pull session_id and safe_config from metadata when present
         session_id: Optional[str] = None
-        safe_cfg: Dict[str, Any] = {}
+        safe_cfg: dict[str, Any] = {}
         try:
             if metadata:
                 raw_sid = metadata.get("session_id")
@@ -1248,14 +1250,14 @@ class MCPServer:
                 sc = metadata.get("safe_config")
                 if isinstance(sc, dict):
                     safe_cfg = sc
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             session_id = None
             safe_cfg = {}
         # Clamp safe_config with allowlist
         try:
             if safe_cfg:
                 safe_cfg = self._merge_safe_config({}, safe_cfg)
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             safe_cfg = {}
 
         # If we have a session id, ensure session exists and merge safe config
@@ -1272,12 +1274,12 @@ class MCPServer:
                             ci = (req.params or {}).get("clientInfo")
                             if isinstance(ci, dict):
                                 sess.client_info.update(ci)
-                    except Exception:
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                         continue
                 sess.touch()
         except PermissionError as e:
-            raise HTTPException(status_code=403, detail=str(e))
-        except Exception:
+            raise HTTPException(status_code=403, detail=str(e)) from e
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Create request context
@@ -1289,7 +1291,7 @@ class MCPServer:
                 metadata_map["safe_config"] = safe_cfg
             if sess:
                 metadata_map["seen_uris"] = list(sess.uris_seen)
-        except Exception:
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
         context = RequestContext(
             request_id="http_batch",
@@ -1310,7 +1312,7 @@ class MCPServer:
                         for uri in seen:
                             if isinstance(uri, str) and uri:
                                 sess.add_seen_uri(uri, max_len)
-            except Exception:
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                 pass
             if response is None:
                 return None
@@ -1324,10 +1326,10 @@ class MCPServer:
                     "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
                     "hint": "Throttle tool calls or wait for the cooldown before retrying."
                 }
-            )
-        except Exception as e:
+            ) from e
+        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error processing HTTP batch request: {self._mask_secrets(str(e))}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
     async def _close_all_connections(self):
         """Close all WebSocket connections"""
@@ -1343,7 +1345,7 @@ class MCPServer:
 
             self.connections.clear()
 
-    async def get_status(self) -> Dict[str, Any]:
+    async def get_status(self) -> dict[str, Any]:
         """Get server status"""
         uptime = (datetime.now(timezone.utc) - self.startup_time).total_seconds()
 
@@ -1370,7 +1372,7 @@ class MCPServer:
             }
         }
 
-    async def get_metrics(self) -> Dict[str, Any]:
+    async def get_metrics(self) -> dict[str, Any]:
         """Get server metrics"""
         # Collect module metrics
         module_metrics = {}
@@ -1415,15 +1417,13 @@ async def reset_mcp_server() -> None:
     """Reset MCP server singleton for test environments."""
     global _server
     if _server is not None:
-        try:
+        with suppress(_MCP_SERVER_NONCRITICAL_EXCEPTIONS):
             await _server.shutdown()
-        except Exception:
-            pass
     _server = None
     try:
         from .modules.registry import reset_module_registry
         await reset_module_registry()
-    except Exception:
+    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
         pass
 
 

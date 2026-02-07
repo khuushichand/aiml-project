@@ -25,21 +25,32 @@ Key Adaptations from Single-User:
 import base64
 import json
 import time
-from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Union, Tuple
+from datetime import datetime
 from enum import Enum
+from typing import Any, Optional, Union
 
 from loguru import logger
 
-# Local imports
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    InputError
-)
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.Chat.chat_helpers import extract_response_content
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call as chat_api_call
+
+# Local imports
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
+
+_DOCGEN_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+    ChatAPIError,
+    CharactersRAGDBError,
+)
 
 
 class DocumentType(Enum):
@@ -135,13 +146,13 @@ class DocumentGeneratorService:
                     self.DEFAULT_PROMPTS[dtype]["system"] = sys_p
                 if usr_p and isinstance(usr_p, str):
                     self.DEFAULT_PROMPTS[dtype]["user"] = usr_p
-        except Exception:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS:
             pass
         self.user_id = user_id or "unknown"
         self._init_tables()
 
         # Request-scoped cache for prompts
-        self._prompt_cache: Dict[DocumentType, Dict[str, Any]] = {}
+        self._prompt_cache: dict[DocumentType, dict[str, Any]] = {}
 
         # No longer need provider mapping - using adapter registry
     @staticmethod
@@ -225,16 +236,16 @@ class DocumentGeneratorService:
 
                 conn.commit()
                 logger.info("Document generator tables initialized")
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize document generator tables: {e}")
-            raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}")
+            raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}") from e
 
     def get_conversation_context(
         self,
         conversation_id: str,
         limit: int = 50,
         include_system: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get conversation context including recent messages.
 
@@ -254,11 +265,11 @@ class DocumentGeneratorService:
                 "DESC",
             )
             raw_history = list(reversed(raw_history))
-        except Exception as exc:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Failed to get conversation context: {exc}")
             return []
 
-        messages: List[Dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         for db_msg in raw_history:
             sender = (db_msg.get("sender") or "").strip().lower()
             if sender == "system" and not include_system:
@@ -270,7 +281,7 @@ class DocumentGeneratorService:
             else:
                 role = "assistant"
 
-            msg_parts: List[Dict[str, Any]] = []
+            msg_parts: list[dict[str, Any]] = []
 
             text_content = db_msg.get("content") or ""
             if text_content:
@@ -301,7 +312,7 @@ class DocumentGeneratorService:
                         "type": "image_url",
                         "image_url": {"url": f"data:{img_mime};base64,{b64_img}"},
                     })
-                except Exception as img_err:
+                except _DOCGEN_NONCRITICAL_EXCEPTIONS as img_err:
                     logger.warning(
                         "Error encoding image from history (msg_id %s): %s",
                         db_msg.get("id"),
@@ -311,7 +322,7 @@ class DocumentGeneratorService:
             if not msg_parts:
                 continue
 
-            message_entry: Dict[str, Any] = {"role": role}
+            message_entry: dict[str, Any] = {"role": role}
             if len(msg_parts) == 1 and msg_parts[0].get("type") == "text":
                 message_entry["content"] = msg_parts[0].get("text", "")
             else:
@@ -336,7 +347,7 @@ class DocumentGeneratorService:
 
     def format_context_for_llm(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         specific_message: Optional[str] = None,
         max_context_length: int = 8000
     ) -> str:
@@ -364,7 +375,7 @@ class DocumentGeneratorService:
                 try:
                     dt = datetime.fromisoformat(timestamp)
                     timestamp = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except Exception as e:
+                except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"Timestamp parse failed in chat context: value={timestamp}, error={e}")
 
             context_parts.append(f"[{timestamp}] {role.upper()}: {content}")
@@ -383,7 +394,7 @@ class DocumentGeneratorService:
 
         return context
 
-    def get_user_prompt_config(self, document_type: DocumentType) -> Dict[str, Any]:
+    def get_user_prompt_config(self, document_type: DocumentType) -> dict[str, Any]:
         """
         Get user-specific prompt configuration or default.
 
@@ -419,7 +430,7 @@ class DocumentGeneratorService:
                     self._prompt_cache[document_type] = config
                     return config
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Failed to get user prompt config: {e}")
 
         # Return default
@@ -474,7 +485,7 @@ class DocumentGeneratorService:
                 logger.info(f"Saved user prompt config for {document_type.value}")
                 return True
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to save user prompt config: {e}")
             return False
 
@@ -485,11 +496,11 @@ class DocumentGeneratorService:
         provider: str,
         model: str,
         api_key: str,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         specific_message: Optional[str] = None,
         custom_prompt: Optional[str] = None,
         stream: bool = False
-    ) -> Union[str, Dict[str, Any]]:
+    ) -> Union[str, dict[str, Any]]:
         """
         Generate a document from conversation.
 
@@ -535,7 +546,7 @@ class DocumentGeneratorService:
                     "document_type": document_type.value,
                     "conversation_id": conversation_id
                 }
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error retrieving conversation: {e}")
             return {
                 "success": False,
@@ -587,9 +598,9 @@ class DocumentGeneratorService:
 
             return result
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to generate {document_type.value}: {e}")
-            raise ChatAPIError(f"Failed to generate document: {str(e)}")
+            raise ChatAPIError(f"Failed to generate document: {str(e)}") from e
 
     def _call_llm(
         self,
@@ -598,7 +609,7 @@ class DocumentGeneratorService:
         api_key: str,
         system_prompt: str,
         user_prompt: str,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
         stream: bool = False
@@ -689,9 +700,9 @@ class DocumentGeneratorService:
                 logger.info(f"Saved generated document {document_id}")
                 return document_id
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to save generated document: {e}")
-            raise CharactersRAGDBError(f"Failed to save document: {e}")
+            raise CharactersRAGDBError(f"Failed to save document: {e}") from e
 
     def record_streamed_document(
         self,
@@ -735,7 +746,7 @@ class DocumentGeneratorService:
                 token_count=token_count
             )
             return document_id
-        except Exception as exc:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(
                 "Failed to persist streamed document for conversation %s: %s",
                 conversation_id,
@@ -749,7 +760,7 @@ class DocumentGeneratorService:
         title: str,
         content: str,
         document_type: DocumentType = DocumentType.BRIEFING,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         provider: str = "watchlists",
         model: str = "watchlists",
         conversation_id: Optional[Union[str, int]] = None,
@@ -776,7 +787,7 @@ class DocumentGeneratorService:
                         (json.dumps(metadata), doc_id),
                     )
                     conn.commit()
-            except Exception as exc:
+            except _DOCGEN_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to store metadata for generated document {doc_id}: {exc}")
         return doc_id
 
@@ -785,7 +796,7 @@ class DocumentGeneratorService:
         conversation_id: Optional[Union[str, int]] = None,
         document_type: Optional[DocumentType] = None,
         limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get previously generated documents.
 
@@ -836,11 +847,11 @@ class DocumentGeneratorService:
 
                 return documents
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get generated documents: {e}")
             return []
 
-    def get_generated_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
+    def get_generated_document_by_id(self, document_id: int) -> Optional[dict[str, Any]]:
         """
         Retrieve a single generated document by its identifier.
 
@@ -876,7 +887,7 @@ class DocumentGeneratorService:
                     'created_at': row[9],
                     'metadata': json.loads(row[10]) if row[10] else {}
                 }
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get generated document {document_id}: {e}")
             return None
 
@@ -903,7 +914,7 @@ class DocumentGeneratorService:
                     return True
                 return False
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete generated document: {e}")
             return False
 
@@ -915,7 +926,7 @@ class DocumentGeneratorService:
         document_type: DocumentType,
         provider: str,
         model: str,
-        prompt_config: Dict[str, Any]
+        prompt_config: dict[str, Any]
     ) -> str:
         """
         Create a job for async document generation.
@@ -950,11 +961,11 @@ class DocumentGeneratorService:
                 logger.info(f"Created generation job {job_id}")
                 return job_id
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create generation job: {e}")
-            raise CharactersRAGDBError(f"Failed to create job: {e}")
+            raise CharactersRAGDBError(f"Failed to create job: {e}") from e
 
-    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job_status(self, job_id: str) -> Optional[dict[str, Any]]:
         """
         Get the status of a generation job.
 
@@ -995,7 +1006,7 @@ class DocumentGeneratorService:
                     }
                 return None
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get job status: {e}")
             return None
 
@@ -1049,7 +1060,7 @@ class DocumentGeneratorService:
                     return True
                 return False
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update job status: {e}")
             return False
 
@@ -1076,11 +1087,11 @@ class DocumentGeneratorService:
                 conn.commit()
                 return cursor.rowcount > 0
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cancelling job: {e}")
             return False
 
-    def get_document(self, document_id: str) -> Optional[Dict[str, Any]]:
+    def get_document(self, document_id: str) -> Optional[dict[str, Any]]:
         """
         Get a generated document.
 
@@ -1103,12 +1114,12 @@ class DocumentGeneratorService:
                     if result.get('metadata'):
                         try:
                             result['metadata'] = json.loads(result['metadata'])
-                        except Exception as e:
+                        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
                             logger.debug(f"Failed to parse document metadata JSON: id={document_id}, error={e}")
                     return result
                 return None
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting document: {e}")
             return None
 
@@ -1116,7 +1127,7 @@ class DocumentGeneratorService:
         self,
         conversation_id: Optional[str] = None,
         document_type: Optional[DocumentType] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List generated documents.
 
@@ -1145,7 +1156,7 @@ class DocumentGeneratorService:
                 cursor = conn.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing documents: {e}")
             return []
 
@@ -1161,7 +1172,7 @@ class DocumentGeneratorService:
         """
         return self.delete_generated_document(document_id)
 
-    def save_prompt_config(self, config: Dict[DocumentType, str]) -> bool:
+    def save_prompt_config(self, config: dict[DocumentType, str]) -> bool:
         """
         Save custom prompt configuration.
 
@@ -1185,7 +1196,7 @@ class DocumentGeneratorService:
                 conn.commit()
                 return True
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error saving prompt config: {e}")
             return False
 
@@ -1213,15 +1224,15 @@ class DocumentGeneratorService:
                     return row['custom_prompt']
                 return None
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting prompt config: {e}")
             return None
 
     async def bulk_generate(
         self,
         conversation_id: str,
-        document_types: List[DocumentType]
-    ) -> List[Dict[str, Any]]:
+        document_types: list[DocumentType]
+    ) -> list[dict[str, Any]]:
         """
         Generate multiple document types at once.
 
@@ -1243,7 +1254,7 @@ class DocumentGeneratorService:
             results.append(result)
         return results
 
-    def get_statistics(self) -> Dict[str, Any]:
+    def get_statistics(self) -> dict[str, Any]:
         """
         Get document generation statistics.
 
@@ -1293,7 +1304,7 @@ class DocumentGeneratorService:
                     "success_rate": success_rate
                 }
 
-        except Exception as e:
+        except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
             return {
                 "total_documents": 0,

@@ -9,20 +9,21 @@
 
 import tempfile
 import xml.etree.ElementTree as ET
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import HTTPException
+
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.Chunking import improved_chunking_process
 from tldw_Server_API.app.core.Utils.Utils import logger
 
-from tldw_Server_API.app.core.Chunking import improved_chunking_process
 
 async def process_xml_task(
     file_bytes: bytes,
     filename: str,
     title: Optional[str],
     author: Optional[str],
-    keywords: List[str],
+    keywords: list[str],
     system_prompt: Optional[str],
     custom_prompt: Optional[str],
     auto_summarize: bool,
@@ -50,7 +51,7 @@ async def process_xml_task(
             tree = ET.parse(tmp_path)
             root = tree.getroot()
         except ET.ParseError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}") from e
 
         # 3) Chunk the XML. For instance:
         chunk_options = {
@@ -68,8 +69,8 @@ async def process_xml_task(
         summary_text = "No summary provided"
         if auto_summarize and api_name and api_name.lower() != "none" and api_key:
             # Combine all chunk text
-            full_text = '\n'.join(ch['text'] for ch in chunks)
-            combined_prompt = (system_prompt or "") + "\n\n" + (custom_prompt or "")
+            '\n'.join(ch['text'] for ch in chunks)
+            (system_prompt or "") + "\n\n" + (custom_prompt or "")
             # summary_text = perform_summarization(api_name, full_text, combined_prompt, api_key)
             summary_text = f"[Auto-summarized with {api_name}]"
 
@@ -104,4 +105,4 @@ async def process_xml_task(
 
     except Exception as e:
         logger.error(f"Error processing XML file: {filename} -> {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

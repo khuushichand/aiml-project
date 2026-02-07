@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.http_client import create_client, RetryPolicy
+from tldw_Server_API.app.core.http_client import create_client
+
 from .base import EmbeddingsProvider
 
 
 class GoogleEmbeddingsAdapter(EmbeddingsProvider):
     name = "google-embeddings"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "dimensions_default": None,
             "max_batch_size": 128,
@@ -27,7 +28,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
         import os
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1").rstrip("/")
 
-    def _normalize(self, raw: Dict[str, Any], *, multi: bool) -> Dict[str, Any]:
+    def _normalize(self, raw: dict[str, Any], *, multi: bool) -> dict[str, Any]:
         # Google embedContent returns {embedding: {values: [...]}}
         # batchEmbedContents returns {embeddings: [{values: [...]}, ...]}
         if not multi:
@@ -37,7 +38,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
             except Exception:
                 vec = []
             return {"data": [{"index": 0, "embedding": vec}], "object": "list", "model": None}
-        data: List[Dict[str, Any]] = []
+        data: list[dict[str, Any]] = []
         try:
             items = raw.get("embeddings", [])
             for i, it in enumerate(items):
@@ -46,7 +47,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
             pass
         return {"data": data, "object": "list", "model": None}
 
-    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         inputs = request.get("input")
         model = request.get("model")
         api_key = request.get("api_key")
@@ -59,7 +60,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
             try:
                 with create_client(timeout=timeout or 60.0) as client:
                     if isinstance(inputs, list):
-                        out: List[Dict[str, Any]] = []
+                        out: list[dict[str, Any]] = []
                         for idx, text in enumerate(inputs):
                             url = f"{base}/models/{model}:embedContent"
                             params = {"key": api_key} if api_key else None
@@ -81,7 +82,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
                         return self._normalize(data, multi=False)
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         msg = (
             "GoogleEmbeddingsAdapter: native HTTP disabled "

@@ -17,25 +17,26 @@
 #
 ####################
 
+import logging
 import os
 import sys
-import logging
-from loguru import logger
 import tempfile
 from pathlib import Path
-from typing import Optional, Union, Tuple, Dict, Any, Callable
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
 import torch
 
 # Apply NumPy 2.0 compatibility patches before importing Nemo
 from .numpy_compat import ensure_numpy_compatibility
+
 ensure_numpy_compatibility()
 
 # Import local config helpers
-from tldw_Server_API.app.core.config import get_stt_config, loaded_config_data
+from tldw_Server_API.app.core.config import get_stt_config
 
 # Global model cache
-_model_cache: Dict[str, Any] = {}
+_model_cache: dict[str, Any] = {}
 
 # Canonical language codes supported by Canary-1b-v2.
 # See: https://huggingface.co/nvidia/canary-1b-v2
@@ -73,6 +74,17 @@ CANARY_SUPPORTED_LANG_CODES_STR = ", ".join(sorted(CANARY_SUPPORTED_LANG_CODES))
 # health checks to decide whether Parakeet/Canary are even eligible).
 _nemo_import_checked: bool = False
 _nemo_available: bool = False
+_NEMO_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _temp_wav_from_numpy(audio_np: np.ndarray, sample_rate: int) -> str:
@@ -99,7 +111,7 @@ def is_nemo_available() -> bool:
     try:
         import nemo.collections.asr  # type: ignore  # noqa: F401
         _nemo_available = True
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         _nemo_available = False
     return _nemo_available
 
@@ -147,7 +159,7 @@ def _get_cache_dir() -> Path:
     """Get the cache directory for Nemo models."""
     try:
         stt_cfg = get_stt_config()
-    except Exception:
+    except _NEMO_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
     cache_dir = stt_cfg.get('nemo_cache_dir', './models/nemo')
 
@@ -166,13 +178,13 @@ def load_canary_model():
     cache_key = _get_model_cache_key('canary', 'standard')
 
     if cache_key in _model_cache:
-        logging.debug(f"Using cached Canary model")
+        logging.debug("Using cached Canary model")
         return _model_cache[cache_key]
 
     try:
         import nemo.collections.asr as nemo_asr
-    except ImportError as e:
-        logging.error("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
+    except ImportError:
+        logging.exception("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
         return None
 
     try:
@@ -189,14 +201,11 @@ def load_canary_model():
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         try:
             stt_cfg = get_stt_config()
-        except Exception:
+        except _NEMO_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         device = stt_cfg.get('nemo_device', device)
 
-        if device == 'cuda' and torch.cuda.is_available():
-            model = model.cuda()
-        else:
-            model = model.cpu()
+        model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
 
         model.eval()
 
@@ -205,7 +214,7 @@ def load_canary_model():
         return model
 
     except Exception as e:
-        logging.error(f"Failed to load Canary model: {e}")
+        logging.exception(f"Failed to load Canary model: {e}")
         return None
 
 
@@ -228,7 +237,7 @@ def load_parakeet_model(variant: str = 'standard'):
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     try:
         stt_cfg = get_stt_config()
-    except Exception:
+    except _NEMO_NONCRITICAL_EXCEPTIONS:
         stt_cfg = {}
     device = stt_cfg.get('nemo_device', device)
 
@@ -240,7 +249,7 @@ def load_parakeet_model(variant: str = 'standard'):
         else:  # standard
             return _load_parakeet_standard(device)
     except Exception as e:
-        logging.error(f"Failed to load Parakeet model (variant: {variant}): {e}")
+        logging.exception(f"Failed to load Parakeet model (variant: {variant}): {e}")
         return None
 
 
@@ -249,7 +258,7 @@ def _load_parakeet_standard(device: str):
     try:
         import nemo.collections.asr as nemo_asr
     except ImportError:
-        logging.error("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
+        logging.exception("Nemo toolkit not installed. Install with: pip install nemo_toolkit[asr]")
         return None
 
     logging.info("Loading Parakeet TDT model from NVIDIA...")
@@ -264,10 +273,7 @@ def _load_parakeet_standard(device: str):
     # Configure for efficient inference
     model.change_decoding_strategy(None)  # Use greedy decoding for speed
 
-    if device == 'cuda' and torch.cuda.is_available():
-        model = model.cuda()
-    else:
-        model = model.cpu()
+    model = model.cuda() if device == 'cuda' and torch.cuda.is_available() else model.cpu()
 
     model.eval()
 
@@ -282,7 +288,7 @@ def _load_parakeet_onnx(device: str):
     try:
         # Import the proper ONNX implementation
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-            load_parakeet_onnx_model
+            load_parakeet_onnx_model,
         )
 
         logging.info("Loading Parakeet TDT ONNX model...")
@@ -303,7 +309,7 @@ def _load_parakeet_onnx(device: str):
             def transcribe(self, audio_path, chunk_duration=None, overlap_duration=15.0, chunk_callback=None):
                 # Use the proper ONNX transcription
                 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-                    transcribe_with_parakeet_onnx
+                    transcribe_with_parakeet_onnx,
                 )
 
                 result = transcribe_with_parakeet_onnx(
@@ -320,15 +326,15 @@ def _load_parakeet_onnx(device: str):
         model = ONNXParakeetModel(session, tokenizer)
         cache_key = _get_model_cache_key('parakeet', 'onnx')
         _model_cache[cache_key] = model
-        logging.info(f"Successfully loaded Parakeet ONNX model with tokenizer")
+        logging.info("Successfully loaded Parakeet ONNX model with tokenizer")
         return model
 
     except ImportError as e:
-        logging.error(f"Failed to import ONNX implementation: {e}")
-        logging.error("Ensure Audio_Transcription_Parakeet_ONNX.py is available")
+        logging.exception(f"Failed to import ONNX implementation: {e}")
+        logging.exception("Ensure Audio_Transcription_Parakeet_ONNX.py is available")
         return None
     except Exception as e:
-        logging.error(f"Failed to load ONNX model: {e}")
+        logging.exception(f"Failed to load ONNX model: {e}")
         return None
 
 
@@ -342,8 +348,8 @@ def _load_parakeet_mlx():
     try:
         # Import the specialized MLX implementation
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
+            check_mlx_available,
             load_parakeet_mlx_model,
-            check_mlx_available
         )
 
         if not check_mlx_available():
@@ -366,7 +372,7 @@ def _load_parakeet_mlx():
         logging.warning(f"MLX implementation not available: {e}. Falling back to standard variant.")
         return _load_parakeet_standard('cpu')
     except Exception as e:
-        logging.error(f"Error loading Parakeet MLX model: {e}")
+        logging.exception(f"Error loading Parakeet MLX model: {e}")
         return _load_parakeet_standard('cpu')
 
 
@@ -435,7 +441,7 @@ def transcribe_with_canary(
 
     # Build language kwargs for NeMo; we only pass values that survived
     # normalization to avoid raising on unsupported codes.
-    lang_kwargs: Dict[str, Any] = {}
+    lang_kwargs: dict[str, Any] = {}
     if source_lang:
         lang_kwargs["source_lang"] = source_lang
     if target_lang:
@@ -461,7 +467,7 @@ def transcribe_with_canary(
         try:
             transcriptions = model.transcribe([audio_np], batch_size=1, **lang_kwargs)
             return _extract_result(transcriptions)
-        except Exception as direct_err:
+        except _NEMO_NONCRITICAL_EXCEPTIONS as direct_err:
             logging.debug(f"Canary direct numpy transcription failed, falling back to temp file: {direct_err}")
             audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
             audio_source = audio_path
@@ -478,13 +484,13 @@ def transcribe_with_canary(
         return _extract_result(transcriptions)
 
     except Exception as e:
-        logging.error(f"Error during Canary transcription: {e}")
+        logging.exception(f"Error during Canary transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
         if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except Exception as rm_err:
+            except OSError as rm_err:
                 logging.debug(f"Failed to remove temp audio file (Canary): path={audio_path}, error={rm_err}")
 
 
@@ -514,7 +520,7 @@ def transcribe_with_parakeet(
     if variant == 'auto':
         try:
             stt_cfg = get_stt_config()
-        except Exception:
+        except _NEMO_NONCRITICAL_EXCEPTIONS:
             stt_cfg = {}
         variant = stt_cfg.get('nemo_model_variant', 'standard')
 
@@ -531,7 +537,7 @@ def transcribe_with_parakeet(
         if variant == 'mlx':
             # Use specialized MLX transcription
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-                transcribe_with_parakeet_mlx as mlx_transcribe
+                transcribe_with_parakeet_mlx as mlx_transcribe,
             )
             result = mlx_transcribe(
                 audio_source,
@@ -550,7 +556,7 @@ def transcribe_with_parakeet(
                     overlap_duration=overlap_duration,
                     chunk_callback=chunk_callback
                 )
-            except Exception as direct_err:
+            except _NEMO_NONCRITICAL_EXCEPTIONS as direct_err:
                 logging.debug(f"Parakeet direct numpy transcription failed, falling back to temp file: {direct_err}")
                 audio_path = _temp_wav_from_numpy(audio_np, sample_rate)
                 audio_source = audio_path
@@ -582,13 +588,13 @@ def transcribe_with_parakeet(
         return result
 
     except Exception as e:
-        logging.error(f"Error during Parakeet transcription: {e}")
+        logging.exception(f"Error during Parakeet transcription: {e}")
         return f"[Transcription error: {str(e)}]"
     finally:
         if cleanup_temp and audio_path and os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
-            except Exception as rm_err:
+            except OSError as rm_err:
                 logging.debug(f"Failed to remove temp audio file (Parakeet): path={audio_path}, error={rm_err}")
 
 
@@ -644,7 +650,7 @@ def unload_nemo_models():
             if hasattr(model, 'cpu'):
                 model.cpu()
             del model
-        except Exception as free_err:
+        except _NEMO_NONCRITICAL_EXCEPTIONS as free_err:
             logging.debug(f"Failed to release Nemo model resources: key={key}, error={free_err}")
 
     _model_cache.clear()

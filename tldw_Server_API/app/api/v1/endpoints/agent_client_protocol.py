@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from loguru import logger
@@ -9,7 +11,6 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.schemas.agent_client_protocol import (
     ACPAgentInfo,
     ACPAgentListResponse,
-    ACPAgentType,
     ACPSessionCancelRequest,
     ACPSessionCloseRequest,
     ACPSessionNewRequest,
@@ -31,6 +32,26 @@ from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
 
 router = APIRouter(prefix="/acp", tags=["acp"])
 
+_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    ACPResponseError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
@@ -39,9 +60,9 @@ router = APIRouter(prefix="/acp", tags=["acp"])
 
 async def _authenticate_ws(
     websocket: WebSocket,
-    token: Optional[str] = None,
-    api_key: Optional[str] = None,
-) -> Optional[int]:
+    token: str | None = None,
+    api_key: str | None = None,
+) -> int | None:
     """Authenticate a WebSocket connection. Returns user_id or None."""
     # Try JWT token first
     if token:
@@ -50,7 +71,7 @@ async def _authenticate_ws(
             token_data = jwtm.verify_token(token)
             if token_data and token_data.user_id:
                 return token_data.user_id
-        except Exception as e:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("JWT auth failed for WebSocket: {}", e)
 
     # Try API key (single-user mode)
@@ -60,7 +81,7 @@ async def _authenticate_ws(
             expected_key = os.getenv("SINGLE_USER_API_KEY", "")
             if expected_key and api_key == expected_key:
                 return 1  # Single-user mode user ID
-        except Exception as e:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("API key auth failed for WebSocket: {}", e)
 
     # Try Authorization header
@@ -70,6 +91,18 @@ async def _authenticate_ws(
             return await _authenticate_ws(websocket, token=auth_header[7:].strip())
         elif auth_header.lower().startswith("x-api-key "):
             return await _authenticate_ws(websocket, api_key=auth_header[10:].strip())
+
+    # Try Sec-WebSocket-Protocol: bearer,<token> or x-api-key,<key>
+    proto_header = websocket.headers.get("sec-websocket-protocol") or websocket.headers.get("Sec-WebSocket-Protocol")
+    if proto_header:
+        parts = [p.strip() for p in proto_header.split(",") if p.strip()]
+        for idx in range(len(parts) - 1):
+            scheme = parts[idx].lower()
+            value = parts[idx + 1]
+            if scheme == "bearer" and value:
+                return await _authenticate_ws(websocket, token=value)
+            if scheme in {"x-api-key", "api-key"} and value:
+                return await _authenticate_ws(websocket, api_key=value)
 
     return None
 
@@ -83,8 +116,8 @@ async def _authenticate_ws(
 async def acp_session_stream(
     websocket: WebSocket,
     session_id: str,
-    token: Optional[str] = Query(None),
-    api_key: Optional[str] = Query(None),
+    token: str | None = Query(None),
+    api_key: str | None = Query(None),
 ) -> None:
     """
     WebSocket endpoint for real-time ACP session updates.
@@ -109,10 +142,8 @@ async def acp_session_stream(
     # Authenticate
     user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
     if user_id is None:
-        try:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
             await websocket.close(code=4401)
-        except Exception:
-            pass
         return
 
     # Set up WebSocket stream wrapper for metrics
@@ -131,7 +162,7 @@ async def acp_session_stream(
         client = await get_runner_client()
 
         # Define send callback for broadcasting
-        async def send_callback(message: Dict[str, Any]) -> None:
+        async def send_callback(message: dict[str, Any]) -> None:
             await stream.send_json(message)
 
         # Register this WebSocket with the session
@@ -161,7 +192,7 @@ async def acp_session_stream(
                     "message": f"Invalid JSON: {e}",
                     "session_id": session_id,
                 })
-            except Exception as e:
+            except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                 logger.exception("Error handling WebSocket message for session {}", session_id)
                 await stream.send_json({
                     "type": "error",
@@ -170,22 +201,115 @@ async def acp_session_stream(
                     "session_id": session_id,
                 })
 
-    except Exception as e:
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         logger.exception("WebSocket error for ACP session {}", session_id)
     finally:
         # Unregister WebSocket
         try:
             client = await get_runner_client()
             await client.unregister_websocket(session_id, send_callback)
-        except Exception:
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             pass
         await stream.stop()
 
 
+@router.websocket("/sessions/{session_id}/ssh")
+async def acp_session_ssh(
+    websocket: WebSocket,
+    session_id: str,
+    token: str | None = Query(None),
+    api_key: str | None = Query(None),
+) -> None:
+    """WebSocket SSH proxy for an ACP sandbox session."""
+    user_id = await _authenticate_ws(websocket, token=token, api_key=api_key)
+    if user_id is None:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4401)
+        return
+
+    try:
+        client = await get_runner_client()
+        if not hasattr(client, "get_ssh_info"):
+            await websocket.close(code=4404)
+            return
+        try:
+            ssh_info = await client.get_ssh_info(session_id, user_id=user_id)
+        except TypeError:
+            ssh_info = await client.get_ssh_info(session_id)
+        if not ssh_info:
+            await websocket.close(code=4404)
+            return
+        ssh_host, ssh_port, ssh_user, ssh_key = ssh_info
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=4404)
+        return
+
+    await websocket.accept()
+    try:
+        import asyncssh  # type: ignore
+    except ImportError:
+        await websocket.close(code=1011)
+        return
+
+    try:
+        key = asyncssh.import_private_key(ssh_key)
+        async with asyncssh.connect(
+            ssh_host,
+            port=int(ssh_port),
+            username=ssh_user,
+            client_keys=[key],
+            known_hosts=None,
+        ) as conn:
+            process = await conn.create_process(term_type="xterm", term_size=(80, 24))
+
+            async def _read_output(reader: Any) -> None:
+                while True:
+                    data = await reader.read(4096)
+                    if not data:
+                        return
+                    await websocket.send_bytes(data.encode() if isinstance(data, str) else data)
+
+            async def _write_input() -> None:
+                while True:
+                    try:
+                        msg = await websocket.receive()
+                    except WebSocketDisconnect:
+                        return
+                    if msg.get("type") == "websocket.disconnect":
+                        return
+                    if msg.get("text"):
+                        text = msg["text"]
+                        try:
+                            payload = json.loads(text)
+                        except json.JSONDecodeError:
+                            payload = None
+                        if isinstance(payload, dict) and payload.get("type") == "resize":
+                            cols = int(payload.get("cols") or 0)
+                            rows = int(payload.get("rows") or 0)
+                            if cols > 0 and rows > 0:
+                                with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                                    process.set_term_size(cols, rows)
+                            continue
+                        process.stdin.write(text)
+                        await process.stdin.drain()
+                    elif msg.get("bytes"):
+                        process.stdin.write(msg["bytes"])
+                        await process.stdin.drain()
+
+            await asyncio.gather(
+                _read_output(process.stdout),
+                _read_output(process.stderr),
+                _write_input(),
+            )
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+            await websocket.close(code=1011)
+
 async def _handle_client_message(
     client: Any,
     session_id: str,
-    data: Dict[str, Any],
+    data: dict[str, Any],
     stream: WebSocketStream,
 ) -> None:
     """Handle a message from the WebSocket client."""
@@ -272,17 +396,16 @@ async def _handle_client_message(
         })
 
 
-def _get_available_agents() -> list[ACPAgentInfo]:
-    """Get list of available agents and their configuration status."""
+def _get_static_agents() -> tuple[list[ACPAgentInfo], str]:
+    """Fallback list of built-in agents when runner registry is unavailable."""
     import os
 
-    agents = []
+    agents: list[ACPAgentInfo] = []
 
-    # Claude Code (requires ANTHROPIC_API_KEY)
     anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CLAUDE_CODE,
+            type="claude_code",
             name="Claude Code",
             description="Anthropic's Claude Code agent for software development tasks",
             is_configured=bool(anthropic_key),
@@ -290,11 +413,10 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # Codex (requires OPENAI_API_KEY)
     openai_key = os.getenv("OPENAI_API_KEY", "")
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CODEX,
+            type="codex",
             name="OpenAI Codex",
             description="OpenAI's Codex agent for code generation and analysis",
             is_configured=bool(openai_key),
@@ -302,10 +424,9 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # OpenCode (open-source, runs locally - always available)
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.OPENCODE,
+            type="opencode",
             name="OpenCode",
             description="Open-source coding agent (github.com/sst/opencode)",
             is_configured=True,
@@ -313,10 +434,9 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    # Custom (always available)
     agents.append(
         ACPAgentInfo(
-            type=ACPAgentType.CUSTOM,
+            type="custom",
             name="Custom Agent",
             description="Configure a custom agent with your own settings",
             is_configured=True,
@@ -324,7 +444,49 @@ def _get_available_agents() -> list[ACPAgentInfo]:
         )
     )
 
-    return agents
+    return agents, "claude_code"
+
+
+async def _get_available_agents() -> tuple[list[ACPAgentInfo], str]:
+    """Get list of available agents and their configuration status."""
+    try:
+        client = await get_runner_client()
+        raw = await client.list_agents()
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        return _get_static_agents()
+
+    agents_raw = raw.get("agents", []) if isinstance(raw, dict) else []
+    default_agent = raw.get("defaultAgentType") if isinstance(raw, dict) else None
+
+    agents: list[ACPAgentInfo] = []
+    for item in agents_raw:
+        if not isinstance(item, dict):
+            continue
+        agent_type = item.get("type")
+        name = item.get("name")
+        if not agent_type or not name:
+            continue
+        is_configured = item.get("isConfigured")
+        if is_configured is None:
+            is_configured = item.get("is_configured", False)
+        requires_api_key = item.get("requiresApiKey")
+        if requires_api_key is None:
+            requires_api_key = item.get("requires_api_key")
+        agents.append(
+            ACPAgentInfo(
+                type=str(agent_type),
+                name=str(name),
+                description=str(item.get("description") or ""),
+                is_configured=bool(is_configured),
+                requires_api_key=str(requires_api_key) if requires_api_key else None,
+            )
+        )
+
+    if not agents:
+        return _get_static_agents()
+
+    default_value = str(default_agent) if default_agent else agents[0].type
+    return agents, default_value
 
 
 @router.get("/agents", response_model=ACPAgentListResponse)
@@ -336,10 +498,10 @@ async def acp_list_agents(
 
     Returns information about which agents are available and properly configured.
     """
-    agents = _get_available_agents()
+    agents, default_agent = await _get_available_agents()
     return ACPAgentListResponse(
         agents=agents,
-        default_agent=ACPAgentType.CLAUDE_CODE,
+        default_agent=default_agent,
     )
 
 
@@ -379,20 +541,50 @@ async def acp_session_new(
 
     try:
         client = await get_runner_client()
-        session_id = await client.create_session(
-            payload.cwd,
-            mcp_servers_dicts,
-            agent_type=payload.agent_type.value,
-        )
+        try:
+            session_id = await client.create_session(
+                payload.cwd,
+                mcp_servers_dicts,
+                agent_type=payload.agent_type,
+                user_id=user.id,
+            )
+        except TypeError:
+            session_id = await client.create_session(
+                payload.cwd,
+                mcp_servers_dicts,
+                agent_type=payload.agent_type,
+            )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    sandbox_meta = None
+    try:
+        if hasattr(client, "get_session_metadata"):
+            try:
+                sandbox_meta = await client.get_session_metadata(session_id, user_id=user.id)
+            except TypeError:
+                sandbox_meta = await client.get_session_metadata(session_id)
+    except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+        sandbox_meta = None
+
+    resolved_agent_type = payload.agent_type
+    if resolved_agent_type is None:
+        try:
+            _, default_agent = await _get_available_agents()
+            resolved_agent_type = default_agent
+        except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            resolved_agent_type = "custom"
 
     return ACPSessionNewResponse(
         session_id=session_id,
         name=session_name,
-        agent_type=payload.agent_type,
+        agent_type=resolved_agent_type,
         agent_capabilities=client.agent_capabilities,
+        sandbox_session_id=(sandbox_meta or {}).get("sandbox_session_id") if sandbox_meta else None,
+        sandbox_run_id=(sandbox_meta or {}).get("sandbox_run_id") if sandbox_meta else None,
+        ssh_ws_url=(sandbox_meta or {}).get("ssh_ws_url") if sandbox_meta else None,
+        ssh_user=(sandbox_meta or {}).get("ssh_user") if sandbox_meta else None,
     )
 
 
@@ -406,7 +598,7 @@ async def acp_session_prompt(
         result = await client.prompt(payload.session_id, payload.prompt)
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
@@ -424,7 +616,7 @@ async def acp_session_cancel(
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return {"status": "ok"}
 
 
@@ -438,14 +630,14 @@ async def acp_session_close(
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return {"status": "ok"}
 
 
 @router.get("/sessions/{session_id}/updates", response_model=ACPSessionUpdatesResponse)
 async def acp_session_updates(
     session_id: str,
-    limit: Optional[int] = Query(default=100, ge=1, le=1000),
+    limit: int | None = Query(default=100, ge=1, le=1000),
     user: User = Depends(get_request_user),
 ) -> ACPSessionUpdatesResponse:
     client = await get_runner_client()

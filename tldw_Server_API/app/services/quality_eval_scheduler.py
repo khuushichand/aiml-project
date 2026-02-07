@@ -18,20 +18,17 @@ This scheduler runs inside the FastAPI lifespan if enabled.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict, Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics.metrics_manager import (
-    observe_histogram,
-    increment_counter,
     set_gauge,
 )
-
 
 DEFAULT_EVAL_PATH = Path("Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl")
 
@@ -39,12 +36,12 @@ DEFAULT_EVAL_PATH = Path("Docs/Deployment/Monitoring/Evals/nightly_rag_eval.json
 @dataclass
 class EvalRecord:
     query: str
-    expect: Optional[str] = None
-    namespace: Optional[str] = None
+    expect: str | None = None
+    namespace: str | None = None
 
 
-def _load_eval_set(path: Path) -> List[EvalRecord]:
-    items: List[EvalRecord] = []
+def _load_eval_set(path: Path) -> list[EvalRecord]:
+    items: list[EvalRecord] = []
     if not path.exists():
         logger.warning(f"RAG quality eval dataset not found at {path}")
         return items
@@ -75,8 +72,8 @@ async def _run_eval_once(dataset_path: Path, dataset_label: str) -> None:
         if not items:
             return
 
-        faithfulness_scores: List[float] = []
-        coverage_scores: List[float] = []
+        faithfulness_scores: list[float] = []
+        coverage_scores: list[float] = []
         # Keep the pass bounded; cap to 50 queries
         for rec in items[:50]:
             try:
@@ -102,10 +99,8 @@ async def _run_eval_once(dataset_path: Path, dataset_label: str) -> None:
                 hc = md.get("hard_citations") or {}
                 cov = hc.get("coverage")
                 if cov is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         coverage_scores.append(max(0.0, min(1.0, float(cov))))
-                    except Exception:
-                        pass
             except Exception as e:
                 logger.debug(f"Eval query failed: {e}")
                 continue
@@ -126,7 +121,7 @@ async def _run_eval_once(dataset_path: Path, dataset_label: str) -> None:
         logger.warning(f"RAG quality evaluation run failed: {e}")
 
 
-async def start_quality_eval_scheduler() -> Optional[asyncio.Task]:
+async def start_quality_eval_scheduler() -> asyncio.Task | None:
     """Start the periodic quality evaluation scheduler if enabled.
 
     Returns an asyncio.Task or None if disabled.

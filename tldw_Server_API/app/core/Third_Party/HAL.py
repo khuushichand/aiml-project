@@ -11,14 +11,14 @@ Supports:
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple, List, Dict, Any
-from tldw_Server_API.app.core.http_client import fetch, fetch_json
+from typing import Any
 
+from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 BASE_URL = "https://api.archives-ouvertes.fr/search/"
 
 
-def _build_url(scope: Optional[str]) -> str:
+def _build_url(scope: str | None) -> str:
     if not scope:
         return BASE_URL
     s = str(scope).strip().strip('/')
@@ -35,7 +35,7 @@ DEFAULT_FL = (
 )
 
 
-def _join_authors(doc: Dict[str, Any]) -> Optional[str]:
+def _join_authors(doc: dict[str, Any]) -> str | None:
     try:
         auths = doc.get("authFullName_s")
         if isinstance(auths, list):
@@ -48,11 +48,11 @@ def _join_authors(doc: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-def _pick_pdf_url(doc: Dict[str, Any]) -> Optional[str]:
+def _pick_pdf_url(doc: dict[str, Any]) -> str | None:
     """Heuristically pick a PDF URL from HAL document fields."""
     try:
         # Common fields that may contain URLs
-        candidates: List[str] = []
+        candidates: list[str] = []
         for key in ("fileMain_s", "linkExtUrl_s", "uri_s"):
             val = doc.get(key)
             if isinstance(val, str):
@@ -73,7 +73,7 @@ def _pick_pdf_url(doc: Dict[str, Any]) -> Optional[str]:
         return None
 
 
-def _normalize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_doc(doc: dict[str, Any]) -> dict[str, Any]:
     title = doc.get("title_s") or doc.get("label_s") or ""
     doi = doc.get("doiId_s") or None
     url = doc.get("uri_s") or (f"https://doi.org/{doi}" if doi else None)
@@ -95,13 +95,13 @@ def search(
     q: str,
     start: int,
     rows: int,
-    fl: Optional[str] = None,
-    fq: Optional[List[str]] = None,
-    sort: Optional[str] = None,
-    scope: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], int, Optional[str]]:
+    fl: str | None = None,
+    fq: list[str] | None = None,
+    sort: str | None = None,
+    scope: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, int, str | None]:
     try:
-        params_list: List[Tuple[str, str]] = [
+        params_list: list[tuple[str, str]] = [
             ("q", (q or "*:*")),
             ("wt", "json"),
             ("start", str(max(0, start))),
@@ -127,7 +127,7 @@ def search(
         return None, 0, f"HAL error: {str(e)}"
 
 
-def by_docid(docid: str, fl: Optional[str] = None, scope: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def by_docid(docid: str, fl: str | None = None, scope: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
     try:
         items, _, err = search(q=f"docid:{docid}", start=0, rows=1, fl=fl or DEFAULT_FL, scope=scope)
         if err:
@@ -139,7 +139,7 @@ def by_docid(docid: str, fl: Optional[str] = None, scope: Optional[str] = None) 
         return None, f"HAL error: {str(e)}"
 
 
-def raw(params: Dict[str, Any], scope: Optional[str] = None) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def raw(params: dict[str, Any], scope: str | None = None) -> tuple[bytes | None, str | None, str | None]:
     """Raw passthrough. Accepts wt in params and returns (content, media_type, error)."""
     try:
         wt = (params.get("wt") or "json").lower()
@@ -159,5 +159,5 @@ def raw(params: Dict[str, Any], scope: Optional[str] = None) -> Tuple[Optional[b
         return None, None, f"HAL error: {str(e)}"
 
 
-def extract_pdf_from_raw_doc(doc: Dict[str, Any]) -> Optional[str]:
+def extract_pdf_from_raw_doc(doc: dict[str, Any]) -> str | None:
     return _pick_pdf_url(doc)

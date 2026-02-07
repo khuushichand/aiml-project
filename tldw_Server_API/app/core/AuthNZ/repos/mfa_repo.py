@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -44,11 +44,10 @@ class AuthnzMfaRepo:
             # asyncpg status string: e.g. "UPDATE 0", "UPDATE 1"
             if isinstance(result, str):
                 parts = result.split()
-                if parts and parts[-1].isdigit():
-                    if int(parts[-1]) == 0:
-                        msg = f"User {user_id} not found during {operation}"
-                        logger.warning(msg)
-                        raise UserNotFoundError(msg)
+                if parts and parts[-1].isdigit() and int(parts[-1]) == 0:
+                    msg = f"User {user_id} not found during {operation}"
+                    logger.warning(msg)
+                    raise UserNotFoundError(msg)
                 return
 
             # aiosqlite cursor-style result
@@ -157,7 +156,7 @@ class AuthnzMfaRepo:
             logger.error(f"AuthnzMfaRepo.clear_mfa_config failed: {exc}")
             raise
 
-    async def get_encrypted_totp_secret(self, user_id: int) -> Optional[str]:
+    async def get_encrypted_totp_secret(self, user_id: int) -> str | None:
         """
         Return the encrypted TOTP secret for a user, if present.
         """
@@ -182,7 +181,7 @@ class AuthnzMfaRepo:
             )
             raise
 
-    async def get_mfa_status_row(self, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_mfa_status_row(self, user_id: int) -> dict[str, Any] | None:
         """
         Fetch raw MFA status fields for a user.
 
@@ -231,7 +230,7 @@ class AuthnzMfaRepo:
             )
             raise
 
-    async def get_backup_codes_json(self, user_id: int) -> Optional[str]:
+    async def get_backup_codes_json(self, user_id: int) -> str | None:
         """
         Return the raw ``backup_codes`` JSON for a user, if present.
         """

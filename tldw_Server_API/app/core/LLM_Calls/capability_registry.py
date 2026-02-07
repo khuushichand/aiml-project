@@ -8,10 +8,10 @@ normalization and blocked field enforcement used by adapters.
 """
 
 import math
-from typing import Any, Dict, Mapping, Set
+from collections.abc import Mapping
+from typing import Any
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
-
 
 SCHEMA_VERSION = 1
 _VALIDATION_METRICS_REGISTERED = False
@@ -59,7 +59,7 @@ def _record_validation_rejection(provider_key: str) -> None:
         return
 
 # Base OpenAI-compatible request fields supported across providers.
-BASE_FIELDS: Set[str] = {
+BASE_FIELDS: set[str] = {
     "messages",
     "model",
     "temperature",
@@ -90,7 +90,7 @@ BASE_FIELDS: Set[str] = {
 }
 
 # Provider-specific extension fields (non-OpenAI keys).
-PROVIDER_EXTENSIONS: Dict[str, Set[str]] = {
+PROVIDER_EXTENSIONS: dict[str, set[str]] = {
     "anthropic": {"top_k"},
     "google": {"top_k"},
     "huggingface": {"top_k"},
@@ -112,7 +112,7 @@ PROVIDER_EXTENSIONS: Dict[str, Set[str]] = {
 }
 
 # Alias mappings from legacy or provider-specific field names to canonical keys.
-ALIASES: Dict[str, Dict[str, str]] = {
+ALIASES: dict[str, dict[str, str]] = {
     "*": {
         "temp": "temperature",
         "streaming": "stream",
@@ -144,7 +144,7 @@ ALIASES: Dict[str, Dict[str, str]] = {
 }
 
 # Explicit denylist for unsafe or unsupported keys.
-BLOCKED_FIELDS: Dict[str, Set[str]] = {
+BLOCKED_FIELDS: dict[str, set[str]] = {
     "cohere": {"tool_choice"},
     "google": {"tool_choice"},
 }
@@ -154,22 +154,22 @@ def _normalize_provider(provider: str) -> str:
     return (provider or "").strip().lower()
 
 
-def _alias_map(provider: str) -> Dict[str, str]:
-    merged: Dict[str, str] = {}
+def _alias_map(provider: str) -> dict[str, str]:
+    merged: dict[str, str] = {}
     merged.update(ALIASES.get("*", {}))
     if provider:
         merged.update(ALIASES.get(provider, {}))
     return merged
 
 
-def normalize_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+def normalize_payload(provider: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a normalized payload with aliases applied.
 
     Alias precedence:
     - Canonical keys win if both are present and non-None.
     - If canonical is missing or None, alias value fills it.
     """
-    normalized: Dict[str, Any] = dict(payload or {})
+    normalized: dict[str, Any] = dict(payload or {})
     aliases = _alias_map(_normalize_provider(provider))
     for alias, canonical in aliases.items():
         if alias not in normalized:
@@ -183,7 +183,7 @@ def normalize_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, An
     return normalized
 
 
-def get_allowed_fields(provider: str) -> Set[str]:
+def get_allowed_fields(provider: str) -> set[str]:
     provider_key = _normalize_provider(provider)
     return set(BASE_FIELDS) | set(PROVIDER_EXTENSIONS.get(provider_key, set()))
 
@@ -229,9 +229,8 @@ def _validate_response_format(provider_key: str, response_format: Any) -> None:
     if not isinstance(resp_type, str) or not resp_type.strip():
         _raise_nested_error(provider_key, "response_format", "type must be a non-empty string")
     schema = response_format.get("json_schema")
-    if resp_type == "json_schema":
-        if not isinstance(schema, Mapping):
-            _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
+    if resp_type == "json_schema" and not isinstance(schema, Mapping):
+        _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
     if schema is not None and not isinstance(schema, Mapping):
         _raise_nested_error(provider_key, "response_format", "json_schema must be an object")
     if isinstance(schema, Mapping):
@@ -265,7 +264,7 @@ def _validate_nested_fields(provider_key: str, payload: Mapping[str, Any]) -> No
     _validate_logit_bias(provider_key, payload.get("logit_bias"))
 
 
-def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+def validate_payload(provider: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Validate payload keys against the capability registry.
 
     Returns a normalized copy of the payload (aliases applied).
@@ -296,12 +295,16 @@ def validate_payload(provider: str, payload: Mapping[str, Any]) -> Dict[str, Any
             provider=provider_key or None,
         )
     _validate_nested_fields(provider_key, filtered)
-    if normalized.get("tool_choice") is not None and not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
-        _record_validation_rejection(provider_key)
-        raise ChatBadRequestError(
-            message="tool_choice requires tools",
-            provider=provider_key or None,
-        )
+    tool_choice = normalized.get("tool_choice")
+    if tool_choice is not None:
+        if isinstance(tool_choice, str) and tool_choice.strip().lower() == "none":
+            return normalized
+        if not (isinstance(normalized.get("tools"), list) and normalized.get("tools")):
+            _record_validation_rejection(provider_key)
+            raise ChatBadRequestError(
+                message="tool_choice requires tools",
+                provider=provider_key or None,
+            )
     return normalized
 
 

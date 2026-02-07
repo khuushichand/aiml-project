@@ -6,8 +6,6 @@ from __future__ import annotations
 import os
 import platform
 from pathlib import Path
-from typing import Optional, Tuple
-
 
 _CONFIG_FILE_ENV = "TLDW_CONFIG_FILE"
 _CONFIG_PATH_ENV = "TLDW_CONFIG_PATH"
@@ -20,7 +18,7 @@ _DEFAULT_MODULE_YAML = {
 }
 
 
-def _env_value(name: str) -> Optional[str]:
+def _env_value(name: str) -> str | None:
     raw = os.getenv(name)
     if not raw:
         return None
@@ -28,7 +26,7 @@ def _env_value(name: str) -> Optional[str]:
     return raw or None
 
 
-def _interpret_config_path(raw: str) -> Tuple[Path, bool]:
+def _interpret_config_path(raw: str) -> tuple[Path, bool]:
     path = Path(raw).expanduser()
     if path.exists():
         return path, path.is_file()
@@ -37,7 +35,7 @@ def _interpret_config_path(raw: str) -> Tuple[Path, bool]:
     return path, False
 
 
-def _find_repo_root(start: Optional[Path] = None) -> Optional[Path]:
+def _find_repo_root(start: Path | None = None) -> Path | None:
     probe = start or Path(__file__).resolve()
     for anc in probe.parents:
         if (anc / ".git").exists():
@@ -47,7 +45,7 @@ def _find_repo_root(start: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
-def _find_api_root(start: Optional[Path] = None) -> Path:
+def _find_api_root(start: Path | None = None) -> Path:
     probe = start or Path(__file__).resolve()
     for anc in probe.parents:
         if anc.name == "tldw_Server_API":
@@ -67,7 +65,7 @@ def _user_config_dir() -> Path:
     return Path(base).expanduser() / "tldw"
 
 
-def _resolve_env_root() -> Optional[Path]:
+def _resolve_env_root() -> Path | None:
     raw = _env_value(_CONFIG_FILE_ENV)
     if raw:
         path, is_file = _interpret_config_path(raw)
@@ -145,8 +143,8 @@ def resolve_prompts_dir() -> Path:
 
 def resolve_module_yaml(
     module_name: str,
-    filename_override: Optional[str] = None,
-) -> Optional[Path]:
+    filename_override: str | None = None,
+) -> Path | None:
     """Resolve a module YAML configuration path."""
     if not module_name:
         return None

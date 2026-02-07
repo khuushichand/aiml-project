@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit, require_permissions
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
     UsageEventLogger,
     get_usage_event_logger,
 )
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import WebScrapingRequest
 from tldw_Server_API.app.core.AuthNZ.permissions import MEDIA_CREATE
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.services.web_scraping_service import (
     process_web_scraping_task,
 )
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -42,7 +44,7 @@ async def process_web_scraping_endpoint(
     """
     try:
         # Usage logging is best-effort; never fail the request.
-        try:
+        with contextlib.suppress(Exception):
             usage_log.log_event(
                 "webscrape.process",
                 tags=[str(payload.scrape_method or "")],
@@ -52,8 +54,6 @@ async def process_web_scraping_endpoint(
                     "max_depth": payload.max_depth,
                 },
             )
-        except Exception:
-            pass
 
         # Resolve the scraping task via the media shim so tests that
         # monkeypatch `media.process_web_scraping_task` continue to work.
@@ -97,15 +97,13 @@ async def process_web_scraping_endpoint(
     except Exception:  # pragma: no cover - defensive path
         error_detail = "Web scraping failed due to an internal error."
         logger.exception("Web scraping endpoint error")
-        try:
+        with contextlib.suppress(Exception):
             logger.error(
                 "Request details - scrape_method: {}, url_input: {}",
                 payload.scrape_method,
                 (payload.url_input[:100] if payload.url_input else "None"),
             )
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=error_detail)
+        raise HTTPException(status_code=500, detail=error_detail) from None
 
 
 __all__ = ["router"]

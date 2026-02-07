@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, List, NoReturn
+from typing import Any, ClassVar, NoReturn
 
-from tldw_Server_API.app.core.File_Artifacts.adapters.base import ValidationIssue
 from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
+from tldw_Server_API.app.core.File_Artifacts.adapters.base import ValidationIssue
 
 
 class TableAdapterBase:
@@ -13,7 +13,7 @@ class TableAdapterBase:
 
     validation_error: ClassVar[type[Exception]] = FileArtifactsValidationError
 
-    def normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def normalize(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Normalize raw table payloads into {columns, rows}."""
         columns = payload.get("columns")
         rows = payload.get("rows")
@@ -30,9 +30,9 @@ class TableAdapterBase:
                 self._raise_validation_error("row_must_be_list")
         return {"columns": normalized_columns, "rows": normalized_rows}
 
-    def validate(self, structured: Dict[str, Any]) -> List[ValidationIssue]:
+    def validate(self, structured: dict[str, Any]) -> list[ValidationIssue]:
         """Validate normalized table payloads and return issues."""
-        issues: List[ValidationIssue] = []
+        issues: list[ValidationIssue] = []
         columns = structured.get("columns")
         rows = structured.get("rows")
         if not isinstance(columns, list) or not columns:

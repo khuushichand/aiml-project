@@ -54,7 +54,7 @@ class _StubPrincipal:
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_abtest_export_json_parses_payload(monkeypatch):
-    import tldw_Server_API.app.api.v1.endpoints.evaluations_unified as endpoints
+    import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified as endpoints
 
     monkeypatch.setattr(endpoints, "get_unified_evaluation_service_for_user", lambda _uid: _StubService())
     monkeypatch.setattr(endpoints, "log_evaluation_exported", lambda **_kwargs: None)

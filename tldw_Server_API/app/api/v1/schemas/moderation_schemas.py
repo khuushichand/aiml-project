@@ -1,7 +1,8 @@
 # moderation_schemas.py
 # Description: Pydantic models for Moderation admin endpoints
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -12,14 +13,14 @@ class ModerationUserOverride(BaseModel):
     input_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for input violations")
     output_action: Optional[Literal['block', 'redact', 'warn']] = Field(None, description="Action for output violations")
     redact_replacement: Optional[str] = Field(None, description="Replacement text for redaction")
-    categories_enabled: Optional[List[str]] = Field(
+    categories_enabled: Optional[list[str]] = Field(
         None,
         description="Categories to enable for this user (comma-separated string or list, e.g., 'pii,confidential')",
     )
 
     @field_validator("categories_enabled", mode="before")
     @classmethod
-    def _normalize_categories_enabled(cls, v: Any) -> Optional[List[str]]:
+    def _normalize_categories_enabled(cls, v: Any) -> Optional[list[str]]:
         if v is None:
             return None
         if isinstance(v, str):
@@ -38,11 +39,11 @@ class ModerationUserOverride(BaseModel):
 
 
 class ModerationBlocklistUpdate(BaseModel):
-    lines: List[str] = Field(default_factory=list, description="Blocklist lines; regex lines can be wrapped in /.../")
+    lines: list[str] = Field(default_factory=list, description="Blocklist lines; regex lines can be wrapped in /.../")
 
 
 class ModerationUserOverridesResponse(BaseModel):
-    overrides: Dict[str, Dict[str, Any]]
+    overrides: dict[str, dict[str, Any]]
 
 
 class BlocklistManagedItem(BaseModel):
@@ -52,7 +53,7 @@ class BlocklistManagedItem(BaseModel):
 
 class BlocklistManagedResponse(BaseModel):
     version: str = Field(..., description="Content hash for optimistic concurrency")
-    items: List[BlocklistManagedItem]
+    items: list[BlocklistManagedItem]
 
 
 class BlocklistAppendRequest(BaseModel):
@@ -78,7 +79,7 @@ class BlocklistDeleteResponse(BaseModel):
 
 
 class BlocklistLintRequest(BaseModel):
-    lines: Optional[List[str]] = None
+    lines: Optional[list[str]] = None
     line: Optional[str] = None
 
     @field_validator('line')
@@ -95,14 +96,14 @@ class BlocklistLintItem(BaseModel):
     pattern_type: Optional[Literal['literal', 'regex', 'comment', 'empty']] = None
     action: Optional[Literal['block', 'redact', 'warn']] = None
     replacement: Optional[str] = None
-    categories: Optional[List[str]] = None
+    categories: Optional[list[str]] = None
     error: Optional[str] = None
     warning: Optional[str] = None
     sample: Optional[str] = None
 
 
 class BlocklistLintResponse(BaseModel):
-    items: List[BlocklistLintItem]
+    items: list[BlocklistLintItem]
     valid_count: int
     invalid_count: int
 
@@ -118,17 +119,17 @@ class ModerationTestResponse(BaseModel):
     action: Literal['block', 'redact', 'warn', 'pass']
     sample: Optional[str] = None
     redacted_text: Optional[str] = None
-    effective: Dict[str, Any]
+    effective: dict[str, Any]
     category: Optional[str] = None
 
 
 class ModerationSettingsResponse(BaseModel):
     pii_enabled: Optional[bool] = Field(None, description="Runtime override for pii_enabled or None if not overridden")
-    categories_enabled: Optional[List[str]] = Field(None, description="Runtime override for categories_enabled or None if not overridden")
-    effective: Dict[str, Any] = Field(..., description="Effective settings after merge with config")
+    categories_enabled: Optional[list[str]] = Field(None, description="Runtime override for categories_enabled or None if not overridden")
+    effective: dict[str, Any] = Field(..., description="Effective settings after merge with config")
 
 
 class ModerationSettingsUpdate(BaseModel):
     pii_enabled: Optional[bool] = None
-    categories_enabled: Optional[List[str]] = None
+    categories_enabled: Optional[list[str]] = None
     persist: Optional[bool] = Field(False, description="Persist runtime overrides to file")

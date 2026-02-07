@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import base64
-import uuid
-from datetime import datetime, timedelta
+import contextlib
 import os
-from typing import List, Optional
-import hashlib
+import threading
+from datetime import datetime
 
 from loguru import logger
+
+from tldw_Server_API.app.core.Audit.unified_audit_service import (
+    AuditContext,
+    AuditEventCategory,
+    AuditEventType,
+    AuditSeverity,
+    UnifiedAuditService,
+)
+from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.Metrics import observe_histogram
 
 from .models import (
     RunPhase,
@@ -16,31 +27,35 @@ from .models import (
     RuntimeType,
     Session,
     SessionSpec,
-    TrustLevel,
 )
+from .orchestrator import SandboxOrchestrator
 from .policy import SandboxPolicy, SandboxPolicyConfig, compute_policy_hash
-from .store import get_store_mode
-from .orchestrator import SandboxOrchestrator, IdempotencyConflict
-from .runners.docker_runner import docker_available
-from .runners.firecracker_runner import firecracker_available, firecracker_real_enabled
-from .runners.lima_runner import lima_available, lima_version, LimaRunner
-from .runners.docker_runner import DockerRunner
-from .runners.firecracker_runner import FirecrackerRunner
+from .runners.docker_runner import DockerRunner, docker_available
+from .runners.firecracker_runner import FirecrackerRunner, firecracker_available, firecracker_real_enabled
+from .runners.lima_runner import LimaRunner, lima_available
 from .snapshots import SnapshotManager
-from tldw_Server_API.app.core.config import settings as app_settings
-import threading
-import asyncio
-
-from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
-    AuditEventType,
-    AuditEventCategory,
-    AuditSeverity,
-    AuditContext,
-)
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Metrics import observe_histogram
+from .store import get_store_mode
 from .streams import get_hub
+
+_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
 
 
 class SandboxService:
@@ -50,7 +65,7 @@ class SandboxService:
     Actual execution is intentionally not implemented at this stage.
     """
 
-    def __init__(self, policy: Optional[SandboxPolicy] = None) -> None:
+    def __init__(self, policy: SandboxPolicy | None = None) -> None:
         cfg = SandboxPolicyConfig.from_settings()
         self.policy = policy or SandboxPolicy(cfg)
         self._orch = SandboxOrchestrator(self.policy)
@@ -75,14 +90,14 @@ class SandboxService:
         try:
             if spec.runtime != RuntimeType.firecracker:
                 return
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             return
         if not firecracker_real_enabled():
             return
 
         errors: dict[str, str] = {}
         base_image = getattr(spec, "base_image", None)
-        rootfs_path: Optional[str] = None
+        rootfs_path: str | None = None
         if base_image:
             try:
                 if os.path.exists(str(base_image)):
@@ -90,7 +105,7 @@ class SandboxService:
                         rootfs_path = str(base_image)
                     else:
                         errors["base_image"] = "not_file"
-            except Exception:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                 pass
         if not rootfs_path:
             rootfs_path = os.getenv("SANDBOX_FC_ROOTFS_PATH")
@@ -119,7 +134,7 @@ class SandboxService:
                 },
             )
 
-    def _validate_spec_version(self, spec_version: Optional[str]) -> None:
+    def _validate_spec_version(self, spec_version: str | None) -> None:
         if not spec_version:
             return
         if spec_version not in self._supported_specs:
@@ -142,26 +157,26 @@ class SandboxService:
         # Queue/backpressure defaults from app settings
         try:
             queue_max_length = int(getattr(app_settings, "SANDBOX_QUEUE_MAX_LENGTH", 100))
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             queue_max_length = 100
         try:
             queue_ttl_sec = int(getattr(app_settings, "SANDBOX_QUEUE_TTL_SEC", 120))
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             queue_ttl_sec = 120
         # Store mode advertised to clients (e.g., memory|sqlite|cluster)
         try:
             store_mode = str(get_store_mode())
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             store_mode = "unknown"
         # Whether we have active enforcement for egress allowlisting (Docker only for now)
         try:
             env_enf = str(os.getenv("SANDBOX_EGRESS_ENFORCEMENT") or getattr(app_settings, "SANDBOX_EGRESS_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             env_enf = False
         egress_supported = bool(self.policy.cfg.egress_enforcement) or bool(env_enf)
         try:
             env_gran = str(os.getenv("SANDBOX_EGRESS_GRANULAR_ENFORCEMENT") or getattr(app_settings, "SANDBOX_EGRESS_GRANULAR_ENFORCEMENT", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             env_gran = False
         granular = bool(egress_supported and env_gran)
         # Whether execution is enabled (env overrides settings)
@@ -171,7 +186,7 @@ class SandboxService:
                 execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
 
         return [
@@ -251,12 +266,9 @@ class SandboxService:
             uid_int = None
             try:
                 uid_int = int(str(user_id)) if user_id is not None else None
-            except Exception:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                 uid_int = None
-            if uid_int is not None:
-                db_path = DatabasePaths.get_audit_db_path(uid_int)
-            else:
-                db_path = None
+            db_path = DatabasePaths.get_audit_db_path(uid_int) if uid_int is not None else None
 
             async def _alog() -> None:
                 svc = UnifiedAuditService(db_path=str(db_path) if db_path else None)
@@ -280,14 +292,14 @@ class SandboxService:
                     try:
                         if status.started_at and status.finished_at:
                             dur_ms = max(0.0, (status.finished_at - status.started_at).total_seconds() * 1000.0)
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         dur_ms = None
                     # Include reason_code for non-success outcomes when available
                     reason_code = None
                     try:
                         if outcome in ("timeout", "failed"):
                             reason_code = (status.message or None)
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         reason_code = None
                     await svc.log_event(
                         event_type=AuditEventType.API_RESPONSE,
@@ -318,11 +330,11 @@ class SandboxService:
             except RuntimeError:
                 loop = asyncio.get_event_loop()
                 loop.create_task(_alog())
-        except Exception as e:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"audit(run.completion) failed: {e}")
         # (rest of method continues)
 
-    def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> Session:
+    def create_session(self, user_id: str | int, spec: SessionSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> Session:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         fc_ok = firecracker_available()
@@ -337,11 +349,11 @@ class SandboxService:
     def destroy_session(self, session_id: str) -> bool:
         try:
             return bool(self._orch.destroy_session(session_id))
-        except Exception as e:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"destroy_session failed: {e}")
             return False
 
-    def parse_inline_files(self, files: Optional[List[dict]]) -> list[tuple[str, bytes]]:
+    def parse_inline_files(self, files: list[dict] | None) -> list[tuple[str, bytes]]:
         results: list[tuple[str, bytes]] = []
         if not files:
             return results
@@ -351,11 +363,11 @@ class SandboxService:
                 b64 = str(f.get("content_b64", ""))
                 data = base64.b64decode(b64)
                 results.append((p, data))
-            except Exception as e:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to parse inline file: {e}")
         return results
 
-    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: Optional[str], raw_body: dict) -> RunStatus:
+    def start_run_scaffold(self, user_id: str | int, spec: RunSpec, spec_version: str, idem_key: str | None, raw_body: dict) -> RunStatus:
         # Validate requested spec version
         self._validate_spec_version(spec_version)
         # Apply policy then enqueue via orchestrator (idempotency-aware)
@@ -377,7 +389,7 @@ class SandboxService:
                     stdin_bps=(int(spec.stdin_bps) if getattr(spec, "stdin_bps", None) is not None else None),
                     stdin_idle_timeout_sec=(int(spec.stdin_idle_timeout_sec) if getattr(spec, "stdin_idle_timeout_sec", None) is not None else None),
                 )
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             pass
         # Emit queue-wait metric as soon as we move out of queued (or immediately after enqueue)
         # so tests that disable execution still observe this metric.
@@ -387,7 +399,7 @@ class SandboxService:
                 import time as _time
                 qwait = max(0.0, _time.time() - float(ts))
                 observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": str(spec.runtime.value if spec.runtime else "unknown")})
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             pass
         # Optional: Execute via Docker runner if enabled and requested
         # Allow per-test overrides via env even if settings were loaded earlier
@@ -397,7 +409,7 @@ class SandboxService:
                 execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             execute_enabled = False
         if execute_enabled and spec.runtime == RuntimeType.docker:
             try:
@@ -410,7 +422,7 @@ class SandboxService:
                 try:
                     if str(os.getenv("TLDW_SANDBOX_DOCKER_FAKE_EXEC") or "").strip().lower() in {"1", "true", "yes", "on", "y"}:
                         background = False
-                except Exception:
+                except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
                 if background:
                     # Return early and execute in background
@@ -418,14 +430,12 @@ class SandboxService:
                     # Best-effort status update; do not abort if orchestrator lacks method
                     try:
                         self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
-                    except Exception as _e:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
                     # Proactively publish a 'start' event so WS subscribers connecting
                     # immediately after POST observe at least one event.
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except Exception:
-                        pass
                     # Metrics: queue wait histogram (if enqueued timestamp known)
                     try:
                         ts = self._orch.get_enqueue_time(status.id)  # type: ignore[attr-defined]
@@ -433,7 +443,7 @@ class SandboxService:
                             import time as _time
                             qwait = max(0.0, _time.time() - float(ts))
                             observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": "docker"})
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
                     def _worker():
                         try:
@@ -452,25 +462,23 @@ class SandboxService:
                             try:
                                 if getattr(real, "resource_usage", None):
                                     status.resource_usage = real.resource_usage  # type: ignore[assignment]
-                            except Exception:
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             try:
                                 self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
-                            except Exception as _e:
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                                 logger.debug(f"sandbox: update_run(completed) skipped: {_e}")
                             # Ensure an 'end' event is published even if the runner didn't
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code})
-                            except Exception:
-                                pass
                             # Ensure policy hash is present (compute if missing)
                             if not status.policy_hash:
                                 status.policy_hash = compute_policy_hash(self.policy.cfg)
                             # Audit completion
                             self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                        except Exception as e:
+                        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Background docker execution failed: {e}")
                     threading.Thread(target=_worker, daemon=True).start()
                 else:
@@ -483,7 +491,7 @@ class SandboxService:
                             import time as _time
                             qwait = max(0.0, _time.time() - float(ts))
                             observe_histogram("sandbox_queue_wait_seconds", value=float(qwait), labels={"runtime": "docker"})
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
                     real = dr.start_run(status.id, spec, ws)
                     real.id = status.id
@@ -496,17 +504,15 @@ class SandboxService:
                     try:
                         if getattr(real, "resource_usage", None):
                             status.resource_usage = real.resource_usage  # type: ignore[assignment]
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
                     # Audit completion (sync path)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except Exception:
-                        pass
-            except Exception as e:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Docker execution failed; keeping enqueue status. Error: {e}")
         elif execute_enabled and spec.runtime == RuntimeType.firecracker:
             try:
@@ -519,12 +525,10 @@ class SandboxService:
                     status.phase = RunPhase.starting
                     try:
                         self._orch.update_run(status.id, status)  # type: ignore[attr-defined]
-                    except Exception as _e:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except Exception:
-                        pass
                     def _worker_fc():
                         try:
                             fr = FirecrackerRunner()
@@ -541,16 +545,14 @@ class SandboxService:
                             try:
                                 if getattr(real, "resource_usage", None):
                                     status.resource_usage = real.resource_usage  # type: ignore[assignment]
-                            except Exception:
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                            except Exception:
-                                pass
-                        except Exception as e:
+                        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Firecracker background execution failed: {e}")
                     threading.Thread(target=_worker_fc, daemon=True).start()
                 else:
@@ -569,27 +571,23 @@ class SandboxService:
                     try:
                         if getattr(real, "resource_usage", None):
                             status.resource_usage = real.resource_usage  # type: ignore[assignment]
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except Exception:
-                        pass
-            except Exception as e:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Firecracker execution failed; marking run failed. Error: {e}")
                 try:
                     status.phase = RunPhase.failed
                     status.message = "firecracker_failed"
                     status.finished_at = datetime.utcnow()
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "firecracker_failed"})
-                    except Exception:
-                        pass
-                except Exception:
+                except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
         elif execute_enabled and spec.runtime == RuntimeType.lima:
             try:
@@ -602,12 +600,10 @@ class SandboxService:
                     status.phase = RunPhase.starting
                     try:
                         self._orch.update_run(status.id, status)
-                    except Exception as _e:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"sandbox: update_run(starting) skipped: {_e}")
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "start", {"bg": True})
-                    except Exception:
-                        pass
                     def _worker_lima():
                         try:
                             lr = LimaRunner()
@@ -624,16 +620,14 @@ class SandboxService:
                             try:
                                 if getattr(real, "resource_usage", None):
                                     status.resource_usage = real.resource_usage
-                            except Exception:
+                            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if real.artifacts:
                                 self._orch.store_artifacts(status.id, real.artifacts)
                             self._orch.update_run(status.id, status)
-                            try:
+                            with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                                 self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                            except Exception:
-                                pass
-                        except Exception as e:
+                        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                             logger.warning(f"Lima background execution failed: {e}")
                     threading.Thread(target=_worker_lima, daemon=True).start()
                 else:
@@ -652,27 +646,23 @@ class SandboxService:
                     try:
                         if getattr(real, "resource_usage", None):
                             status.resource_usage = real.resource_usage
-                    except Exception:
+                    except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                         pass
                     if real.artifacts:
                         self._orch.store_artifacts(status.id, real.artifacts)
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         self._audit_run_completion(user_id=user_id, run_id=status.id, status=status, spec_version=spec_version, session_id=spec.session_id)
-                    except Exception:
-                        pass
-            except Exception as e:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Lima execution failed; marking run failed. Error: {e}")
                 try:
                     status.phase = RunPhase.failed
                     status.message = "lima_failed"
                     status.finished_at = datetime.utcnow()
                     self._orch.update_run(status.id, status)
-                    try:
+                    with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
                         get_hub().publish_event(status.id, "end", {"exit_code": status.exit_code, "reason": "lima_failed"})
-                    except Exception:
-                        pass
-                except Exception:
+                except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
                     pass
         else:
             # Stub artifacts even without execution
@@ -684,7 +674,7 @@ class SandboxService:
         # Attach canonical policy hash for metadata consistency
         try:
             status.policy_hash = compute_policy_hash(self.policy.cfg)
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             status.policy_hash = None  # type: ignore[assignment]
         # Timestamps in scaffold
         now = datetime.utcnow()
@@ -698,10 +688,10 @@ class SandboxService:
             status.message = "Sandbox scaffold: execution not implemented"
         return status
 
-    def get_run(self, run_id: str) -> Optional[RunStatus]:
+    def get_run(self, run_id: str) -> RunStatus | None:
         return self._orch.get_run(run_id)
 
-    def get_session_workspace_path(self, session_id: str) -> Optional[str]:
+    def get_session_workspace_path(self, session_id: str) -> str | None:
         return self._orch.get_session_workspace_path(session_id)
 
     def cancel_run(self, run_id: str) -> bool:
@@ -717,7 +707,7 @@ class SandboxService:
                 cancelled = DockerRunner.cancel_run(run_id)
             elif st.runtime == RuntimeType.lima:
                 cancelled = LimaRunner.cancel_run(run_id)
-        except Exception as e:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"cancel_run failed: {e}")
             cancelled = False
         # Update status
@@ -729,13 +719,11 @@ class SandboxService:
             self._orch.update_run(run_id, st)
             # Consider the operation successful if we set killed state
             cancelled = True
-        except Exception:
+        except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS:
             pass
         # Ensure WS end event is sent even if runner didn't publish
-        try:
+        with contextlib.suppress(_SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS):
             get_hub().publish_event(run_id, "end", {"exit_code": None, "canceled": True})
-        except Exception:
-            pass
         return bool(cancelled)
 
     # -----------------
@@ -777,7 +765,7 @@ class SandboxService:
             raise ValueError("Session not found or no workspace")
         return self._snapshots.restore_snapshot(session_id, snapshot_id, ws)
 
-    def clone_session(self, session_id: str, new_name: Optional[str] = None) -> Session:
+    def clone_session(self, session_id: str, new_name: str | None = None) -> Session:
         """Clone a session including its workspace.
 
         Args:
@@ -824,11 +812,11 @@ class SandboxService:
         if new_ws:
             try:
                 self._snapshots.clone_session(session_id, source_ws, new_sess.id, new_ws)
-            except Exception as e:
+            except _SANDBOX_SERVICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to clone workspace: {e}")
                 # Clean up on failure
                 self._orch.destroy_session(new_sess.id)
-                raise ValueError(f"Failed to clone workspace: {e}")
+                raise ValueError(f"Failed to clone workspace: {e}") from e
 
         return new_sess
 
@@ -855,7 +843,7 @@ class SandboxService:
         """
         return self._snapshots.delete_snapshot(session_id, snapshot_id)
 
-    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> Optional[dict]:
+    def get_snapshot_info(self, session_id: str, snapshot_id: str) -> dict | None:
         """Get information about a specific snapshot.
 
         Args:

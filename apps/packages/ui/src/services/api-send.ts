@@ -81,8 +81,13 @@ export async function apiSend<T = any, P extends PathOrUrl = PathOrUrl, M extend
     // IMPORTANT: getConfig must fetch fresh config each time it's called
     // (not pre-fetch once), because the config may change or not be seeded yet.
     getConfig: async () => {
-      const config = await storage.get('tldwConfig').catch(() => null)
-      console.log('[API_SEND_DEBUG] direct request config', { hasConfig: !!config, serverUrl: config?.serverUrl })
+      const config = (await storage.get('tldwConfig').catch(() => null)) as
+        | { serverUrl?: string }
+        | null
+      console.log('[API_SEND_DEBUG] direct request config', {
+        hasConfig: !!config,
+        serverUrl: config?.serverUrl
+      })
       return config
     }
   })

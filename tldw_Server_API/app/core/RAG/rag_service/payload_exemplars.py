@@ -13,10 +13,9 @@ import random
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
-
 
 BASE_DIR = Path("Databases/observability")
 SINK = BASE_DIR / "rag_payload_exemplars.jsonl"
@@ -34,7 +33,7 @@ def _enforce_base_dir(candidate: Path) -> Path:
     return resolved
 
 
-def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -> Path:
+def _safe_sink(user_id: str | None = None, namespace: str | None = None) -> Path:
     try:
         # Prefer explicit override when provided
         p = os.getenv("RAG_PAYLOAD_EXEMPLAR_PATH")
@@ -44,16 +43,10 @@ def _safe_sink(user_id: Optional[str] = None, namespace: Optional[str] = None) -
             # In multi-tenant setups, segregate exemplars per user/namespace
             if namespace:
                 safe_namespace = "".join(c for c in str(namespace) if c.isalnum() or c in ('-', '_', '.'))
-                if safe_namespace:
-                    sink = BASE_DIR / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl"
-                else:
-                    sink = SINK
+                sink = BASE_DIR / "tenants" / safe_namespace / "rag_payload_exemplars.jsonl" if safe_namespace else SINK
             elif user_id:
                 safe_user_id = "".join(c for c in str(user_id) if c.isalnum() or c in ('-', '_', '.'))
-                if safe_user_id:
-                    sink = BASE_DIR / "users" / safe_user_id / "rag_payload_exemplars.jsonl"
-                else:
-                    sink = SINK
+                sink = BASE_DIR / "users" / safe_user_id / "rag_payload_exemplars.jsonl" if safe_user_id else SINK
             else:
                 sink = SINK
         sink.parent.mkdir(parents=True, exist_ok=True)
@@ -80,11 +73,11 @@ def _redact(text: str) -> str:
 def maybe_record_exemplar(
     *,
     query: str,
-    documents: List[Any],
+    documents: list[Any],
     answer: str,
     reason: str,
-    user_id: Optional[str] = None,
-    namespace: Optional[str] = None,
+    user_id: str | None = None,
+    namespace: str | None = None,
 ) -> None:
     """Sample and persist a redacted exemplar of the payload.
 

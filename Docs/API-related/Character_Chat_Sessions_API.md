@@ -24,12 +24,39 @@ Note:
 - Update session: `PUT /api/v1/chats/{chat_id}`
 - Delete session (soft): `DELETE /api/v1/chats/{chat_id}`
 - Export session: `GET /api/v1/chats/{chat_id}/export`
+- Get chat settings: `GET /api/v1/chats/{chat_id}/settings`
+- Update chat settings: `PUT /api/v1/chats/{chat_id}/settings`
+- Prepare character completion payload: `POST /api/v1/chats/{chat_id}/completions`
+- Run character completion (optional persistence/stream): `POST /api/v1/chats/{chat_id}/complete-v2`
+- Preview prompt assembly and budgets: `POST /api/v1/chats/{chat_id}/prompt-preview`
 - Legacy rate-limit test: `POST /api/v1/chats/{chat_id}/complete`
 
 Notes
 - Ownership is enforced; only the creator can access their sessions.
 - Use the Messages API to send/edit/delete/search messages in a session.
 - For LLM replies, call `POST /api/v1/chat/completions` with a `conversation_id` and optional `character_id`.
+
+## Character Chat Settings Fields (Selected)
+
+`PUT /api/v1/chats/{chat_id}/settings` accepts a merged settings object. Selected keys:
+
+- `chatPresetOverrideId` (string|null): Chat-level prompt preset ID used when `presetScope` is `"chat"`.
+- `chatGenerationOverride` (object|null): Canonical per-chat generation override block.
+- `generationOverrides` (object|null): Legacy alias accepted for backward compatibility.
+- `presetScope` (`"chat"` or `"character"`): Controls whether chat preset override or character preset is default.
+
+`chatGenerationOverride` / `generationOverrides` object shape:
+- `enabled` (bool, optional): If `false`, chat-level generation override is disabled.
+- `temperature` (number 0.0-2.0, optional)
+- `top_p` (number 0.0-1.0, optional)
+- `repetition_penalty` (number 0.0-3.0, optional)
+- `stop` (array[string], optional)
+- `updatedAt` (ISO timestamp, optional)
+
+Compatibility and precedence:
+- Server reads canonical `chatGenerationOverride` first.
+- If missing, server falls back to legacy `generationOverrides`.
+- If both are present, canonical wins.
 
 ## Examples
 

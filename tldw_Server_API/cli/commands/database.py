@@ -2,16 +2,14 @@
 Database management commands for tldw Evaluations CLI.
 """
 
+import contextlib
 import sys
 from pathlib import Path
-from datetime import datetime
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_table, print_json
-)
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_json, print_success, print_table
 
 
 @click.group()
@@ -55,7 +53,7 @@ def db_status(ctx, output_format):
     try:
         cli_context.load_config()
 
-        from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_stats, get_connection_health
+        from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection_health, get_connection_stats
 
         stats = get_connection_stats()
         health = get_connection_health()
@@ -131,16 +129,12 @@ def cleanup_db(ctx, days, dry_run):
             # Cleanup unified audit logs by retention window
             svc = UnifiedAuditService()
             import asyncio as _asyncio
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.initialize())
-            except RuntimeError:
-                pass
             # Set retention_days temporarily and execute cleanup
             svc.retention_days = days
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.cleanup_old_logs())
-            except RuntimeError:
-                pass
             print_success(f"Unified audit cleanup completed for records older than {days} days")
 
     except Exception as e:

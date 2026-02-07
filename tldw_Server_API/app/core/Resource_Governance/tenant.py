@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import hmac
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Mapping, Optional
+from typing import Any
+
 from loguru import logger
 
 
@@ -17,9 +20,9 @@ class TenantScopeConfig:
 
 def get_tenant_id(
     headers: Mapping[str, str],
-    claims: Optional[Mapping[str, Any]] = None,
-    config: Optional[TenantScopeConfig] = None,
-) -> Optional[str]:
+    claims: Mapping[str, Any] | None = None,
+    config: TenantScopeConfig | None = None,
+) -> str | None:
     """
     Extract a tenant identifier from request headers or JWT claims.
 
@@ -47,9 +50,27 @@ def get_tenant_id(
 
 
 _LOG_HASH_SECRET_WARNED = False
+_HASH_SECRET_FALLBACK_ENV_KEYS = (
+    "API_KEY_PEPPER",
+    "JWT_SECRET_KEY",
+    "SINGLE_USER_API_KEY",
+    "API_KEY",
+)
 
 
-def hash_entity(value: str, secret: Optional[str] = None) -> str:
+def _resolve_hash_secret(secret: str | None, env_secret: str | None) -> str | None:
+    if secret:
+        return secret
+    if env_secret:
+        return env_secret
+    for key in _HASH_SECRET_FALLBACK_ENV_KEYS:
+        candidate = os.getenv(key)
+        if candidate:
+            return candidate
+    return None
+
+
+def hash_entity(value: str, secret: str | None = None) -> str:
     """
     Produce a stable, non-reversible identifier for logging/metrics.
 
@@ -60,17 +81,16 @@ def hash_entity(value: str, secret: Optional[str] = None) -> str:
     global _LOG_HASH_SECRET_WARNED
     env_secret = os.getenv("TLDW_LOG_HASH_SECRET")
     enforce = str(os.getenv("TLDW_ENFORCE_LOG_HASH_SECRET") or "").strip().lower() in ("1", "true", "yes", "on")
-    if not secret and not env_secret:
-        if enforce:
-            # In enforced mode, fail fast to avoid cross-process instability
-            raise RuntimeError("TLDW_LOG_HASH_SECRET is required but not set (TLDW_ENFORCE_LOG_HASH_SECRET=1)")
+    if enforce and not env_secret and not secret:
+        # In enforced mode, require the dedicated log-hash secret explicitly.
+        raise RuntimeError("TLDW_LOG_HASH_SECRET is required but not set (TLDW_ENFORCE_LOG_HASH_SECRET=1)")
+    resolved_secret = _resolve_hash_secret(secret=secret, env_secret=env_secret)
+    if not resolved_secret:
         if not _LOG_HASH_SECRET_WARNED:
-            try:
+            with contextlib.suppress(Exception):
                 logger.warning("hash_entity using process-local fallback; set TLDW_LOG_HASH_SECRET for stable hashing across processes")
-            except Exception:
-                pass
             _LOG_HASH_SECRET_WARNED = True
-    key = (secret or env_secret or os.getpid().__repr__()).encode()
+    key = (resolved_secret or os.getpid().__repr__()).encode()
     return hmac.new(key, value.encode(), sha256).hexdigest()
 
 

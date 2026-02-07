@@ -2,15 +2,16 @@
 # Connection pooling for API providers to improve performance
 
 import asyncio
-import time
-from typing import Dict, Optional, Any
-from contextlib import asynccontextmanager
-from loguru import logger
 import threading
+import time
+from contextlib import asynccontextmanager, suppress
+from typing import Any, Optional
+
+from loguru import logger
 
 from tldw_Server_API.app.core.Embeddings.circuit_breaker import CircuitBreaker
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 
 class ConnectionPool:
@@ -101,20 +102,18 @@ class ConnectionPool:
             with self._lock:
                 self._usage_stats['active_connections'] -= 1
             if semaphore is not None:
-                try:
+                with suppress(Exception):
                     semaphore.release()
-                except Exception:
-                    pass
 
     async def request(
         self,
         method: str,
         url: str,
-        headers: Optional[Dict[str, str]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        json_data: Optional[dict[str, Any]] = None,
         data: Optional[Any] = None,
-        params: Optional[Dict[str, str]] = None
-    ) -> Dict[str, Any]:
+        params: Optional[dict[str, str]] = None
+    ) -> dict[str, Any]:
         """Make an HTTP request using the connection pool with circuit breaker protection."""
         return await self._breaker.call_async(
             self._request_impl,
@@ -130,11 +129,11 @@ class ConnectionPool:
         self,
         method: str,
         url: str,
-        headers: Optional[Dict[str, str]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
+        headers: Optional[dict[str, str]] = None,
+        json_data: Optional[dict[str, Any]] = None,
         data: Optional[Any] = None,
-        params: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        params: Optional[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         """
         Make an HTTP request using the connection pool.
 
@@ -185,8 +184,6 @@ class ConnectionPool:
                         f"{self.provider} API error: "
                         f"status={status}, body={error_text}"
                     )
-                    with self._lock:
-                        self._usage_stats['failures'] += 1
                     raise NetworkError(f"HTTP {status}")
 
                 ctype = (resp.headers.get("content-type", "") or "").lower()
@@ -218,7 +215,7 @@ class ConnectionPool:
         """Close the connection pool and cleanup resources."""
         logger.info(f"ConnectionPool for {self.provider} closed (http_client-managed)")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get connection pool statistics."""
         with self._lock:
             avg_time = (
@@ -259,7 +256,7 @@ class ConnectionPoolManager:
     """
 
     def __init__(self):
-        self.pools: Dict[str, ConnectionPool] = {}
+        self.pools: dict[str, ConnectionPool] = {}
         self._lock = threading.RLock()
 
     def get_pool(
@@ -302,7 +299,7 @@ class ConnectionPoolManager:
         self.pools.clear()
         logger.info("All connection pools closed")
 
-    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """Get statistics for all connection pools."""
         with self._lock:
             return {

@@ -9,33 +9,65 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 import aiosqlite
 from loguru import logger
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
-    UnifiedAuditService,
     HIGH_RISK_SCORE,
+    UnifiedAuditService,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
-
 _UNIDENTIFIED_TENANT_ID = "unidentified_user"
+
+_AUDIT_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    AttributeError,
+)
+
+_AUDIT_JSON_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+)
+
+_AUDIT_DB_EXCEPTIONS = (
+    aiosqlite.Error,
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
+
+_AUDIT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+)
 
 
 @dataclass(frozen=True)
 class AuditMigrationSource:
     path: Path
-    tenant_id: Optional[str]
+    tenant_id: str | None
     label: str
 
 
@@ -45,17 +77,28 @@ class AuditMigrationCounts:
     events_read: int = 0
     events_inserted: int = 0
     events_skipped: int = 0
+    # stats_* are event-level counters for audit_daily_stats derivation.
+    # stats_read = source events considered for stats, stats_inserted =
+    # events that contributed to a daily stats bucket, stats_skipped =
+    # events that could not contribute (duplicate event IDs or invalid timestamp).
     stats_read: int = 0
     stats_inserted: int = 0
     stats_skipped: int = 0
     failed: bool = False
-    error: Optional[str] = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditStatsUpdateResult:
+    events_contributed: int = 0
+    events_skipped: int = 0
+    buckets_updated: int = 0
 
 
 @dataclass
 class AuditMigrationReport:
     shared_db_path: Path
-    sources: List[AuditMigrationCounts]
+    sources: list[AuditMigrationCounts]
 
     @property
     def total_events_inserted(self) -> int:
@@ -66,6 +109,10 @@ class AuditMigrationReport:
         return sum(c.events_skipped for c in self.sources)
 
     @property
+    def total_stats_read(self) -> int:
+        return sum(c.stats_read for c in self.sources)
+
+    @property
     def total_stats_inserted(self) -> int:
         return sum(c.stats_inserted for c in self.sources)
 
@@ -74,7 +121,7 @@ class AuditMigrationReport:
         return sum(c.stats_skipped for c in self.sources)
 
     @property
-    def failed_sources(self) -> List[AuditMigrationCounts]:
+    def failed_sources(self) -> list[AuditMigrationCounts]:
         return [c for c in self.sources if c.failed]
 
     @property
@@ -82,12 +129,12 @@ class AuditMigrationReport:
         return len(self.failed_sources)
 
 
-def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
+def _normalize_subpath(raw: str | None) -> Path | None:
     if raw is None:
         return None
     try:
         value = str(raw).strip()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return None
     if not value:
         return None
@@ -102,14 +149,14 @@ def _normalize_subpath(raw: Optional[str]) -> Optional[Path]:
 
 def discover_audit_sources(
     *,
-    user_db_base_dir: Optional[Path] = None,
-    default_db_path: Optional[Path] = None,
-) -> List[AuditMigrationSource]:
+    user_db_base_dir: Path | None = None,
+    default_db_path: Path | None = None,
+) -> list[AuditMigrationSource]:
     base_dir = user_db_base_dir or DatabasePaths.get_user_db_base_dir()
-    sources: List[AuditMigrationSource] = []
+    sources: list[AuditMigrationSource] = []
     seen_paths: set[Path] = set()
 
-    def _add_source(path: Path, tenant_id: Optional[str], label: str) -> None:
+    def _add_source(path: Path, tenant_id: str | None, label: str) -> None:
         resolved = path.resolve()
         if resolved in seen_paths:
             return
@@ -174,7 +221,7 @@ async def _ensure_checkpoint_table(db: aiosqlite.Connection) -> None:
 
 async def _load_checkpoint(
     db: aiosqlite.Connection, source_path: Path
-) -> Tuple[int, Optional[str], Optional[str]]:
+) -> tuple[int, str | None, str | None]:
     try:
         async with db.execute(
             "SELECT last_rowid, last_event_id, last_timestamp FROM audit_migration_checkpoints WHERE source_path = ?",
@@ -207,8 +254,8 @@ async def _save_checkpoint(
     db: aiosqlite.Connection,
     source_path: Path,
     last_rowid: int,
-    last_event_id: Optional[str],
-    last_timestamp: Optional[str],
+    last_event_id: str | None,
+    last_timestamp: str | None,
 ) -> None:
     await db.execute(
         """
@@ -235,7 +282,7 @@ def _normalize_tenant_value(value: Any) -> str:
         return ""
     try:
         return str(value).strip()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return ""
 
 
@@ -243,14 +290,14 @@ def _is_system_event(event_type: Any, category: Any) -> bool:
     if category is not None:
         try:
             cat_val = str(category).lower()
-        except Exception:
+        except _AUDIT_COERCE_EXCEPTIONS:
             cat_val = ""
         if cat_val == "system":
             return True
     if event_type is not None:
         try:
             event_val = str(event_type).lower()
-        except Exception:
+        except _AUDIT_COERCE_EXCEPTIONS:
             event_val = ""
         if event_val.startswith("system"):
             return True
@@ -259,7 +306,7 @@ def _is_system_event(event_type: Any, category: Any) -> bool:
 
 def _resolve_tenant_id(
     *,
-    tenant_override: Optional[str],
+    tenant_override: str | None,
     raw_tenant: Any,
     context_user_id: Any,
     event_type: Any,
@@ -311,11 +358,26 @@ def _coerce_timestamp(value: Any) -> str:
         if dt_val.tzinfo is None:
             dt_val = dt_val.replace(tzinfo=timezone.utc)
         return dt_val.astimezone(timezone.utc).isoformat()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return str(value)
 
 
-def _parse_timestamp_to_date(value: Any) -> Optional[date]:
+def _checkpoint_timestamp(value: Any, previous: str | None) -> str | None:
+    """Return a safe checkpoint timestamp while preserving source text ordering."""
+    try:
+        if value is None:
+            return previous
+        s = str(value).strip()
+        if not s:
+            return previous
+        # Preserve source-side timestamp text so resume comparisons match
+        # ORDER BY timestamp,event_id semantics in the source database.
+        return s
+    except _AUDIT_COERCE_EXCEPTIONS:
+        return previous
+
+
+def _parse_timestamp_to_date(value: Any) -> date | None:
     try:
         if isinstance(value, datetime):
             dt_val = value
@@ -335,7 +397,7 @@ def _parse_timestamp_to_date(value: Any) -> Optional[date]:
         return None
 
 
-def _infer_category(event_type: Optional[str]) -> str:
+def _infer_category(event_type: str | None) -> str:
     if not event_type:
         return "system"
     val = str(event_type).strip().lower()
@@ -382,7 +444,7 @@ def _safe_json_text(value: Any, default: str) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False)
-    except Exception:
+    except _AUDIT_JSON_EXCEPTIONS:
         return str(value)
 
 
@@ -395,14 +457,14 @@ def _pick(row: dict[str, Any], *names: str) -> Any:
 
 def _build_event_record(
     row: dict[str, Any],
-    columns: List[str],
+    columns: list[str],
     *,
-    tenant_override: Optional[str],
+    tenant_override: str | None,
     system_tenant_id: str,
     unidentified_tenant_id: str,
 ) -> dict[str, Any]:
     event_type_val = _pick(row, "event_type", "event") or "system.start"
-    record: dict[str, Any] = {col: None for col in columns}
+    record: dict[str, Any] = dict.fromkeys(columns)
 
     record["event_id"] = str(_pick(row, "event_id") or uuid4())
     record["timestamp"] = _coerce_timestamp(_pick(row, "timestamp"))
@@ -444,7 +506,7 @@ def _build_event_record(
     record["result_count"] = _pick(row, "result_count")
 
     record["risk_score"] = _pick(row, "risk_score") or 0
-    record["pii_detected"] = bool(_pick(row, "pii_detected") or False)
+    record["pii_detected"] = _safe_bool(_pick(row, "pii_detected"), False)
     record["compliance_flags"] = _safe_json_text(_pick(row, "compliance_flags"), "[]")
     record["metadata"] = _safe_json_text(_pick(row, "metadata"), "{}")
 
@@ -453,7 +515,7 @@ def _build_event_record(
 
 async def _fetch_existing_event_ids(
     db: aiosqlite.Connection,
-    event_ids: List[str],
+    event_ids: list[str],
     *,
     chunk_size: int = 500,
 ) -> set[str]:
@@ -501,24 +563,37 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n", ""}:
+        return False
+    return default
+
+
 def _normalize_result(value: Any) -> str:
     """Normalize result strings for stats; missing/invalid values become empty string."""
     try:
         if value is None:
             return ""
         return str(value).strip().lower()
-    except Exception:
+    except _AUDIT_COERCE_EXCEPTIONS:
         return ""
 
 
 async def _update_shared_daily_stats_from_records(
     db: aiosqlite.Connection,
-    records: List[dict[str, Any]],
+    records: list[dict[str, Any]],
     *,
     unidentified_tenant_id: str,
-) -> int:
+) -> AuditStatsUpdateResult:
     if not records:
-        return 0
+        return AuditStatsUpdateResult()
     stats = defaultdict(lambda: {
         "total": 0,
         "high_risk": 0,
@@ -527,12 +602,16 @@ async def _update_shared_daily_stats_from_records(
         "tokens": 0,
         "durations": [],
     })
+    stats_events_contributed = 0
+    stats_events_skipped = 0
 
     for record in records:
         tenant_id = record.get("tenant_user_id") or unidentified_tenant_id
         date_val = _parse_timestamp_to_date(record.get("timestamp"))
         if date_val is None:
+            stats_events_skipped += 1
             continue
+        stats_events_contributed += 1
         category = str(record.get("category") or "system")
         key = (tenant_id, date_val, category)
         stats[key]["total"] += 1
@@ -591,14 +670,18 @@ async def _update_shared_daily_stats_from_records(
             ),
         )
         updated_rows += 1
-    return updated_rows
+    return AuditStatsUpdateResult(
+        events_contributed=stats_events_contributed,
+        events_skipped=stats_events_skipped,
+        buckets_updated=updated_rows,
+    )
 
 
 async def _migrate_source(
     shared_db: aiosqlite.Connection,
     source: AuditMigrationSource,
     *,
-    columns: List[str],
+    columns: list[str],
     insert_sql: str,
     system_tenant_id: str,
     unidentified_tenant_id: str,
@@ -615,6 +698,22 @@ async def _migrate_source(
                 return counts
 
             last_rowid, last_event_id, last_timestamp = await _load_checkpoint(shared_db, source_key)
+            # Existing checkpoints may contain normalized UTC timestamps from older
+            # builds. Refresh from the source event_id to keep resume comparisons
+            # aligned with source timestamp text.
+            if last_timestamp is not None and last_event_id:
+                try:
+                    async with source_db.execute(
+                        "SELECT timestamp FROM audit_events WHERE event_id = ? LIMIT 1",
+                        (last_event_id,),
+                    ) as cur:
+                        checkpoint_row = await cur.fetchone()
+                    if checkpoint_row:
+                        refreshed = _checkpoint_timestamp(checkpoint_row["timestamp"], last_timestamp)
+                        if refreshed is not None:
+                            last_timestamp = refreshed
+                except _AUDIT_DB_EXCEPTIONS:
+                    pass
             if last_timestamp is None and last_rowid > 0:
                 # Attempt to upgrade legacy rowid checkpoint to timestamp+event_id.
                 async with source_db.execute(
@@ -656,9 +755,10 @@ async def _migrate_source(
                         break
 
                     counts.events_read += len(rows)
-                    records: List[dict[str, Any]] = []
+                    counts.stats_read += len(rows)
+                    records: list[dict[str, Any]] = []
                     seen: set[str] = set()
-                    duplicates_in_chunk: List[str] = []
+                    duplicates_in_chunk: list[str] = []
                     for row in rows:
                         record = _build_event_record(
                             dict(row),
@@ -680,9 +780,10 @@ async def _migrate_source(
                     )
                     filtered = [r for r in records if r.get("event_id") not in existing]
                     duplicates_existing = [r["event_id"] for r in records if r.get("event_id") in existing]
+                    duplicates_total = len(duplicates_in_chunk) + len(duplicates_existing)
 
                     counts.events_inserted += len(filtered)
-                    counts.events_skipped += len(duplicates_in_chunk) + len(duplicates_existing)
+                    counts.events_skipped += duplicates_total
 
                     if duplicates_in_chunk:
                         logger.warning(
@@ -701,33 +802,33 @@ async def _migrate_source(
                             duplicates_existing[:5],
                         )
 
+                    counts.stats_skipped += duplicates_total
                     if filtered:
                         await shared_db.executemany(insert_sql, filtered)
-                        stats_updated = await _update_shared_daily_stats_from_records(
+                        stats_result = await _update_shared_daily_stats_from_records(
                             shared_db,
                             filtered,
                             unidentified_tenant_id=unidentified_tenant_id,
                         )
-                        counts.stats_inserted += stats_updated
+                        counts.stats_inserted += stats_result.events_contributed
+                        counts.stats_skipped += stats_result.events_skipped
 
                     last_row = rows[-1]
-                    try:
+                    with contextlib.suppress(_AUDIT_COERCE_EXCEPTIONS):
                         last_rowid = int(last_row["rowid"])
-                    except Exception:
-                        pass
                     try:
                         last_event = last_row["event_id"]
-                    except Exception:
+                    except (KeyError, TypeError, IndexError):
                         last_event = None
                     if last_event:
                         last_event_id = str(last_event)
                     try:
-                        last_timestamp = _coerce_timestamp(last_row["timestamp"])
-                    except Exception:
+                        last_timestamp = _checkpoint_timestamp(last_row["timestamp"], last_timestamp)
+                    except _AUDIT_NONCRITICAL_EXCEPTIONS:
                         last_timestamp = last_timestamp
                     await _save_checkpoint(shared_db, source_key, last_rowid, last_event_id, last_timestamp)
                     await shared_db.commit()
-    except Exception as exc:
+    except _AUDIT_DB_EXCEPTIONS as exc:
         counts.failed = True
         counts.error = f"{type(exc).__name__}: {exc}"
         logger.warning(
@@ -743,9 +844,9 @@ async def _migrate_source(
 
 async def migrate_to_shared_audit_db(
     *,
-    shared_db_path: Optional[Path] = None,
-    user_db_base_dir: Optional[Path] = None,
-    default_db_path: Optional[Path] = None,
+    shared_db_path: Path | None = None,
+    user_db_base_dir: Path | None = None,
+    default_db_path: Path | None = None,
     system_tenant_id: str = "system",
     unidentified_tenant_id: str = _UNIDENTIFIED_TENANT_ID,
     chunk_size: int = 5000,
@@ -782,7 +883,7 @@ async def migrate_to_shared_audit_db(
         logger.warning("No audit databases found for migration.")
         return AuditMigrationReport(shared_db_path=shared_path, sources=[])
 
-    counts: List[AuditMigrationCounts] = []
+    counts: list[AuditMigrationCounts] = []
     async with aiosqlite.connect(shared_path) as shared_db:
         shared_db.row_factory = aiosqlite.Row
         try:
@@ -791,7 +892,7 @@ async def migrate_to_shared_audit_db(
             await shared_db.execute("PRAGMA temp_store=MEMORY;")
             await shared_db.execute("PRAGMA foreign_keys=ON;")
             await shared_db.execute("PRAGMA busy_timeout=5000;")
-        except Exception:
+        except _AUDIT_DB_EXCEPTIONS:
             pass
         await _ensure_checkpoint_table(shared_db)
         await shared_db.commit()
@@ -812,18 +913,19 @@ async def migrate_to_shared_audit_db(
 
     report = AuditMigrationReport(shared_db_path=shared_path, sources=counts)
     logger.info(
-        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_inserted={}, stats_skipped={}",
+        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_read={}, stats_inserted={}, stats_skipped={}",
         len(report.sources),
         report.total_failures,
         report.total_events_inserted,
         report.total_events_skipped,
+        report.total_stats_read,
         report.total_stats_inserted,
         report.total_stats_skipped,
     )
     return report
 
 
-def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
+def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Migrate per-user audit DBs into shared audit DB.")
     parser.add_argument(
         "--shared-db",
@@ -865,7 +967,7 @@ def _parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[Iterable[str]] = None) -> int:
+def main(argv: Iterable[str] | None = None) -> int:
     args = _parse_args(argv)
     shared_db = Path(args.shared_db).expanduser() if args.shared_db else None
     user_db_base = Path(args.user_db_base).expanduser() if args.user_db_base else None

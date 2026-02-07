@@ -6,7 +6,8 @@ from __future__ import annotations
 import configparser
 import os
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from loguru import logger
@@ -25,6 +26,8 @@ from tldw_Server_API.app.core.config_paths import (
 )
 from tldw_Server_API.app.core.Embeddings.simplified_config import (
     get_config as get_embeddings_config,
+)
+from tldw_Server_API.app.core.Embeddings.simplified_config import (
     get_config_sources as get_embeddings_sources,
 )
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config_snapshot as get_evaluations_snapshot
@@ -48,7 +51,7 @@ def _is_sensitive(path: str) -> bool:
     return bool(_SENSITIVE_KEY_PATTERN.search(path))
 
 
-def _normalize_source(raw: Optional[str]) -> str:
+def _normalize_source(raw: str | None) -> str:
     if raw in _ALLOWED_SOURCES:
         return raw
     return "default"
@@ -58,7 +61,7 @@ def _flatten_values(
     data: Any,
     sources: Any,
     prefix: str,
-    out: Dict[str, ConfigValue],
+    out: dict[str, ConfigValue],
 ) -> None:
     if isinstance(data, dict):
         for key, value in data.items():
@@ -83,16 +86,16 @@ def _flatten_values(
 
 
 def _filter_defaults(
-    values: Dict[str, ConfigValue],
+    values: dict[str, ConfigValue],
     include_defaults: bool,
-) -> Dict[str, ConfigValue]:
+) -> dict[str, ConfigValue]:
     if include_defaults:
         return values
     return {key: val for key, val in values.items() if val.source != "default"}
 
 
-def _build_config_txt_values() -> Dict[str, ConfigValue]:
-    values: Dict[str, ConfigValue] = {}
+def _build_config_txt_values() -> dict[str, ConfigValue]:
+    values: dict[str, ConfigValue] = {}
     config_parser = load_comprehensive_config()
     if not hasattr(config_parser, "sections"):
         return values
@@ -120,34 +123,34 @@ def _build_config_txt_values() -> Dict[str, ConfigValue]:
     return values
 
 
-def _build_tts_values() -> Dict[str, ConfigValue]:
+def _build_tts_values() -> dict[str, ConfigValue]:
     manager = get_tts_config_manager()
     data = manager.to_dict()
     sources = manager.get_sources()
-    values: Dict[str, ConfigValue] = {}
+    values: dict[str, ConfigValue] = {}
     _flatten_values(data, sources, "", values)
     return values
 
 
-def _build_embeddings_values() -> Dict[str, ConfigValue]:
+def _build_embeddings_values() -> dict[str, ConfigValue]:
     config = get_embeddings_config()
     data = config.to_dict()
     sources = get_embeddings_sources()
-    values: Dict[str, ConfigValue] = {}
+    values: dict[str, ConfigValue] = {}
     _flatten_values(data, sources, "", values)
     return values
 
 
-def _build_evaluations_values() -> Dict[str, ConfigValue]:
+def _build_evaluations_values() -> dict[str, ConfigValue]:
     snapshot = get_evaluations_snapshot()
     data = snapshot.get("config", {})
     sources = snapshot.get("sources", {})
-    values: Dict[str, ConfigValue] = {}
+    values: dict[str, ConfigValue] = {}
     _flatten_values(data, sources, "", values)
     return values
 
 
-def _normalize_sections(sections: Optional[Iterable[str]]) -> List[str]:
+def _normalize_sections(sections: Iterable[str] | None) -> list[str]:
     if not sections:
         return ["config_txt", "tts", "embeddings", "evaluations"]
     normalized = []
@@ -167,7 +170,7 @@ def _normalize_sections(sections: Optional[Iterable[str]]) -> List[str]:
     summary="Get effective configuration with redaction",
 )
 async def get_effective_config(
-    sections: Optional[List[str]] = Query(
+    sections: list[str] | None = Query(
         None,
         description="Limit response to specific config namespaces (e.g., tts, embeddings)",
     ),
@@ -219,7 +222,7 @@ async def get_effective_config(
         "evaluations": _build_evaluations_values,
     }
     selected_sections = _normalize_sections(sections)
-    values: Dict[str, Dict[str, ConfigValue]] = {}
+    values: dict[str, dict[str, ConfigValue]] = {}
     unknown_sections = sorted({section for section in selected_sections if section not in builders})
 
     for section in selected_sections:

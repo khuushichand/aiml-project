@@ -31,7 +31,7 @@ def test_idempotency_concurrency_hits(prompt_studio_dual_backend_client, monkeyp
     proj, pr = _create_project_and_prompt(db)
 
     # Stub metrics in endpoint module
-    from tldw_Server_API.app.api.v1.endpoints import prompt_studio_optimization as mod
+    from tldw_Server_API.app.api.v1.endpoints.prompt_studio import prompt_studio_optimization as mod
     stub = _StubPSMetrics()
     monkeypatch.setattr(mod, "prompt_studio_metrics", stub, raising=True)
 

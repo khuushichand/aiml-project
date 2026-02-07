@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Spin, Empty, Tag, Descriptions, Skeleton } from "antd"
+import { Empty, Tag, Descriptions, Skeleton } from "antd"
 import {
   User,
   Calendar,
@@ -141,6 +141,45 @@ export const DocumentInfoTab: React.FC = () => {
           column={1}
           className="[&_.ant-descriptions-item-label]:text-muted [&_.ant-descriptions-item-content]:text-text"
         >
+          {metadata.fileName && (
+            <Descriptions.Item
+              label={
+                <span className="flex items-center gap-1.5">
+                  <FileText className="h-3.5 w-3.5" />
+                  {t("option:documentWorkspace.fileName", "File name")}
+                </span>
+              }
+            >
+              <span className="break-all">{metadata.fileName}</span>
+            </Descriptions.Item>
+          )}
+
+          {metadata.creator && (
+            <Descriptions.Item
+              label={
+                <span className="flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5" />
+                  {t("option:documentWorkspace.creator", "Creator")}
+                </span>
+              }
+            >
+              {metadata.creator}
+            </Descriptions.Item>
+          )}
+
+          {metadata.producer && (
+            <Descriptions.Item
+              label={
+                <span className="flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5" />
+                  {t("option:documentWorkspace.producer", "Producer")}
+                </span>
+              }
+            >
+              {metadata.producer}
+            </Descriptions.Item>
+          )}
+
           {metadata.pageCount !== undefined && (
             <Descriptions.Item
               label={

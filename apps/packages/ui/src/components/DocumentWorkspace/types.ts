@@ -15,6 +15,10 @@ export type EpubTheme = "light" | "dark" | "sepia"
 
 export type EpubScrollMode = "paginated" | "continuous"
 
+export type EpubSpreadMode = "none" | "auto" | "always"
+
+export type EpubFontFamily = "inter" | "georgia" | "merriweather" | "system"
+
 export type InsightDetailLevel = "brief" | "standard" | "detailed"
 
 export type AnnotationColor = "yellow" | "green" | "blue" | "pink"
@@ -74,6 +78,7 @@ export interface Annotation {
 }
 
 export type AnnotationSyncStatus = "synced" | "pending" | "error"
+export type WorkspaceHealthStatus = "unknown" | "ok" | "error"
 
 export interface InsightSection {
   key: string
@@ -125,6 +130,9 @@ export interface DocumentMetadata {
   id: number
   title: string
   authors?: string[]
+  creator?: string
+  producer?: string
+  fileName?: string
   abstract?: string
   keywords?: string[]
   pageCount?: number
@@ -169,6 +177,10 @@ export interface DocumentWorkspaceState {
   currentChapterTitle: string | null
   epubTheme: EpubTheme
   epubScrollMode: EpubScrollMode
+  epubSpreadMode: EpubSpreadMode
+  epubFontSize: number
+  epubFontFamily: EpubFontFamily
+  epubLineHeight: number
   insightDetailLevel: InsightDetailLevel
 
   // Search
@@ -181,6 +193,10 @@ export interface DocumentWorkspaceState {
   annotations: Annotation[]
   pendingAnnotations: Annotation[]
   annotationSyncStatus: AnnotationSyncStatus
+
+  // Server health (document workspace tables)
+  annotationsHealth: WorkspaceHealthStatus
+  progressHealth: WorkspaceHealthStatus
 }
 
 // Store actions interface
@@ -210,6 +226,10 @@ export interface DocumentWorkspaceActions {
   setCurrentChapterTitle: (title: string | null) => void
   setEpubTheme: (theme: EpubTheme) => void
   setEpubScrollMode: (mode: EpubScrollMode) => void
+  setEpubSpreadMode: (mode: EpubSpreadMode) => void
+  setEpubFontSize: (size: number) => void
+  setEpubFontFamily: (family: EpubFontFamily) => void
+  setEpubLineHeight: (height: number) => void
   setInsightDetailLevel: (level: InsightDetailLevel) => void
 
   // Search
@@ -225,6 +245,8 @@ export interface DocumentWorkspaceActions {
   removeAnnotation: (id: string) => void
   setAnnotations: (annotations: Annotation[]) => void
   setAnnotationSyncStatus: (status: AnnotationSyncStatus) => void
+  setAnnotationsHealth: (status: WorkspaceHealthStatus) => void
+  setProgressHealth: (status: WorkspaceHealthStatus) => void
 
   // Reset
   reset: () => void
@@ -255,6 +277,10 @@ export const DEFAULT_DOCUMENT_WORKSPACE_STATE: DocumentWorkspaceState = {
   currentChapterTitle: null,
   epubTheme: "light",
   epubScrollMode: "paginated",
+  epubSpreadMode: "none",
+  epubFontSize: 100,
+  epubFontFamily: "inter",
+  epubLineHeight: 1.6,
   insightDetailLevel: "standard",
   searchOpen: false,
   searchQuery: "",
@@ -262,5 +288,7 @@ export const DEFAULT_DOCUMENT_WORKSPACE_STATE: DocumentWorkspaceState = {
   activeSearchIndex: 0,
   annotations: [],
   pendingAnnotations: [],
-  annotationSyncStatus: "synced"
+  annotationSyncStatus: "synced",
+  annotationsHealth: "unknown",
+  progressHealth: "unknown"
 }

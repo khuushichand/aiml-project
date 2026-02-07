@@ -5,11 +5,11 @@ Manages user-specific audit service instances for dependency injection.
 import asyncio
 import os
 import threading
-import weakref
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Set, Union
+from typing import Any, Callable, Optional, Union
 
 from fastapi import Depends, HTTPException, status
 from loguru import logger
@@ -25,15 +25,15 @@ except ImportError:
     )
 
 # Local Imports
-from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.testing import is_test_mode
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import (
     ServiceInitializationError,
     ServiceInitializationTimeoutError,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 #######################################################################################################################
 
@@ -111,7 +111,7 @@ def _resolve_audit_storage_mode() -> str:
     raw = settings.get("AUDIT_STORAGE_MODE", "per_user")
     try:
         mode = str(raw).strip().lower()
-    except Exception:
+    except (TypeError, ValueError):
         mode = "per_user"
     if mode not in _VALID_STORAGE_MODES:
         logger.warning(f"Invalid AUDIT_STORAGE_MODE={raw!r}; using per_user")
@@ -127,7 +127,7 @@ def _shared_audit_db_path() -> str:
 def _is_test_context() -> bool:
     try:
         return bool(os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode()
-    except Exception as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         logger.debug("Failed to determine test context; defaulting to False: {}", exc)
         return False
 
@@ -135,7 +135,7 @@ def _is_test_context() -> bool:
 def _mark_service_used(service: UnifiedAuditService) -> None:
     try:
         service._last_used_ts = time.monotonic()  # type: ignore[attr-defined]
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError):
         logger.debug("Failed to mark service used timestamp")
 
 
@@ -151,7 +151,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     evicted_at = time.monotonic()
     try:
         service._tldw_evicted_at = evicted_at  # type: ignore[attr-defined]
-    except Exception as exc:
+    except (AttributeError, RuntimeError, TypeError) as exc:
         logger.debug("Failed to set eviction timestamp for user {}: {}", user_id, exc)
     service_key = id(service)
 
@@ -166,7 +166,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
             _services_stopping.discard(service_key)
         try:
             service._tldw_stop_scheduled = False  # type: ignore[attr-defined]
-        except Exception as exc:
+        except (AttributeError, RuntimeError, TypeError) as exc:
             logger.debug("Failed to clear stop-scheduled flag on audit service: {}", exc)
 
     async def _stop():
@@ -195,7 +195,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                 ):
                     try:
                         service._tldw_evicted_at = last_used  # type: ignore[attr-defined]
-                    except Exception as exc:
+                    except (AttributeError, RuntimeError, TypeError) as exc:
                         logger.debug(
                             "Failed to update eviction timestamp for user {}: {}",
                             user_id,
@@ -216,7 +216,7 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                 break
             await service.stop()
             logger.info(f"Audit service for user {user_id} stopped ({reason}).")
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             logger.error(
                 f"Failed to stop audit service for user {user_id} ({reason}): {exc}",
                 exc_info=True,
@@ -234,13 +234,21 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
                     "Audit service owner loop not running; shutting down on current loop."
                 )
                 owner_loop = None
-        except Exception:
+        except (AttributeError, RuntimeError):
             owner_loop = None
 
     try:
         current_loop = asyncio.get_running_loop()
     except RuntimeError:
         current_loop = None
+
+    def _run():
+        try:
+            asyncio.run(_stop())
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.error(
+                f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
+            )
 
     if owner_loop and owner_loop is not current_loop:
         future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
@@ -257,21 +265,17 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
         return
 
     if current_loop:
+        # In test contexts, avoid leaving background stop tasks pending on loop shutdown.
+        if _is_test_context():
+            threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
+            return
         current_loop.create_task(_stop())
         return
-
-    def _run():
-        try:
-            asyncio.run(_stop())
-        except Exception as e:
-            logger.error(
-                f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
-            )
 
     threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
 
 
-_services_stopping: Set[int] = set()
+_services_stopping: set[int] = set()
 _services_stopping_lock = threading.Lock()  # Protects _services_stopping service-id set
 
 
@@ -412,8 +416,8 @@ class _LoopState:
     cache: Any
     cache_lock: threading.Lock = field(default_factory=threading.Lock)
     init_lock: threading.Lock = field(default_factory=threading.Lock)
-    initializing_users: Set[Optional[Union[int, str]]] = field(default_factory=set)
-    initializing_events: Dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
+    initializing_users: set[Optional[Union[int, str]]] = field(default_factory=set)
+    initializing_events: dict[Optional[Union[int, str]], asyncio.Event] = field(default_factory=dict)
 
 
 _STATE_LOCK = threading.Lock()
@@ -516,10 +520,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
         logger.debug(f"Using cached audit service instance for user_id: {user_id}")
         return service_instance
 
-    if storage_mode == "shared":
-        key_label = "shared"
-    else:
-        key_label = "default" if user_id is None else f"user_id {user_id}"
+    key_label = "shared" if storage_mode == "shared" else "default" if user_id is None else f"user_id {user_id}"
     logger.info(f"No cached audit service found for {key_label}. Initializing.")
 
     init_timeout_s = _settings_float("AUDIT_INIT_TIMEOUT_SECONDS", 30.0, min_value=0.1, max_value=300.0)
@@ -579,9 +580,7 @@ async def _get_or_create_audit_service_for_key(user_id: Optional[Union[int, str]
                     logger.debug(f"Audit service for user {user_id} created concurrently.")
                     return service_instance
 
-            if storage_mode == "shared":
-                service_instance = await _create_default_audit_service()
-            elif user_id is None:
+            if storage_mode == "shared" or user_id is None:
                 service_instance = await _create_default_audit_service()
             else:
                 service_instance = await _create_audit_service_for_user(user_id)
@@ -715,10 +714,7 @@ async def shutdown_user_audit_service(user_id: int):
             existing = state.cache.get(user_id)
             if existing:
                 pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                if callable(pop_no_cb):
-                    service = pop_no_cb(user_id, None)
-                else:
-                    service = state.cache.pop(user_id, None)
+                service = pop_no_cb(user_id, None) if callable(pop_no_cb) else state.cache.pop(user_id, None)
                 if service:
                     services.append(service)
 
@@ -748,7 +744,7 @@ async def shutdown_user_audit_service(user_id: int):
             else:
                 await service.stop()
             logger.info(f"Shut down audit service for user {user_id}")
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(
                 f"Error shutting down audit service for user {user_id}: {e}",
                 exc_info=True,
@@ -781,10 +777,7 @@ async def shutdown_all_audit_services():
             total_instances += len(keys)
             for key in keys:
                 pop_no_cb = getattr(state.cache, "pop_no_callback", None)
-                if callable(pop_no_cb):
-                    service = pop_no_cb(key, None)
-                else:
-                    service = state.cache.pop(key, None)
+                service = pop_no_cb(key, None) if callable(pop_no_cb) else state.cache.pop(key, None)
                 if service:
                     services.append(service)
 
@@ -826,7 +819,7 @@ async def shutdown_all_audit_services():
                         f"Audit service owner loop not running; forcing shutdown on current loop ({_service_label(service)})"
                     )
                     owner_loop = None
-            except Exception:
+            except (AttributeError, RuntimeError):
                 owner_loop = None
 
         try:
@@ -840,7 +833,7 @@ async def shutdown_all_audit_services():
                 await _await_with_timeout(asyncio.wrap_future(future), label=_service_label(service))
             else:
                 await _await_with_timeout(service.stop(), label=_service_label(service))
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             error_count += 1
             logger.error(f"Error shutting down audit service: {e}", exc_info=True)
 

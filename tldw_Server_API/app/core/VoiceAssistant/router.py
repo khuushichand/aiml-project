@@ -4,9 +4,8 @@
 # Pipeline: STT (transcription) -> Intent Parse -> Action Execute -> TTS (response)
 #
 #######################################################################################################################
-import asyncio
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Optional
 
 from loguru import logger
 
@@ -15,7 +14,6 @@ from .registry import VoiceCommandRegistry, get_voice_command_registry
 from .schemas import (
     ActionResult,
     ActionType,
-    BuiltinCommand,
     ParsedIntent,
     VoiceIntent,
     VoiceSessionContext,
@@ -58,7 +56,7 @@ class VoiceCommandRouter:
         self.workflow_handler = workflow_handler or get_voice_workflow_handler()
 
         # Custom action handlers
-        self._custom_handlers: Dict[str, Callable] = {}
+        self._custom_handlers: dict[str, Callable] = {}
         self._register_builtin_handlers()
 
     def _register_builtin_handlers(self) -> None:
@@ -92,7 +90,7 @@ class VoiceCommandRouter:
         text: str,
         user_id: int,
         session_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
         db: Optional[Any] = None,
     ) -> tuple[ActionResult, str]:
         """
@@ -376,7 +374,7 @@ class VoiceCommandRouter:
                 error_message=str(e),
             )
 
-    def _format_tool_result(self, tool_name: str, result: Dict[str, Any]) -> str:
+    def _format_tool_result(self, tool_name: str, result: dict[str, Any]) -> str:
         """Format tool result for TTS response."""
         if not result:
             return "The action completed but returned no results."
@@ -475,7 +473,7 @@ class VoiceCommandRouter:
             from tldw_Server_API.app.core.LLM_Calls.LLM_API_Calls_Unified import chat_api_call_async
 
             # Build conversation context
-            context_messages = session.get_context_messages(max_turns=5)
+            session.get_context_messages(max_turns=5)
 
             # System prompt for voice assistant
             system_prompt = """You are a helpful voice assistant. Keep your responses concise and natural-sounding for speech.
@@ -755,7 +753,7 @@ Respond conversationally and get straight to the point."""
         self,
         run_id: str,
         user_id: int,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get the status of a workflow run.
 

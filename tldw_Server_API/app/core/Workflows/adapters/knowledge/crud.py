@@ -12,8 +12,9 @@ This module includes adapters for knowledge CRUD operations:
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -30,6 +31,21 @@ from tldw_Server_API.app.core.Workflows.adapters.knowledge._config import (
     VoiceIntentConfig,
 )
 
+_KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+)
+
 
 @registry.register(
     "notes",
@@ -39,7 +55,7 @@ from tldw_Server_API.app.core.Workflows.adapters.knowledge._config import (
     tags=["knowledge", "notes"],
     config_model=NotesConfig,
 )
-async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_notes_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage notes within a workflow step.
 
     Config:
@@ -62,7 +78,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -97,7 +113,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
         # Resolve notes DB directory
         try:
             notes_base_dir = DatabasePaths.get_user_base_directory(int(user_id))
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             notes_base_dir = Path("Databases") / "user_databases"
 
         service = NotesInteropService(base_db_directory=notes_base_dir, api_client_id="workflow_engine")
@@ -137,7 +153,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
                 if current is None:
                     return {"error": "note_not_found", "note_id": note_id}
                 expected_version = current.get("version", 1)
-            update_data: Dict[str, Any] = {}
+            update_data: dict[str, Any] = {}
             title = config.get("title")
             if title is not None:
                 update_data["title"] = _render(title)
@@ -174,7 +190,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Notes adapter error: {e}")
         return {"error": f"notes_error:{e}"}
 
@@ -187,7 +203,7 @@ async def run_notes_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["knowledge", "prompts"],
     config_model=PromptsConfig,
 )
-async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_prompts_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage prompts within a workflow step.
 
     Config:
@@ -233,7 +249,7 @@ async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         if not prompts_interop.is_initialized():
             try:
                 prompts_db_path = DatabasePaths.get_prompts_db_path()
-            except Exception:
+            except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
                 prompts_db_path = Path("Databases") / "prompts.db"
             prompts_interop.initialize_interop(db_path=str(prompts_db_path), client_id="workflow_engine")
 
@@ -333,7 +349,7 @@ async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Prompts adapter error: {e}")
         return {"error": f"prompts_error:{e}"}
 
@@ -346,7 +362,7 @@ async def run_prompts_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
     tags=["knowledge", "collections"],
     config_model=CollectionsConfig,
 )
-async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_collections_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Manage reading list collections within a workflow step.
 
     Config:
@@ -370,7 +386,7 @@ async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -551,7 +567,7 @@ async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Collections adapter error: {e}")
         return {"error": f"collections_error:{e}"}
 
@@ -564,7 +580,7 @@ async def run_collections_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["knowledge", "chunking"],
     config_model=ChunkingConfig,
 )
-async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_chunking_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Chunk text using various strategies.
 
     Config:
@@ -592,10 +608,7 @@ async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     else:
         # Try to get from context (last step output)
         last = context.get("last") or {}
-        if isinstance(last, dict):
-            text = last.get("text") or last.get("content") or last.get("summary") or ""
-        else:
-            text = ""
+        text = last.get("text") or last.get("content") or last.get("summary") or "" if isinstance(last, dict) else ""
     text = str(text) if text else ""
 
     if not text.strip():
@@ -644,7 +657,7 @@ async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
             "overlap": overlap,
         }
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Chunking adapter error: {e}")
         return {"error": f"chunking_error:{e}"}
 
@@ -657,7 +670,7 @@ async def run_chunking_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     tags=["knowledge", "extraction"],
     config_model=ClaimsExtractConfig,
 )
-async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_claims_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract and search claims from text within a workflow step.
 
     Config:
@@ -679,7 +692,7 @@ async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -721,10 +734,7 @@ async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, 
                 text = _render(text)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    text = last.get("text") or last.get("content") or ""
-                else:
-                    text = ""
+                text = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             if not text:
                 return {"error": "missing_text_for_extraction"}
@@ -811,7 +821,7 @@ async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Claims extract adapter error: {e}")
         return {"error": f"claims_extract_error:{e}"}
 
@@ -824,7 +834,7 @@ async def run_claims_extract_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["knowledge", "voice"],
     config_model=VoiceIntentConfig,
 )
-async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_voice_intent_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Parse voice/text input into actionable intents.
 
     Config:
@@ -858,7 +868,7 @@ async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, An
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 text_t = last.get("text") or last.get("transcript") or last.get("content") or ""
-        except Exception:
+        except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS:
             text_t = ""
 
     if not text_t:
@@ -894,10 +904,7 @@ async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, An
 
     # Get config options
     llm_enabled = config.get("llm_enabled")
-    if llm_enabled is None:
-        llm_enabled = True
-    else:
-        llm_enabled = bool(llm_enabled)
+    llm_enabled = True if llm_enabled is None else bool(llm_enabled)
 
     awaiting_confirmation = bool(config.get("awaiting_confirmation"))
 
@@ -1011,7 +1018,7 @@ async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, An
                 parser.llm_enabled = False
 
             # Build context dict
-            parse_context: Dict[str, Any] = {}
+            parse_context: dict[str, Any] = {}
             if awaiting_confirmation:
                 parse_context["awaiting_confirmation"] = True
             if conversation_history:
@@ -1055,7 +1062,7 @@ async def run_voice_intent_adapter(config: Dict[str, Any], context: Dict[str, An
             "processing_time_ms": result.processing_time_ms,
         }
 
-    except Exception as e:
+    except _KNOWLEDGE_CRUD_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Voice intent adapter error: {e}")
         return {
             "error": f"voice_intent_error:{e}",

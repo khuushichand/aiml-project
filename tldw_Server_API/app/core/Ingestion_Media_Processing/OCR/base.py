@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
     OCRResult,
@@ -26,16 +25,16 @@ class OCRBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         """Run OCR on an image (bytes) and return extracted text (UTF-8)."""
         raise NotImplementedError
 
     def ocr_image_structured(
         self,
         image_bytes: bytes,
-        lang: Optional[str] = None,
-        output_format: Optional[str] = None,
-        prompt_preset: Optional[str] = None,
+        lang: str | None = None,
+        output_format: str | None = None,
+        prompt_preset: str | None = None,
     ) -> OCRResult:
         """
         Best-effort structured OCR result. Backends can override for richer output.

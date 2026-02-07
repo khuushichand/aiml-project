@@ -5,19 +5,20 @@ Provides comprehensive security validation for webhook URLs, domain filtering,
 rate limiting, and permission management for webhook operations.
 """
 
+import asyncio
+import ipaddress
 import re
 import socket
-import ipaddress
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any, Optional, List, Set, Tuple
+import ssl
 from dataclasses import dataclass
 from enum import Enum
-import asyncio
-import ssl
+from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
+
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 
 
 class WebhookSecurityLevel(Enum):
@@ -35,7 +36,7 @@ class WebhookValidationError:
     severity: str
     field: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return {
             "code": self.code,
@@ -49,10 +50,10 @@ class WebhookValidationError:
 class WebhookValidationResult:
     """Result of webhook validation."""
     valid: bool
-    errors: List[WebhookValidationError]
-    warnings: List[WebhookValidationError]
+    errors: list[WebhookValidationError]
+    warnings: list[WebhookValidationError]
     security_score: float  # 0.0 to 1.0
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
     @property
     def has_errors(self) -> bool:
@@ -271,9 +272,9 @@ class WebhookSecurityValidator:
     async def _validate_hostname(
         self,
         hostname: str,
-        errors: List[WebhookValidationError],
-        warnings: List[WebhookValidationError],
-        metadata: Dict[str, Any]
+        errors: list[WebhookValidationError],
+        warnings: list[WebhookValidationError],
+        metadata: dict[str, Any]
     ):
         """Validate hostname for security issues."""
         try:
@@ -310,7 +311,7 @@ class WebhookSecurityValidator:
             try:
                 import socket
                 ip_addresses = socket.getaddrinfo(hostname, None)
-                resolved_ips = list(set(addr[4][0] for addr in ip_addresses))
+                resolved_ips = list({addr[4][0] for addr in ip_addresses})
                 metadata["resolved_ips"] = resolved_ips
 
                 for ip_str in resolved_ips:
@@ -352,7 +353,7 @@ class WebhookSecurityValidator:
         except Exception as e:
             logger.warning(f"Hostname validation error: {e}")
 
-    def _validate_domain(self, hostname: str) -> Dict[str, Any]:
+    def _validate_domain(self, hostname: str) -> dict[str, Any]:
         """Validate domain against allow/block lists."""
         errors = []
         warnings = []
@@ -398,7 +399,7 @@ class WebhookSecurityValidator:
             "metadata": metadata
         }
 
-    def _validate_path(self, path: str, warnings: List[WebhookValidationError]):
+    def _validate_path(self, path: str, warnings: list[WebhookValidationError]):
         """Validate URL path for potential issues."""
         # Check for suspicious path patterns
         suspicious_patterns = [
@@ -412,13 +413,13 @@ class WebhookSecurityValidator:
             if re.search(pattern, path_lower):
                 warnings.append(WebhookValidationError(
                     code="SUSPICIOUS_PATH",
-                    message=f"Potentially suspicious path pattern detected",
+                    message="Potentially suspicious path pattern detected",
                     severity="warning",
                     field="url"
                 ))
                 break
 
-    def _validate_query_params(self, query: str, warnings: List[WebhookValidationError]):
+    def _validate_query_params(self, query: str, warnings: list[WebhookValidationError]):
         """Validate URL query parameters."""
         try:
             params = parse_qs(query)
@@ -434,7 +435,7 @@ class WebhookSecurityValidator:
 
             # Check for suspicious parameter names
             suspicious_param_names = ['eval', 'exec', 'system', 'cmd', 'shell']
-            for param_name in params.keys():
+            for param_name in params:
                 if param_name.lower() in suspicious_param_names:
                     warnings.append(WebhookValidationError(
                         code="SUSPICIOUS_PARAMETER",
@@ -458,7 +459,7 @@ class WebhookSecurityValidator:
         url: str,
         hostname: str,
         port: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Test webhook URL connectivity."""
         result = {
             "reachable": False,
@@ -602,9 +603,9 @@ class WebhookSecurityValidator:
     def _calculate_security_score(
         self,
         url: str,
-        errors: List[WebhookValidationError],
-        warnings: List[WebhookValidationError],
-        metadata: Dict[str, Any]
+        errors: list[WebhookValidationError],
+        warnings: list[WebhookValidationError],
+        metadata: dict[str, Any]
     ) -> float:
         """Calculate security score for the webhook URL."""
         score = 1.0  # Start with perfect score
@@ -651,7 +652,7 @@ class WebhookPermissionManager:
         webhook_id: Optional[int] = None,
         url: Optional[str] = None,
         action: str = "access"
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> tuple[bool, Optional[str]]:
         """
         Check if user has permission to perform action on webhook.
 

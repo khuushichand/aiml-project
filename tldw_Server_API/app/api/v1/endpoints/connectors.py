@@ -1,65 +1,65 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Callable
 import os
 import secrets
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
-from loguru import logger
+from typing import Any, Callable
 
-from tldw_Server_API.app.api.v1.schemas.connectors import (
-    ConnectorProvider,
-    ConnectorAccount,
-    ConnectorSource,
-    SyncOptions,
-    ImportJob,
-    AuthorizeURLResponse,
-    ConnectorPolicy,
-    ConnectorSourceCreateRequest,
-    ConnectorSourcePatchRequest,
-)
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from loguru import logger
+from starlette.status import HTTP_403_FORBIDDEN, HTTP_500_INTERNAL_SERVER_ERROR
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
-    get_current_active_user,
     get_auth_principal,
-    require_roles,
+    get_current_active_user,
     get_db_transaction,
-    get_user_org_policy,
     get_org_policy_from_principal,
     require_permissions,
+    require_roles,
+)
+from tldw_Server_API.app.api.v1.schemas.connectors import (
+    AuthorizeURLResponse,
+    ConnectorAccount,
+    ConnectorPolicy,
+    ConnectorProvider,
+    ConnectorSource,
+    ConnectorSourceCreateRequest,
+    ConnectorSourcePatchRequest,
+    ImportJob,
+    SyncOptions,
 )
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_CONFIGURE
 from tldw_Server_API.app.core.External_Sources import (
     get_connector_by_name,
 )
-from tldw_Server_API.app.core.External_Sources.policy import (
-    get_default_policy_from_env,
-    evaluate_policy_constraints,
-)
 from tldw_Server_API.app.core.External_Sources.connectors_service import (
-    upsert_policy,
-    get_policy,
+    consume_oauth_state,
+    count_connectors_jobs_today,
     create_account,
-    list_accounts,
-    delete_account,
-    create_source,
-    list_sources,
-    update_source,
     create_import_job,
-    get_account_tokens,
+    create_oauth_state,
+    create_source,
+    delete_account,
     get_account_email,
     get_account_for_user,
-    count_connectors_jobs_today,
-    create_oauth_state,
-    consume_oauth_state,
+    get_account_tokens,
+    get_policy,
+    list_accounts,
+    list_sources,
+    update_source,
+    upsert_policy,
 )
-from tldw_Server_API.app.core.http_client import afetch as _http_afetch, RetryPolicy as _RetryPolicy
+from tldw_Server_API.app.core.External_Sources.policy import (
+    evaluate_policy_constraints,
+    get_default_policy_from_env,
+)
+from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
+from tldw_Server_API.app.core.http_client import afetch as _http_afetch
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
-
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
 
-def _resolve_redirect_base(request: Optional[Request], conn) -> str:
+def _resolve_redirect_base(request: Request | None, conn) -> str:
     """Resolve connector redirect base, allowing request to be optional for tests.
 
     Priority: CONNECTOR_REDIRECT_BASE_URL env var > request.base_url > connector.redirect_base.
@@ -81,7 +81,7 @@ def _resolve_redirect_base(request: Optional[Request], conn) -> str:
     return resolved
 
 
-def _get_user_id(current_user: Dict[str, Any]) -> int:
+def _get_user_id(current_user: dict[str, Any]) -> int:
     user_id = current_user.get("id")
     if user_id is None:
         raise HTTPException(status_code=401, detail="User ID not found in token")
@@ -96,8 +96,8 @@ def get_connectors_job_counter() -> Callable[[int], int]:
     return count_connectors_jobs_today
 
 
-@router.get("/providers", response_model=List[ConnectorProvider])
-async def list_providers() -> List[ConnectorProvider]:
+@router.get("/providers", response_model=list[ConnectorProvider])
+async def list_providers() -> list[ConnectorProvider]:
     return [
         ConnectorProvider(name="drive", scopes_required=["drive.readonly"], auth_type="oauth2"),
         ConnectorProvider(name="notion", scopes_required=[], auth_type="oauth2"),
@@ -108,10 +108,10 @@ async def list_providers() -> List[ConnectorProvider]:
 async def start_authorize(
     provider: str,
     request: Request,
-    state: Optional[str] = None,
-    scopes: Optional[str] = None,
+    state: str | None = None,
+    scopes: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> AuthorizeURLResponse:
     conn = get_connector_by_name(provider)
     redirect_base = _resolve_redirect_base(request, conn)
@@ -130,10 +130,10 @@ async def oauth_callback(
     provider: str,
     code: str,
     request: Request,
-    state: Optional[str] = None,
+    state: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+    org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorAccount:
     conn = get_connector_by_name(provider)
     pol = org_policy
@@ -198,8 +198,8 @@ async def oauth_callback(
     redirect_uri = f"{base.rstrip('/')}/api/v1/connectors/providers/{provider}/callback" if base else ""
     tokens = await conn.exchange_code(code, redirect_uri)
     # Optional email/workspace fetch for policy enforcement
-    acct_email: Optional[str] = None
-    notion_workspace_id: Optional[str] = None
+    acct_email: str | None = None
+    notion_workspace_id: str | None = None
     if provider == 'drive' and (tokens.get('access_token')):
         try:
             # userinfo endpoint provides email when scopes include 'email'
@@ -262,10 +262,10 @@ async def oauth_callback(
     )
 
 
-@router.get("/accounts", response_model=List[ConnectorAccount])
+@router.get("/accounts", response_model=list[ConnectorAccount])
 async def get_accounts(
-    db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
-) -> List[ConnectorAccount]:
+    db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+) -> list[ConnectorAccount]:
     user_id = _get_user_id(current_user)
     rows = await list_accounts(db, user_id)
     return [ConnectorAccount(id=int(r["id"]), provider=r["provider"], display_name=r.get("display_name") or "", email=r.get("email"), created_at=str(r.get("created_at")), connected=True) for r in rows]
@@ -273,8 +273,8 @@ async def get_accounts(
 
 @router.delete("/accounts/{account_id}")
 async def remove_account(
-    account_id: int, db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
-) -> Dict[str, Any]:
+    account_id: int, db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+) -> dict[str, Any]:
     user_id = _get_user_id(current_user)
     await delete_account(db, user_id, account_id)
     return {"ok": True}
@@ -284,12 +284,12 @@ async def remove_account(
 async def browse_provider_sources(
     provider: str,
     account_id: int = Query(..., ge=1),
-    parent_remote_id: Optional[str] = None,
+    parent_remote_id: str | None = None,
     page_size: int = Query(50, ge=1, le=200),
-    cursor: Optional[str] = None,
+    cursor: str | None = None,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+) -> dict[str, Any]:
     user_id = _get_user_id(current_user)
     tokens = await get_account_tokens(db, user_id, account_id)
     if not tokens:
@@ -307,7 +307,7 @@ async def browse_provider_sources(
             items, next_cursor = [], None
     except Exception as e:
         logger.error(f"Browse error for {provider}: {e}")
-        raise HTTPException(status_code=502, detail=f"Browse failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Browse failed: {e}") from e
     return {"items": items, "next_cursor": next_cursor}
 
 
@@ -315,8 +315,8 @@ async def browse_provider_sources(
 async def add_source(
     payload: ConnectorSourceCreateRequest,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+    org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
 ) -> ConnectorSource:
     # payload keys: account_id, provider, remote_id, type, path, options
     account_id = int(payload.account_id)
@@ -370,13 +370,13 @@ async def add_source(
     )
 
 
-@router.get("/sources", response_model=List[ConnectorSource])
+@router.get("/sources", response_model=list[ConnectorSource])
 async def get_sources(
-    db=Depends(get_db_transaction), current_user: Dict[str, Any] = Depends(get_current_active_user)
-) -> List[ConnectorSource]:
+    db=Depends(get_db_transaction), current_user: dict[str, Any] = Depends(get_current_active_user)
+) -> list[ConnectorSource]:
     user_id = _get_user_id(current_user)
     rows = await list_sources(db, user_id)
-    out: List[ConnectorSource] = []
+    out: list[ConnectorSource] = []
     for r in rows:
         out.append(
             ConnectorSource(
@@ -399,7 +399,7 @@ async def patch_source(
     source_id: int,
     payload: ConnectorSourcePatchRequest,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
 ) -> ConnectorSource:
     enabled = payload.enabled
     options = payload.options
@@ -425,8 +425,8 @@ async def import_source(
     source_id: int,
     request: Request,
     db=Depends(get_db_transaction),
-    current_user: Dict[str, Any] = Depends(get_current_active_user),
-    org_policy: Dict[str, Any] = Depends(get_org_policy_from_principal),
+    current_user: dict[str, Any] = Depends(get_current_active_user),
+    org_policy: dict[str, Any] = Depends(get_org_policy_from_principal),
     count_jobs_fn: Callable[[int], int] = Depends(get_connectors_job_counter),
 ) -> ImportJob:
     # Enforce per-role daily quota from org policy for all modes; single-user
@@ -459,7 +459,7 @@ async def import_source(
 
 
 @router.get("/jobs/{job_id}")
-async def get_job_status(job_id: int) -> Dict[str, Any]:
+async def get_job_status(job_id: int) -> dict[str, Any]:
     try:
         from tldw_Server_API.app.core.Jobs.manager import JobManager
         jm = JobManager()
@@ -472,7 +472,7 @@ async def get_job_status(job_id: int) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # Admin: Org-level policy
@@ -524,5 +524,5 @@ async def upsert_org_policy(
 ) -> ConnectorPolicy:
     # Enforce: only meaningful in multi-user mode; but persist anyway for forward usage
     p = policy.model_dump()
-    saved = await upsert_policy(db, int(policy.org_id), p)
+    await upsert_policy(db, int(policy.org_id), p)
     return await get_org_policy(org_id=int(policy.org_id), db=db)

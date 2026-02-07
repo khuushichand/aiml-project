@@ -14,9 +14,10 @@ import json
 import random
 import re
 import statistics
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -25,7 +26,7 @@ from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import (
     extract_article_data_from_html,
 )
 
-TP_FP_FN = Tuple[float, float, float]
+TP_FP_FN = tuple[float, float, float]
 
 
 @dataclass
@@ -41,7 +42,7 @@ class BenchmarkMetrics:
     recall_std: float
     accuracy_std: float
 
-    def to_dict(self) -> Dict[str, float]:
+    def to_dict(self) -> dict[str, float]:
         return {
             "f1": self.f1,
             "precision": self.precision,
@@ -60,7 +61,7 @@ class ArticleExtractionBenchmarkEvaluator:
     def __init__(
         self,
         dataset_root: Path,
-        extractor: Optional[Callable[[str, str], str]] = None,
+        extractor: Callable[[str, str], str] | None = None,
         n_bootstrap: int = 1000,
     ) -> None:
         self.dataset_root = Path(dataset_root)
@@ -81,11 +82,11 @@ class ArticleExtractionBenchmarkEvaluator:
 
     def run(
         self,
-        limit: Optional[int] = None,
-        output_predictions_path: Optional[Path] = None,
+        limit: int | None = None,
+        output_predictions_path: Path | None = None,
     ) -> BenchmarkMetrics:
         full_ground_truth = self._load_ground_truth()
-        predictions: Dict[str, Dict[str, str]] = {}
+        predictions: dict[str, dict[str, str]] = {}
 
         item_ids = list(full_ground_truth.keys())
         if limit is not None:
@@ -140,7 +141,7 @@ class ArticleExtractionBenchmarkEvaluator:
             accuracy_std=metrics["accuracy_std"],
         )
 
-    def _load_ground_truth(self) -> Dict[str, Dict[str, str]]:
+    def _load_ground_truth(self) -> dict[str, dict[str, str]]:
         with self.ground_truth_path.open("r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -168,25 +169,25 @@ class ArticleExtractionBenchmarkEvaluator:
 
 
 def evaluate_metrics(
-    ground_truth: Dict[str, Dict[str, str]],
-    prediction: Dict[str, Dict[str, str]],
+    ground_truth: dict[str, dict[str, str]],
+    prediction: dict[str, dict[str, str]],
     n_bootstrap: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if ground_truth.keys() != prediction.keys():
         raise ValueError("Prediction keys do not match ground truth")
 
-    tp_fp_fns: List[TP_FP_FN] = []
-    accuracies: List[float] = []
-    for key in ground_truth.keys():
+    tp_fp_fns: list[TP_FP_FN] = []
+    accuracies: list[float] = []
+    for key in ground_truth:
         true = ground_truth[key].get("articleBody", "")
         pred = prediction[key].get("articleBody", "")
         tp_fp_fns.append(string_shingle_matching(true=true, pred=pred))
         accuracies.append(get_accuracy(true=true, pred=pred))
 
-    metrics: Dict[str, Any] = metrics_from_tp_fp_fns(tp_fp_fns)
+    metrics: dict[str, Any] = metrics_from_tp_fp_fns(tp_fp_fns)
     metrics["accuracy"] = statistics.mean(accuracies)
 
-    bootstrap_values: Dict[str, List[float]] = {}
+    bootstrap_values: dict[str, list[float]] = {}
     n_items = len(tp_fp_fns)
     indices_range = range(n_items)
     for _ in range(n_bootstrap):
@@ -208,7 +209,7 @@ def evaluate_metrics(
     return metrics
 
 
-def metrics_from_tp_fp_fns(tp_fp_fns: Iterable[TP_FP_FN]) -> Dict[str, float]:
+def metrics_from_tp_fp_fns(tp_fp_fns: Iterable[TP_FP_FN]) -> dict[str, float]:
     tp_fp_fns_list = list(tp_fp_fns)
     precision_scores = [
         precision_score(tp, fp, fn)
@@ -270,11 +271,11 @@ def string_shingle_matching(true: str, pred: str, ngram_n: int = 4) -> TP_FP_FN:
     return tp, fp, fn
 
 
-def _all_shingles(text: str, ngram_n: int) -> Dict[Tuple[str, ...], int]:
+def _all_shingles(text: str, ngram_n: int) -> dict[tuple[str, ...], int]:
     return dict(_count_ngrams(_ngrams(text, ngram_n)))
 
 
-def _ngrams(text: str, n: int) -> List[Tuple[str, ...]]:
+def _ngrams(text: str, n: int) -> list[tuple[str, ...]]:
     tokens = _tokenize(text)
     if not tokens:
         return []
@@ -283,8 +284,8 @@ def _ngrams(text: str, n: int) -> List[Tuple[str, ...]]:
     return [tuple(tokens[i : i + n]) for i in range(0, len(tokens) - n + 1)]
 
 
-def _count_ngrams(ngrams: Iterable[Tuple[str, ...]]) -> Dict[Tuple[str, ...], int]:
-    counts: Dict[Tuple[str, ...], int] = {}
+def _count_ngrams(ngrams: Iterable[tuple[str, ...]]) -> dict[tuple[str, ...], int]:
+    counts: dict[tuple[str, ...], int] = {}
     for ngram in ngrams:
         counts[ngram] = counts.get(ngram, 0) + 1
     return counts
@@ -296,7 +297,7 @@ _TOKEN_RE = re.compile(
 )
 
 
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     if not text:
         return []
     return _TOKEN_RE.findall(text)

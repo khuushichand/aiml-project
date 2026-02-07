@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
 from .base import EmbeddingsProvider
-from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
 
 
 class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
     name = "openai-embeddings"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "dimensions_default": None,
             "max_batch_size": 2048,
@@ -22,17 +23,17 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         # Default to False to preserve current behavior; can be flipped in CI later
         return bool(v and v.lower() in {"1", "true", "yes", "on"})
 
-    def _base_url(self, openai_cfg: Optional[Dict[str, Any]] = None) -> str:
+    def _base_url(self, openai_cfg: dict[str, Any] | None = None) -> str:
         from tldw_Server_API.app.core.LLM_Calls.chat_calls import _resolve_openai_api_base
         return _resolve_openai_api_base(openai_cfg or {})
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         h = {"Content-Type": "application/json"}
         if api_key:
             h["Authorization"] = f"Bearer {api_key}"
         return h
 
-    def _normalize_response(self, raw: Dict[str, Any], *, multi: bool) -> Dict[str, Any]:
+    def _normalize_response(self, raw: dict[str, Any], *, multi: bool) -> dict[str, Any]:
         # Pass-through OpenAI shape if present; otherwise synthesize a basic structure
         if isinstance(raw, dict) and "data" in raw:
             return raw
@@ -45,7 +46,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
             return {"data": data, "model": None, "object": "list"}
         return {"data": [], "model": None, "object": "list"}
 
-    def embed(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def embed(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         inputs = request.get("input")
         model = request.get("model")
         dimensions = request.get("dimensions")
@@ -93,7 +94,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
                 return resp.json()
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         # Delegate-first fallback using legacy helper(s)
         from tldw_Server_API.app.core.LLM_Calls import chat_calls as legacy

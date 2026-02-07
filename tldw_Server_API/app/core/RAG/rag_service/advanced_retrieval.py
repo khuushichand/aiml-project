@@ -17,28 +17,29 @@ Notes:
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Tuple
-import asyncio
-import math
+from typing import Any
 
 from loguru import logger
 
 try:
-    from .types import Document
-except Exception:  # pragma: no cover - import guard for isolated tests
+    from .types import DataSource, Document
+except ImportError:  # pragma: no cover - import guard for isolated tests
     # Minimal fallback for type hints
     class Document:  # type: ignore
-        def __init__(self, id: str, content: str, source=None, metadata: Optional[Dict[str, Any]] = None, score: float = 0.0):
+        def __init__(self, id: str, content: str, source=None, metadata: dict[str, Any] | None = None, score: float = 0.0):
             self.id = id
             self.content = content
             self.source = source
             self.metadata = metadata or {}
             self.score = score
+    class DataSource:  # type: ignore
+        MEDIA_DB = "media_db"
 
 try:
-    from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service  # type: ignore
-except Exception:  # pragma: no cover - import guard for environments without embeddings
+    from tldw_Server_API.app.core.Embeddings.async_embeddings import get_async_embedding_service
+except ImportError:  # pragma: no cover - import guard for environments without embeddings
     get_async_embedding_service = None  # type: ignore
 
 
@@ -51,7 +52,7 @@ class MultiVectorConfig:
     batch_size: int = 32
 
 
-def _sliding_spans(text: str, span_chars: int, stride: int, max_spans: int) -> List[Tuple[int, int, str]]:
+def _sliding_spans(text: str, span_chars: int, stride: int, max_spans: int) -> list[tuple[int, int, str]]:
     """
     Produce overlapping spans (start_idx, end_idx, span_text).
     """
@@ -60,7 +61,7 @@ def _sliding_spans(text: str, span_chars: int, stride: int, max_spans: int) -> L
     n = len(text)
     if span_chars <= 0 or stride <= 0:
         return [(0, n, text)]
-    spans: List[Tuple[int, int, str]] = []
+    spans: list[tuple[int, int, str]] = []
     i = 0
     while i < n and len(spans) < max_spans:
         start = i
@@ -75,7 +76,7 @@ def _sliding_spans(text: str, span_chars: int, stride: int, max_spans: int) -> L
     return spans
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     try:
         import numpy as np  # local import to avoid hard dep at import time
         va = np.array(a, dtype=float)
@@ -85,7 +86,7 @@ def _cosine(a: List[float], b: List[float]) -> float:
         if na == 0.0 or nb == 0.0:
             return 0.0
         return float(va.dot(vb) / (na * nb))
-    except Exception:
+    except (ImportError, AttributeError, TypeError, ValueError, ZeroDivisionError):
         # Fallback: Jaccard over rounded floats as tokens (very rough)
         sa = {round(x, 3) for x in a}
         sb = {round(x, 3) for x in b}
@@ -98,10 +99,10 @@ def _cosine(a: List[float], b: List[float]) -> float:
 
 async def apply_multi_vector_passages(
     query: str,
-    documents: List[Document],
-    config: Optional[MultiVectorConfig] = None,
-    user_id: Optional[str] = None,
-) -> List[Document]:
+    documents: list[Document],
+    config: MultiVectorConfig | None = None,
+    user_id: str | None = None,
+) -> list[Document]:
     """
     Reorder documents using a ColBERT-style max-sim over span embeddings.
 
@@ -122,13 +123,13 @@ async def apply_multi_vector_passages(
     # Embed query
     try:
         q_vec = await svc.create_embedding(text=query, user_id=user_id)
-    except Exception as e:
-        logger.warning(f"Query embedding failed; skipping multi-vector passages: {e}")
+    except (AttributeError, ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
+        logger.warning(f"Query embedding failed; skipping multi-vector passages: {exc}")
         return documents
 
     # Build spans for all docs
-    all_spans: List[str] = []
-    span_meta: List[Tuple[int, int, int]] = []  # (doc_idx, start, end)
+    all_spans: list[str] = []
+    span_meta: list[tuple[int, int, int]] = []  # (doc_idx, start, end)
     for idx, doc in enumerate(documents):
         spans = _sliding_spans(doc.content or "", cfg.span_chars, cfg.stride, cfg.max_spans_per_doc)
         for (s, e, txt) in spans:
@@ -139,26 +140,26 @@ async def apply_multi_vector_passages(
         return documents
 
     # Embed spans in batches
-    span_vectors: List[List[float]] = []
+    span_vectors: list[list[float]] = []
     try:
         for i in range(0, len(all_spans), cfg.batch_size):
             batch = all_spans[i : i + cfg.batch_size]
             vecs = await svc.create_embeddings_batch(batch, user_id=user_id)
             span_vectors.extend(vecs)
-    except Exception as e:
-        logger.warning(f"Span embeddings failed; skipping multi-vector passages: {e}")
+    except (AttributeError, ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as exc:
+        logger.warning(f"Span embeddings failed; skipping multi-vector passages: {exc}")
         return documents
 
     # For each document, compute best span similarity
-    best_by_doc: Dict[int, Tuple[float, int]] = {}  # doc_idx -> (best_sim, span_global_idx)
-    for g_idx, (doc_idx, s, e) in enumerate(span_meta):
+    best_by_doc: dict[int, tuple[float, int]] = {}  # doc_idx -> (best_sim, span_global_idx)
+    for g_idx, (doc_idx, _s, _e) in enumerate(span_meta):
         sim = _cosine(q_vec, span_vectors[g_idx])
         prev = best_by_doc.get(doc_idx)
         if prev is None or sim > prev[0]:
             best_by_doc[doc_idx] = (sim, g_idx)
 
     # Attach metadata and produce ordering
-    ranked: List[Tuple[float, int]] = []
+    ranked: list[tuple[float, int]] = []
     for doc_idx, (sim, g_idx) in best_by_doc.items():
         d = documents[doc_idx]
         s_doc_idx, start, end = span_meta[g_idx]
@@ -180,10 +181,8 @@ async def apply_multi_vector_passages(
         }
         d.metadata = meta
         # Keep original score but expose mv_score for downstream consumers
-        try:
+        with contextlib.suppress(AttributeError, TypeError, ValueError):
             d.metadata["mv_score"] = float(sim)
-        except Exception:
-            pass
         ranked.append((sim, doc_idx))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
@@ -193,7 +192,7 @@ async def apply_multi_vector_passages(
         return [documents[idx] for (_, idx) in ranked]
 
     # Replace each doc with its best span as a pseudo-document
-    out_docs: List[Document] = []
+    out_docs: list[Document] = []
     for sim, doc_idx in ranked:
         d = documents[doc_idx]
         mv = (d.metadata or {}).get("mv_best_span", {})
@@ -207,6 +206,9 @@ async def apply_multi_vector_passages(
             "parent_score": float(getattr(d, 'score', 0.0) or 0.0),
             "mv_adapted": True,
         }
-        out_docs.append(Document(id=new_id, content=span_text, source=getattr(d, 'source', None), metadata=new_meta, score=float(sim)))
+        source = getattr(d, 'source', None)
+        if source is None:
+            source = DataSource.MEDIA_DB
+        out_docs.append(Document(id=new_id, content=span_text, source=source, metadata=new_meta, score=float(sim)))
 
     return out_docs

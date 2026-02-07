@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Embeddings.services import jobs_worker
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
-
 
 _STAGE_JOB_TYPES = {
     "chunking": "embeddings_chunking",
@@ -39,7 +39,7 @@ def _env_float(key: str, default: float) -> float:
         return float(default)
 
 
-def _retry_limits() -> Dict[str, int]:
+def _retry_limits() -> dict[str, int]:
     return {
         "max_retries": _env_int("EMBEDDINGS_REDIS_MAX_RETRIES", 2),
         "base_backoff": _env_int("EMBEDDINGS_REDIS_RETRY_BACKOFF_BASE", 2),
@@ -58,8 +58,8 @@ async def _ensure_group(client: Any, *, stream: str, group: str) -> None:
             raise
 
 
-def _normalize_payload(fields: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
+def _normalize_payload(fields: dict[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     for key, value in (fields or {}).items():
         payload[str(key)] = value
     return payload
@@ -69,7 +69,7 @@ async def _send_dlq(
     client: Any,
     *,
     stage: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     error: str,
 ) -> None:
     dlq_stream = f"{redis_pipeline.dlq_prefix()}:{stage}"
@@ -87,7 +87,7 @@ async def _handle_stage_message(
     *,
     stage: str,
     message_id: str,
-    fields: Dict[str, Any],
+    fields: dict[str, Any],
     client: Any,
     streams: redis_pipeline.RedisEmbeddingsQueues,
 ) -> None:
@@ -278,10 +278,8 @@ async def _worker_loop(stage: str, worker_id: str, stop_event: asyncio.Event) ->
                     except Exception as exc:
                         logger.warning(f"Embeddings redis worker ack failed stage={stage} id={message_id}: {exc}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await client.close()
-        except Exception:
-            pass
 
 
 async def main() -> None:

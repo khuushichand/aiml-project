@@ -4,6 +4,7 @@ import type { ConversationState } from "@/services/tldw/TldwApiClient"
 import type { RagPinnedResult } from "@/utils/rag-format"
 import type { ToolCall, ToolCallResult } from "@/types/tool-calls"
 import type { DiscoSkillComment } from "@/types/disco-skills"
+import type { MessageSteeringMode } from "@/types/message-steering"
 
 // Knowledge type is now server-side only; this is a placeholder for legacy compatibility
 export type Knowledge = {
@@ -72,6 +73,8 @@ export type Message = {
   toolResults?: ToolCallResult[]
   // Disco skills annotation (optional)
   discoSkillComment?: DiscoSkillComment
+  // Character message pin state (server metadata-backed)
+  pinned?: boolean
 }
 
 export type ChatHistory = {
@@ -123,6 +126,11 @@ export type State = {
   setSelectedSystemPrompt: (selectedSystemPrompt: string) => void
   selectedQuickPrompt: string | null
   setSelectedQuickPrompt: (selectedQuickPrompt: string) => void
+  messageSteeringMode: MessageSteeringMode
+  setMessageSteeringMode: (mode: MessageSteeringMode) => void
+  messageSteeringForceNarrate: boolean
+  setMessageSteeringForceNarrate: (enabled: boolean) => void
+  clearMessageSteering: () => void
   queuedMessages: { message: string; image: string }[]
   addQueuedMessage: (payload: { message: string; image: string }) => void
   setQueuedMessages: (messages: { message: string; image: string }[]) => void

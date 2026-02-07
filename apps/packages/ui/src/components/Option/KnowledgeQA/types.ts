@@ -76,6 +76,7 @@ export type SearchHistoryItem = {
   sourcesCount: number
   hasAnswer: boolean
   preset?: RagPresetName
+  keywords?: string[]
 }
 
 // Thread/conversation for Knowledge QA
@@ -137,7 +138,7 @@ export type KnowledgeQAActions = {
   clearResults: () => void
 
   // Thread actions
-  createNewThread: () => Promise<string>
+  createNewThread: (title?: string) => Promise<string>
   selectThread: (threadId: string) => Promise<void>
   askFollowUp: (question: string) => Promise<void>
 

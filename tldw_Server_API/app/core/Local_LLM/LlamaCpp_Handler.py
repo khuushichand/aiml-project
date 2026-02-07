@@ -2,26 +2,61 @@
 # Description: Handler for Llama.cpp models, managing server processes and inference.
 #
 import asyncio
-import socket
-import time
+import contextlib
 import os
 import platform
 import signal
 import subprocess  # For synchronous fallback if needed
+import time
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-# Local imports
-from .LLM_Base_Handler import BaseLLMHandler
-from .LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
-from .LLM_Inference_Schemas import LlamaCppConfig
-from tldw_Server_API.app.core.Local_LLM import http_utils
-from tldw_Server_API.app.core.Local_LLM import handler_utils
+from typing import Any, Optional
+
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.LLM_Calls.sse import (
     ensure_sse_line,
-    sse_done,
-    sse_data,
     openai_delta_chunk,
+    sse_data,
+    sse_done,
 )
+from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
+
+# Local imports
+from .LLM_Base_Handler import BaseLLMHandler
+from .LLM_Inference_Exceptions import InferenceError, ModelNotFoundError, ServerError
+from .LLM_Inference_Schemas import LlamaCppConfig
+
+try:
+    import httpx as _httpx
+except ImportError:  # pragma: no cover - optional dependency in some test setups
+    _httpx = None  # type: ignore[assignment]
+
+_LLAMACPP_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+if _httpx is not None:
+    _LLAMACPP_HTTP_EXCEPTIONS = (
+        _httpx.HTTPError,
+        _httpx.TimeoutException,
+    )
+
+_LLAMACPP_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    NetworkError,
+    OSError,
+    PermissionError,
+    RetryExhaustedError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    subprocess.SubprocessError,
+) + _LLAMACPP_HTTP_EXCEPTIONS
 
 
 def create_async_client(*args, **kwargs):
@@ -42,7 +77,7 @@ async def wait_for_http_ready(*args, **kwargs):
 # Functions:
 
 class LlamaCppHandler(BaseLLMHandler):
-    def __init__(self, config: LlamaCppConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: LlamaCppConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: LlamaCppConfig  # For type hinting
         # self.logger = logger # Or use self.logger from BaseLLMHandler if already set
@@ -76,7 +111,7 @@ class LlamaCppHandler(BaseLLMHandler):
             "inference_time_sum": 0.0,
         }
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         return dict(self.metrics)
 
     # --- Utilities (delegating to shared handler_utils) ---
@@ -94,14 +129,14 @@ class LlamaCppHandler(BaseLLMHandler):
                 return candidate
         return start_port  # Fallback
 
-    def _denylist_check(self, args: Dict[str, Any]):
+    def _denylist_check(self, args: dict[str, Any]):
         try:
             handler_utils.check_denylist(
                 args,
                 allow_secrets=getattr(self.config, "allow_cli_secrets", False),
             )
         except ValueError as e:
-            raise ServerError(str(e))
+            raise ServerError(str(e)) from e
 
     def _is_path_allowed(self, p: Path) -> bool:
         """Check if path is under allowed directories."""
@@ -129,7 +164,7 @@ class LlamaCppHandler(BaseLLMHandler):
             except ProcessLookupError:
                 if hasattr(process, "terminate"):
                     process.terminate()
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 if hasattr(process, "terminate"):
                     process.terminate()
         try:
@@ -143,13 +178,13 @@ class LlamaCppHandler(BaseLLMHandler):
                 try:
                     pgid = await asyncio.to_thread(os.getpgid, process.pid)
                     await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
-                except Exception:
+                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                     if hasattr(process, "kill"):
                         process.kill()
             try:
                 if hasattr(process, "wait"):
                     await process.wait()
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 pass
 
     async def _drain_stream(self, stream, label: str) -> None:
@@ -162,7 +197,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     break
         except asyncio.CancelledError:
             return
-        except Exception:
+        except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
             # Best-effort drain; ignore errors
             return
 
@@ -196,18 +231,18 @@ class LlamaCppHandler(BaseLLMHandler):
         except ProcessLookupError:
             return f"No process found with PID {pid}."
         except subprocess.CalledProcessError as e_taskkill:
-            self.logger.error(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
+            self.logger.exception(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
             return f"Failed to stop unmanaged PID {pid} with taskkill."
         except Exception as e:
             self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
-            raise ServerError(f"Error stopping unmanaged PID {pid}: {e}")
+            raise ServerError(f"Error stopping unmanaged PID {pid}: {e}") from e
 
     def _is_chat_endpoint(self, api_endpoint: str) -> bool:
         endpoint = f"/{api_endpoint.lstrip('/')}"
         return endpoint.lower().endswith("/chat/completions")
 
-    def _messages_to_prompt(self, messages: List[Dict[str, str]]) -> str:
-        parts: List[str] = []
+    def _messages_to_prompt(self, messages: list[dict[str, str]]) -> str:
+        parts: list[str] = []
         for msg in messages:
             if isinstance(msg, dict):
                 role = str(msg.get("role", "user"))
@@ -218,7 +253,7 @@ class LlamaCppHandler(BaseLLMHandler):
             parts.append(f"{role}: {content}")
         return "\n".join(parts)
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         """Lists locally available GGUF models."""
         if not self.models_dir.exists():
             return []
@@ -233,7 +268,7 @@ class LlamaCppHandler(BaseLLMHandler):
         return (self.models_dir / model_filename).is_file()
 
     # --- Server Management (Core of the swapping logic) ---
-    async def start_server(self, model_filename: str, server_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def start_server(self, model_filename: str, server_args: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         """
         Starts the Llama.cpp server with the specified model.
         If a server is already running managed by this handler, it will be stopped first (model swap).
@@ -274,14 +309,14 @@ class LlamaCppHandler(BaseLLMHandler):
                 self._active_server_port = prev_port
                 self._active_server_host = prev_host
                 self._active_server_log_handle = prev_log_handle
-                raise ServerError(f"Model swap failed: could not stop existing server: {e}")
+                raise ServerError(f"Model swap failed: could not stop existing server: {e}") from e
 
         args = {k: v for k, v in (server_args or {}).items() if v is not None and v != ""}
         self._denylist_check(args)
 
         # Allowlist of supported args (internal key -> formatter)
         # Each formatter extends the command list with the mapped CLI args.
-        allowed_formatters: Dict[str, Any] = {
+        allowed_formatters: dict[str, Any] = {
             "port": lambda v: ["--port", str(int(v))],
             "host": lambda v: ["--host", str(v)],
             "threads": lambda v: ["-t", str(int(v))],
@@ -442,7 +477,7 @@ class LlamaCppHandler(BaseLLMHandler):
             command += ["-t", str(int(threads))]
 
         # Validate all provided keys are allowed
-        invalid = [k for k in args.keys() if k not in allowed_formatters and k not in {"port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"}]
+        invalid = [k for k in args if k not in allowed_formatters and k not in {"port", "host", "threads", "t", "ctx_size", "c", "n_gpu_layers", "ngl", "gpu_layers"}]
         if invalid and not getattr(self.config, "allow_unvalidated_args", False):
             raise ServerError(f"Unsupported llama.cpp server args: {sorted(invalid)}")
 
@@ -488,14 +523,14 @@ class LlamaCppHandler(BaseLLMHandler):
                 stdout_redir = log_file_handle
                 stderr_redir = log_file_handle
                 self.logger.info(f"Llama.cpp server logs will be written to: {self.config.log_output_file}")
-            except Exception as e:
-                self.logger.error(f"Could not open log file {self.config.log_output_file}: {e}. Logging to PIPE.")
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e:
+                self.logger.exception(f"Could not open log file {self.config.log_output_file}: {e}. Logging to PIPE.")
 
         try:
-            cpe_kwargs = dict(
-                stdout=stdout_redir,
-                stderr=stderr_redir,
-            )
+            cpe_kwargs = {
+                "stdout": stdout_redir,
+                "stderr": stderr_redir,
+            }
             if platform.system() != "Windows":
                 cpe_kwargs["preexec_fn"] = os.setsid
             else:
@@ -527,12 +562,13 @@ class LlamaCppHandler(BaseLLMHandler):
                 self.logger.error(
                     f"Llama.cpp server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}"
                 )
-                if log_file_handle: log_file_handle.close()
+                if log_file_handle:
+                    log_file_handle.close()
                 try:
                     if process.returncode is None:
                         # Stop server if it started but not ready
                         await self._terminate_process(process)
-                except Exception:
+                except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                     pass
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llama.cpp server failed to start. Stderr: {stderr_output}")
@@ -555,9 +591,10 @@ class LlamaCppHandler(BaseLLMHandler):
             return {"status": "started", "pid": process.pid, "model": model_filename, "port": port, "host": host,
                     "command": ' '.join(redacted_cmd)}
         except Exception as e:
-            if log_file_handle: log_file_handle.close()
+            if log_file_handle:
+                log_file_handle.close()
             self.logger.error(f"Exception starting Llama.cpp server for {model_filename}: {e}", exc_info=True)
-            raise ServerError(f"Exception starting Llama.cpp server: {e}")
+            raise ServerError(f"Exception starting Llama.cpp server: {e}") from e
 
     async def stop_server(self, pid: Optional[int] = None, port: Optional[int] = None) -> str:
         if pid is not None:
@@ -589,7 +626,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     except ProcessLookupError:
                         self.logger.warning(f"Process {pid} not found for SIGTERM, likely already terminated.")
                         process_to_stop.terminate()  # Fallback
-                    except Exception as e_pg:
+                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_pg:
                         self.logger.warning(
                             f"Failed to send SIGTERM to process group {pid}: {e_pg}. Falling back to PID.")
                         process_to_stop.terminate()
@@ -602,10 +639,8 @@ class LlamaCppHandler(BaseLLMHandler):
                         f"Llama.cpp server PID {pid} (Model: {model_name}) did not terminate gracefully. Killing.")
                     if platform.system() == "Windows":
                         if hasattr(process_to_stop, "send_signal"):
-                            try:
+                            with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                 process_to_stop.send_signal(signal.CTRL_BREAK_EVENT)
-                            except Exception:
-                                pass
                         if hasattr(process_to_stop, "terminate"):
                             process_to_stop.terminate()
                         if hasattr(process_to_stop, "kill"):
@@ -625,7 +660,7 @@ class LlamaCppHandler(BaseLLMHandler):
                             except ProcessLookupError:
                                 self.logger.warning(
                                     f"PID {pid} already exited when attempting SIGKILL fallback.")
-                            except Exception as e_killpid:
+                            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_killpid:
                                 self.logger.debug(
                                     f"os.kill fallback failed for PID {pid}: {e_killpid}; checking for process.kill()"
                                 )
@@ -635,7 +670,7 @@ class LlamaCppHandler(BaseLLMHandler):
                                         self.logger.info(
                                             f"Invoked process.kill() for PID {pid} (final fallback)."
                                         )
-                                    except Exception as e_pkill:
+                                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e_pkill:
                                         self.logger.warning(
                                             f"process.kill() failed for PID {pid}: {e_pkill}")
                     await process_to_stop.wait()
@@ -666,9 +701,9 @@ class LlamaCppHandler(BaseLLMHandler):
             self._active_server_model = None
             self._active_server_port = None
             self._active_server_host = None
-            raise ServerError(f"Error stopping Llama.cpp server: {e}")
+            raise ServerError(f"Error stopping Llama.cpp server: {e}") from e
 
-    async def get_server_status(self) -> Dict[str, Any]:
+    async def get_server_status(self) -> dict[str, Any]:
         if self._active_server_process and self._active_server_process.returncode is None:
             return {
                 "status": "running",
@@ -681,9 +716,9 @@ class LlamaCppHandler(BaseLLMHandler):
             }
         return {"status": "stopped", "model": None, "pid": None, "port": None, "host": None}
 
-    async def inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
+    async def inference(self, prompt: Optional[str] = None, messages: Optional[list[dict[str, str]]] = None,
                         api_endpoint: str = "/v1/chat/completions",  # or /completion
-                        **kwargs) -> Dict[str, Any]:
+                        **kwargs) -> dict[str, Any]:
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
 
@@ -751,23 +786,23 @@ class LlamaCppHandler(BaseLLMHandler):
                         exc_info=True
                     )
                     self.metrics["inference_error_count"] += 1
-                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}")
+                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}") from e
                 if http_utils.is_network_error(e):
                     self.logger.error(
                         f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
                         exc_info=True
                     )
                     self.metrics["inference_error_count"] += 1
-                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}") from e
                 error_text = http_utils.get_http_error_text(e)
                 self.logger.error(
                     f"Unexpected error during Llama.cpp inference to {target_url}: {error_text}",
                     exc_info=True,
                 )
                 self.metrics["inference_error_count"] += 1
-                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}")
+                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}") from e
 
-    async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[List[Dict[str, str]]] = None,
+    async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[list[dict[str, str]]] = None,
                                api_endpoint: str = "/v1/chat/completions", **kwargs):
         if not self._active_server_process or self._active_server_process.returncode is not None:
             raise ServerError("Llama.cpp server is not running or not managed by this handler.")
@@ -823,7 +858,7 @@ class LlamaCppHandler(BaseLLMHandler):
                             yield openai_delta_chunk(l)
                     if not done_sent:
                         yield sse_done()
-            except Exception as e:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS as e:
                 status = http_utils.get_http_status_from_exception(e)
                 if status is not None:
                     msg = http_utils.get_http_error_text(e)
@@ -860,7 +895,7 @@ class LlamaCppHandler(BaseLLMHandler):
                     except ProcessLookupError:
                         if hasattr(proc, "terminate"):
                             proc.terminate()
-                    except Exception:
+                    except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                         if hasattr(proc, "terminate"):
                             proc.terminate()
 
@@ -873,29 +908,23 @@ class LlamaCppHandler(BaseLLMHandler):
                     # No running event loop - best effort, OS will reap eventually
                     pass
 
-            except Exception:
+            except _LLAMACPP_NONCRITICAL_EXCEPTIONS:
                 # Best-effort kill if needed
                 if proc.returncode is None:
                     if platform.system() == "Windows":
                         if hasattr(proc, "kill"):
-                            try:
+                            with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                 proc.kill()
-                            except Exception:
-                                pass
                     else:
                         try:
                             os.killpg(os.getpgid(pid), signal.SIGKILL)
                         except (ProcessLookupError, PermissionError, OSError):
                             if hasattr(proc, "kill"):
-                                try:
+                                with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                                     proc.kill()
-                                except Exception:
-                                    pass
             if self._active_server_log_handle:
-                try:
+                with contextlib.suppress(_LLAMACPP_NONCRITICAL_EXCEPTIONS):
                     self._active_server_log_handle.close()
-                except Exception:
-                    pass
             self._stop_stream_drainers()
 
         self._active_server_process = None

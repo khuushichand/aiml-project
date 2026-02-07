@@ -8,21 +8,37 @@ This module includes adapters for search operations:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
-from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     RAGSearchConfig,
     RSSFetchConfig,
     WebSearchConfig,
+)
+
+_RAG_ADAPTER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    LookupError,
+    ModuleNotFoundError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeError,
+    ValueError,
+    json.JSONDecodeError,
 )
 
 
@@ -34,7 +50,7 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     tags=["rag", "search"],
     config_model=RAGSearchConfig,
 )
-async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_rag_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute a RAG search via the unified pipeline.
 
     Config:
@@ -56,7 +72,7 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     try:
         if callable(context.get("is_cancelled")) and context["is_cancelled"]():
             return {"__status__": "cancelled"}
-    except Exception:
+    except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
         pass
 
     template_query = config.get("query") or ""
@@ -99,7 +115,7 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
         # quick wins
         "highlight_results", "highlight_query_terms", "track_cost",
     }
-    kwargs: Dict[str, Any] = {k: v for k, v in (config or {}).items() if k in passthrough_keys}
+    kwargs: dict[str, Any] = {k: v for k, v in (config or {}).items() if k in passthrough_keys}
 
     result = await unified_rag_pipeline(
         query=rendered_query,
@@ -120,15 +136,15 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
                 "metadata": d.metadata,
                 "score": float(getattr(d, "score", 0.0) or 0.0),
             })
-        except Exception:
+        except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
             # Be robust to different shapes
             try:
                 doc_dict = d if isinstance(d, dict) else json.loads(json.dumps(d, default=str))
-            except Exception:
+            except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
                 doc_dict = {"id": "unknown", "content": str(d)}
             docs.append(doc_dict)
 
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "documents": docs,
         "metadata": result.metadata,
         "timings": result.timings,
@@ -140,6 +156,54 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     return out
 
 
+def _truncate_content_by_tokens(
+    content: str,
+    max_tokens: int,
+    model: str | None = None,
+) -> str:
+    """Truncate content by token budget using binary search.
+
+    Uses tiktoken when available; falls back to a conservative char estimate.
+    """
+    text = str(content or "")
+    if not text:
+        return ""
+
+    token_budget = max(1, int(max_tokens))
+
+    try:
+        import tiktoken  # type: ignore
+
+        if model:
+            try:
+                encoding = tiktoken.encoding_for_model(model)
+            except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
+                encoding = tiktoken.get_encoding("cl100k_base")
+        else:
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+        if len(encoding.encode(text)) <= token_budget:
+            return text
+
+        left, right = 0, len(text)
+        while left < right:
+            mid = (left + right + 1) // 2
+            if len(encoding.encode(text[:mid])) <= token_budget:
+                left = mid
+            else:
+                right = mid - 1
+
+        truncated = text[:left].rstrip()
+        return f"{truncated}\n...[truncated]" if left < len(text) else truncated
+
+    except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
+        # Approximate 4 chars/token if tokenizer is unavailable.
+        char_budget = max(1, token_budget) * 4
+        if len(text) <= char_budget:
+            return text
+        return f"{text[:char_budget].rstrip()}\n...[truncated]"
+
+
 @registry.register(
     "web_search",
     category="rag",
@@ -148,18 +212,27 @@ async def run_rag_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["rag", "search", "web"],
     config_model=WebSearchConfig,
 )
-async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_web_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Perform web search using various search engines.
 
     Config:
       - query: str (templated) - Search query
-      - engine: Literal["google", "bing", "duckduckgo", "brave", "searxng", "kagi", "serper", "tavily"] = "google"
+      - engine: str (or legacy aliases: provider/search_engine)
+      - auto_query_rewrite: bool = False - Rewrite query before search using query_rewrite adapter
+      - query_rewrite_strategy: str = "simplify"
+      - query_rewrite_max_rewrites: int = 1
       - num_results: int = 10 - Number of results
       - content_country: str = "US"
       - search_lang: str = "en"
       - output_lang: str = "en"
       - safesearch: str = "active"
       - date_range: Optional[str]
+      - include_domains/exclude_domains (aliases for site_whitelist/site_blacklist)
+      - searx_url/searx_json_mode for custom Searx endpoint behavior
+      - fetch_content: bool = False - Fetch page content for top search results
+      - fetch_limit: int = 3 - Number of results to enrich with fetched content
+      - filter_failed_fetches: bool = True - Drop failed fetches from enriched subset
+      - max_content_tokens: int = 1200 - Token budget per fetched page
       - summarize: bool = False - Summarize results with LLM
       - api_name: Optional[str] - LLM provider for summarization
     Output:
@@ -169,27 +242,109 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
 
+    def _cfg(*keys: str, default: Any = None) -> Any:
+        for key in keys:
+            if key in config and config.get(key) is not None:
+                return config.get(key)
+        return default
+
+    def _as_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
     def _render(value: Any) -> Any:
         if isinstance(value, str):
             return apply_template_to_string(value, context) or value
         return value
 
-    query = _render(config.get("query") or "")
+    query = str(_render(_cfg("query", default="")) or "").strip()
     if not query:
         return {"error": "missing_query"}
+    original_query = query
 
-    engine = str(config.get("engine") or "google").strip().lower()
-    num_results = int(config.get("num_results") or config.get("result_count") or 10)
-    content_country = str(config.get("content_country") or "US")
-    search_lang = str(config.get("search_lang") or "en")
-    output_lang = str(config.get("output_lang") or "en")
-    safesearch = str(config.get("safesearch") or "active")
-    date_range = config.get("date_range")
-    summarize = bool(config.get("summarize", False))
+    # Prefer "engine"; keep legacy "provider" for backwards compatibility.
+    engine = str(_cfg("engine", "provider", "search_engine", default="google")).strip().lower()
+    if engine == "searxng":
+        engine = "searx"
+    auto_query_rewrite = _as_bool(_cfg("auto_query_rewrite", "rewrite_query", "enable_query_rewrite", default=False), default=False)
+    query_rewrite_strategy = str(_cfg("query_rewrite_strategy", "rewrite_strategy", default="simplify")).strip().lower() or "simplify"
+    query_rewrite_max_rewrites = max(1, int(_cfg("query_rewrite_max_rewrites", "rewrite_max_rewrites", default=1)))
+    query_rewrite_provider = _cfg("query_rewrite_provider", "rewrite_provider")
+    query_rewrite_model = _cfg("query_rewrite_model", "rewrite_model")
+    num_results = int(_cfg("num_results", "result_count", "max_results", default=10))
+    content_country = str(_cfg("content_country", "country", default="US"))
+    search_lang = str(_cfg("search_lang", "search_language", default="en"))
+    output_lang = str(_cfg("output_lang", "output_language", "ui_lang", default="en"))
+    raw_safesearch = _cfg("safesearch", "safe_search", "safeSearch", default="active")
+    safesearch = ("active" if raw_safesearch else "off") if isinstance(raw_safesearch, bool) else str(raw_safesearch or "active")
+    date_range = _cfg("date_range", "time_range", "timeRange")
+    summarize = _as_bool(_cfg("summarize", default=False), default=False)
+    fetch_content = _as_bool(_cfg("fetch_content", "fetchContent", default=False), default=False)
+    fetch_limit = max(0, int(_cfg("fetch_limit", "fetch_max_results", "max_fetch_results", default=min(num_results, 3))))
+    filter_failed_fetches = _as_bool(_cfg("filter_failed_fetches", "drop_failed_fetches", default=True), default=True)
+    fetch_timeout_seconds = float(_cfg("fetch_timeout_seconds", "fetch_timeout_s", default=12.0))
+    max_content_tokens = max(32, int(_cfg("max_content_tokens", "content_max_tokens", default=1200)))
+    tokenizer_model = _cfg("tokenizer_model", "content_tokenizer_model")
+    site_whitelist = _cfg("site_whitelist", "include_domains", "includeDomains")
+    site_blacklist = _cfg("site_blacklist", "exclude_domains", "excludeDomains")
+    exact_terms = _cfg("exactTerms", "exact_terms")
+    exclude_terms = _cfg("excludeTerms", "exclude_terms")
+    searx_url = _cfg("searx_url", "searxUrl")
+    searx_json_mode = _as_bool(_cfg("searx_json_mode", "searxJsonMode", default=False), default=False)
 
-    valid_engines = {"google", "bing", "duckduckgo", "brave", "searxng", "kagi", "serper", "tavily"}
+    valid_engines = {
+        "google", "duckduckgo", "brave", "kagi", "tavily", "searx", "exa", "firecrawl",
+        "baidu", "bing", "yandex", "sogou", "startpage", "stract", "serper",
+    }
     if engine not in valid_engines:
         return {"error": f"invalid_engine:{engine}", "valid_engines": list(valid_engines)}
+
+    query_rewrite_meta: dict[str, Any] | None = None
+    if auto_query_rewrite:
+        try:
+            from tldw_Server_API.app.core.Workflows.adapters.rag.query import run_query_rewrite_adapter
+
+            rewrite_result = await run_query_rewrite_adapter(
+                {
+                    "query": query,
+                    "strategy": query_rewrite_strategy,
+                    "max_rewrites": query_rewrite_max_rewrites,
+                    "provider": query_rewrite_provider,
+                    "model": query_rewrite_model,
+                },
+                context,
+            )
+            rewrites = rewrite_result.get("rewritten_queries") if isinstance(rewrite_result, dict) else None
+            rewritten_query = None
+            if isinstance(rewrites, list):
+                rewritten_query = next((str(item).strip() for item in rewrites if str(item).strip()), None)
+            if rewritten_query:
+                query = rewritten_query
+            query_rewrite_meta = {
+                "enabled": True,
+                "strategy": query_rewrite_strategy,
+                "original_query": original_query,
+                "query_used": query,
+                "rewritten": bool(rewritten_query),
+            }
+            if isinstance(rewrite_result, dict) and rewrite_result.get("error"):
+                query_rewrite_meta["error"] = rewrite_result.get("error")
+        except Exception as exc:
+            query_rewrite_meta = {
+                "enabled": True,
+                "strategy": query_rewrite_strategy,
+                "original_query": original_query,
+                "query_used": query,
+                "rewritten": False,
+                "error": str(exc),
+            }
 
     # Test mode simulation
     if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
@@ -207,9 +362,9 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
         }
 
     try:
-        from tldw_Server_API.app.core.WebSearch.Web_Search import perform_websearch
+        from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
 
-        raw_results = perform_websearch(
+        raw_results = ws.perform_websearch(
             search_engine=engine,
             search_query=query,
             content_country=content_country,
@@ -218,9 +373,14 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
             result_count=num_results,
             date_range=date_range,
             safesearch=safesearch,
-            site_blacklist=config.get("site_blacklist"),
-            exactTerms=config.get("exact_terms"),
-            excludeTerms=config.get("exclude_terms"),
+            site_blacklist=site_blacklist,
+            site_whitelist=site_whitelist,
+            exactTerms=exact_terms,
+            excludeTerms=exclude_terms,
+            search_params={
+                "searx_url": searx_url,
+                "searx_json_mode": searx_json_mode,
+            },
         )
 
         if not isinstance(raw_results, dict):
@@ -235,13 +395,75 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
             formatted_results.append({
                 "title": r.get("title") or "",
                 "link": r.get("link") or r.get("url") or "",
-                "snippet": r.get("snippet") or r.get("description") or "",
+                "snippet": r.get("snippet") or r.get("description") or r.get("content") or "",
             })
 
-        # Combine snippets into text for downstream steps
-        text = "\n".join([f"- {r['title']}: {r['snippet']}" for r in formatted_results if r.get("title")])
+        fetch_summary: dict[str, Any] | None = None
+        if fetch_content and formatted_results:
+            from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import scrape_article
 
-        out: Dict[str, Any] = {
+            async def _fetch_one(idx: int, item: dict[str, Any]) -> tuple[int, str | None, str | None]:
+                link = str(item.get("link") or "").strip()
+                if not link:
+                    return idx, None, "missing_link"
+                try:
+                    scraped = await asyncio.wait_for(scrape_article(link), timeout=fetch_timeout_seconds)
+                except asyncio.TimeoutError:
+                    return idx, None, "timeout"
+                except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS as exc:
+                    return idx, None, str(exc)
+                if not isinstance(scraped, dict):
+                    return idx, None, "invalid_scrape_payload"
+                scraped_content = str(scraped.get("content") or "").strip()
+                if not scraped_content:
+                    return idx, None, str(scraped.get("error") or "empty_content")
+                return idx, _truncate_content_by_tokens(scraped_content, max_content_tokens, model=tokenizer_model), None
+
+            targets = list(enumerate(formatted_results[:fetch_limit]))
+            fetched = await asyncio.gather(*[_fetch_one(idx, item) for idx, item in targets])
+            fetch_errors: list[dict[str, Any]] = []
+            fetched_count = 0
+            success_indices: list[int] = []
+            for idx, content, err in fetched:
+                if content:
+                    formatted_results[idx]["content"] = content
+                    fetched_count += 1
+                    success_indices.append(idx)
+                    if not formatted_results[idx].get("snippet"):
+                        formatted_results[idx]["snippet"] = content[:300]
+                elif err:
+                    fetch_errors.append({"index": idx, "error": err})
+
+            dropped_count = 0
+            if filter_failed_fetches and targets:
+                attempted_set = {idx for idx, _ in targets}
+                success_set = set(success_indices)
+                dropped_count = len(attempted_set - success_set)
+                formatted_results = [
+                    item
+                    for idx, item in enumerate(formatted_results)
+                    if idx not in attempted_set or idx in success_set
+                ]
+
+            fetch_summary = {
+                "enabled": True,
+                "attempted": len(targets),
+                "fetched": fetched_count,
+                "dropped_failed": dropped_count,
+                "filter_failed_fetches": filter_failed_fetches,
+                "max_content_tokens": max_content_tokens,
+            }
+            if fetch_errors:
+                fetch_summary["errors"] = fetch_errors[:10]
+
+        # Combine snippets into text for downstream steps
+        text = "\n".join([
+            f"- {r['title']}: {r.get('content') or r.get('snippet') or ''}"
+            for r in formatted_results
+            if r.get("title")
+        ])
+
+        out: dict[str, Any] = {
             "results": formatted_results,
             "count": len(formatted_results),
             "query": query,
@@ -249,26 +471,31 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
             "text": text,
             "total_found": raw_results.get("total_results_found", len(formatted_results)),
         }
+        if query != original_query:
+            out["original_query"] = original_query
+        if query_rewrite_meta is not None:
+            out["query_rewrite"] = query_rewrite_meta
+        if fetch_summary is not None:
+            out["fetch_content"] = fetch_summary
 
         # Optional summarization
         if summarize and text:
             try:
-                from tldw_Server_API.app.core.WebSearch.Web_Search import summarize as ws_summarize
-                api_name = _render(config.get("api_name") or config.get("api_provider") or "openai")
-                summary = ws_summarize(
+                api_name = _render(_cfg("api_name", "api_provider", "apiProvider", default="openai"))
+                summary = ws.summarize(
                     input_data=text,
                     custom_prompt_arg=f"Summarize the following search results for the query '{query}':",
                     api_name=api_name,
                 )
                 out["summary"] = summary
                 out["text"] = summary  # Replace text with summary for downstream
-            except Exception as e:
+            except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Web search summarization failed: {e}")
                 out["summary_error"] = str(e)
 
         return out
 
-    except Exception as e:
+    except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Web search adapter error: {e}")
         return {"error": f"web_search_error:{e}"}
 
@@ -281,7 +508,7 @@ async def run_web_search_adapter(config: Dict[str, Any], context: Dict[str, Any]
     tags=["rag", "feed"],
     config_model=RSSFetchConfig,
 )
-async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fetch RSS/Atom feeds and return items.
 
     Config:
@@ -320,15 +547,15 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
             try:
                 if not (u.startswith("http://") or u.startswith("https://")):
                     continue
-                tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+                tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
                 allowed = False
                 try:
                     allowed = is_url_allowed_for_tenant(u, tenant_id)
-                except Exception:
+                except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
                     allowed = is_url_allowed(u)
                 if not allowed:
                     continue
-                host = urlparse(u).hostname or ""
+                urlparse(u).hostname or ""
                 timeout = float(os.getenv("WORKFLOWS_RSS_TIMEOUT", "8"))
                 with _wf_create_client(timeout=timeout) as client:
                     resp = client.get(u)
@@ -338,7 +565,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
                 # Parse as XML (RSS or Atom)
                 try:
                     root = ET.fromstring(text)
-                except Exception:
+                except (ET.ParseError, TypeError, ValueError):
                     continue
                 # Heuristic: RSS <item> or Atom <entry>
                 items = root.findall('.//item')
@@ -375,12 +602,12 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
                     if guid:
                         rec["guid"] = guid
                     results.append(rec)
-            except Exception:
+            except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS:
                 continue
         results = results[:limit]
         text_concat = "\n\n".join([r.get("summary") or r.get("title") or "" for r in results if (r.get("summary") or r.get("title"))])
         return {"results": results, "count": len(results), "text": text_concat}
-    except Exception as e:
+    except _RAG_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
         return {"error": f"rss_error:{e}"}
 
 
@@ -392,7 +619,7 @@ async def run_rss_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["rag", "feed"],
     config_model=RSSFetchConfig,
 )
-async def run_atom_fetch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_atom_fetch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fetch Atom feeds (alias for rss_fetch).
 
     Config:

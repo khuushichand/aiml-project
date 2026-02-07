@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import IO, AsyncIterator, Optional
+from typing import IO
 
 from aiofiles import threadpool as aiofiles_threadpool
-
 from loguru import logger
 
 
-def resolve_safe_local_path(path: Path, base_dir: Path) -> Optional[Path]:
+def resolve_safe_local_path(path: Path, base_dir: Path) -> Path | None:
     """
     Resolve ``path`` relative to ``base_dir`` and validate containment.
 
@@ -34,8 +34,17 @@ def resolve_safe_local_path(path: Path, base_dir: Path) -> Optional[Path]:
             return None
         if common_path == str(base_resolved):
             return path_resolved
+        # Fallback to realpath comparison (macOS /var -> /private/var symlink, etc.)
+        base_real = os.path.realpath(base_resolved)
+        path_real = os.path.realpath(path_resolved)
+        try:
+            common_real = os.path.commonpath([base_real, path_real])
+        except ValueError:
+            common_real = None
+        if common_real == base_real:
+            return Path(path_real)
         logger.warning(
-            "Rejected path outside of base directory for local media source: %s (base: %s)",
+            "Rejected path outside of base directory for local media source: {} (base: {})",
             path_resolved,
             base_resolved,
         )
@@ -83,7 +92,7 @@ def _open_safe_posix(
     relative_path: Path,
     base_dir: Path,
     mode: str,
-) -> Optional[IO]:
+) -> IO | None:
     if not relative_path.parts:
         logger.warning("Rejected empty relative path under base directory: %s", base_dir)
         return None
@@ -126,7 +135,7 @@ def _open_safe_windows(
     safe_path: Path,
     base_dir: Path,
     mode: str,
-) -> Optional[IO]:
+) -> IO | None:
     try:
         handle = open(safe_path, mode)
     except Exception as exc:
@@ -159,7 +168,7 @@ def open_safe_local_path(
     base_dir: Path,
     *,
     mode: str = "rb",
-) -> Optional[IO]:
+) -> IO | None:
     """
     Open a local file under ``base_dir`` with best-effort protections against traversal.
 
@@ -194,7 +203,7 @@ async def open_safe_local_path_async(
     base_dir: Path,
     *,
     mode: str = "rb",
-) -> AsyncIterator[Optional[IO]]:
+) -> AsyncIterator[IO | None]:
     """
     Async wrapper around ``open_safe_local_path`` that returns an aiofiles handle.
 

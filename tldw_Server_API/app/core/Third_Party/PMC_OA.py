@@ -8,33 +8,30 @@ exposes a simple PDF download helper for PMC articles.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
-
-import os
+import contextlib
+from typing import Any
 from xml.etree import ElementTree as ET
-from tldw_Server_API.app.core.http_client import fetch
 
+from tldw_Server_API.app.core.http_client import fetch
 
 BASE_URL = "https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi"
 
 
-def _get_xml(params: Dict[str, Any]) -> ET.Element:
+def _get_xml(params: dict[str, Any]) -> ET.Element:
     r = fetch(method="GET", url=BASE_URL, params=params, headers={"Accept": "application/xml"}, timeout=20)
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code}")
     try:
         return ET.fromstring(r.text)
     finally:
-        try:
+        with contextlib.suppress(Exception):
             r.close()
-        except Exception:
-            pass
 
 
-def pmc_oa_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+def pmc_oa_identify() -> tuple[dict[str, Any] | None, str | None]:
     try:
         root = _get_xml({})
-        info: Dict[str, Any] = {}
+        info: dict[str, Any] = {}
         # Extract simple counts and formats when present
         resp_date = root.find("responseDate")
         repo = root.find("repositoryName")
@@ -51,7 +48,7 @@ def pmc_oa_identify() -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         return None, f"PMC OA Identify error: {str(e)}"
 
 
-def _parse_resumption(root: ET.Element) -> Optional[str]:
+def _parse_resumption(root: ET.Element) -> str | None:
     res = root.find("resumption")
     if res is None:
         return None
@@ -63,18 +60,18 @@ def _parse_resumption(root: ET.Element) -> Optional[str]:
 
 
 def pmc_oa_query(
-    from_date: Optional[str] = None,
-    until_date: Optional[str] = None,
-    fmt: Optional[str] = None,  # 'pdf' or 'tgz'
-    resumption_token: Optional[str] = None,
-    id_param: Optional[str] = None,
-) -> Tuple[Optional[List[Dict[str, Any]]], Optional[str], Optional[str]]:
+    from_date: str | None = None,
+    until_date: str | None = None,
+    fmt: str | None = None,  # 'pdf' or 'tgz'
+    resumption_token: str | None = None,
+    id_param: str | None = None,
+) -> tuple[list[dict[str, Any]] | None, str | None, str | None]:
     """Query OA Web Service for record links.
 
     Returns (items, resumption_token, error_message)
     """
     try:
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if id_param:
             params["id"] = id_param
         elif resumption_token:
@@ -87,7 +84,7 @@ def pmc_oa_query(
             if fmt:
                 params["format"] = fmt
         root = _get_xml(params)
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         for rec in root.findall("records/record"):
             rid = rec.attrib.get("id")
             citation = rec.attrib.get("citation")
@@ -112,7 +109,7 @@ def pmc_oa_query(
         return None, None, f"PMC OA query error: {str(e)}"
 
 
-def download_pmc_pdf(pmcid: str) -> Tuple[Optional[bytes], Optional[str], Optional[str]]:
+def download_pmc_pdf(pmcid: str) -> tuple[bytes | None, str | None, str | None]:
     """Download a PMC PDF by PMCID numeric portion.
 
     Returns (content_bytes, filename, error_message)

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Claims_Extraction.claims_embeddings import claim_embedding_id
+from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
-from tldw_Server_API.app.core.config import settings
 
 
 @dataclass(frozen=True)
@@ -18,7 +19,7 @@ class ClaimEmbedding:
     media_id: int
     chunk_index: int
     claim_text: str
-    embedding: List[float]
+    embedding: list[float]
     norm: float
 
 
@@ -27,9 +28,9 @@ def _vector_norm(vec: Iterable[float]) -> float:
 
 
 def _cosine_similarity(
-    vec_a: List[float],
+    vec_a: list[float],
     norm_a: float,
-    vec_b: List[float],
+    vec_b: list[float],
     norm_b: float,
 ) -> float:
     if not vec_a or not vec_b or norm_a <= 0 or norm_b <= 0:
@@ -40,20 +41,19 @@ def _cosine_similarity(
     return dot / (norm_a * norm_b)
 
 
-def _iter_claims_for_user(db: MediaDatabase, user_id: str, page_size: int = 1000) -> Iterable[Dict[str, Any]]:
+def _iter_claims_for_user(db: MediaDatabase, user_id: str, page_size: int = 1000) -> Iterable[dict[str, Any]]:
     offset = 0
     while True:
         rows = db.list_claims(owner_user_id=user_id, limit=page_size, offset=offset, include_deleted=False)
         if not rows:
             break
-        for row in rows:
-            yield row
+        yield from rows
         offset += len(rows)
         if len(rows) < page_size:
             break
 
 
-def _batched_ids(ids: List[str], batch_size: int) -> Iterable[List[str]]:
+def _batched_ids(ids: list[str], batch_size: int) -> Iterable[list[str]]:
     if batch_size <= 0:
         batch_size = 200
     for i in range(0, len(ids), batch_size):
@@ -65,13 +65,13 @@ def _load_claim_embeddings(
     db: MediaDatabase,
     user_id: str,
     batch_size: int,
-) -> Tuple[List[ClaimEmbedding], int]:
+) -> tuple[list[ClaimEmbedding], int]:
     claim_rows = list(_iter_claims_for_user(db, user_id))
     if not claim_rows:
         return [], 0
 
-    id_to_claim: Dict[str, Dict[str, Any]] = {}
-    embed_ids: List[str] = []
+    id_to_claim: dict[str, dict[str, Any]] = {}
+    embed_ids: list[str] = []
     for row in claim_rows:
         embed_id = claim_embedding_id(
             int(row.get("media_id") or 0),
@@ -100,7 +100,7 @@ def _load_claim_embeddings(
         logger.debug(f"Claims clustering: unable to access claims collection '{collection_name}': {exc}")
         return [], len(embed_ids)
 
-    embeddings: List[ClaimEmbedding] = []
+    embeddings: list[ClaimEmbedding] = []
     missing = 0
     for batch in _batched_ids(embed_ids, batch_size):
         try:
@@ -138,13 +138,13 @@ def _load_claim_embeddings(
 
 
 def _cluster_embeddings(
-    embeddings: List[ClaimEmbedding],
+    embeddings: list[ClaimEmbedding],
     similarity_threshold: float,
     min_size: int,
-) -> List[Dict[str, Any]]:
-    clusters: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    clusters: list[dict[str, Any]] = []
     for claim in sorted(embeddings, key=lambda c: c.claim_id):
-        best_idx: Optional[int] = None
+        best_idx: int | None = None
         best_sim = similarity_threshold
         for idx, cluster in enumerate(clusters):
             sim = _cosine_similarity(
@@ -175,9 +175,9 @@ def _cluster_embeddings(
             target["centroid"] = [v / target["count"] for v in target["sum"]]
             target["centroid_norm"] = _vector_norm(target["centroid"])
 
-    payload: List[Dict[str, Any]] = []
+    payload: list[dict[str, Any]] = []
     for cluster in clusters:
-        members: List[ClaimEmbedding] = cluster["members"]
+        members: list[ClaimEmbedding] = cluster["members"]
         if len(members) < min_size:
             continue
         centroid = cluster["centroid"]
@@ -202,8 +202,8 @@ def rebuild_claim_clusters_embeddings(
     db: MediaDatabase,
     user_id: str,
     min_size: int,
-    similarity_threshold: Optional[float] = None,
-) -> Dict[str, Any]:
+    similarity_threshold: float | None = None,
+) -> dict[str, Any]:
     try:
         min_size = int(min_size)
     except (TypeError, ValueError):

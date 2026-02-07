@@ -13,22 +13,22 @@ Behavior is intentionally kept backwards compatible with the original helpers.
 
 import asyncio
 import math
-import os
 import shutil
 import tempfile
 import uuid
-from pathlib import Path as FilePath, Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from pathlib import Path
+from pathlib import Path as FilePath
+from typing import Any
 
 import aiofiles
 
+from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     FileValidationError,
     FileValidator,
-    process_and_validate_file,
     _extension_candidates,
+    process_and_validate_file,
 )
-from tldw_Server_API.app.core.config import loaded_config_data
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
 
@@ -42,7 +42,7 @@ class TempDirManager:
     """
 
     def __init__(self, prefix: str = "media_processing_", *, cleanup: bool = True) -> None:
-        self.temp_dir_path: Optional[FilePath] = None
+        self.temp_dir_path: FilePath | None = None
         self.prefix = prefix
         self._cleanup = cleanup
         self._created = False
@@ -80,14 +80,14 @@ class TempDirManager:
 
 
 async def save_uploaded_files(
-    files: List["aiofiles.threadpool.binary.AsyncBufferedIOBase"],  # UploadFile duck type
+    files: list[aiofiles.threadpool.binary.AsyncBufferedIOBase],  # UploadFile duck type
     temp_dir: Path,
     validator: FileValidator,
-    expected_media_type_key: Optional[str] = None,
-    allowed_extensions: Optional[List[str]] = None,
+    expected_media_type_key: str | None = None,
+    allowed_extensions: list[str] | None = None,
     *,
     skip_archive_scanning: bool = False,
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Save uploaded files to a temporary directory, validating them via FileValidator.
 
@@ -109,9 +109,9 @@ async def save_uploaded_files(
         file_handling_errors: List of dicts for failures:
             `{"original_filename": str, "input_ref": str, "status": "Error", "error": str}`.
     """
-    processed_files: List[Dict[str, Any]] = []
-    file_handling_errors: List[Dict[str, Any]] = []
-    used_secure_names: Set[str] = set()
+    processed_files: list[dict[str, Any]] = []
+    file_handling_errors: list[dict[str, Any]] = []
+    used_secure_names: set[str] = set()
 
     normalized_allowed_extensions = {ext.lower().strip() for ext in allowed_extensions} if allowed_extensions else None
     logger.debug(f"Allowed extensions for upload: {normalized_allowed_extensions}")
@@ -119,7 +119,7 @@ async def save_uploaded_files(
     for file in files:
         original_filename = getattr(file, "filename", None)
         input_ref = original_filename or f"upload_{uuid.uuid4()}"
-        local_file_path: Optional[Path] = None
+        local_file_path: Path | None = None
 
         try:
             if not original_filename:
@@ -232,10 +232,10 @@ async def save_uploaded_files(
                 extension=file_extension,
             )
 
-            def _build_filename(base: str, ext: str, suffix: Optional[str] = None) -> str:
+            def _build_filename(base: str, ext: str, suffix: str | None = None, _max_len=max_total_filename_len) -> str:
                 suffix_txt = f"_{suffix}" if suffix else ""
                 reserved = len(suffix_txt) + len(ext)
-                available = max_total_filename_len - reserved
+                available = _max_len - reserved
                 trunc_base = base if len(base) <= available else base[: max(1, available)]
                 return f"{trunc_base}{suffix_txt}{ext}"
 
@@ -258,7 +258,7 @@ async def save_uploaded_files(
                 f"Attempting to save uploaded file '{original_filename}' securely as: {local_file_path}"
             )
 
-            inferred_media_key: Optional[str] = None
+            inferred_media_key: str | None = None
             if candidates:
                 if any(
                     c
@@ -354,7 +354,7 @@ async def save_uploaded_files(
                 ):
                     inferred_media_key = "code"
 
-            max_cfg_bytes: Optional[int] = None
+            max_cfg_bytes: int | None = None
             try:
                 size_key = inferred_media_key or expected_media_type_key
                 cfg = validator.get_media_config(size_key)

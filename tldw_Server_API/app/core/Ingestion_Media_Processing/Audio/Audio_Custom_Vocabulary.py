@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -48,7 +47,7 @@ def _as_bool(val: object, default: bool) -> bool:
     return default
 
 
-def _read_text_lines(path: Path) -> List[str]:
+def _read_text_lines(path: Path) -> list[str]:
     try:
         content = path.read_text(encoding="utf-8")
         lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
@@ -58,7 +57,7 @@ def _read_text_lines(path: Path) -> List[str]:
         return []
 
 
-def _read_json(path: Path) -> Optional[object]:
+def _read_json(path: Path) -> object | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
@@ -66,7 +65,7 @@ def _read_json(path: Path) -> Optional[object]:
         return None
 
 
-def _load_terms_from_file(path: Path) -> List[str]:
+def _load_terms_from_file(path: Path) -> list[str]:
     if not path.exists():
         return []
     # Allow simple newline-delimited text or JSON list
@@ -83,14 +82,14 @@ def _load_terms_from_file(path: Path) -> List[str]:
     return []
 
 
-def _load_replacements_from_file(path: Path) -> Dict[str, str]:
+def _load_replacements_from_file(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
     # JSON dict expected; tolerate JSON lines of pairs
     data = _read_json(path)
     if isinstance(data, dict):
         # Ensure string->string
-        out: Dict[str, str] = {}
+        out: dict[str, str] = {}
         for k, v in data.items():
             try:
                 ks = str(k)
@@ -101,7 +100,7 @@ def _load_replacements_from_file(path: Path) -> Dict[str, str]:
                 continue
         return out
     # Fallback: each non-empty line as "misheard=correct" or "misheard,correct"
-    items: Dict[str, str] = {}
+    items: dict[str, str] = {}
     for ln in _read_text_lines(path):
         if "=" in ln:
             a, b = ln.split("=", 1)
@@ -116,7 +115,7 @@ def _load_replacements_from_file(path: Path) -> Dict[str, str]:
     return items
 
 
-def _cfg_section() -> Dict[str, object]:
+def _cfg_section() -> dict[str, object]:
     try:
         cfg = loaded_config_data.get("STT-Settings", {}) or {}
     except Exception:
@@ -130,7 +129,7 @@ def _cfg_section() -> Dict[str, object]:
     return cfg  # type: ignore[return-value]
 
 
-def load_terms() -> List[str]:
+def load_terms() -> list[str]:
     cfg = _cfg_section()
     raw_path = str(cfg.get("custom_vocab_terms_file", "") or "").strip()
     if not raw_path:
@@ -138,7 +137,7 @@ def load_terms() -> List[str]:
     path = Path(raw_path).expanduser()
     terms = _load_terms_from_file(path)
     # Deduplicate and keep short; avoid bloating prompts
-    uniq: List[str] = []
+    uniq: list[str] = []
     seen = set()
     for t in terms:
         if t not in seen:
@@ -149,7 +148,7 @@ def load_terms() -> List[str]:
     return uniq
 
 
-def load_replacements() -> Dict[str, str]:
+def load_replacements() -> dict[str, str]:
     cfg = _cfg_section()
     raw_path = str(cfg.get("custom_vocab_replacements_file", "") or "").strip()
     if not raw_path:
@@ -158,7 +157,7 @@ def load_replacements() -> Dict[str, str]:
     return _load_replacements_from_file(path)
 
 
-def build_initial_prompt(terms: Optional[List[str]] = None) -> Optional[str]:
+def build_initial_prompt(terms: list[str] | None = None) -> str | None:
     """Build an initial prompt for faster-whisper from terms list.
 
     Returns None when disabled or no terms.
@@ -212,7 +211,7 @@ def apply_replacements(text: str) -> str:
     return out
 
 
-def initial_prompt_if_enabled() -> Optional[str]:
+def initial_prompt_if_enabled() -> str | None:
     return build_initial_prompt()
 
 

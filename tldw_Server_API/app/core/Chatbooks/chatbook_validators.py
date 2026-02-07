@@ -9,12 +9,13 @@ Provides comprehensive validation and sanitization for chatbook operations
 to prevent security vulnerabilities and ensure data integrity.
 """
 
-import re
 import os
+import re
 import stat
 import zipfile
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional
+
 from loguru import logger
 
 
@@ -85,13 +86,10 @@ class ChatbookValidator:
 
         # Additional check: ZIP files from some tools use 0xA1ED pattern
         # This is a fallback for Unix-created archives
-        if zip_info.external_attr >> 16 == 0xA1ED:
-            return True
-
-        return False
+        return zip_info.external_attr >> 16 == 41453
 
     @classmethod
-    def validate_filename(cls, filename: str) -> Tuple[bool, Optional[str], str]:
+    def validate_filename(cls, filename: str) -> tuple[bool, Optional[str], str]:
         """
         Validate and sanitize a filename.
 
@@ -104,8 +102,14 @@ class ChatbookValidator:
         if not filename:
             return False, "No filename provided", ""
 
+        # Reject path separators or traversal attempts up front
+        if "/" in filename or "\\" in filename or cls.PATH_TRAVERSAL_PATTERN.search(filename):
+            return False, "Invalid filename: path separators are not allowed", ""
+
         # Extract basename and remove path components
         base_filename = os.path.basename(filename)
+        if base_filename != filename:
+            return False, "Invalid filename: path separators are not allowed", ""
 
         # Check length
         if len(base_filename) > cls.MAX_NAME_LENGTH:
@@ -132,15 +136,12 @@ class ChatbookValidator:
         # Ensure it ends with a valid extension after sanitization
         if not any(sanitized.lower().endswith(ext) for ext in cls.VALID_EXTENSIONS):
             # Force it to end with .zip
-            if '.' in sanitized:
-                sanitized = sanitized.rsplit('.', 1)[0] + '.zip'
-            else:
-                sanitized = sanitized + '.zip'
+            sanitized = sanitized.rsplit('.', 1)[0] + '.zip' if '.' in sanitized else sanitized + '.zip'
 
         return True, None, sanitized
 
     @classmethod
-    def validate_file_size(cls, file_size: int, compressed: bool = True) -> Tuple[bool, Optional[str]]:
+    def validate_file_size(cls, file_size: int, compressed: bool = True) -> tuple[bool, Optional[str]]:
         """
         Validate file size.
 
@@ -161,7 +162,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_zip_file(cls, file_path: str) -> Tuple[bool, Optional[str]]:
+    def validate_zip_file(cls, file_path: str) -> tuple[bool, Optional[str]]:
         """
         Comprehensive validation of a ZIP file.
 
@@ -236,7 +237,7 @@ class ChatbookValidator:
 
                     # Check individual file size
                     if info.file_size > cls.MAX_FILE_IN_ARCHIVE:
-                        size_mb = info.file_size / (1024 * 1024)
+                        info.file_size / (1024 * 1024)
                         max_mb = cls.MAX_FILE_IN_ARCHIVE / (1024 * 1024)
                         return False, f"Archive contains files larger than {max_mb:.0f}MB limit"
 
@@ -277,8 +278,8 @@ class ChatbookValidator:
     def validate_chatbook_metadata(cls,
                                  name: str,
                                  description: str,
-                                 tags: List[str] = None,
-                                 categories: List[str] = None) -> Tuple[bool, Optional[str]]:
+                                 tags: list[str] = None,
+                                 categories: list[str] = None) -> tuple[bool, Optional[str]]:
         """
         Validate chatbook metadata.
 
@@ -333,7 +334,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_media_quality(cls, media_quality: str) -> Tuple[bool, Optional[str]]:
+    def validate_media_quality(cls, media_quality: str) -> tuple[bool, Optional[str]]:
         """
         Validate media quality value.
 
@@ -349,7 +350,7 @@ class ChatbookValidator:
         return True, None
 
     @classmethod
-    def validate_author(cls, author: Optional[str]) -> Tuple[bool, Optional[str]]:
+    def validate_author(cls, author: Optional[str]) -> tuple[bool, Optional[str]]:
         """
         Validate author field.
 
@@ -418,7 +419,7 @@ class ChatbookValidator:
 
     @classmethod
     def validate_content_selections(cls,
-                                   content_selections: Dict[str, List[str]]) -> Tuple[bool, Optional[str]]:
+                                   content_selections: dict[str, list[str]]) -> tuple[bool, Optional[str]]:
         """
         Validate content selection dictionary.
 
@@ -483,10 +484,7 @@ class ChatbookValidator:
 
         # Check for dangerous directory names
         parts = Path(normalized).parts
-        if any(part in cls.DANGEROUS_PATHS for part in parts):
-            return True
-
-        return False
+        return bool(any(part in cls.DANGEROUS_PATHS for part in parts))
 
     @classmethod
     def _is_dangerous_file(cls, filename: str) -> bool:

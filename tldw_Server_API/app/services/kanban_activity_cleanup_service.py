@@ -11,20 +11,29 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+
+_KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"kanban_activity_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
@@ -39,7 +48,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
@@ -52,13 +61,11 @@ def _cleanup_for_user(user_id: int) -> int:
     try:
         return db.cleanup_old_activities()
     finally:
-        try:
+        with contextlib.suppress(_KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS):
             db.close()
-        except Exception:
-            pass
 
 
-async def start_kanban_activity_cleanup_scheduler() -> Optional[asyncio.Task]:
+async def start_kanban_activity_cleanup_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -76,7 +83,7 @@ async def start_kanban_activity_cleanup_scheduler() -> Optional[asyncio.Task]:
                     total_deleted += _cleanup_for_user(user_id)
                 if total_deleted:
                     logger.info(f"Kanban activity cleanup removed {total_deleted} old activities")
-            except Exception as exc:
+            except _KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"kanban_activity_cleanup: cleanup run failed: {exc}")
             await asyncio.sleep(interval)
 

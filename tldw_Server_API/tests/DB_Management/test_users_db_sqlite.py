@@ -76,6 +76,63 @@ async def test_users_db_returns_boolean_flags_under_sqlite(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_users_db_migrates_uuid_column_without_unique_alter(tmp_path: Path):
+    db_file = tmp_path / "users_missing_uuid.db"
+    if db_file.exists():
+        db_file.unlink()
+
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                metadata TEXT,
+                is_active INTEGER DEFAULT 1,
+                is_superuser INTEGER DEFAULT 0,
+                role TEXT DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP,
+                email_verified INTEGER DEFAULT 0,
+                is_verified INTEGER DEFAULT 0,
+                storage_quota_mb INTEGER DEFAULT 5120,
+                storage_used_mb INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            ("legacy", "legacy@example.com", "pw"),
+        )
+        conn.commit()
+
+    settings = Settings(
+        AUTH_MODE="single_user",
+        DATABASE_URL=f"sqlite:///{db_file}",
+    )
+
+    pool = DatabasePool(settings)
+    try:
+        users_db = UsersDB(db_pool=pool)
+        await users_db.initialize()
+
+        async with pool.transaction() as conn:
+            cur = await conn.execute("PRAGMA table_info(users)")
+            columns = {row[1] for row in await cur.fetchall()}
+            assert "uuid" in columns
+
+            cur = await conn.execute("SELECT uuid FROM users WHERE username = ?", ("legacy",))
+            row = await cur.fetchone()
+            assert row is not None
+            assert row[0]
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
 async def test_create_user_duplicate_race_surfaces_duplicate_error(tmp_path: Path, monkeypatch):
     db_file = tmp_path / "users_race.db"
     settings = Settings(

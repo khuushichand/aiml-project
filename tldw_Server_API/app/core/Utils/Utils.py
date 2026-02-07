@@ -1,5 +1,23 @@
 # Utils.py
 from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+import mimetypes
+import os
+import re
+import tempfile
+import time
+import unicodedata
+import uuid
+import zipfile
+from datetime import datetime
+from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
+from typing import AnyStr
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
 #########################################
 # General Utilities Library
 # This library is used to hold random utilities used by various other libraries.
@@ -31,28 +49,12 @@ from __future__ import annotations
 #
 # Import necessary libraries
 import chardet
-import configparser
-import hashlib
-import json
-import os
-import re
-import tempfile
-import time
-import uuid
-import mimetypes
-import sys
-import zipfile
-from datetime import timedelta, datetime
-from decimal import Decimal, ROUND_HALF_UP
-from pathlib import Path
-from typing import Union, AnyStr, Tuple, List, Optional, Protocol, cast
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from loguru import logger
+
 #
 # 3rd-Party Imports
-from tldw_Server_API.app.core.http_client import fetch, download, RetryPolicy, DownloadError
-import unicodedata
-from tqdm import tqdm
-from loguru import logger
+from tldw_Server_API.app.core.http_client import RetryPolicy, download, fetch
+
 #
 #######################################################################################################################
 #
@@ -105,8 +107,8 @@ def cleanup_downloads():
             if os.path.exists(file_path):
                 os.remove(file_path)
                 logging.info(f"Cleaned up file: {file_path}")
-        except Exception as e:
-            logging.error(f"Error cleaning up file {file_path}: {e}")
+        except OSError as e:
+            logging.exception(f"Error cleaning up file {file_path}: {e}")
 
 #
 #
@@ -171,7 +173,7 @@ def get_database_path(db_name: str) -> str:
     return path
 
 
-def get_project_relative_path(relative_path: Union[str, os.PathLike[AnyStr]]) -> str:
+def get_project_relative_path(relative_path: str | os.PathLike[AnyStr]) -> str:
     """Convert a relative path to a path relative to the project root."""
     path = os.path.join(get_project_root(), str(relative_path))
     logging.trace(f"Project relative path for {relative_path}: {path}")
@@ -272,7 +274,7 @@ def format_metadata_as_text(metadata):
                     hours, remainder = divmod(int(total_seconds), 3600)
                     minutes, seconds = divmod(remainder, 60)
                     formatted_value = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                except Exception:
+                except (TypeError, ValueError):
                     formatted_value = str(value)
             else:
                 formatted_value = str(value)
@@ -347,7 +349,7 @@ def convert_to_seconds(time_str):
     raise ValueError(f"Invalid time format '{time_str}'")
 
 
-def truncate_content(content: Optional[str], max_length: int = 200) -> Optional[str]:
+def truncate_content(content: str | None, max_length: int = 200) -> str | None:
     """Truncate content to the specified maximum length with ellipsis."""
     if not content:
         return content
@@ -427,7 +429,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
             head = fetch(method="GET", url=url, allow_redirects=True, timeout=10, headers={"Range": "bytes=0-0"})
             ctype = head.headers.get("content-type", "")
             guessed_ext = mimetypes.guess_extension(ctype.split(";")[0].strip()) or ""
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             guessed_ext = ""
 
     # ---------- 3) final fallback  ------------------------------------------
@@ -443,7 +445,7 @@ def smart_download(url: str, tmp_dir: Path) -> Path:
 
 
 def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5):
-    temp_path = dest_path + '.tmp'
+    dest_path + '.tmp'
     dest_dir = os.path.dirname(dest_path)
     if dest_dir:
         os.makedirs(dest_dir, exist_ok=True)
@@ -456,13 +458,13 @@ def download_file(url, dest_path, expected_checksum=None, max_retries=3, delay=5
             try:
                 if os.path.exists(dest_path):
                     os.remove(dest_path)
-            except Exception as cleanup_error:
-                logging.error(f"Failed to remove file after checksum mismatch: {cleanup_error}")
+            except OSError as cleanup_error:
+                logging.exception(f"Failed to remove file after checksum mismatch: {cleanup_error}")
             raise ValueError("Downloaded file's checksum does not match the expected checksum")
         logging.info("Download complete and verified!")
         return dest_path
     except Exception as e:
-        logging.error(f"Download failed: {e}")
+        logging.exception(f"Download failed: {e}")
         raise
 
 def download_file_if_missing(url: str, local_path: str) -> None:
@@ -479,7 +481,7 @@ def download_file_if_missing(url: str, local_path: str) -> None:
     try:
         download(url=url, dest=local_path, resume=False)
     except Exception as e:
-        logging.error(f"Download failed: {e}")
+        logging.exception(f"Download failed: {e}")
         raise
 
 def create_download_directory(title):
@@ -506,10 +508,10 @@ def safe_read_file(file_path):
             logging.debug(f"Reading file in binary mode: {file_path}")
             raw_data = file.read()
     except FileNotFoundError:
-        logging.error(f"File not found: {file_path}")
+        logging.exception(f"File not found: {file_path}")
         return f"File not found: {file_path}"
-    except Exception as e:
-        logging.error(f"An error occurred while reading the file: {e}")
+    except (OSError, TypeError, ValueError) as e:
+        logging.exception(f"An error occurred while reading the file: {e}")
         return f"An error occurred while reading the file: {e}"
 
     if not raw_data:
@@ -752,14 +754,14 @@ def get_db_config():
     try:
         from tldw_Server_API.app.core.DB_Management.DB_Manager import get_db_config as _dbm_get
         return _dbm_get()
-    except Exception as e:
-        logging.error(f"Failed to delegate to DB_Manager.get_db_config: {e}")
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
+        logging.exception(f"Failed to delegate to DB_Manager.get_db_config: {e}")
         # Preserve a minimal, safe default
         try:
             from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
             default_sqlite = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
-        except Exception as exc:
-            logging.error(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
+        except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logging.exception(f"Failed to resolve default SQLite path via DatabasePaths: {exc}")
             raise
         return {
             'type': 'sqlite',
@@ -793,20 +795,16 @@ def save_temp_file(file):
 
     temp_path = os.path.join(temp_dir, unique_name)
     if hasattr(file, "seek"):
-        try:
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
             file.seek(0)
-        except Exception:
-            pass
     data = file.read()
     if isinstance(data, str):
         data = data.encode('utf-8')
     with open(temp_path, 'wb') as f:
         f.write(data)
     if hasattr(file, "seek"):
-        try:
+        with contextlib.suppress(OSError, RuntimeError, ValueError):
             file.seek(0)
-        except Exception:
-            pass
     temp_files.append(temp_path)
     return temp_path
 
@@ -817,8 +815,8 @@ def cleanup_temp_files():
             try:
                 os.remove(file_path)
                 logging.info(f"Removed temporary file: {file_path}")
-            except Exception as e:
-                logging.error(f"Failed to remove temporary file {file_path}: {e}")
+            except OSError as e:
+                logging.exception(f"Failed to remove temporary file {file_path}: {e}")
     temp_files.clear()
 
 def generate_unique_id():
@@ -851,19 +849,19 @@ class FileProcessor:
 
         # Try detected encoding first
         try:
-            with open(file_path, 'r', encoding=detected_encoding) as f:
+            with open(file_path, encoding=detected_encoding) as f:
                 return f.read()
         except UnicodeDecodeError:
             # If detected encoding fails, try others
             for encoding in FileProcessor.ENCODINGS_TO_TRY:
                 try:
-                    with open(file_path, 'r', encoding=encoding) as f:
+                    with open(file_path, encoding=encoding) as f:
                         return f.read()
                 except UnicodeDecodeError:
                     continue
 
             # If all encodings fail, use utf-8 with error handling
-            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+            with open(file_path, encoding='utf-8', errors='replace') as f:
                 return f.read()
 
     @staticmethod
@@ -926,7 +924,7 @@ class ZipValidator:
         return any(part == ".." for part in parts)
 
     @staticmethod
-    def validate_zip_file(zip_path: str) -> Tuple[bool, str, List[str]]:
+    def validate_zip_file(zip_path: str) -> tuple[bool, str, list[str]]:
         """
         Validate zip file and its contents
         Returns: (is_valid, error_message, valid_files)
@@ -974,7 +972,7 @@ class ZipValidator:
 
         except zipfile.BadZipFile:
             return False, "Invalid or corrupted zip file", []
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, zipfile.LargeZipFile) as e:
             return False, f"Error processing zip file: {str(e)}", []
 
 def format_text_with_line_breaks(text):
@@ -998,7 +996,7 @@ def format_transcript(raw_text: str) -> str:
 # End of File Handling Functions
 #######################################################################################################################
 
-def extract_media_id_from_result_string(result_msg: Optional[str]) -> Optional[str]:
+def extract_media_id_from_result_string(result_msg: str | None) -> str | None:
     """
     Extracts the Media ID from a string expected to contain 'Media ID: <id>'.
 

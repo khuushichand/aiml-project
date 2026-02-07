@@ -8,18 +8,32 @@ This is a thin adapter for Stage 1/2 validation and can be replaced by a
 full-featured middleware later.
 """
 
+import contextlib
 import os
 import re
 import uuid
-from typing import Any, Callable, Awaitable, Optional
 
 from loguru import logger
-from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
+from .deps import derive_client_ip, derive_entity_key
 from .governor import RGRequest
-from .deps import derive_entity_key, derive_client_ip
+
+_RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    re.error,
+)
 
 
 class RGSimpleMiddleware:
@@ -43,7 +57,7 @@ class RGSimpleMiddleware:
             snap = None
             try:
                 snap = loader.get_snapshot() if loader else None
-            except Exception:
+            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                 snap = None
             current_path = str(getattr(snap, "source_path", "")) if snap else None
             if (loader is None) or (snap is None) or (current_path and str(current_path) != str(env_path)):
@@ -55,7 +69,7 @@ class RGSimpleMiddleware:
                 await new_loader.load_once()
                 request.app.state.rg_policy_loader = new_loader
                 request.app.state.rg_policy_store = "file"
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             # Best-effort only; never block the request
             pass
 
@@ -79,10 +93,10 @@ class RGSimpleMiddleware:
                     regex = re.escape(pat) + "$"
                 compiled.append((re.compile(regex), str(pol)))
             self._compiled_map = compiled
-        except Exception as e:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RGSimpleMiddleware: route_map init skipped: {e}")
 
-    def _derive_policy_id(self, request: Request) -> Optional[str]:
+    def _derive_policy_id(self, request: Request) -> str | None:
         # Prefer path-based routing (works even before route resolution)
         try:
             # Use compiled route_map if available
@@ -93,7 +107,7 @@ class RGSimpleMiddleware:
                 try:
                     if pat.match(path):
                         return str(pol)
-                except Exception:
+                except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                     continue
             # Fallback to simple string matching from snapshot if compiled map unavailable
             loader = getattr(request.app.state, "rg_policy_loader", None)
@@ -111,7 +125,7 @@ class RGSimpleMiddleware:
                         return str(pol)
                 elif path == pat:
                     return str(pol)
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Fallback to tag-based routing (may not be available early in ASGI pipeline)
@@ -121,7 +135,7 @@ class RGSimpleMiddleware:
             snap = loader.get_snapshot() if loader else None
             route_map = getattr(snap, "route_map", {}) or {}
             by_tag = dict(route_map.get("by_tag") or {})
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             by_tag = {}
         try:
             route = request.scope.get("route")
@@ -129,7 +143,7 @@ class RGSimpleMiddleware:
             for t in tags:
                 if t in by_tag:
                     return str(by_tag[t])
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             pass
         # Heuristic fallback by path segments for common endpoints
         try:
@@ -138,7 +152,7 @@ class RGSimpleMiddleware:
                 return "chat.default"
             if p.startswith("/api/v1/audio/"):
                 return "audio.default"
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             pass
         return None
 
@@ -157,7 +171,7 @@ class RGSimpleMiddleware:
         try:
             # Always compute and attach normalized client IP for diagnostics
             request.state.rg_client_ip = derive_client_ip(request)
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             # best-effort only
             pass
         return derive_entity_key(request)
@@ -171,10 +185,8 @@ class RGSimpleMiddleware:
         # Make sure loader (and its route_map) tracks current env path
         await self._ensure_loader_matches_env(request)
         # Compile route map for fast path matches (best-effort)
-        try:
+        with contextlib.suppress(_RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS):
             self._init_route_map(request)
-        except Exception:
-            pass
         # If governor not initialized, lazily create one using loader + backend env
         gov = getattr(request.app.state, "rg_governor", None)
         if gov is None:
@@ -189,7 +201,7 @@ class RGSimpleMiddleware:
                         from .governor import MemoryResourceGovernor as _RG
                         request.app.state.rg_governor = _RG(policy_loader=loader)
                     gov = request.app.state.rg_governor
-            except Exception:
+            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                 gov = None
         if gov is None:
             await self.app(scope, receive, send)
@@ -201,10 +213,8 @@ class RGSimpleMiddleware:
             return
         # Attach policy_id to request.state so downstream dependencies can
         # detect RG-governed routes and avoid double-enforcement.
-        try:
+        with contextlib.suppress(_RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS):
             request.state.rg_policy_id = policy_id
-        except Exception:
-            pass
 
         # Build RG request. Always include 'requests'. Specialized categories
         # (tokens/streams/jobs/minutes/etc.) are enforced at endpoint level.
@@ -217,7 +227,7 @@ class RGSimpleMiddleware:
 
         try:
             decision, handle_id = await gov.reserve(rg_req, op_id=op_id)
-        except Exception as e:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"RGSimpleMiddleware reserve error: {e}")
             await self.app(scope, receive, send)
             return
@@ -229,7 +239,7 @@ class RGSimpleMiddleware:
             categories = {}
             try:
                 categories = dict((decision.details or {}).get("categories") or {})
-            except Exception:
+            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                 categories = {}
             # Choose a primary category for header mapping: prefer requests, else tokens, else streams/jobs
             primary = None
@@ -258,7 +268,7 @@ class RGSimpleMiddleware:
                             limit = int((pol.get("tokens") or {}).get("per_min") or 0)
                         elif primary in ("streams", "jobs"):
                             limit = int((pol.get(primary) or {}).get("max_concurrent") or 0)
-                except Exception:
+                except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                     limit = 0
 
             resp = JSONResponse({
@@ -284,7 +294,7 @@ class RGSimpleMiddleware:
                                 resp.headers["X-RateLimit-PerMinute-Limit"] = str(per_min)
                                 resp.headers["X-RateLimit-PerMinute-Remaining"] = "0"
                                 resp.headers["X-RateLimit-Tokens-Remaining"] = "0"
-                    except Exception:
+                    except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                         pass
             await resp(scope, receive, send)
             return
@@ -293,7 +303,7 @@ class RGSimpleMiddleware:
         # Prepare success-path rate-limit headers (using precise peek when available)
         try:
             _cats = dict((decision.details or {}).get("categories") or {})
-        except Exception:
+        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
             _cats = {}
         _req_cat = _cats.get("requests") or {}
         _limit = int(_req_cat.get("limit") or 0)
@@ -310,7 +320,7 @@ class RGSimpleMiddleware:
                     if callable(peek):
                         try:
                             peek_result = await peek(entity, _categories_to_peek, policy_id)
-                        except Exception:
+                        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                             peek_result = None
                     # requests headers (compat)
                     # Fallback to policy rpm if decision did not include limit
@@ -321,7 +331,7 @@ class RGSimpleMiddleware:
                             if loader is not None and policy_id:
                                 pol = loader.get_policy(policy_id) or {}
                                 eff_limit = int((pol.get("requests") or {}).get("rpm") or 0)
-                        except Exception:
+                        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                             eff_limit = 0
                     if eff_limit:
                         headers.append((b"x-ratelimit-limit", str(eff_limit).encode()))
@@ -351,7 +361,7 @@ class RGSimpleMiddleware:
                                 # override generic reset with stricter value
                                 headers = [(k, v) for (k, v) in headers if k != b"x-ratelimit-reset"]
                                 headers.append((b"x-ratelimit-reset", str(overall_reset).encode()))
-                        except Exception:
+                        except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                             pass
                         # Tokens headers are only emitted when the request actually
                         # reserved tokens via middleware (not the default behavior).
@@ -361,7 +371,7 @@ class RGSimpleMiddleware:
                             try:
                                 if tinfo.get("remaining") is not None:
                                     tokens_remaining_val = int(tinfo.get("remaining") or 0)
-                            except Exception:
+                            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                                 tokens_remaining_val = None
                             # Expose per-minute headers when policy defines per_min.
                             try:
@@ -382,12 +392,12 @@ class RGSimpleMiddleware:
                                             headers.append((b"x-ratelimit-perminute-remaining", str(max(0, per_min - 1)).encode()))
                                         if tokens_remaining_val is None:
                                             tokens_remaining_val = max(0, per_min - 1)
-                            except Exception:
+                            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                                 pass
                             if tokens_remaining_val is None:
                                 tokens_remaining_val = 0
                             headers.append((b"x-ratelimit-tokens-remaining", str(int(tokens_remaining_val)).encode()))
-                except Exception:
+                except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS:
                     pass
                 message = {**message, "headers": headers}
             await send(message)
@@ -399,7 +409,7 @@ class RGSimpleMiddleware:
             try:
                 if handle_id:
                     await gov.commit(handle_id, actuals=None)
-            except Exception as e:
+            except _RG_MIDDLEWARE_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"RGSimpleMiddleware commit error: {e}")
 
         return response

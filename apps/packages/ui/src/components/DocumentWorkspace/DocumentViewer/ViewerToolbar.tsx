@@ -119,62 +119,18 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
 
   return (
     <div className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-surface px-2">
-      {/* Navigation section */}
-      <div className="flex items-center gap-1">
-        <Tooltip title={t("option:documentWorkspace.previousPage", "Previous")}>
-          <button
-            onClick={onPreviousPage}
-            disabled={currentPage <= 1}
-            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t("option:documentWorkspace.previousPage", "Previous")}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </button>
-        </Tooltip>
-
-        {isEpub ? (
-          // EPUB: Show percentage progress
-          <div className="flex items-center gap-2 min-w-[120px]">
-            <Progress
-              percent={Math.round(percentage)}
-              size="small"
-              showInfo={false}
-              className="w-16"
-            />
-            <span className="text-sm text-muted tabular-nums">
-              {Math.round(percentage)}%
-            </span>
-          </div>
-        ) : (
-          // PDF: Show page numbers
-          <div className="flex items-center gap-1 text-sm">
-            <Input
-              type="number"
-              min={1}
-              max={totalPages}
-              value={currentPage}
-              onChange={handlePageInputChange}
-              onBlur={handlePageInputBlur}
-              className="w-14 text-center"
-              size="small"
-            />
-            <span className="text-muted">
-              / {totalPages || "-"}
-            </span>
-          </div>
-        )}
-
-        <Tooltip title={t("option:documentWorkspace.nextPage", "Next")}>
-          <button
-            onClick={onNextPage}
-            disabled={currentPage >= totalPages}
-            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={t("option:documentWorkspace.nextPage", "Next")}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        </Tooltip>
-      </div>
+      {/* View mode - only for PDF */}
+      {!isEpub && (
+        <div className="flex items-center">
+          <Select
+            value={viewMode}
+            onChange={onViewModeChange}
+            size="small"
+            className="w-32"
+            options={viewModeOptions}
+          />
+        </div>
+      )}
 
       {/* Zoom controls - only for PDF */}
       {!isEpub && (
@@ -231,18 +187,62 @@ export const ViewerToolbar: React.FC<ViewerToolbarProps> = ({
         {isEpub && <EpubSettingsPanel />}
       </div>
 
-      {/* View mode - only for PDF */}
-      {!isEpub && (
-        <div className="flex items-center">
-          <Select
-            value={viewMode}
-            onChange={onViewModeChange}
-            size="small"
-            className="w-32"
-            options={viewModeOptions}
-          />
-        </div>
-      )}
+      {/* Navigation section */}
+      <div className="flex items-center gap-1">
+        <Tooltip title={t("option:documentWorkspace.previousPage", "Previous")}>
+          <button
+            onClick={onPreviousPage}
+            disabled={currentPage <= 1}
+            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label={t("option:documentWorkspace.previousPage", "Previous")}
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+        </Tooltip>
+
+        {isEpub ? (
+          // EPUB: Show percentage progress
+          <div className="flex items-center gap-2 min-w-[120px]">
+            <Progress
+              percent={Math.round(percentage)}
+              size="small"
+              showInfo={false}
+              className="w-16"
+            />
+            <span className="text-sm text-muted tabular-nums">
+              {Math.round(percentage)}%
+            </span>
+          </div>
+        ) : (
+          // PDF: Show page numbers
+          <div className="flex items-center gap-1 text-sm">
+            <Input
+              type="number"
+              min={1}
+              max={totalPages}
+              value={currentPage}
+              onChange={handlePageInputChange}
+              onBlur={handlePageInputBlur}
+              className="w-14 text-center"
+              size="small"
+            />
+            <span className="text-muted">
+              / {totalPages || "-"}
+            </span>
+          </div>
+        )}
+
+        <Tooltip title={t("option:documentWorkspace.nextPage", "Next")}>
+          <button
+            onClick={onNextPage}
+            disabled={currentPage >= totalPages}
+            className="rounded p-1.5 hover:bg-hover disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label={t("option:documentWorkspace.nextPage", "Next")}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      </div>
     </div>
   )
 }

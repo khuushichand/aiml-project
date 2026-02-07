@@ -9,20 +9,20 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.billing_repo import AuthnzBillingRepo
+from tldw_Server_API.app.core.Billing.plan_limits import check_limit, get_plan_limits
 from tldw_Server_API.app.core.Billing.stripe_client import (
+    CheckoutSession,
+    PortalSession,
     StripeClient,
     get_stripe_client,
     is_billing_enabled,
-    CheckoutSession,
-    PortalSession,
 )
-from tldw_Server_API.app.core.Billing.plan_limits import get_plan_limits, check_limit
 
 
 @dataclass
@@ -30,9 +30,9 @@ class UsageStatus:
     """Current usage status for an organization."""
     org_id: int
     plan_name: str
-    limits: Dict[str, Any]
-    usage: Dict[str, int]
-    limit_checks: Dict[str, Dict[str, Any]]
+    limits: dict[str, Any]
+    usage: dict[str, int]
+    limit_checks: dict[str, dict[str, Any]]
     has_warnings: bool
     has_exceeded: bool
 
@@ -44,11 +44,11 @@ class SubscriptionStatus:
     plan_name: str
     plan_display_name: str
     status: str
-    billing_cycle: Optional[str]
-    current_period_end: Optional[str]
-    trial_end: Optional[str]
+    billing_cycle: str | None
+    current_period_end: str | None
+    trial_end: str | None
     cancel_at_period_end: bool
-    limits: Dict[str, Any]
+    limits: dict[str, Any]
 
 
 class SubscriptionService:
@@ -64,9 +64,9 @@ class SubscriptionService:
 
     def __init__(
         self,
-        db_pool: Optional[DatabasePool] = None,
-        billing_repo: Optional[AuthnzBillingRepo] = None,
-        stripe_client: Optional[StripeClient] = None,
+        db_pool: DatabasePool | None = None,
+        billing_repo: AuthnzBillingRepo | None = None,
+        stripe_client: StripeClient | None = None,
     ):
         self._db_pool = db_pool
         self._billing_repo = billing_repo
@@ -92,7 +92,7 @@ class SubscriptionService:
     # Plans
     # =========================================================================
 
-    async def list_available_plans(self) -> List[Dict[str, Any]]:
+    async def list_available_plans(self) -> list[dict[str, Any]]:
         """
         List all publicly available subscription plans.
 
@@ -132,7 +132,7 @@ class SubscriptionService:
             },
         ]
 
-    async def get_plan(self, plan_name: str) -> Optional[Dict[str, Any]]:
+    async def get_plan(self, plan_name: str) -> dict[str, Any] | None:
         """Get a specific plan by name."""
         repo = await self._get_billing_repo()
         plan = await repo.get_plan_by_name(plan_name)
@@ -148,7 +148,7 @@ class SubscriptionService:
             }
         return None
 
-    async def get_plan_for_checkout(self, plan_name: str) -> Optional[Dict[str, Any]]:
+    async def get_plan_for_checkout(self, plan_name: str) -> dict[str, Any] | None:
         """
         Resolve a plan for checkout by name.
 
@@ -211,8 +211,8 @@ class SubscriptionService:
         org_id: int,
         plan_name: str,
         billing_cycle: str = "monthly",
-        trial_days: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        trial_days: int | None = None,
+    ) -> dict[str, Any]:
         """
         Create or update a subscription for an organization.
 
@@ -264,7 +264,7 @@ class SubscriptionService:
         success_url: str,
         cancel_url: str,
         org_email: str,
-        org_name: Optional[str] = None,
+        org_name: str | None = None,
     ) -> CheckoutSession:
         """
         Create a Stripe checkout session for a plan upgrade.
@@ -396,9 +396,9 @@ class SubscriptionService:
         org_id: int,
         *,
         at_period_end: bool = True,
-        user_id: Optional[int] = None,
-        ip_address: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        user_id: int | None = None,
+        ip_address: str | None = None,
+    ) -> dict[str, Any]:
         """Cancel an organization's subscription."""
         repo = await self._get_billing_repo()
         sub = await repo.get_org_subscription(org_id)
@@ -451,8 +451,8 @@ class SubscriptionService:
         self,
         org_id: int,
         *,
-        user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        user_id: int | None = None,
+    ) -> dict[str, Any]:
         """Resume a subscription that was set to cancel."""
         repo = await self._get_billing_repo()
         sub = await repo.get_org_subscription(org_id)
@@ -485,7 +485,7 @@ class SubscriptionService:
     # Usage & Limits
     # =========================================================================
 
-    async def get_org_limits(self, org_id: int) -> Dict[str, Any]:
+    async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get the effective limits for an organization."""
         repo = await self._get_billing_repo()
         return await repo.get_org_limits(org_id)
@@ -494,7 +494,7 @@ class SubscriptionService:
         self,
         org_id: int,
         *,
-        current_usage: Dict[str, int],
+        current_usage: dict[str, int],
     ) -> UsageStatus:
         """
         Check current usage against limits.
@@ -541,8 +541,8 @@ class SubscriptionService:
     async def handle_webhook_event(
         self,
         event_type: str,
-        event_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        event_data: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Handle a Stripe webhook event.
 
@@ -573,9 +573,9 @@ class SubscriptionService:
 
     async def _handle_checkout_completed(
         self,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         repo: AuthnzBillingRepo,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle checkout.session.completed event."""
         session = event_data.get("object", {})
         metadata = session.get("metadata", {})
@@ -593,7 +593,7 @@ class SubscriptionService:
         subscription_id = session.get("subscription")
         customer_id = session.get("customer")
 
-        plan_updates: Dict[str, Any] = {}
+        plan_updates: dict[str, Any] = {}
         plan_name = metadata.get("plan_name")
         if plan_name:
             try:
@@ -636,9 +636,9 @@ class SubscriptionService:
 
     async def _handle_subscription_updated(
         self,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         repo: AuthnzBillingRepo,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle customer.subscription.updated event."""
         subscription = event_data.get("object", {})
         customer_id = subscription.get("customer")
@@ -653,7 +653,7 @@ class SubscriptionService:
         # Try to determine the active plan from the subscription items so that
         # local plan_id / limits stay in sync with Stripe when upgrades or
         # downgrades are initiated from the Billing Portal.
-        plan_updates: Dict[str, Any] = {}
+        plan_updates: dict[str, Any] = {}
         items = (subscription.get("items") or {}).get("data") or []
         if items:
             item0 = items[0] or {}
@@ -665,7 +665,7 @@ class SubscriptionService:
             recurring = price_obj.get("recurring") or {}
             interval = recurring.get("interval") or plan_obj.get("interval")
 
-            new_plan: Optional[Dict[str, Any]] = None
+            new_plan: dict[str, Any] | None = None
             if price_id:
                 new_plan = await repo.get_plan_by_stripe_price_id(price_id)
             if not new_plan and product_id:
@@ -681,7 +681,7 @@ class SubscriptionService:
 
         # Always update status and period timestamps; merge any plan updates.
         stripe_status = subscription.get("status")
-        update_fields: Dict[str, Any] = {
+        update_fields: dict[str, Any] = {
             "stripe_subscription_status": stripe_status,
             "current_period_start": datetime.fromtimestamp(
                 subscription.get("current_period_start", 0),
@@ -714,9 +714,9 @@ class SubscriptionService:
 
     async def _handle_subscription_deleted(
         self,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         repo: AuthnzBillingRepo,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle customer.subscription.deleted event."""
         subscription = event_data.get("object", {})
         customer_id = subscription.get("customer")
@@ -748,9 +748,9 @@ class SubscriptionService:
 
     async def _handle_invoice_paid(
         self,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         repo: AuthnzBillingRepo,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle invoice.paid event."""
         invoice = event_data.get("object", {})
         customer_id = invoice.get("customer")
@@ -777,9 +777,9 @@ class SubscriptionService:
 
     async def _handle_payment_failed(
         self,
-        event_data: Dict[str, Any],
+        event_data: dict[str, Any],
         repo: AuthnzBillingRepo,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle invoice.payment_failed event."""
         invoice = event_data.get("object", {})
         customer_id = invoice.get("customer")
@@ -826,14 +826,14 @@ class SubscriptionService:
         *,
         limit: int = 50,
         offset: int = 0,
-    ) -> Tuple[List[Dict[str, Any]], int]:
+    ) -> tuple[list[dict[str, Any]], int]:
         """List payment/invoice history for an organization."""
         repo = await self._get_billing_repo()
         return await repo.list_payments(org_id, limit=limit, offset=offset)
 
 
 # Singleton instance with async-safe initialization
-_subscription_service: Optional[SubscriptionService] = None
+_subscription_service: SubscriptionService | None = None
 _subscription_service_lock = asyncio.Lock()
 
 

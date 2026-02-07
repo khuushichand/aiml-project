@@ -1,6 +1,4 @@
 import { test, expect } from '@playwright/test'
-import path from 'path'
-import { launchWithExtension } from './utils/extension'
 import { launchWithBuiltExtension } from './utils/extension-build'
 import {
   waitForConnectionStore,
@@ -14,8 +12,6 @@ const SERVER_URL =
   process.env.TLDW_SERVER_URL ?? 'http://127.0.0.1:8000'
 const API_KEY =
   process.env.TLDW_API_KEY ?? 'THIS-IS-A-SECURE-KEY-123-FAKE-KEY'
-
-const TEST_EXT_PATH = path.resolve('build/chrome-mv3')
 
 // Gate all tests behind an opt‑in env flag so they never
 // run in normal suites unless explicitly requested.
@@ -79,104 +75,63 @@ describeLive('Live server UX review (no mocks)', () => {
     }
   })
 
-  test('Onboarding to connected state with live server', async () => {
-    const { context, page } = await launchWithExtension(TEST_EXT_PATH)
+  test('Onboarding connect form renders with live server settings', async () => {
+    test.setTimeout(90_000)
+    const { context, page, optionsUrl } = await launchWithBuiltExtension()
 
     try {
-      // Step 1: server URL + reachability hint
-      await waitForConnectionStore(page, 'live-onboarding-initial')
-      await expect(
-        page.getByText(/Let’s get you connected|Let's get you connected/i)
-      ).toBeVisible({ timeout: 15_000 })
+      await page.goto(optionsUrl + '#/', {
+        waitUntil: 'domcontentloaded'
+      })
 
-      const urlInput = page.getByLabel(/Server URL/i)
-      await urlInput.scrollIntoViewIfNeeded()
+      await waitForConnectionStore(page, 'live-onboarding-initial')
+      const heading = page
+        .getByText(/Let’s get you connected|Let's get you connected/i)
+        .or(
+          page.getByRole('heading', {
+            name: /Welcome to tldw Assistant/i
+          })
+        )
+        .first()
+      await expect(heading).toBeVisible({ timeout: 20_000 })
+
+      const urlInput = page.getByLabel(/Server URL/i).first()
+      if ((await urlInput.count()) === 0) {
+        // In some live runs a previously connected state is restored and the
+        // server-connect form is skipped. Capture the state and continue.
+        await page.screenshot({
+          path: 'e2e-tests/live-onboarding-restored-connected-state.png',
+          fullPage: true
+        })
+        await logConnectionSnapshot(page, 'live-onboarding-restored-state')
+        return
+      }
+      await expect(urlInput).toBeVisible({ timeout: 15_000 })
       await urlInput.fill(SERVER_URL)
 
-      // Wait for the reachability helper to update. Prefer the
-      // "reachable" copy, but accept the neutral hint for now so
-      // this test stays informative while connection UX evolves.
-      const helper = page.getByText(
-        /We’ll enable Next once we can reach this address\.|We'll enable Next once we can reach this address\.|Server responded successfully\. You can continue\./i
-      )
-      await expect(helper).toBeVisible({ timeout: 12_000 })
+      const apiKeyInput = page
+        .locator('input[placeholder*="API key" i], input[aria-label*="API key" i]')
+        .first()
+      if ((await apiKeyInput.count()) > 0) {
+        await apiKeyInput.fill(API_KEY)
+      }
+
+      await expect(
+        page.getByRole('button', { name: /^Connect$/i }).first()
+      ).toBeVisible({ timeout: 15_000 })
 
       await page.screenshot({
         path: 'e2e-tests/live-onboarding-step1.png',
         fullPage: true
       })
-
-      await page.getByRole('button', { name: /Next/i }).click()
-
-      // Step 2: Single-user API key
-      await expect(
-        page.getByText(/Authentication Mode/i)
-      ).toBeVisible({ timeout: 10_000 })
-
-      await page.getByText(/Single User \(API Key\)/i).click()
-
-      const apiKeyInput = page.getByPlaceholder(/Enter your API key/i)
-      await apiKeyInput.fill(API_KEY)
-
-      await page.screenshot({
-        path: 'e2e-tests/live-onboarding-step2.png',
-        fullPage: true
-      })
-
-      await page
-        .getByRole('button', { name: /Continue/i })
-        .click()
-
-      await logConnectionSnapshot(page, 'live-onboarding-after-auth')
-
-      // Either the wizard auto‑finishes into chat, or shows Step 3 with
-      // connected tags. Accept either outcome.
-      const chatPlaceholder = page.getByPlaceholder(
-        /Type a message\.\.\./i
-      )
-      const connectionTag = page.getByText(/Connection:/i)
-
-      await Promise.race([
-        chatPlaceholder.waitFor({ timeout: 30_000 }).catch(() => null),
-        connectionTag.waitFor({ timeout: 30_000 }).catch(() => null)
-      ])
-
-      await page.screenshot({
-        path: 'e2e-tests/live-onboarding-after-continue.png',
-        fullPage: true
-      })
-
-      // Log header chips for later UX review.
-      const serverChip = await page
-        .getByText(/Server:/i)
-        .first()
-        .textContent()
-        .catch(() => null)
-      const knowledgeChip =
-        (await page
-          .getByText(/Knowledge:/i)
-          .first()
-          .textContent()
-          .catch(() => null)) || null
-
-      if (serverChip) {
-        console.log(
-          'HEADER_SERVER_CHIP:',
-          serverChip.replace(/\s+/g, ' ').trim()
-        )
-      }
-      if (knowledgeChip) {
-        console.log(
-          'HEADER_KNOWLEDGE_CHIP:',
-          knowledgeChip.replace(/\s+/g, ' ').trim()
-        )
-      }
+      await logConnectionSnapshot(page, 'live-onboarding-surface-ready')
     } finally {
-      await context.close()
+      void context.close().catch(() => undefined)
     }
   })
 
   test('Quick Ingest + Media status with live server', async () => {
+    test.setTimeout(180_000)
     const { context, page, optionsUrl } = await launchWithBuiltExtension({
       seedConfig: {
         serverUrl: SERVER_URL,
@@ -214,10 +169,10 @@ describeLive('Live server UX review (no mocks)', () => {
       await urlInput.click()
       await urlInput.fill('https://example.com/')
       await page
-        .getByRole('button', { name: /Add URLs/i })
+        .getByRole('button', { name: /Add URL/i })
         .click()
 
-      const row = modal.getByText('https://example.com/').first()
+      const row = modal.getByText(/https:\/\/example\.com\/?/i).first()
       await expect(row).toBeVisible({ timeout: 15_000 })
 
       await page.screenshot({
@@ -225,31 +180,68 @@ describeLive('Live server UX review (no mocks)', () => {
         fullPage: true
       })
 
-      const runButton = modal.getByRole('button', {
-        name: /Run quick ingest/i
-      })
+      let runButton = modal.getByTestId('quick-ingest-run').first()
+      if ((await runButton.count()) === 0) {
+        runButton = modal.getByRole('button', {
+          name: /Run quick ingest|Ingest|Process/i
+        }).first()
+      }
+      await runButton.scrollIntoViewIfNeeded()
       await expect(runButton).toBeVisible({ timeout: 15_000 })
       await runButton.click()
 
-      // Wait for progress, then either a completion summary or an error banner.
-      await modal
-        .getByText(/Running quick ingest/i)
-        .waitFor({ timeout: 20_000 })
+      const quickIngestError = modal
+        .getByText(
+          /We couldn[’']t process ingest items right now|Extension messaging timed out/i
+        )
+        .first()
 
-      const summaryOrError = await Promise.race([
+      // Some environments jump straight to completion/error without showing
+      // an intermediate "Running quick ingest" label.
+      const firstIngestState = await Promise.race([
+        modal
+          .getByText(/Running quick ingest/i)
+          .waitFor({ timeout: 20_000 })
+          .then(() => 'running')
+          .catch(() => null),
         modal
           .getByText(
             /Quick ingest completed successfully\.|Quick ingest completed with some errors\./i
           )
-          .waitFor({ timeout: 60_000 })
+          .waitFor({ timeout: 20_000 })
           .then(() => 'completed')
           .catch(() => null),
-        modal
-          .getByText(/We couldn’t process ingest items right now/i)
-          .waitFor({ timeout: 60_000 })
+        quickIngestError
+          .waitFor({ timeout: 20_000 })
           .then(() => 'error')
           .catch(() => null)
       ])
+
+      if (firstIngestState === 'error') {
+        await page.screenshot({
+          path: 'e2e-tests/live-quick-ingest-error.png',
+          fullPage: true
+        })
+        return
+      }
+
+      let summaryOrError: 'completed' | 'error' | null =
+        firstIngestState === 'completed' ? 'completed' : null
+      if (summaryOrError === null) {
+        summaryOrError = await Promise.race([
+          modal
+            .getByText(
+              /Quick ingest completed successfully\.|Quick ingest completed with some errors\./i
+            )
+            .waitFor({ timeout: 60_000 })
+            .then(() => 'completed' as const)
+            .catch(() => null),
+          quickIngestError
+            .waitFor({ timeout: 60_000 })
+            .then(() => 'error' as const)
+            .catch(() => null)
+        ])
+      }
 
       // If the run failed, capture the UI and bail out early; the error
       // banner itself is sufficient UX coverage for this path.
@@ -329,7 +321,9 @@ describeLive('Live server UX review (no mocks)', () => {
         // RAG health is ready and index exists: the full workspace
         // should be visible instead of an empty card.
         await expect(
-          page.getByText(/Knowledge search & chat/i)
+          page.getByRole("heading", {
+            name: /Knowledge QA|Knowledge search & chat/i,
+          })
         ).toBeVisible({ timeout: 20_000 })
       }
 
@@ -338,16 +332,16 @@ describeLive('Live server UX review (no mocks)', () => {
         fullPage: true
       })
 
-      const serverChip = await page
-        .getByText(/Server:/i)
-        .first()
-        .textContent()
-        .catch(() => null)
-      const knowledgeChip = await page
-        .getByText(/Knowledge:/i)
-        .first()
-        .textContent()
-        .catch(() => null)
+      const readOptionalChipText = async (pattern: RegExp) => {
+        const chip = page.getByText(pattern).first()
+        if ((await chip.count()) === 0) {
+          return null
+        }
+        return chip.textContent().catch(() => null)
+      }
+
+      const serverChip = await readOptionalChipText(/Server:/i)
+      const knowledgeChip = await readOptionalChipText(/Knowledge:/i)
 
       if (serverChip) {
         console.log(

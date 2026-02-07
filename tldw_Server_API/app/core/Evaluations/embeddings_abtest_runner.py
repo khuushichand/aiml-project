@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple
-from loguru import logger
+from typing import Any
+
 import numpy as np
+from loguru import logger
 
 from tldw_Server_API.app.api.v1.schemas.embeddings_abtest_schemas import (
     EmbeddingsABTestConfig,
-    ABTestArm,
-    ABTestQuery,
 )
 
 
 async def _embed_texts(
     provider: str,
     model: str,
-    texts: List[str],
-    metadata: Optional[Dict[str, Any]] = None,
-) -> List[List[float]]:
+    texts: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> list[list[float]]:
     """Create embeddings for texts using the enhanced embeddings endpoint utilities.
 
     Returns L2-normalized vectors for numeric outputs.
@@ -33,7 +31,7 @@ async def _embed_texts(
         metadata=metadata,
     )
     # L2-normalize to ensure consistent scoring if caller relies on numeric vectors
-    normed: List[List[float]] = []
+    normed: list[list[float]] = []
     for vec in embeddings:
         arr = np.array(vec, dtype=np.float32)
         nrm = float(np.linalg.norm(arr))
@@ -43,14 +41,14 @@ async def _embed_texts(
     return normed
 
 
-async def prepare_query_embeddings_for_arms(config: EmbeddingsABTestConfig) -> Dict[str, List[List[float]]]:
+async def prepare_query_embeddings_for_arms(config: EmbeddingsABTestConfig) -> dict[str, list[list[float]]]:
     """Embed all queries per arm using each arm's provider/model.
 
     This utility helps run vector-only comparisons without modifying retrievers.
     Returns a mapping of arm_key ("provider:model") -> list of query vectors.
     """
     texts = [q.text for q in config.queries]
-    results: Dict[str, List[List[float]]] = {}
+    results: dict[str, list[list[float]]] = {}
 
     for arm in config.arms:
         arm_key = f"{arm.provider}:{arm.model}"

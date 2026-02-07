@@ -3,19 +3,39 @@ from __future__ import annotations
 import os
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, date, timezone
-from typing import Any, Callable, Dict, Mapping, Optional
+from datetime import date, datetime, timezone
+from typing import Any
 
-from loguru import logger
-from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
-from jinja2.sandbox import SandboxedEnvironment
 from jinja2 import StrictUndefined, nodes
+from jinja2.sandbox import SandboxedEnvironment
+from loguru import logger
+
+from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo
-except Exception:  # pragma: no cover - fallback for older environments
+except ImportError:  # pragma: no cover - fallback for older environments
     ZoneInfo = None  # type: ignore
+
+_TEMPLATE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 # -----------------------------
@@ -26,16 +46,16 @@ except Exception:  # pragma: no cover - fallback for older environments
 @dataclass
 class TemplateEnv:
     timezone: str = "UTC"
-    locale: Optional[str] = None  # Reserved for future use (Babel)
+    locale: str | None = None  # Reserved for future use (Babel)
 
 
 @dataclass
 class TemplateContext:
-    user: Optional[Mapping[str, Any]] = None
-    chat: Optional[Mapping[str, Any]] = None
-    request_meta: Optional[Mapping[str, Any]] = None
+    user: Mapping[str, Any] | None = None
+    chat: Mapping[str, Any] | None = None
+    request_meta: Mapping[str, Any] | None = None
     env: TemplateEnv = field(default_factory=TemplateEnv)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,8 +64,10 @@ class TemplateOptions:
     allow_external_calls: bool = False
     max_output_chars: int = 2000
     timeout_ms: int = 250
-    random_seed: Optional[int] = None
+    random_seed: int | None = None
 
+
+import contextlib
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -63,7 +85,7 @@ def options_from_env() -> TemplateOptions:
             return default
         try:
             return int(str(raw))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     seed_env = os.getenv("TEMPLATES_RANDOM_SEED")
@@ -71,14 +93,14 @@ def options_from_env() -> TemplateOptions:
     try:
         if seed_env is not None and str(seed_env).strip() != "":
             seed = int(str(seed_env))
-    except Exception:
+    except (TypeError, ValueError):
         seed = None
 
     # Fallback to config.txt when env not set
     cp = None
     try:
         cp = load_comprehensive_config()
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         cp = None
 
     def _cfg_bool(section: str, key: str, default: bool) -> bool:
@@ -86,7 +108,7 @@ def options_from_env() -> TemplateOptions:
             try:
                 raw = cp.get(section, key, fallback=str(default))
                 return str(raw).strip().lower() in {"1", "true", "yes", "on"}
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default
 
@@ -94,7 +116,7 @@ def options_from_env() -> TemplateOptions:
         if cp and cp.has_section(section):
             try:
                 return int(str(cp.get(section, key, fallback=str(default))))
-            except Exception:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default
 
@@ -136,7 +158,7 @@ _ENV = _build_env()
 # -----------------------------
 
 
-def _tzinfo(tz_name: Optional[str]) -> Any:
+def _tzinfo(tz_name: str | None) -> Any:
     if not tz_name:
         return timezone.utc
     if ZoneInfo is None:
@@ -144,11 +166,11 @@ def _tzinfo(tz_name: Optional[str]) -> Any:
         return timezone.utc
     try:
         return ZoneInfo(tz_name)
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         return timezone.utc
 
 
-def _fn_now(fmt: str = "%Y-%m-%d", tz: Optional[str] = None) -> str:
+def _fn_now(fmt: str = "%Y-%m-%d", tz: str | None = None) -> str:
     tzinfo = _tzinfo(tz)
     return datetime.now(tz=tzinfo).strftime(fmt)
 
@@ -157,12 +179,12 @@ def _fn_today(fmt: str = "%Y-%m-%d") -> str:
     return date.today().strftime(fmt)
 
 
-def _fn_iso_now(tz: Optional[str] = None) -> str:
+def _fn_iso_now(tz: str | None = None) -> str:
     tzinfo = _tzinfo(tz)
     return datetime.now(tz=tzinfo).isoformat()
 
 
-def _sanitize_user(user_raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+def _sanitize_user(user_raw: Mapping[str, Any] | None) -> dict[str, Any]:
     if not user_raw:
         return {}
     return {
@@ -172,15 +194,13 @@ def _sanitize_user(user_raw: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
 
 
 class _RandomFacade:
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         import random as _random  # local import to avoid global state surprises
 
         self._random = _random.Random()
         if seed is not None:
-            try:
+            with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
                 self._random.seed(seed)
-            except Exception:
-                pass
 
     def randint(self, a: int, b: int) -> int:
         return self._random.randint(a, b)
@@ -218,11 +238,7 @@ _DISALLOWED_NODE_TYPES = {
 
 
 def _validate_expression_only(template_src: str) -> None:
-    try:
-        ast = _ENV.parse(template_src)
-    except Exception as e:
-        # Parsing errors propagate to caller (handled as template_parse_error)
-        raise e
+    ast = _ENV.parse(template_src)
 
     def _walk(n: nodes.Node) -> None:
         if isinstance(n, tuple(_DISALLOWED_NODE_TYPES)):
@@ -242,7 +258,7 @@ class TemplateRenderError(Exception):
     pass
 
 
-def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] = None) -> str:
+def render(text: str, ctx: TemplateContext, options: TemplateOptions | None = None) -> str:
     """Render `text` with a sandboxed environment and strict guards.
 
     On any error or guard violation, logs and returns the original `text`.
@@ -256,23 +272,21 @@ def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] =
     metrics_source = "unknown"
     try:
         metrics_source = str((ctx.extra or {}).get("_metrics_source", "unknown"))
-    except Exception:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
         metrics_source = "unknown"
 
     # Validate expression-only template
     try:
         _validate_expression_only(text)
-    except Exception as e:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_parse_error/expression_only: {e}")
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "parse"})
-        except Exception:
-            pass
         return text
 
     # Build helper functions and variables exposed to the template
     # Functions are provided via the render context so they can be gated per-call.
-    helpers: Dict[str, Any] = {
+    helpers: dict[str, Any] = {
         "now": _fn_now,
         "today": _fn_today,
         "iso_now": _fn_iso_now,
@@ -296,7 +310,7 @@ def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] =
     helpers["user"] = (lambda _u=safe_user: lambda: dict(_u))()
 
     # Collect variables for rendering
-    render_vars: Dict[str, Any] = {}
+    render_vars: dict[str, Any] = {}
     render_vars.update(helpers)
 
     # Provide a minimal env block
@@ -314,12 +328,10 @@ def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] =
     try:
         tmpl = _ENV.from_string(text)
         output = tmpl.render(render_vars)
-    except Exception as e:
+    except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"template_render_failure: {e}")
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_render_failure_total", labels={"source": metrics_source, "reason": "exception"})
-        except Exception:
-            pass
         return text
     finally:
         elapsed_ms = int((time.monotonic() - start) * 1000)
@@ -327,33 +339,25 @@ def render(text: str, ctx: TemplateContext, options: Optional[TemplateOptions] =
             logger.debug(
                 f"template_render_timeout: elapsed_ms={elapsed_ms} > timeout_ms={opts.timeout_ms}"
             )
-            try:
+            with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
                 increment_counter("template_render_timeout_total", labels={"source": metrics_source})
-            except Exception:
-                pass
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             observe_histogram("template_render_duration_seconds", value=float(elapsed_ms) / 1000.0, labels={"source": metrics_source})
-        except Exception:
-            pass
 
     if not isinstance(output, str):
         try:
             output = str(output)
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             return text
 
     if len(output) > opts.max_output_chars:
         logger.debug(
             f"template_output_too_large: size={len(output)} cap={opts.max_output_chars}"
         )
-        try:
+        with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
             increment_counter("template_output_truncated_total", labels={"source": metrics_source})
-        except Exception:
-            pass
         return output[: opts.max_output_chars]
 
-    try:
+    with contextlib.suppress(_TEMPLATE_NONCRITICAL_EXCEPTIONS):
         increment_counter("template_render_success_total", labels={"source": metrics_source})
-    except Exception:
-        pass
     return output

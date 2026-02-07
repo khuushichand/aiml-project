@@ -74,3 +74,23 @@ def test_rewrite_cache_unsafe_user_id_is_hashed(tmp_path, monkeypatch):
     rc2 = RewriteCache(user_id="../../etc/passwd")
     cache_path2 = Path(rc2.path).resolve()
     assert cache_path.parent.parent.name == cache_path2.parent.parent.name
+
+
+def test_rewrite_cache_corpus_scopes_entries(tmp_path, monkeypatch):
+    p = tmp_path / "rc.jsonl"
+    monkeypatch.setenv("RAG_REWRITE_CACHE_PATH", str(p))
+    rc = RewriteCache()
+
+    q = "shared query"
+    rc.put(q, ["tenant-a rewrite"], intent="FACTUAL", corpus="tenant-a")
+    rc.put(q, ["tenant-b rewrite"], intent="FACTUAL", corpus="tenant-b")
+
+    out_a = rc.get(q, intent="FACTUAL", corpus="tenant-a")
+    out_b = rc.get(q, intent="FACTUAL", corpus="tenant-b")
+
+    assert out_a is not None
+    assert out_b is not None
+    assert any("tenant-a rewrite" == r for r in out_a)
+    assert any("tenant-b rewrite" == r for r in out_b)
+    assert all("tenant-b rewrite" != r for r in out_a)
+    assert all("tenant-a rewrite" != r for r in out_b)

@@ -197,6 +197,12 @@ export type ActorSettings = {
   chatRole: ActorChatRole
 
   /**
+   * When true, Actor content may be concatenated onto other
+   * appendable system blocks instead of replacing them.
+   */
+  appendable?: boolean
+
+  /**
    * How Actor interacts with scene / prompt templates when they are active.
    * "merge"   – Actor content is merged with templates (default).
    * "override" – Actor may replace overlapping template fields.
@@ -313,6 +319,7 @@ export const createDefaultActorSettings = (): ActorSettings => ({
   chatPosition: "before",
   chatDepth: 0,
   chatRole: "system",
+  appendable: false,
   notesGmOnly: false,
   templateMode: "merge"
 })

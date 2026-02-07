@@ -72,10 +72,10 @@ def test_media_postgres_migration_adds_safe_metadata(pg_database_config: Databas
 
 
 @pytest.mark.integration
-def test_media_postgres_migration_reaches_v19_and_restores_workspace_tag(
+def test_media_postgres_migration_reaches_v20_and_restores_workspace_tag(
     pg_database_config: DatabaseConfig,
 ) -> None:
-    """Downgrade schema to v9 and ensure v10–v19 migrations repair late additions."""
+    """Downgrade schema to v9 and ensure v10–v20 migrations repair late additions."""
 
     backend = DatabaseBackendFactory.create_backend(pg_database_config)
     db = MediaDatabase(db_path=":memory:", client_id="pg-migration-v19", backend=backend)

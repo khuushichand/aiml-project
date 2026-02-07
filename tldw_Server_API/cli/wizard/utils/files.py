@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 
 def atomic_write(path: Path, data: str, encoding: str = "utf-8") -> None:

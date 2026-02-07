@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from datetime import datetime, timezone, timedelta
 import re
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
 
-def _to_list(val: Any) -> List[str]:
+def _to_list(val: Any) -> list[str]:
     if val is None:
         return []
     if isinstance(val, list):
@@ -13,7 +14,7 @@ def _to_list(val: Any) -> List[str]:
     return [str(val)]
 
 
-def _normalize_payload(payload: Any) -> List[Dict[str, Any]]:
+def _normalize_payload(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         fl = payload.get("filters")
         if isinstance(fl, list):
@@ -24,10 +25,10 @@ def _normalize_payload(payload: Any) -> List[Dict[str, Any]]:
     return []
 
 
-def normalize_filters(payload: Any) -> List[Dict[str, Any]]:
+def normalize_filters(payload: Any) -> list[dict[str, Any]]:
     """Return a normalized list of filters sorted by priority desc then index."""
     raw = _normalize_payload(payload)
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for f in raw:
         t = str(f.get("type") or "").lower()
         a = str(f.get("action") or "").lower()
@@ -38,7 +39,7 @@ def normalize_filters(payload: Any) -> List[Dict[str, Any]]:
         val = f.get("value") if isinstance(f.get("value"), dict) else {}
         try:
             pr = int(f.get("priority")) if f.get("priority") is not None else 0
-        except Exception:
+        except (TypeError, ValueError):
             pr = 0
         active = f.get("is_active")
         if active is None:
@@ -56,27 +57,27 @@ def normalize_filters(payload: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def _get_text_fields(candidate: Dict[str, Any], names: Sequence[str]) -> List[str]:
-    vals: List[str] = []
+def _get_text_fields(candidate: dict[str, Any], names: Sequence[str]) -> list[str]:
+    vals: list[str] = []
     for n in names:
         v = candidate.get(n)
         if v is None:
             continue
         try:
             s = str(v)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if s:
             vals.append(s)
     return vals
 
 
-def _match_keyword(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+def _match_keyword(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
     keywords = [k.lower() for k in _to_list(value.get("keywords")) if str(k).strip()]
     if not keywords:
         return False
     fields = value.get("fields")
-    field_names: List[str]
+    field_names: list[str]
     if isinstance(fields, list) and fields:
         field_names = [str(x) for x in fields if str(x).strip()]
     else:
@@ -94,7 +95,7 @@ def _match_keyword(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     return any(k in haystack for k in keywords)
 
 
-def _match_author(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+def _match_author(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
     names = [k.lower() for k in _to_list(value.get("names")) if str(k).strip()]
     if not names:
         return False
@@ -107,7 +108,7 @@ def _match_author(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     return any(n in author for n in names)
 
 
-def _compile_regex(pattern: str, flags: Optional[str]) -> Optional[re.Pattern[str]]:
+def _compile_regex(pattern: str, flags: str | None) -> re.Pattern[str] | None:
     if not pattern:
         return None
     f = 0
@@ -124,11 +125,11 @@ def _compile_regex(pattern: str, flags: Optional[str]) -> Optional[re.Pattern[st
             f |= re.DOTALL
     try:
         return re.compile(pattern, f)
-    except Exception:
+    except (re.error, TypeError, ValueError):
         return None
 
 
-def _match_regex(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+def _match_regex(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
     pattern = value.get("pattern")
     if not isinstance(pattern, str) or not pattern:
         return False
@@ -141,7 +142,7 @@ def _match_regex(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
         for name in fields:
             try:
                 hay = str(candidate.get(name) or "")
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if rx.search(hay):
                 return True
@@ -158,7 +159,7 @@ def _match_regex(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     return False
 
 
-def _parse_iso(dt: str) -> Optional[datetime]:
+def _parse_iso(dt: str) -> datetime | None:
     text = (dt or "").strip()
     if not text:
         return None
@@ -170,7 +171,7 @@ def _parse_iso(dt: str) -> Optional[datetime]:
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         return d.astimezone(timezone.utc)
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         pass
     # Fallback email.utils
     try:
@@ -182,11 +183,11 @@ def _parse_iso(dt: str) -> Optional[datetime]:
         if d.tzinfo is None:
             d = d.replace(tzinfo=timezone.utc)
         return d.astimezone(timezone.utc)
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         return None
 
 
-def _match_date_range(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
+def _match_date_range(value: dict[str, Any], candidate: dict[str, Any]) -> bool:
     max_age_days = value.get("max_age_days")
     since_raw = value.get("since")
     until_raw = value.get("until")
@@ -195,7 +196,7 @@ def _match_date_range(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     if max_age_days is not None and not isinstance(max_age_days, int):
         try:
             max_age_days = int(max_age_days)
-        except Exception:
+        except (TypeError, ValueError):
             return False
     pub = candidate.get("published_at")
     if not pub:
@@ -218,15 +219,15 @@ def _match_date_range(value: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
             if until_dt is None or dt > until_dt:
                 return False
         return True
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         return False
 
 
-def _match_all(_: Dict[str, Any], __: Dict[str, Any]) -> bool:
+def _match_all(_: dict[str, Any], __: dict[str, Any]) -> bool:
     return True
 
 
-def evaluate_filters(filters: List[Dict[str, Any]], candidate: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+def evaluate_filters(filters: list[dict[str, Any]], candidate: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     """Return (decision, meta) where decision in {include, exclude, flag, None}.
 
     Applies active filters in priority order, short-circuiting on first match.
@@ -251,5 +252,5 @@ def evaluate_filters(filters: List[Dict[str, Any]], candidate: Dict[str, Any]) -
         if matched:
             fid = f.get("id")
             key = f"id:{fid}" if fid is not None else f"idx:{idx}"
-            return f.get("action"), {"key": key}
+            return f.get("action"), {"key": key, "id": fid, "type": t}
     return None, {}

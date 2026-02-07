@@ -11,7 +11,7 @@ import base64
 import os
 import time
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
@@ -23,8 +23,8 @@ from tldw_Server_API.app.core.Workflows.adapters._common import (
 )
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import (
-    ImageGenConfig,
     ImageDescribeConfig,
+    ImageGenConfig,
 )
 
 # Attempt to import DatabasePaths; if unavailable, fall back to a sensible default
@@ -37,7 +37,7 @@ except ImportError:
 try:
     from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 except ImportError:
-    def resolve_context_user_id(context: Dict[str, Any]) -> str | None:
+    def resolve_context_user_id(context: dict[str, Any]) -> str | None:
         return context.get("user_id")
 
 
@@ -49,7 +49,7 @@ except ImportError:
     tags=["content", "image"],
     config_model=ImageGenConfig,
 )
-async def run_image_gen_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate images from text prompts using configured image generation backends.
 
     Config:
@@ -123,10 +123,7 @@ async def run_image_gen_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if img_format not in ("png", "jpg", "jpeg", "webp"):
         img_format = "png"
     save_artifact = config.get("save_artifact")
-    if save_artifact is None:
-        save_artifact = True
-    else:
-        save_artifact = bool(save_artifact)
+    save_artifact = True if save_artifact is None else bool(save_artifact)
 
     # Test mode simulation
     if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
@@ -261,7 +258,7 @@ async def run_image_gen_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["content", "image"],
     config_model=ImageDescribeConfig,
 )
-async def run_image_describe_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_image_describe_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Describe an image using VLM/multimodal LLM.
 
     Config:

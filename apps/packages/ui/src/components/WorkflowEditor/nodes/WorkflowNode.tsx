@@ -10,19 +10,6 @@ import { memo, useMemo } from "react"
 import { Handle, Position } from "@xyflow/react"
 import type { NodeProps } from "@xyflow/react"
 import {
-  MessageSquare,
-  Search,
-  Video,
-  GitBranch,
-  Layers,
-  UserCheck,
-  Globe,
-  Volume2,
-  Mic,
-  Clock,
-  Terminal,
-  Play,
-  Square,
   AlertCircle,
   CheckCircle2,
   Loader2,
@@ -32,32 +19,18 @@ import {
 } from "lucide-react"
 import type {
   WorkflowNodeData,
-  WorkflowStepType,
   StepExecutionStatus
 } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { getStepMetadata, PORT_COLORS } from "../step-registry"
+import { STEP_ICON_COMPONENTS, DEFAULT_STEP_ICON } from "../step-icons"
 
 type WorkflowNodeProps = NodeProps & {
   data: WorkflowNodeData
 }
 
-// Icon mapping
-const STEP_ICONS: Record<WorkflowStepType, React.ComponentType<{ className?: string }>> = {
-  prompt: MessageSquare,
-  rag_search: Search,
-  media_ingest: Video,
-  branch: GitBranch,
-  map: Layers,
-  wait_for_human: UserCheck,
-  webhook: Globe,
-  tts: Volume2,
-  stt_transcribe: Mic,
-  delay: Clock,
-  log: Terminal,
-  start: Play,
-  end: Square
-}
+// Icon mapping (from registry icon keys)
+const FALLBACK_ICON = DEFAULT_STEP_ICON
 
 // Status icons
 const STATUS_ICONS: Record<
@@ -71,6 +44,7 @@ const STATUS_ICONS: Record<
   failed: XCircle,
   skipped: XCircle,
   waiting_human: Hand,
+  waiting_approval: Hand,
   cancelled: XCircle
 }
 
@@ -83,6 +57,7 @@ const STATUS_COLORS: Record<StepExecutionStatus, string> = {
   failed: "text-red-500",
   skipped: "text-gray-400",
   waiting_human: "text-yellow-500 animate-pulse",
+  waiting_approval: "text-yellow-500 animate-pulse",
   cancelled: "text-gray-500"
 }
 
@@ -117,14 +92,16 @@ const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: stri
 
 export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => {
   const nodeStates = useWorkflowEditorStore((s) => s.nodeStates)
+  const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
   const executionState = nodeStates[id]
 
   const metadata = useMemo(
-    () => getStepMetadata(data.stepType),
-    [data.stepType]
+    () => getStepMetadata(data.stepType, stepRegistry),
+    [data.stepType, stepRegistry]
   )
 
-  const Icon = STEP_ICONS[data.stepType] || MessageSquare
+  const Icon =
+    (metadata?.icon && STEP_ICON_COMPONENTS[metadata.icon]) || FALLBACK_ICON
   const category = metadata?.category || "utility"
   const styles = CATEGORY_STYLES[category]
 
@@ -138,7 +115,9 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
 
   // Determine if node is running
   const isRunning = executionState?.status === "running"
-  const isWaiting = executionState?.status === "waiting_human"
+  const isWaiting =
+    executionState?.status === "waiting_human" ||
+    executionState?.status === "waiting_approval"
   const hasError = executionState?.status === "failed"
 
   return (
@@ -244,19 +223,12 @@ export const WorkflowNode = memo(({ id, data, selected }: WorkflowNodeProps) => 
 
 WorkflowNode.displayName = "WorkflowNode"
 
-// Export node types for React Flow registration
-export const workflowNodeTypes = {
-  prompt: WorkflowNode,
-  rag_search: WorkflowNode,
-  media_ingest: WorkflowNode,
-  branch: WorkflowNode,
-  map: WorkflowNode,
-  wait_for_human: WorkflowNode,
-  webhook: WorkflowNode,
-  tts: WorkflowNode,
-  stt_transcribe: WorkflowNode,
-  delay: WorkflowNode,
-  log: WorkflowNode,
-  start: WorkflowNode,
-  end: WorkflowNode
-} as const
+// Build node types map for React Flow registration
+export const buildWorkflowNodeTypes = (stepTypes: string[] = []) => {
+  const mapping: Record<string, typeof WorkflowNode> = {}
+  stepTypes.forEach((type) => {
+    mapping[type] = WorkflowNode
+  })
+  mapping.default = WorkflowNode
+  return mapping
+}

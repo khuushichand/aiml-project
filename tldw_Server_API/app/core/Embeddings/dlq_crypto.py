@@ -8,12 +8,24 @@ Falls back to base64 encoding when crypto is unavailable (marked alg=none).
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Any
 
 from loguru import logger
 
+try:
+    from cryptography.exceptions import InvalidTag  # type: ignore
+
+    _DECRYPT_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+        InvalidTag,
+        TypeError,
+        ValueError,
+        binascii.Error,
+    )
+except ImportError:
+    _DECRYPT_NONCRITICAL_EXCEPTIONS = (TypeError, ValueError, binascii.Error)
 
 _SCRYPT_PARAMS = {
     "n": 2**14,
@@ -28,7 +40,7 @@ def _derive_key_from_passphrase_legacy(passphrase: str) -> bytes:
     return hashlib.sha256(passphrase.encode("utf-8")).digest()
 
 
-def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, str]:
+def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> tuple[bytes, str]:
     import hashlib
     try:
         key = hashlib.scrypt(
@@ -52,10 +64,10 @@ def _derive_key_from_passphrase(passphrase: str, salt: bytes) -> Tuple[bytes, st
         return _derive_key_from_passphrase_legacy(passphrase), "sha256"
 
 
-def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> Dict[str, str]:
+def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> dict[str, str]:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
-    except Exception:
+    except ImportError:
         # Fallback to base64-only marker
         return {"alg": "none", "b64": base64.b64encode(plaintext).decode("utf-8")}
     aesgcm = AESGCM(key)
@@ -68,15 +80,15 @@ def _aesgcm_encrypt(plaintext: bytes, key: bytes) -> Dict[str, str]:
     }
 
 
-def _aesgcm_decrypt(obj: Dict[str, str], key: bytes) -> Optional[bytes]:
+def _aesgcm_decrypt(obj: dict[str, str], key: bytes) -> bytes | None:
     try:
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # type: ignore
-    except Exception:
+    except ImportError:
         # Fallback: base64-only marker
         if obj.get("alg") == "none" and obj.get("b64"):
             try:
                 return base64.b64decode(obj.get("b64") or "")
-            except Exception:
+            except (TypeError, ValueError, binascii.Error):
                 return None
         return None
     try:
@@ -88,11 +100,11 @@ def _aesgcm_decrypt(obj: Dict[str, str], key: bytes) -> Optional[bytes]:
         ct = base64.b64decode(obj.get("ct") or "")
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, ct, associated_data=None)
-    except Exception:
+    except _DECRYPT_NONCRITICAL_EXCEPTIONS:
         return None
 
 
-def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
+def encrypt_payload_if_configured(payload_obj: dict[str, Any]) -> str | None:
     """Return JSON string of encrypted blob when configured; else None.
 
     When EMBEDDINGS_DLQ_ENCRYPTION_KEY is set, encrypts with AES-GCM (or base64 fallback).
@@ -111,17 +123,17 @@ def encrypt_payload_if_configured(payload_obj: Dict[str, Any]) -> Optional[str]:
                 obj["salt"] = base64.b64encode(salt).decode("utf-8")
                 obj["kdf_params"] = _SCRYPT_PARAMS
         return json.dumps(obj)
-    except Exception:
+    except (MemoryError, OSError, TypeError, ValueError):
         return None
 
 
-def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, Any]]:
+def decrypt_payload_if_present(enc_json: str | None) -> dict[str, Any] | None:
     """Attempt to decrypt an encrypted payload blob; returns dict or None."""
     if not enc_json:
         return None
     try:
         obj = json.loads(enc_json)
-    except Exception:
+    except (TypeError, ValueError, json.JSONDecodeError):
         return None
     key_str = os.getenv("EMBEDDINGS_DLQ_ENCRYPTION_KEY")
     if not key_str:
@@ -157,5 +169,14 @@ def decrypt_payload_if_present(enc_json: Optional[str]) -> Optional[Dict[str, An
         if raw is None:
             return None
         return json.loads(raw.decode("utf-8"))
-    except Exception:
+    except (
+        AttributeError,
+        MemoryError,
+        OSError,
+        TypeError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+        binascii.Error,
+    ):
         return None

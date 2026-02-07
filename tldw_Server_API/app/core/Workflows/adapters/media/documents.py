@@ -9,12 +9,13 @@ This module includes adapters for document operations:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -32,6 +33,33 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     PDFExtractConfig,
 )
 
+_DOCUMENT_PATH_RESOLUTION_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    AttributeError,
+    KeyError,
+)
+
+_DOCUMENT_FILE_IO_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+)
+
+_DOCUMENT_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+    ConnectionError,
+    TimeoutError,
+)
+
 
 @registry.register(
     "pdf_extract",
@@ -41,7 +69,7 @@ from tldw_Server_API.app.core.Workflows.adapters.media._config import (
     tags=["media", "document"],
     config_model=PDFExtractConfig,
 )
-async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract text and metadata from a PDF file.
 
     Config:
@@ -99,10 +127,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
         keywords = None
 
     perform_chunking = config.get("perform_chunking")
-    if perform_chunking is None:
-        perform_chunking = True
-    else:
-        perform_chunking = bool(perform_chunking)
+    perform_chunking = True if perform_chunking is None else bool(perform_chunking)
 
     chunk_method = str(config.get("chunk_method") or "sentences").strip()
     max_chunk_size = int(config.get("max_chunk_size") or 500)
@@ -120,10 +145,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
     enable_vlm = bool(config.get("enable_vlm"))
     vlm_backend = config.get("vlm_backend")
     vlm_detect_tables_only = config.get("vlm_detect_tables_only")
-    if vlm_detect_tables_only is None:
-        vlm_detect_tables_only = True
-    else:
-        vlm_detect_tables_only = bool(vlm_detect_tables_only)
+    vlm_detect_tables_only = True if vlm_detect_tables_only is None else bool(vlm_detect_tables_only)
 
     # Test mode simulation
     if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
@@ -158,7 +180,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
             local_path = resolve_workflow_file_path(pdf_uri, context, config)
     except AdapterError as e:
         return {"error": str(e), "status": "Error", "content": "", "text": ""}
-    except Exception as e:
+    except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
         logger.debug(f"PDF extract adapter: failed to resolve path: {e}")
         return {"error": f"invalid_pdf_path:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -168,7 +190,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
     # Read PDF bytes
     try:
         pdf_bytes = local_path.read_bytes()
-    except Exception as e:
+    except _DOCUMENT_FILE_IO_EXCEPTIONS as e:
         logger.exception(f"PDF extract adapter: failed to read PDF: {e}")
         return {"error": f"pdf_read_error:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -231,7 +253,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
                     mime_type="text/plain",
                     metadata={"parser": parser, "page_count": page_count},
                 )
-        except Exception as e:
+        except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"PDF extract adapter: failed to persist artifact: {e}")
 
         return {
@@ -245,7 +267,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
             "warnings": result.get("warnings") or [],
         }
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"PDF extract adapter error: {e}")
         return {"error": f"pdf_extract_error:{e}", "status": "Error", "content": "", "text": ""}
 
@@ -258,7 +280,7 @@ async def run_pdf_extract_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["media", "ocr"],
     config_model=OCRConfig,
 )
-async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run OCR on an image to extract text.
 
     Config:
@@ -315,7 +337,7 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             local_path = resolve_workflow_file_path(image_uri, context, config)
     except AdapterError as e:
         return {"error": str(e), "text": ""}
-    except Exception as e:
+    except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
         logger.debug(f"OCR adapter: failed to resolve image path: {e}")
         return {"error": f"invalid_image_path:{e}", "text": ""}
 
@@ -325,14 +347,13 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     # Read image bytes
     try:
         image_bytes = local_path.read_bytes()
-    except Exception as e:
+    except _DOCUMENT_FILE_IO_EXCEPTIONS as e:
         logger.exception(f"OCR adapter: failed to read image: {e}")
         return {"error": f"image_read_error:{e}", "text": ""}
 
     # Get OCR backend
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.registry import get_backend
-        from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import OCRResult
 
         backend = get_backend(backend_name)
         if backend is None:
@@ -373,12 +394,12 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                     mime_type="text/plain",
                     metadata={"backend": output.get("meta", {}).get("backend"), "format": output_format},
                 )
-        except Exception as e:
+        except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"OCR adapter: failed to persist artifact: {e}")
 
         return output
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"OCR adapter error: {e}")
         return {"error": f"ocr_error:{e}", "text": ""}
 
@@ -391,7 +412,7 @@ async def run_ocr_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["media", "document"],
     config_model=DocumentTableExtractConfig,
 )
-async def run_document_table_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_document_table_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract tables from documents as structured JSON/CSV.
 
     Config:
@@ -416,14 +437,18 @@ async def run_document_table_extract_adapter(config: Dict[str, Any], context: Di
     if file_uri:
         try:
             file_path = resolve_workflow_file_uri(file_uri, context, config)
-        except Exception as e:
+        except AdapterError as e:
+            return {"error": f"invalid_file_uri:{e}", "tables": [], "count": 0}
+        except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
             return {"error": f"invalid_file_uri:{e}", "tables": [], "count": 0}
     elif file_path:
         if isinstance(file_path, str):
             file_path = _tmpl(file_path, context) or file_path
         try:
             file_path = resolve_workflow_file_path(file_path, context, config)
-        except Exception as e:
+        except AdapterError as e:
+            return {"error": f"file_access_denied:{e}", "tables": [], "count": 0}
+        except _DOCUMENT_PATH_RESOLUTION_EXCEPTIONS as e:
             return {"error": f"file_access_denied:{e}", "tables": [], "count": 0}
     else:
         return {"error": "missing_file_path", "tables": [], "count": 0}
@@ -439,7 +464,6 @@ async def run_document_table_extract_adapter(config: Dict[str, Any], context: Di
             # Use docling for table extraction
             try:
                 from docling.document_converter import DocumentConverter
-                from docling.datamodel.base_models import InputFormat
 
                 converter = DocumentConverter()
                 result = converter.convert(str(file_path))
@@ -479,13 +503,11 @@ async def run_document_table_extract_adapter(config: Dict[str, Any], context: Di
                     for page in doc:
                         content += page.get_text()
                     doc.close()
-                except Exception as e:
+                except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
                     logger.debug(f"PDF read error: {e}")
             else:
-                try:
+                with contextlib.suppress(_DOCUMENT_FILE_IO_EXCEPTIONS):
                     content = Path(file_path).read_text(encoding="utf-8", errors="ignore")
-                except Exception:
-                    pass
 
             if content:
                 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async
@@ -507,7 +529,7 @@ Example: [{"headers": ["Name", "Value"], "rows": [["A", "1"], ["B", "2"]]}]"""
                     json_match = re.search(r'\[[\s\S]*\]', text)
                     if json_match:
                         tables = json.loads(json_match.group())
-                except Exception:
+                except (ValueError, TypeError):
                     pass
 
         # Convert to CSV if requested
@@ -528,6 +550,6 @@ Example: [{"headers": ["Name", "Value"], "rows": [["A", "1"], ["B", "2"]]}]"""
             "format": output_format,
         }
 
-    except Exception as e:
+    except _DOCUMENT_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Document table extract error: {e}")
         return {"error": f"table_extract_error:{e}", "tables": [], "count": 0}

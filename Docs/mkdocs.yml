@@ -262,6 +262,7 @@ nav:
       - Organizations & Admin:
           - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md
           - Organization Administration: User_Guides/Organization_Administration.md
+          - Multi-User Postgres Setup: User_Guides/Multi-User_Postgres_Setup.md
           - Multi-User Deployment Guide: User_Guides/Multi-User_Deployment_Guide.md
           - Production Hardening Checklist: User_Guides/Production_Hardening_Checklist.md
           - Usage Module: User_Guides/Usage_Module.md

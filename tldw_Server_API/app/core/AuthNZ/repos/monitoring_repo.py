@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -97,7 +97,7 @@ class AuthnzMonitoringRepo:
                 "delete_audit_logs_before", detail=str(exc)
             ) from exc
 
-    async def get_metrics_window_summary(self, cutoff: datetime) -> Dict[str, int]:
+    async def get_metrics_window_summary(self, cutoff: datetime) -> dict[str, int]:
         """
         Return aggregate authentication and rate-limit metrics for a time window.
 
@@ -138,13 +138,13 @@ class AuthnzMonitoringRepo:
 
             # Normalize to a plain mapping of int counts for callers.
             if isinstance(row, dict):
-                data: Dict[str, Any] = row
+                data: dict[str, Any] = row
             else:
                 # Fallback for sequence-like rows
                 keys = ("successful_auths", "failed_auths", "rate_limit_hits")
                 data = {k: (row[idx] if idx < len(row) else 0) for idx, k in enumerate(keys)}  # type: ignore[index]
 
-            result: Dict[str, int] = {}
+            result: dict[str, int] = {}
             for key in ("successful_auths", "failed_auths", "rate_limit_hits"):
                 raw_value = data.get(key, 0) or 0
                 try:
@@ -228,7 +228,7 @@ class AuthnzMonitoringRepo:
                 "get_active_api_keys_count", detail=str(exc)
             ) from exc
 
-    async def get_recent_security_alerts(self, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_recent_security_alerts(self, limit: int = 10) -> list[dict[str, Any]]:
         """
         Return recent security-alert metric audit_log rows.
 

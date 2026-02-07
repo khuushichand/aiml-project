@@ -15,15 +15,17 @@
 #
 ####################
 
-import os
-import sys
+import importlib.util
 import logging
-from loguru import logger
-import tempfile
+import os
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
-from typing import Optional, Union, Dict, Any, List, Callable
+from typing import Any, Callable, Optional, Union
+
 import numpy as np
+from loguru import logger
 
 # Check if we're on macOS
 IS_MACOS = sys.platform == 'darwin'
@@ -41,22 +43,18 @@ def check_mlx_available() -> bool:
         logger.debug("MLX is only available on macOS")
         return False
 
-    try:
-        import mlx
-        import mlx.core as mx
-        return True
-    except ImportError:
+    if importlib.util.find_spec("mlx") is None:
         logger.debug("MLX not installed")
         return False
+    if importlib.util.find_spec("mlx.core") is None:
+        logger.debug("MLX core not available")
+        return False
+    return True
 
 
 def check_parakeet_mlx_installed() -> bool:
     """Check if parakeet-mlx is installed."""
-    try:
-        import parakeet_mlx
-        return True
-    except ImportError:
-        return False
+    return importlib.util.find_spec("parakeet_mlx") is not None
 
 
 def install_parakeet_mlx() -> bool:
@@ -167,10 +165,10 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
                 else:
                     model = parakeet_mlx.from_pretrained(model_id)
             except Exception as e2:
-                logging.error(f"Failed to download/load model: {e2}")
+                logging.exception(f"Failed to download/load model: {e2}")
                 return None
         except Exception as e:
-            logging.error(f"Failed to load model {model_id}: {e}")
+            logging.exception(f"Failed to load model {model_id}: {e}")
             return None
 
         _mlx_model_cache = model
@@ -179,11 +177,11 @@ def load_parakeet_mlx_model(force_reload: bool = False, model_path: Optional[str
         return model
 
     except ImportError as e:
-        logging.error(f"Failed to import parakeet: {e}")
+        logging.exception(f"Failed to import parakeet: {e}")
         logging.info("Try installing manually: pip install git+https://github.com/senstella/parakeet-mlx.git")
         return None
     except Exception as e:
-        logging.error(f"Failed to load Parakeet MLX model: {e}")
+        logging.exception(f"Failed to load Parakeet MLX model: {e}")
         return None
 
 
@@ -287,7 +285,7 @@ def transcribe_with_parakeet_mlx(
             if isinstance(audio_data, np.ndarray):
                 logging.info(f"Transcribing audio of length {len(audio_data)/16000:.2f} seconds")
             else:
-                logging.info(f"Transcribing audio file")
+                logging.info("Transcribing audio file")
 
         transcribe_kwargs = {}
         if chunk_duration is not None:
@@ -318,10 +316,7 @@ def transcribe_with_parakeet_mlx(
 
         # The transcribe method returns an AlignedResult object
         # Extract the text from it
-        if hasattr(result, 'text'):
-            transcription = result.text
-        else:
-            transcription = result
+        transcription = result.text if hasattr(result, 'text') else result
 
         if isinstance(transcription, dict):
             # Handle structured output
@@ -336,12 +331,12 @@ def transcribe_with_parakeet_mlx(
         return text
 
     except ImportError as e:
-        logging.error(f"Missing required library: {e}")
+        logging.exception(f"Missing required library: {e}")
         return f"[Error: Missing required library: {e}]"
     except Exception as e:
         import traceback
-        logging.error(f"Error during Parakeet MLX transcription: {e}")
-        logging.error(f"Traceback: {traceback.format_exc()}")
+        logging.exception(f"Error during Parakeet MLX transcription: {e}")
+        logging.exception(f"Traceback: {traceback.format_exc()}")
         return f"[Error: Transcription failed: {str(e)}]"
 
 
@@ -350,7 +345,7 @@ def transcribe_streaming_mlx(
     chunk_size: int = 16000,  # 1 second chunks at 16kHz
     overlap: float = 0.1,      # 10% overlap
     verbose: bool = False
-) -> List[str]:
+) -> list[str]:
     """
     Transcribe audio stream using Parakeet MLX.
 
@@ -409,7 +404,7 @@ def transcribe_streaming_mlx(
                 yield text
 
     except Exception as e:
-        logging.error(f"Error in streaming transcription: {e}")
+        logging.exception(f"Error in streaming transcription: {e}")
         yield f"[Error: {str(e)}]"
 
 
@@ -436,14 +431,14 @@ def unload_parakeet_mlx_model():
 
             logging.info("Unloaded Parakeet MLX model from memory")
         except Exception as e:
-            logging.error(f"Error unloading model: {e}")
+            logging.exception(f"Error unloading model: {e}")
 
 
 #######################################################################################################################
 # Utility Functions
 #
 
-def get_mlx_device_info() -> Dict[str, Any]:
+def get_mlx_device_info() -> dict[str, Any]:
     """Get information about MLX device and capabilities."""
     info = {
         'available': False,
@@ -475,7 +470,7 @@ def get_mlx_device_info() -> Dict[str, Any]:
     return info
 
 
-def benchmark_parakeet_mlx(audio_duration: float = 10.0) -> Dict[str, float]:
+def benchmark_parakeet_mlx(audio_duration: float = 10.0) -> dict[str, float]:
     """
     Benchmark Parakeet MLX performance.
 
@@ -553,7 +548,7 @@ def integrate_with_nemo_module():
         return True
 
     except Exception as e:
-        logging.error(f"Failed to integrate with Nemo module: {e}")
+        logging.exception(f"Failed to integrate with Nemo module: {e}")
         return False
 
 

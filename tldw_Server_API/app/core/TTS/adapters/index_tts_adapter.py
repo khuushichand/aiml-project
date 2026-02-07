@@ -7,25 +7,17 @@ import base64
 import contextlib
 import tempfile
 import wave
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from typing import Any, Optional
+
 #
 # Third-party Imports
 import numpy as np
 from loguru import logger
-#
-# Local Imports
-from .base import (
-    AudioFormat,
-    ProviderStatus,
-    TTSCapabilities,
-    TTSAdapter,
-    TTSRequest,
-    TTSResponse,
-)
+
 from ..audio_converter import AudioConverter
 from ..streaming_audio_writer import AudioNormalizer, StreamingAudioWriter
-from ..utils import parse_bool
 from ..tts_exceptions import (
     TTSGenerationError,
     TTSModelLoadError,
@@ -36,6 +28,19 @@ from ..tts_exceptions import (
     TTSValidationError,
     TTSVoiceCloningError,
 )
+from ..utils import parse_bool
+
+#
+# Local Imports
+from .base import (
+    AudioFormat,
+    ProviderStatus,
+    TTSAdapter,
+    TTSCapabilities,
+    TTSRequest,
+    TTSResponse,
+)
+
 #
 #######################################################################################################################
 #
@@ -50,7 +55,7 @@ class IndexTTS2Adapter(TTSAdapter):
     STREAM_SAMPLE_RATE = 22050
     SUPPORTED_FORMATS = {AudioFormat.MP3, AudioFormat.WAV}
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config=config)
 
         # Resolve configuration with sensible defaults
@@ -122,6 +127,19 @@ class IndexTTS2Adapter(TTSAdapter):
             self._status = ProviderStatus.INITIALIZING
             engine = await asyncio.to_thread(self._create_engine)
             self._engine = engine
+            try:
+                from ..tts_resource_manager import get_resource_manager
+                resource_manager = await get_resource_manager()
+                register_result = resource_manager.register_model(
+                    provider=self.provider_name.lower(),
+                    model_instance=engine,
+                    cleanup_callback=lambda: setattr(self, "_engine", None),
+                    model_key=str(self.model_dir),
+                )
+                if asyncio.iscoroutine(register_result):
+                    await register_result
+            except Exception:
+                pass
 
             # Cache capabilities for later use
             self._capabilities = await self.get_capabilities()
@@ -152,7 +170,7 @@ class IndexTTS2Adapter(TTSAdapter):
         """Instantiate the IndexTTS2 engine (runs in executor)."""
         from indextts.infer_v2 import IndexTTS2  # Local import to avoid hard dependency at module load
 
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "cfg_path": str(self.cfg_path),
             "model_dir": str(self.model_dir),
             "use_fp16": self.use_fp16,
@@ -227,7 +245,7 @@ class IndexTTS2Adapter(TTSAdapter):
 
         extras = dict(request.extra_params or {})
 
-        temp_paths: List[str] = []
+        temp_paths: list[str] = []
         try:
             (
                 speaker_path,
@@ -318,7 +336,7 @@ class IndexTTS2Adapter(TTSAdapter):
                 details={"error": str(exc)},
             ) from exc
 
-    async def _prepare_emotion_reference(self, extras: Dict[str, Any]) -> Optional[str]:
+    async def _prepare_emotion_reference(self, extras: dict[str, Any]) -> Optional[str]:
         """Materialize optional emotion reference audio."""
         emo_audio_reference = extras.get("emo_audio_reference")
         emo_audio_path = extras.get("emo_audio_path")
@@ -347,10 +365,10 @@ class IndexTTS2Adapter(TTSAdapter):
     async def _prepare_generation_inputs(
         self,
         request: TTSRequest,
-        extras: Dict[str, Any],
-    ) -> Tuple[str, Optional[str], Dict[str, Any], Dict[str, Any], List[str]]:
+        extras: dict[str, Any],
+    ) -> tuple[str, Optional[str], dict[str, Any], dict[str, Any], list[str]]:
         """Prepare temp files and inference kwargs for generation."""
-        temp_paths: List[str] = []
+        temp_paths: list[str] = []
         speaker_path = await self._write_temp_audio(request.voice_reference, suffix=".wav")
         temp_paths.append(speaker_path)
 
@@ -366,7 +384,7 @@ class IndexTTS2Adapter(TTSAdapter):
 
         return speaker_path, emo_path, infer_kwargs, generation_kwargs, temp_paths
 
-    def _cleanup_temp_paths(self, paths: List[str]) -> None:
+    def _cleanup_temp_paths(self, paths: list[str]) -> None:
         """Remove temporary files created during inference."""
         for path in paths:
             with contextlib.suppress(Exception):
@@ -376,9 +394,9 @@ class IndexTTS2Adapter(TTSAdapter):
         self,
         request: TTSRequest,
         speaker_path: str,
-        infer_kwargs: Dict[str, Any],
-        generation_kwargs: Dict[str, Any],
-        temp_paths: List[str],
+        infer_kwargs: dict[str, Any],
+        generation_kwargs: dict[str, Any],
+        temp_paths: list[str],
     ) -> AsyncGenerator[bytes, None]:
         """Return async generator that streams IndexTTS2 audio."""
         stream_sample_rate = self.output_sample_rate or self.STREAM_SAMPLE_RATE
@@ -447,10 +465,7 @@ class IndexTTS2Adapter(TTSAdapter):
             return b""
 
         try:
-            if hasattr(chunk, "detach"):
-                np_chunk = chunk.detach().cpu().numpy()
-            else:
-                np_chunk = np.asarray(chunk)
+            np_chunk = chunk.detach().cpu().numpy() if hasattr(chunk, "detach") else np.asarray(chunk)
         except Exception as exc:
             logger.warning("IndexTTS2 streaming chunk conversion error: %s", exc)
             return b""
@@ -500,12 +515,12 @@ class IndexTTS2Adapter(TTSAdapter):
 
     def _build_infer_kwargs(
         self,
-        extras: Dict[str, Any],
+        extras: dict[str, Any],
         emo_path: Optional[str],
         stream: bool,
-    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Prepare keyword arguments for IndexTTS2.infer."""
-        infer_kwargs: Dict[str, Any] = {
+        infer_kwargs: dict[str, Any] = {
             "emo_audio_prompt": emo_path,
             "emo_alpha": float(extras.get("emo_alpha", 1.0)),
             "emo_vector": extras.get("emo_vector"),
@@ -536,7 +551,7 @@ class IndexTTS2Adapter(TTSAdapter):
         self,
         result: Any,
         target_format: AudioFormat,
-    ) -> Tuple[bytes, float, int]:
+    ) -> tuple[bytes, float, int]:
         """
         Convert IndexTTS2 inference results into requested audio format.
 
@@ -614,7 +629,7 @@ class IndexTTS2Adapter(TTSAdapter):
         audio_bytes: bytes,
         original_sample_rate: Optional[int],
         target_format: AudioFormat,
-    ) -> Tuple[bytes, float, int]:
+    ) -> tuple[bytes, float, int]:
         """Handle conversion when IndexTTS2 writes directly to disk."""
         with tempfile.TemporaryDirectory() as tmpdir:
             input_path = Path(tmpdir) / "index_tts_input.wav"
@@ -652,7 +667,7 @@ class IndexTTS2Adapter(TTSAdapter):
         logger.warning("Falling back to WAV output for IndexTTS2 (format conversion failed)")
         return wav_path.read_bytes()
 
-    async def _probe_duration(self, wav_path: Path, sample_rate_hint: Optional[int]) -> Tuple[float, int]:
+    async def _probe_duration(self, wav_path: Path, sample_rate_hint: Optional[int]) -> tuple[float, int]:
         """Estimate audio duration for metadata."""
         if not wav_path.exists():
             return 0.0, sample_rate_hint or self.output_sample_rate
@@ -671,10 +686,7 @@ class IndexTTS2Adapter(TTSAdapter):
         """Persist numpy int16 audio array to WAV."""
         mono = np.asarray(audio, dtype=np.int16)
         if mono.ndim == 2:
-            if mono.shape[1] > 1:
-                mono = mono.mean(axis=1)
-            else:
-                mono = mono[:, 0]
+            mono = mono.mean(axis=1) if mono.shape[1] > 1 else mono[:, 0]
 
         mono = np.asarray(mono, dtype=np.int16)
 

@@ -10,25 +10,24 @@ import re
 import sqlite3
 import threading
 import time
-import weakref
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Generator
-import json
 import urllib.parse as _url
+import weakref
+from collections.abc import Generator
+from contextlib import contextmanager, suppress
+from pathlib import Path
+from typing import Any, Optional, Union
+
 from loguru import logger as _loguru_logger
-from queue import Queue, Empty
 
 from .base import (
+    BackendFeatures,
+    BackendType,
+    ConnectionPool,
     DatabaseBackend,
     DatabaseConfig,
-    BackendType,
-    BackendFeatures,
-    ConnectionPool,
-    QueryResult,
-    FTSQuery,
     DatabaseError,
-    NotSupportedError
+    FTSQuery,
+    QueryResult,
 )
 
 logger = _loguru_logger
@@ -38,7 +37,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _QUOTED_IDENTIFIER_RE = re.compile(r'^"[^"]+"$')
 
 
-def _classify_sqlite_path(db_path: str) -> Tuple[bool, bool]:
+def _classify_sqlite_path(db_path: str) -> tuple[bool, bool]:
     """Return (is_memory, use_uri) for a SQLite path/URI."""
     raw = (db_path or "").strip()
     lowered = raw.lower()
@@ -54,7 +53,7 @@ def _sqlite_file_path_from_uri(db_uri: str) -> Optional[Path]:
     """Extract a filesystem path from a file: URI, if present."""
     try:
         parsed = _url.urlparse(db_uri)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if parsed.scheme != "file":
         return None
@@ -66,7 +65,7 @@ def _sqlite_file_path_from_uri(db_uri: str) -> Optional[Path]:
         if not candidate.is_absolute():
             return (Path.cwd() / candidate).resolve()
         return candidate.resolve()
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         return candidate
 
 class SQLiteConnectionPool(ConnectionPool):
@@ -88,19 +87,19 @@ class SQLiteConnectionPool(ConnectionPool):
                 self.db_path = db_path
             else:
                 self.db_path = str(Path(db_path).resolve())
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             self.db_path = db_path
         self.config = config
         self._local = threading.local()
-        self._connections: Dict[int, sqlite3.Connection] = {}
-        self._thread_refs: Dict[int, weakref.ReferenceType[threading.Thread]] = {}
+        self._connections: dict[int, sqlite3.Connection] = {}
+        self._thread_refs: dict[int, weakref.ReferenceType[threading.Thread]] = {}
         self._lock = threading.RLock()
         self._closed = False
 
     def _prune_dead_threads(self) -> None:
         """Close connections owned by threads that have exited."""
         with self._lock:
-            stale_ids: List[int] = []
+            stale_ids: list[int] = []
             for tid, ref in self._thread_refs.items():
                 thread_obj = ref()
                 if thread_obj is None or not thread_obj.is_alive():
@@ -108,10 +107,8 @@ class SQLiteConnectionPool(ConnectionPool):
             for tid in stale_ids:
                 conn = self._connections.pop(tid, None)
                 if conn:
-                    try:
+                    with suppress(OSError, RuntimeError, sqlite3.Error):
                         conn.close()
-                    except Exception:
-                        pass
                 self._thread_refs.pop(tid, None)
 
     def get_connection(self) -> sqlite3.Connection:
@@ -139,13 +136,10 @@ class SQLiteConnectionPool(ConnectionPool):
         # Ensure database directory exists for file-backed DBs
         if not self._is_memory:
             try:
-                if self._use_uri:
-                    dbp = _sqlite_file_path_from_uri(self.db_path)
-                else:
-                    dbp = Path(self.db_path)
+                dbp = _sqlite_file_path_from_uri(self.db_path) if self._use_uri else Path(self.db_path)
                 if dbp and dbp.parent and not dbp.parent.exists():
                     dbp.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
+            except OSError:
                 pass
 
         conn = sqlite3.connect(
@@ -190,28 +184,24 @@ class SQLiteConnectionPool(ConnectionPool):
             try:
                 conn = self._connections.get(thread_id)
                 if conn:
-                    try:
+                    with suppress(OSError, RuntimeError, sqlite3.Error):
                         conn.close()
-                    except Exception:
-                        pass
                 self._connections[thread_id] = None
-            except Exception:
+            except (AttributeError, KeyError, RuntimeError, TypeError):
                 pass
-            try:
+            with suppress(AttributeError, KeyError, RuntimeError, TypeError):
                 self._thread_refs.pop(thread_id, None)
-            except Exception:
-                pass
             try:
                 if hasattr(self._local, 'connection'):
                     self._local.connection = None
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
             # Prune stale entries to avoid unbounded growth
             try:
                 stale_keys = [tid for tid, conn in self._connections.items() if conn is None]
                 for tid in stale_keys:
                     self._connections.pop(tid, None)
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 pass
 
     @contextmanager
@@ -221,7 +211,7 @@ class SQLiteConnectionPool(ConnectionPool):
         try:
             yield conn
         except Exception as e:
-            logger.error(f"Error in connection context: {e}")
+            logger.exception(f"Error in connection context: {e}")
             raise
 
     def close_all(self) -> None:
@@ -232,12 +222,12 @@ class SQLiteConnectionPool(ConnectionPool):
                 if conn:
                     try:
                         conn.close()
-                    except Exception as e:
-                        logger.error(f"Error closing connection: {e}")
+                    except (OSError, RuntimeError, sqlite3.Error) as e:
+                        logger.exception(f"Error closing connection: {e}")
             self._connections.clear()
             self._thread_refs.clear()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get pool statistics."""
         self._prune_dead_threads()
         with self._lock:
@@ -326,25 +316,24 @@ class SQLiteBackend(DatabaseBackend):
         Uses explicit BEGIN/COMMIT/ROLLBACK and guards with in_transaction to
         avoid errors when statements (e.g., executescript) implicitly end a txn.
         """
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
+        started = False
         try:
             if not getattr(conn, "in_transaction", False):
                 conn.execute("BEGIN")
+                started = True
             yield conn
-            if getattr(conn, "in_transaction", False):
+            if started and getattr(conn, "in_transaction", False):
                 conn.execute("COMMIT")
         except Exception as e:
-            if getattr(conn, "in_transaction", False):
+            if started and getattr(conn, "in_transaction", False):
                 try:
                     conn.execute("ROLLBACK")
                 except sqlite3.OperationalError:
                     # Best effort; ignore if no active transaction
                     pass
-            logger.error(f"Transaction failed: {e}")
+            logger.exception(f"Transaction failed: {e}")
             raise
 
     def get_pool(self) -> ConnectionPool:
@@ -358,16 +347,13 @@ class SQLiteBackend(DatabaseBackend):
     def execute(
         self,
         query: str,
-        params: Optional[Union[Tuple, Dict]] = None,
+        params: Optional[Union[tuple, dict]] = None,
         connection: Optional[sqlite3.Connection] = None
     ) -> QueryResult:
         """Execute a query and return results."""
         start_time = time.time()
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             cursor = conn.cursor()
@@ -395,22 +381,19 @@ class SQLiteBackend(DatabaseBackend):
             )
 
         except sqlite3.Error as e:
-            logger.error(f"Query execution failed: {e}")
-            raise DatabaseError(f"SQLite error: {e}")
+            logger.exception(f"Query execution failed: {e}")
+            raise DatabaseError(f"SQLite error: {e}") from e
 
     def execute_many(
         self,
         query: str,
-        params_list: List[Union[Tuple, Dict]],
+        params_list: list[Union[tuple, dict]],
         connection: Optional[sqlite3.Connection] = None
     ) -> QueryResult:
         """Execute a query multiple times with different parameters."""
         start_time = time.time()
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             cursor = conn.cursor()
@@ -427,22 +410,19 @@ class SQLiteBackend(DatabaseBackend):
             )
 
         except sqlite3.Error as e:
-            logger.error(f"Batch execution failed: {e}")
-            raise DatabaseError(f"SQLite error: {e}")
+            logger.exception(f"Batch execution failed: {e}")
+            raise DatabaseError(f"SQLite error: {e}") from e
 
     def create_tables(self, schema: str, connection: Optional[sqlite3.Connection] = None) -> None:
         """Create tables from a schema definition."""
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         try:
             # Execute the schema as a script
             conn.executescript(schema)
         except sqlite3.Error as e:
-            logger.error(f"Schema creation failed: {e}")
-            raise DatabaseError(f"Failed to create schema: {e}")
+            logger.exception(f"Schema creation failed: {e}")
+            raise DatabaseError(f"Failed to create schema: {e}") from e
 
     def table_exists(self, table_name: str, connection: Optional[sqlite3.Connection] = None) -> bool:
         """Check if a table exists."""
@@ -457,7 +437,7 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[sqlite3.Connection] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Get information about a table's columns."""
         query = f"PRAGMA table_info({self.escape_identifier(table_name)})"
         result = self.execute(query, connection=connection)
@@ -479,7 +459,7 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[sqlite3.Connection] = None
     ) -> None:
         """Create a FTS5 virtual table."""
@@ -509,15 +489,15 @@ class SQLiteBackend(DatabaseBackend):
             self.execute(rebuild_query, connection=connection)
 
         except sqlite3.Error as e:
-            logger.error(f"FTS table creation failed: {e}")
-            raise DatabaseError(f"Failed to create FTS table: {e}")
+            logger.exception(f"FTS table creation failed: {e}")
+            raise DatabaseError(f"Failed to create FTS table: {e}") from e
 
     def _ensure_fts_triggers(
         self,
         *,
         table_name: str,
         source_table: str,
-        columns: List[str],
+        columns: list[str],
         connection: Optional[sqlite3.Connection] = None,
     ) -> None:
         """Create FTS sync triggers for external-content tables (SQLite)."""
@@ -645,7 +625,7 @@ class SQLiteBackend(DatabaseBackend):
         bm25_match = re.match(r"^bm25(?:\((.*)\))?$", expr_core, re.IGNORECASE)
         if bm25_match:
             inner = (bm25_match.group(1) or "").strip()
-            weights: List[str] = []
+            weights: list[str] = []
             if inner:
                 tokens = [token.strip() for token in inner.split(",") if token.strip()]
                 if tokens and (_IDENTIFIER_RE.match(tokens[0]) or _QUOTED_IDENTIFIER_RE.match(tokens[0])):
@@ -688,10 +668,7 @@ class SQLiteBackend(DatabaseBackend):
         is_memory, use_uri = _classify_sqlite_path(self.config.sqlite_path)
         if is_memory:
             return 0
-        if use_uri:
-            db_path = _sqlite_file_path_from_uri(self.config.sqlite_path)
-        else:
-            db_path = Path(self.config.sqlite_path)
+        db_path = _sqlite_file_path_from_uri(self.config.sqlite_path) if use_uri else Path(self.config.sqlite_path)
         if db_path and db_path.exists():
             return db_path.stat().st_size
         return 0
@@ -717,14 +694,11 @@ class SQLiteBackend(DatabaseBackend):
         self,
         table_name: str,
         connection: Optional[sqlite3.Connection] = None
-    ) -> Generator[Dict[str, Any], None, None]:
+    ) -> Generator[dict[str, Any], None, None]:
         """Export data from a table."""
         query = f"SELECT * FROM {self.escape_identifier(table_name)}"
 
-        if connection:
-            conn = connection
-        else:
-            conn = self.get_pool().get_connection()
+        conn = connection or self.get_pool().get_connection()
 
         cursor = conn.cursor()
         cursor.execute(query)
@@ -739,7 +713,7 @@ class SQLiteBackend(DatabaseBackend):
     def import_data(
         self,
         table_name: str,
-        data: List[Dict[str, Any]],
+        data: list[dict[str, Any]],
         connection: Optional[sqlite3.Connection] = None
     ) -> int:
         """Import data into a table."""

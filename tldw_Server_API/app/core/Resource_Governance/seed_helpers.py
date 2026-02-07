@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, Mapping, Optional
-
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
 
@@ -31,10 +30,7 @@ async def seed_rg_policies_sqlite(db_pool: DatabasePool, rows: Iterable[Mapping[
     for r in rows:
         pid = str(r.get("id"))
         payload_obj = r.get("payload") or {}
-        if not isinstance(payload_obj, (str, bytes, bytearray)):
-            payload = json.dumps(payload_obj)
-        else:
-            payload = payload_obj
+        payload = json.dumps(payload_obj) if not isinstance(payload_obj, (str, bytes, bytearray)) else payload_obj
         ver = int(r.get("version") or 1)
         upd = r.get("updated_at")
         if isinstance(upd, datetime):
@@ -77,10 +73,7 @@ async def seed_rg_policies_postgres(db_pool: DatabasePool, rows: Iterable[Mappin
     for r in rows:
         pid = str(r.get("id"))
         payload_obj = r.get("payload") or {}
-        if not isinstance(payload_obj, (str, bytes, bytearray)):
-            payload = json.dumps(payload_obj)
-        else:
-            payload = payload_obj
+        payload = json.dumps(payload_obj) if not isinstance(payload_obj, (str, bytes, bytearray)) else payload_obj
         ver = int(r.get("version") or 1)
         upd = r.get("updated_at")
         if isinstance(upd, datetime):

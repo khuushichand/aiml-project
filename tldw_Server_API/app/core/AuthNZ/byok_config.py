@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import normalize_provider_name
 
-
-PROVIDER_APP_CONFIG_KEYS: Dict[str, str] = {
+PROVIDER_APP_CONFIG_KEYS: dict[str, str] = {
     "openai": "openai_api",
     "anthropic": "anthropic_api",
     "cohere": "cohere_api",
@@ -28,8 +27,8 @@ PROVIDER_APP_CONFIG_KEYS: Dict[str, str] = {
 
 def build_app_config_overrides(
     provider: str,
-    credential_fields: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    credential_fields: dict[str, Any] | None,
+) -> dict[str, Any]:
     if not credential_fields:
         return {}
 
@@ -38,7 +37,7 @@ def build_app_config_overrides(
     if not section:
         return {}
 
-    cfg_section: Dict[str, Any] = {}
+    cfg_section: dict[str, Any] = {}
     base_url = credential_fields.get("base_url")
     if isinstance(base_url, str) and base_url.strip():
         cfg_section["api_base_url"] = base_url.strip()
@@ -53,15 +52,15 @@ def build_app_config_overrides(
 
 
 def merge_app_config_overrides(
-    base_config: Optional[Dict[str, Any]],
+    base_config: dict[str, Any] | None,
     provider: str,
-    credential_fields: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    credential_fields: dict[str, Any] | None,
+) -> dict[str, Any]:
     overrides = build_app_config_overrides(provider, credential_fields)
     if not overrides:
         return dict(base_config or {})
 
-    merged: Dict[str, Any] = dict(base_config or {})
+    merged: dict[str, Any] = dict(base_config or {})
     for section, values in overrides.items():
         existing = merged.get(section)
         merged_section = dict(existing or {}) if isinstance(existing, dict) else {}

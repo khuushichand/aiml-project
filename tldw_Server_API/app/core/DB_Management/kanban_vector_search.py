@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -109,7 +109,7 @@ def _map_priority(priority: int) -> int:
     return mapped or 5
 
 
-def _extract_embedding_settings(embedding_config: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
+def _extract_embedding_settings(embedding_config: dict[str, Any] | None) -> tuple[str | None, str | None]:
     """Pull provider/model identifiers from a user embedding configuration."""
     if not isinstance(embedding_config, dict):
         return None, None
@@ -135,7 +135,7 @@ class KanbanVectorSearch:
     def __init__(
         self,
         user_id: str,
-        embedding_config: Optional[Dict[str, Any]] = None,
+        embedding_config: dict[str, Any] | None = None,
     ):
         """
         Initialize the Kanban vector search.
@@ -147,7 +147,7 @@ class KanbanVectorSearch:
         """
         self.user_id = str(user_id)
         self.embedding_config = embedding_config
-        self._manager: Optional[Any] = None
+        self._manager: Any | None = None
         self._collection_name = get_kanban_collection_name(self.user_id)
         self._available = False
 
@@ -192,7 +192,7 @@ class KanbanVectorSearch:
         self.close()
         return False
 
-    def _build_document(self, card: Dict[str, Any]) -> str:
+    def _build_document(self, card: dict[str, Any]) -> str:
         """
         Build a searchable document from card data.
 
@@ -225,7 +225,7 @@ class KanbanVectorSearch:
 
         return " ".join(parts)
 
-    def _build_metadata(self, card: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_metadata(self, card: dict[str, Any]) -> dict[str, Any]:
         """
         Build ChromaDB metadata from card data.
 
@@ -252,7 +252,7 @@ class KanbanVectorSearch:
 
         return metadata
 
-    def index_card(self, card: Dict[str, Any]) -> bool:
+    def index_card(self, card: dict[str, Any]) -> bool:
         """
         Index a card for vector search.
 
@@ -363,10 +363,10 @@ class KanbanVectorSearch:
     def search(
         self,
         query: str,
-        board_id: Optional[int] = None,
-        priority: Optional[str] = None,
+        board_id: int | None = None,
+        priority: str | None = None,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search cards using vector similarity.
 
@@ -392,7 +392,7 @@ class KanbanVectorSearch:
 
         try:
             # Build where filter
-            where_filter: Optional[Dict[str, Any]] = None
+            where_filter: dict[str, Any] | None = None
             if board_id or priority:
                 where_filter = {}
                 if board_id:
@@ -432,7 +432,7 @@ class KanbanVectorSearch:
             logger.warning(f"Vector search failed for user {self.user_id}: {e}")
             return []
 
-    def reindex_all_cards(self, cards: List[Dict[str, Any]]) -> Tuple[int, int]:
+    def reindex_all_cards(self, cards: list[dict[str, Any]]) -> tuple[int, int]:
         """
         Reindex all cards for a user (useful for rebuilding the index).
 
@@ -460,8 +460,8 @@ class KanbanVectorSearch:
 
 def create_kanban_vector_search(
     user_id: str,
-    embedding_config: Optional[Dict[str, Any]] = None,
-) -> Optional[KanbanVectorSearch]:
+    embedding_config: dict[str, Any] | None = None,
+) -> KanbanVectorSearch | None:
     """
     Factory function to create a KanbanVectorSearch instance.
 

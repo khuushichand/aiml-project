@@ -2,9 +2,9 @@
 Core scheduler components.
 """
 
-from .write_buffer import SafeWriteBuffer
+from .leader_election import DistributedLock, LeaderElection, LeaderTask
 from .worker_pool import Worker, WorkerPool, WorkerState
-from .leader_election import LeaderElection, LeaderTask, DistributedLock
+from .write_buffer import SafeWriteBuffer
 
 __all__ = [
     'SafeWriteBuffer',

@@ -1,31 +1,55 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, AsyncIterator, List
-
-from .base import ChatProvider
-
-import os
+import asyncio
 import json
+import os
+from collections.abc import AsyncIterator, Iterable
+from typing import Any
+
 from loguru import logger
+
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
 from tldw_Server_API.app.core.http_client import (
     create_client as _hc_create_client,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatBadRequestError
-from tldw_Server_API.app.core.LLM_Calls.sse import (
-    normalize_provider_line,
-    is_done_line,
-    sse_done,
-    finalize_stream,
-    openai_delta_chunk,
-    sse_data,
-)
-from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import split_system_message
+from tldw_Server_API.app.core.LLM_Calls.capability_registry import normalize_payload, validate_payload
 from tldw_Server_API.app.core.LLM_Calls.payload_utils import merge_extra_body, merge_extra_headers
+from tldw_Server_API.app.core.LLM_Calls.sse import (
+    finalize_stream,
+    is_done_line,
+    normalize_provider_line,
+    sse_data,
+    sse_done,
+)
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+
+from .base import ChatProvider
 
 # Expose a patchable factory for tests; production uses the centralized client
 http_client_factory = _hc_create_client
+
+_GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+try:
+    import httpx as _google_httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _google_httpx = None
+else:
+    _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS = _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS + (
+        _google_httpx.HTTPError,
+    )
 
 
 def _stream_debug_enabled(provider: str) -> bool:
@@ -46,15 +70,13 @@ def _env_flag(name: str) -> bool:
     lowered = value.strip().lower()
     if lowered in {"1", "true", "yes", "on"}:
         return True
-    if lowered in {"0", "false", "no", "off", ""}:
-        return False
-    return True
+    return lowered not in {"0", "false", "no", "off", ""}
 
 
 class GoogleAdapter(ChatProvider):
     name = "google"
 
-    def capabilities(self) -> Dict[str, Any]:
+    def capabilities(self) -> dict[str, Any]:
         return {
             "supports_streaming": True,
             "supports_tools": True,
@@ -62,7 +84,7 @@ class GoogleAdapter(ChatProvider):
             "max_output_tokens_default": None,
         }
 
-    def _to_handler_args(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_handler_args(self, request: dict[str, Any]) -> dict[str, Any]:
         streaming_raw = request.get("stream")
         if streaming_raw is None:
             streaming_raw = request.get("streaming")
@@ -84,7 +106,7 @@ class GoogleAdapter(ChatProvider):
             "app_config": request.get("app_config"),
         }
 
-    def _apply_config_defaults(self, request: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_config_defaults(self, request: dict[str, Any]) -> dict[str, Any]:
         merged = dict(request)
         cfg = (merged.get("app_config") or {}).get("google_api", {})
 
@@ -92,7 +114,7 @@ class GoogleAdapter(ChatProvider):
             """Add a benign type marker so provider-agnostic validation can pass."""
             if not isinstance(tools_value, list):
                 return tools_value
-            annotated: List[Any] = []
+            annotated: list[Any] = []
             for tool in tools_value:
                 if not isinstance(tool, dict):
                     annotated.append(tool)
@@ -132,37 +154,45 @@ class GoogleAdapter(ChatProvider):
         merged["tools"] = _annotate_gemini_native_tools(merged.get("tools"))
         return merged
 
-    def _base_url(self, request: Optional[Dict[str, Any]] = None) -> str:
+    def _base_url(self, request: dict[str, Any] | None = None) -> str:
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip().rstrip("/")
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            gcfg = cfg.get("google_api") or {}
+            base = gcfg.get("api_base_url") or gcfg.get("api_base")
+            if isinstance(base, str) and base.strip():
+                return base.strip().rstrip("/")
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
+            pass
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
 
-    def _headers(self, api_key: Optional[str]) -> Dict[str, str]:
+    def _headers(self, api_key: str | None) -> dict[str, str]:
         # Gemini typically accepts API key via header or query param. Prefer header here.
         h = {"Content-Type": "application/json"}
         if api_key:
             h["x-goog-api-key"] = api_key
         return h
 
-    def _resolve_timeout(self, request: Dict[str, Any], fallback: Optional[float]) -> float:
+    def _resolve_timeout(self, request: dict[str, Any], fallback: float | None) -> float:
         try:
             cfg = (request.get("app_config") or {}).get("google_api", {})
             t = cfg.get("api_timeout")
             if t is not None:
                 try:
                     return float(t)
-                except Exception:
+                except (TypeError, ValueError):
                     pass
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             pass
         if fallback is not None:
             return float(fallback)
         return float(self.capabilities().get("default_timeout_seconds", 90))
 
     @staticmethod
-    def _to_gemini_contents(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        contents: List[Dict[str, Any]] = []
+    def _to_gemini_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        contents: list[dict[str, Any]] = []
         allow_image_urls = _env_flag("LLM_ADAPTERS_GEMINI_IMAGE_URLS_BETA")
         allow_audio_urls = _env_flag("LLM_ADAPTERS_GEMINI_AUDIO_URLS_BETA")
         allow_video_urls = _env_flag("LLM_ADAPTERS_GEMINI_VIDEO_URLS_BETA")
@@ -174,8 +204,10 @@ class GoogleAdapter(ChatProvider):
             # Gemini uses "model" instead of "assistant"
             if role == "assistant":
                 role = "model"
+            elif role not in {"user", "model"}:
+                role = "user"
             content = m.get("content")
-            parts: List[Dict[str, Any]] = []
+            parts: list[dict[str, Any]] = []
             if isinstance(content, str):
                 parts.append({"text": content})
             elif isinstance(content, list):
@@ -199,7 +231,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "application/octet-stream"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[image: unsupported data URI]"})
                             elif allow_image_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "image/*", "fileUri": u}})
@@ -218,7 +250,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "audio/*"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[audio: unsupported data URI]"})
                             elif allow_audio_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "audio/*", "fileUri": u}})
@@ -237,7 +269,7 @@ class GoogleAdapter(ChatProvider):
                                     header, b64 = u.split(",", 1)
                                     mime = header.split(":", 1)[1].split(";", 1)[0] or "video/*"
                                     parts.append({"inlineData": {"mimeType": mime, "data": b64}})
-                                except Exception:
+                                except (AttributeError, IndexError, TypeError, ValueError):
                                     parts.append({"text": "[video: unsupported data URI]"})
                             elif allow_video_urls and (u.startswith("http://") or u.startswith("https://")):
                                 parts.append({"fileData": {"mimeType": "video/*", "fileUri": u}})
@@ -246,12 +278,12 @@ class GoogleAdapter(ChatProvider):
             contents.append({"role": role, "parts": parts or [{"text": ""}]})
         return contents
 
-    def _build_payload(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        messages: List[Dict[str, Any]] = request.get("messages") or []
+    def _build_payload(self, request: dict[str, Any]) -> dict[str, Any]:
+        messages: list[dict[str, Any]] = request.get("messages") or []
         system_message = request.get("system_message")
         if not system_message:
             system_message, messages = split_system_message(messages)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "contents": self._to_gemini_contents(messages),
             "generationConfig": {}
         }
@@ -307,7 +339,7 @@ class GoogleAdapter(ChatProvider):
         # Optional: map OpenAI-style tools to Gemini functionDeclarations behind a flag
         if tools and openai_tools and tools_enabled:
             try:
-                fdecls: List[Dict[str, Any]] = []
+                fdecls: list[dict[str, Any]] = []
                 for t in tools:
                     if isinstance(t, dict) and t.get("type") == "function" and isinstance(t.get("function"), dict):
                         fn = t["function"]
@@ -324,14 +356,14 @@ class GoogleAdapter(ChatProvider):
                         fdecls.append(fdecl)
                 if fdecls:
                     payload["tools"] = [{"functionDeclarations": fdecls}]
-            except Exception:
+            except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
                 # tools mapping is best-effort and optional
                 pass
         elif tools and not openai_tools:
             # Assume tools are already Gemini-native; pass through as-is.
             cleaned_tools: Any = tools
             if isinstance(tools, list):
-                cleaned_list: List[Any] = []
+                cleaned_list: list[Any] = []
                 for item in tools:
                     if not isinstance(item, dict):
                         cleaned_list.append(item)
@@ -348,15 +380,15 @@ class GoogleAdapter(ChatProvider):
         return payload
 
     @staticmethod
-    def _normalize_to_openai_shape(data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_to_openai_shape(data: dict[str, Any]) -> dict[str, Any]:
         try:
             cands = data.get("candidates") or []
-            choices: List[Dict[str, Any]] = []
+            choices: list[dict[str, Any]] = []
             for idx, cand in enumerate(cands):
                 content = (cand or {}).get("content") or {}
                 parts = content.get("parts") or []
                 text_accum = ""
-                tool_calls: List[Dict[str, Any]] = []
+                tool_calls: list[dict[str, Any]] = []
                 if parts:
                     tc_idx = 0
                     for p in parts:
@@ -371,7 +403,7 @@ class GoogleAdapter(ChatProvider):
                             try:
                                 import json as _json
                                 arg_str = _json.dumps(args if args is not None else {})
-                            except Exception:
+                            except (TypeError, ValueError):
                                 arg_str = "{}"
                             tool_calls.append({
                                 "id": f"call_{tc_idx}",
@@ -379,7 +411,7 @@ class GoogleAdapter(ChatProvider):
                                 "function": {"name": name, "arguments": arg_str},
                             })
                             tc_idx += 1
-                message: Dict[str, Any] = {"role": "assistant", "content": text_accum or None}
+                message: dict[str, Any] = {"role": "assistant", "content": text_accum or None}
                 if tool_calls:
                     message["tool_calls"] = tool_calls
                 finish_reason_raw = cand.get("finishReason")
@@ -404,11 +436,11 @@ class GoogleAdapter(ChatProvider):
                 "usage": usage,
                 "provider_response": data,
             }
-        except Exception:
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
             return data
 
     @staticmethod
-    def _stream_event_deltas(event: Any, state: Optional[Dict[str, int]] = None) -> Iterable[str]:
+    def _stream_event_deltas(event: Any, state: dict[str, int] | None = None) -> Iterable[str]:
         if state is None:
             state = {}
         if isinstance(event, list):
@@ -440,7 +472,7 @@ class GoogleAdapter(ChatProvider):
                     args = fc.get("args")
                     try:
                         arg_str = json.dumps(args if args is not None else {})
-                    except Exception:
+                    except (TypeError, ValueError):
                         arg_str = "{}"
                     yield sse_data({
                         "choices": [{
@@ -474,25 +506,25 @@ class GoogleAdapter(ChatProvider):
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         from tldw_Server_API.app.core.LLM_Calls.error_utils import (
-            get_http_status_from_exception,
             get_http_error_text,
+            get_http_status_from_exception,
             is_http_status_error,
             log_http_400_body,
         )
         if is_http_status_error(exc):
             from tldw_Server_API.app.core.Chat.Chat_Deps import (
-                ChatBadRequestError,
-                ChatAuthenticationError,
-                ChatRateLimitError,
-                ChatProviderError,
                 ChatAPIError,
+                ChatAuthenticationError,
+                ChatBadRequestError,
+                ChatProviderError,
+                ChatRateLimitError,
             )
             resp = getattr(exc, "response", None)
             status = get_http_status_from_exception(exc)
             body = None
             try:
                 body = resp.json()
-            except Exception:
+            except (TypeError, ValueError, json.JSONDecodeError):
                 body = None
             log_http_400_body(self.name, exc, body)
             detail = None
@@ -500,7 +532,7 @@ class GoogleAdapter(ChatProvider):
                 err = body["error"]
                 msg = (err.get("message") or "").strip()
                 st = (err.get("status") or "").strip()
-                code = err.get("code")
+                err.get("code")
                 detail = (f"{st} {msg}" if st else msg) or str(exc)
             else:
                 detail = get_http_error_text(exc)
@@ -515,7 +547,7 @@ class GoogleAdapter(ChatProvider):
             return ChatAPIError(provider=self.name, message=str(detail), status_code=status or 500)
         return super().normalize_error(exc)
 
-    def chat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
         request = validate_payload(self.name, request)
@@ -536,10 +568,10 @@ class GoogleAdapter(ChatProvider):
                 resp.raise_for_status()
                 data = resp.json()
                 return self._normalize_to_openai_shape(data)
-        except Exception as e:
-            raise self.normalize_error(e)
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
+            raise self.normalize_error(e) from e
 
-    def stream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Iterable[str]:
+    def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = normalize_payload(self.name, request or {})
         request = self._apply_config_defaults(request)
         request = validate_payload(self.name, request)
@@ -569,7 +601,7 @@ class GoogleAdapter(ChatProvider):
                             logger.debug(f"{self.name} stream raw: {raw!r}")
                         try:
                             line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
-                        except Exception:
+                        except (TypeError, UnicodeDecodeError, ValueError):
                             line = str(raw)
                         if is_done_line(line):
                             if not seen_done:
@@ -586,7 +618,7 @@ class GoogleAdapter(ChatProvider):
                                 continue
                             try:
                                 event = json.loads(payload_text)
-                            except Exception:
+                            except (TypeError, ValueError, json.JSONDecodeError):
                                 normalized = normalize_provider_line(line)
                                 if normalized is not None:
                                     yield normalized
@@ -598,7 +630,7 @@ class GoogleAdapter(ChatProvider):
                             buffer += stripped
                             try:
                                 event = json.loads(buffer)
-                            except Exception:
+                            except (TypeError, ValueError, json.JSONDecodeError):
                                 continue
                             buffer = ""
                             yielded = False
@@ -610,15 +642,14 @@ class GoogleAdapter(ChatProvider):
                         normalized = normalize_provider_line(line)
                         if normalized is not None:
                             yield normalized
-                    for tail in finalize_stream(response=resp, done_already=seen_done):
-                        yield tail
+                    yield from finalize_stream(response=resp, done_already=seen_done)
             return
-        except Exception as e:
-            raise self.normalize_error(e)
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
+            raise self.normalize_error(e) from e
 
-    async def achat(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> Dict[str, Any]:
-        return self.chat(request, timeout=timeout)
+    async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
+        return await asyncio.to_thread(self.chat, request, timeout=timeout)
 
-    async def astream(self, request: Dict[str, Any], *, timeout: Optional[float] = None) -> AsyncIterator[str]:
+    async def astream(self, request: dict[str, Any], *, timeout: float | None = None) -> AsyncIterator[str]:
         async for item in wrap_sync_stream(self.stream(request, timeout=timeout)):
             yield item

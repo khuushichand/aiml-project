@@ -4,20 +4,17 @@ API endpoint to provide configuration information for auto-populating documentat
 Only exposes non-sensitive configuration suitable for documentation.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from fastapi.responses import RedirectResponse, HTMLResponse
-from typing import Dict, List, Optional
 import configparser
 import os
 from pathlib import Path
 
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from fastapi import APIRouter
+from fastapi.responses import HTMLResponse, RedirectResponse
+from loguru import logger
+from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config import settings as global_settings
-from loguru import logger
-import os
 
 router = APIRouter()
 
@@ -35,7 +32,7 @@ def get_config_path() -> Path:
     return Path(project_root) / "Config_Files" / "config.txt"
 
 
-def load_safe_config() -> Dict:
+def load_safe_config() -> dict:
     """
     Load configuration that is safe to expose for documentation.
     Excludes sensitive information like actual API keys.
@@ -368,9 +365,7 @@ async def get_quickstart_redirect():
             url = "/docs"
 
         # Normalize
-        if url.startswith("http://") or url.startswith("https://"):
-            target = url
-        elif url.startswith("/"):
+        if url.startswith("http://") or url.startswith("https://") or url.startswith("/"):
             target = url
         else:
             # Treat as same-origin path

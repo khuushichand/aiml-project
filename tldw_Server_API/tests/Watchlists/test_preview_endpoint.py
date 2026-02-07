@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,11 +8,11 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture()
-def client_with_user(monkeypatch):
+def client_with_user(monkeypatch, tmp_path):
     async def override_user():
         return User(id=909, username="wluser", email=None, is_active=True)
 
-    base_dir = Path.cwd() / "Databases" / "test_user_dbs_preview"
+    base_dir = tmp_path / "test_user_dbs_preview"
     base_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("USER_DB_BASE_DIR", str(base_dir))
     monkeypatch.setenv("TEST_MODE", "1")
@@ -69,6 +67,12 @@ def test_preview_rss_include_only_toggle(client_with_user: TestClient):
     ingest_items = [it for it in data.get("items", []) if it.get("decision") == "ingest"]
     assert len(ingest_items) >= 1
     assert all(it.get("matched_action") in (None, "include", "flag") for it in ingest_items)
+    include_matches = [it for it in ingest_items if it.get("matched_action") == "include"]
+    assert len(include_matches) >= 1
+    first_match = include_matches[0]
+    assert first_match.get("matched_filter_type") == "keyword"
+    assert (first_match.get("matched_filter_key") or "").startswith(("id:", "idx:"))
+    assert first_match.get("matched_filter_id") is None
 
     # Now change include rule to not match and keep gating ON
     r2 = c.patch(

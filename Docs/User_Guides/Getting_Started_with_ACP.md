@@ -62,6 +62,46 @@ runner_env = HOME=/absolute/path/to/.tldw-agent-home,PYTHONUNBUFFERED=1
 startup_timeout_ms = 10000
 ```
 
+Install ACP dependencies:
+
+```bash
+pip install -e ".[acp]"
+```
+
+### Optional: Sandbox Mode (Run ACP in Containers)
+
+To run the ACP agent inside a sandbox container and access it via web SSH:
+
+1. Build the ACP image:
+
+```bash
+docker build -f Dockerfiles/ACP/Dockerfile -t tldw/acp-agent:latest .
+```
+
+2. Enable sandbox mode in `config.txt`:
+
+```ini
+[ACP-SANDBOX]
+enabled = true
+runtime = docker
+base_image = tldw/acp-agent:latest
+network_policy = allow_all
+agent_command = claude
+agent_args = ["code"]
+```
+
+3. Set required env vars:
+
+```bash
+export ACP_SANDBOX_ENABLED=1
+export ACP_SANDBOX_AGENT_COMMAND=claude
+export SANDBOX_ENABLE_EXECUTION=1
+export SANDBOX_BACKGROUND_EXECUTION=1
+export SANDBOX_DOCKER_BIND_WORKSPACE=1
+```
+
+Start `tldw_server` from the same shell (or ensure your service manager passes these env vars) so the server process inherits the sandbox settings.
+
 **Key settings explained:**
 
 | Setting | Description |

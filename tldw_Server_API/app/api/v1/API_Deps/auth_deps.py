@@ -1,66 +1,90 @@
 # auth_deps.py
 # Description: FastAPI dependency injection for authentication services
 #
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Callable, Awaitable
-from collections.abc import Mapping
-import inspect
 import asyncio
-import threading
-import re
+import inspect
 import os
+import re
+import threading
 import time
+from collections.abc import AsyncGenerator, Awaitable, Mapping
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 from weakref import WeakKeyDictionary
+
 #
 # 3rd-party imports
-from fastapi import Depends, HTTPException, status, Request, Header, Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, Header, HTTPException, Request, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
+    get_auth_principal as _resolve_auth_principal,
+)
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+from tldw_Server_API.app.core.AuthNZ.exceptions import (
+    DatabaseError,
+    InvalidTokenError,
+    RegistrationError,
+    TokenExpiredError,
+    TransactionError,
+    WeakPasswordError,
+)
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
+from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, get_password_service
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal, is_single_user_principal
-from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService, get_jwt_service
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager, get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import (
     get_settings,
     is_single_user_mode,
     is_single_user_profile_mode,
 )
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
-from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
-from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
-from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    AuthenticationError,
-    InvalidTokenError,
-    TokenExpiredError,
-    UserNotFoundError,
-    AccountInactiveError,
-    InsufficientPermissionsError
-)
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from tldw_Server_API.app.core.DB_Management.Users_DB import get_users_db
-from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
-from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     authenticate_api_key_user,
     verify_jwt_and_fetch_user,
 )
+from tldw_Server_API.app.core.DB_Management.scope_context import set_scope
 from tldw_Server_API.app.core.exceptions import InactiveUserError
-from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
-from tldw_Server_API.app.core.AuthNZ.auth_principal_resolver import (
-    get_auth_principal as _resolve_auth_principal,
-)
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
-from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
-    is_single_user_ip_allowed,
-    resolve_client_ip,
-)
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
+from tldw_Server_API.app.core.testing import (
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_production_like_env as _is_production_like_env,
+)
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
+from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
+
+# Narrowed exception tuple for auth dependency safety (BLE001)
+_AUTH_DEPS_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    InvalidTokenError,
+    TokenExpiredError,
+    DatabaseError,
+    TransactionError,
+    RegistrationError,
+    WeakPasswordError,
+    InactiveUserError,
+)
 
 # Test stub shared state (persist across dependency calls under TEST_MODE/pytest)
 _TEST_SESSION_STATE: dict = {"sid": 1000, "sessions": {}}
@@ -76,7 +100,7 @@ _SENSITIVE_USER_KEY_PATTERN = re.compile(
 )
 
 
-def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
+def _public_user_dict(user: Mapping[str, Any]) -> dict[str, Any]:
     """
     Return a sanitized shallow copy of a user mapping.
 
@@ -85,7 +109,7 @@ def _public_user_dict(user: Mapping[str, Any]) -> Dict[str, Any]:
     (passwords, tokens, secrets, API keys, SSNs) so dependency returns never
     expose sensitive fields.
     """
-    safe: Dict[str, Any] = {}
+    safe: dict[str, Any] = {}
     for key, value in dict(user).items():
         if isinstance(key, str) and _SENSITIVE_USER_KEY_PATTERN.search(key):
             continue
@@ -99,7 +123,7 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
     return token.count(".") == 2
 
 
-async def _authenticate_api_key_from_request(request: Request, api_key: str) -> Dict[str, Any]:
+async def _authenticate_api_key_from_request(request: Request, api_key: str) -> dict[str, Any]:
     test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
     if test_mode:
         # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
@@ -126,7 +150,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             logger.debug("TEST_MODE is enabled for non-production environment")
         try:
             settings = get_settings()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             settings = None
         allowed_keys: set[str] = set()
         test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
@@ -145,10 +169,11 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
             try:
                 if settings and isinstance(settings.DATABASE_URL, str) and settings.DATABASE_URL.startswith("sqlite:///"):
                     from pathlib import Path as _Path
+
                     from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables as _ensure_authnz_tables
                     db_path = settings.DATABASE_URL.replace("sqlite:///", "")
                     _ensure_authnz_tables(_Path(db_path))
-            except Exception as _ensure_err:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as _ensure_err:
                 logger.debug("AuthNZ test fallback: ensure_authnz_tables skipped/failed: {}", _ensure_err)
             fixed_id = getattr(settings, "SINGLE_USER_FIXED_ID", 1)
             user = {
@@ -166,7 +191,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
                 request.state.user_id = fixed_id
                 request.state.team_ids = []
                 request.state.org_ids = []
-            except Exception as state_exc:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
                 logger.debug(
                     "API key test-mode path: unable to attach state context: {}",
                     state_exc,
@@ -191,7 +216,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
     except HTTPException:
         # Propagate explicit HTTP errors unchanged (401/403, etc.)
         raise
-    except Exception as e:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
         if _is_test_mode():
             logger.exception("API key authentication error in get_current_user (TEST_MODE)")
         else:
@@ -202,7 +227,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate API key",
-        )
+        ) from e
 
 
 def _get_test_session_lock() -> asyncio.Lock:
@@ -242,8 +267,8 @@ def _activate_scope_context(
     request: Request,
     *,
     user_id: Optional[int],
-    org_ids: Optional[List[int]],
-    team_ids: Optional[List[int]],
+    org_ids: Optional[list[int]],
+    team_ids: Optional[list[int]],
     is_admin: bool,
 ) -> None:
     """Record content scope information for downstream database access."""
@@ -258,33 +283,29 @@ def _activate_scope_context(
             active_team_id=active_team,
             is_admin=is_admin,
         )
-        setattr(request.state, "_content_scope_token", token)
-    except Exception as exc:
+        request.state._content_scope_token = token
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Unable to establish content scope context: {}",
             exc,
         )
 
-async def get_db_transaction():
+async def get_db_transaction() -> AsyncGenerator[Any, None]:
     """Get database connection in transaction mode.
 
-    Always behaves as an async generator for FastAPI compatibility. In TEST_MODE/pytest,
+    Always behaves as an async generator for FastAPI compatibility. In explicit test mode,
     yields a lightweight pool adapter that runs queries without holding a long-lived
     transaction to avoid event-loop and teardown issues. Otherwise, yields a
     request-scoped transaction connection.
     """
     db_pool = await get_db_pool()
 
-    # Decide whether to use the lightweight adapter (tests/pytest) or a real transaction
+    # Decide whether to use the lightweight adapter (explicit test mode) or a real transaction
     use_adapter = False
     try:
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             use_adapter = True
-        else:
-            import sys as _sys  # local import to avoid test-only dependency at module import
-            if "pytest" in _sys.modules:
-                use_adapter = True
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         # If any detection fails, fall back to default transaction behavior
         use_adapter = False
 
@@ -297,7 +318,7 @@ async def get_db_transaction():
         # query/return semantics for tests. If other modules need similar behavior,
         # it can be extracted into the DB_Management layer.
         class _ConnAdapter:
-            def __init__(self, _conn):
+            def __init__(self, _conn: Any) -> None:
                 self._conn = _conn
                 # Heuristic: asyncpg connection exposes fetchrow; aiosqlite does not
                 self._is_sqlite = not hasattr(self._conn, "fetchrow")
@@ -309,7 +330,7 @@ async def get_db_transaction():
                 # Replace $1, $2 ... with '?'
                 return self._dollar_param.sub("?", query)
 
-            async def execute(self, query: str, *args):
+            async def execute(self, query: str, *args: object) -> Any:
                 # Postgres (asyncpg) supports variadic args; SQLite expects a sequence
                 if not self._is_sqlite:
                     # asyncpg connection
@@ -320,7 +341,7 @@ async def get_db_transaction():
                     cur = await self._conn.execute(q, params)
                     try:
                         await self._conn.commit()
-                    except Exception as exc:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Test DB adapter: sqlite commit failed: {}",
                             exc,
@@ -328,7 +349,7 @@ async def get_db_transaction():
                         raise
                     return cur
 
-            async def fetchval(self, query: str, *args):
+            async def fetchval(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchval(query, *args)
@@ -339,7 +360,7 @@ async def get_db_transaction():
                     row = await cur.fetchone()
                     return row[0] if row else None
 
-            async def fetch(self, query: str, *args):
+            async def fetch(self, query: str, *args: object) -> list[Any]:
                 if not self._is_sqlite:
                     # asyncpg connection
                     rows = await self._conn.fetch(query, *args)
@@ -350,11 +371,11 @@ async def get_db_transaction():
                     cur = await self._conn.execute(q, params)
                     rows = await cur.fetchall()
                     try:
-                        return [{key: r[key] for key in r.keys()} for r in rows]
-                    except Exception:
+                        return [{key: r[key] for key in r} for r in rows]
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return rows
 
-            async def fetchrow(self, query: str, *args):
+            async def fetchrow(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
                     # asyncpg connection
                     return await self._conn.fetchrow(query, *args)
@@ -364,15 +385,15 @@ async def get_db_transaction():
                     cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     try:
-                        return {key: row[key] for key in row.keys()} if row else None
-                    except Exception:
+                        return {key: row[key] for key in row} if row else None
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return row
 
-            async def commit(self):
+            async def commit(self) -> None:
                 if self._is_sqlite:
                     try:
                         await self._conn.commit()
-                    except Exception as exc:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                         logger.debug(
                             "Test DB adapter: sqlite commit failed: {}",
                             exc,
@@ -402,12 +423,19 @@ async def get_jwt_service_dep() -> JWTService:
 
 async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
-    # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
+    # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init.
+    # Never use this stub in production-like environments.
     try:
-        import os as _os, sys as _sys
+        import os as _os
 
         force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
-        if not force_real and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules):
+        in_production_like = bool(_is_production_like_env())
+        if (
+            not force_real
+            and not in_production_like
+            and _is_explicit_pytest_runtime()
+            and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"))
+        ):
             class _StubSessionManager:
                 enabled = True
 
@@ -428,7 +456,7 @@ async def get_session_manager_dep() -> SessionManager:
                     refresh_token: str,
                     ip_address: str = "",
                     user_agent: str = "",
-                ):
+                ) -> dict[str, Any]:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             _TEST_SESSION_STATE["sid"] += 1
@@ -454,25 +482,25 @@ async def get_session_manager_dep() -> SessionManager:
                     _session_id: int = 0,
                     _access_token: str = "",
                     _refresh_token: str = "",
-                    **_kwargs,
-                ):
+                    **_kwargs: object,
+                ) -> bool:
                     # No-op in stub
                     return True
 
-                async def refresh_session(self, *_args, **kwargs):
+                async def refresh_session(self, *_args: object, **kwargs: object) -> dict[str, Any]:
                     return {
                         "session_id": kwargs.get("session_id") or 1,
                         "user_id": kwargs.get("user_id") or 1,
                         "expires_at": datetime.now(timezone.utc).isoformat(),
                     }
 
-                async def get_user_sessions(self, user_id: int):
+                async def get_user_sessions(self, user_id: int) -> list[dict[str, Any]]:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             sessions = list(_TEST_SESSION_STATE["sessions"].values())
                         return [s for s in sessions if s.get("user_id") == user_id]
 
-                async def revoke_session(self, session_id: int, *_args, **_kwargs):
+                async def revoke_session(self, session_id: int, *_args: object, **_kwargs: object) -> bool:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             sess = _TEST_SESSION_STATE["sessions"].get(session_id)
@@ -482,7 +510,7 @@ async def get_session_manager_dep() -> SessionManager:
                             sess["is_active"] = False
                             return True
 
-                async def revoke_all_user_sessions(self, user_id: int):
+                async def revoke_all_user_sessions(self, user_id: int) -> int:
                     async with _get_test_session_lock():
                         with _TEST_SESSION_STATE_GUARD:
                             changed = 0
@@ -522,7 +550,7 @@ async def get_session_manager_dep() -> SessionManager:
                         _TEST_EPHEMERAL_STATE["values"].pop(key, None)
 
             return _StubSessionManager()  # type: ignore[return-value]
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "get_session_manager_dep: test stub resolution failed; falling back to real SessionManager: {}",
             exc,
@@ -557,7 +585,7 @@ async def get_current_user(
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY")
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Resolve and return the current authenticated user.
 
@@ -590,7 +618,7 @@ async def get_current_user(
                 bool(x_api_key),
                 request.url.path,
             )
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "get_current_user: TEST_MODE auth header diagnostics failed; continuing without diagnostics: {}",
             exc,
@@ -614,7 +642,7 @@ async def get_current_user(
             else:
                 # Normalize to a plain dict to preserve existing return shape
                 if isinstance(cached_user, Mapping):
-                    user_dict: Dict[str, Any] = dict(cached_user)
+                    user_dict: dict[str, Any] = dict(cached_user)
                 else:
                     dump = getattr(cached_user, "model_dump", None) or getattr(cached_user, "dict", None)
                     user_dict = dict(dump())
@@ -625,7 +653,7 @@ async def get_current_user(
                 try:
                     if isinstance(cached_user, Mapping):
                         request.state._auth_user = safe_user
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to update request.state._auth_user with sanitized user: {}",
                         exc,
@@ -635,7 +663,7 @@ async def get_current_user(
                     uid = safe_user.get("id")
                     if uid is not None:
                         request.state.user_id = int(uid)
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to attach user_id to request.state: {}",
                         exc,
@@ -653,13 +681,13 @@ async def get_current_user(
                         team_ids=team_ids if team_ids is not None else getattr(request.state, "team_ids", None),
                         is_admin=bool(getattr(principal, "is_admin", False)),
                     )
-                except Exception as exc:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(
                         "Fast-path: unable to (re)establish content scope context: {}",
                         exc,
                     )
                 return safe_user
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         # Fall through to standard auth behavior if any issue occurs
         logger.debug(
             "get_current_user: Fast-path AuthContext reuse failed, falling back to standard auth: {}",
@@ -670,7 +698,7 @@ async def get_current_user(
     if credentials and not x_api_key:
         try:
             settings = get_settings()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             settings = None
         if settings and getattr(settings, "AUTH_MODE", None) == "single_user":
             x_api_key = credentials.credentials
@@ -696,7 +724,7 @@ async def get_current_user(
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
                 extra_headers["X-TLDW-Auth-Headers"] = present_headers
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE missing-bearer diagnostic headers: {}",
                     exc,
@@ -733,10 +761,10 @@ async def get_current_user(
             if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
-                except Exception as exc:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as inner_exc:  # noqa: BLE001
                     logger.debug(
                         "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
-                        exc,
+                        inner_exc,
                     )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -745,7 +773,7 @@ async def get_current_user(
             ) from exc
         # Propagate non-401 HTTP errors unchanged.
         raise
-    except Exception as e:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
         if _is_test_mode():
             logger.exception("Authentication error in get_current_user (TEST_MODE)")
         else:
@@ -757,7 +785,7 @@ async def get_current_user(
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "get_current_user: failed to set TEST_MODE auth-error diagnostic header: {}",
                     exc,
@@ -786,7 +814,7 @@ async def get_current_user(
         uid = safe_user.get("id")
         if uid is not None:
             request.state.user_id = int(uid)
-    except Exception as state_exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as state_exc:
         logger.debug(
             "JWT path: unable to attach user_id from verify_jwt_and_fetch_user: {}",
             state_exc,
@@ -842,7 +870,7 @@ async def get_auth_principal(
             )
     except HTTPException:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Maintenance guard skipped: {}", exc)
     return principal
 
@@ -913,7 +941,7 @@ def require_api_key_scope(
         ):
             ...
     """
-    from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope, has_scope
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import has_scope, normalize_scope
 
     required_scopes = frozenset(s.strip().lower() for s in scopes if s)
 
@@ -1023,8 +1051,8 @@ async def require_service_principal(
 
 
 async def get_current_active_user(
-    current_user: Dict[str, Any] = Depends(get_current_user)
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_user)
+) -> dict[str, Any]:
     """
     Get current active user (verified and not locked)
 
@@ -1055,8 +1083,8 @@ async def get_current_active_user(
 async def get_user_org_policy(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
+) -> dict[str, Any]:
     """
     Deprecated compatibility shim for user-dict org policy lookups.
 
@@ -1071,13 +1099,13 @@ async def get_user_org_policy(
     )
 
 
-async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
+async def _load_org_policy(db: Any, org_id: int) -> dict[str, Any]:
     """
     Internal helper to load an organization policy with consistent error handling.
     """
     try:
         pol = await get_policy(db, org_id)
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.exception(
             "Failed to load organization policy for org_id={}",
             org_id,
@@ -1095,8 +1123,8 @@ async def _load_org_policy(db: Any, org_id: int) -> Dict[str, Any]:
 async def get_org_policy_from_principal(
     db: Any = Depends(get_db_transaction),  # noqa: B008
     principal: AuthPrincipal = Depends(get_auth_principal),  # noqa: B008
-    current_user: Dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user),  # noqa: B008
+) -> dict[str, Any]:
     """
     Resolve organization policy primarily from ``AuthPrincipal``, with fallbacks.
 
@@ -1128,12 +1156,12 @@ async def get_org_policy_from_principal(
             # Explicit compatibility mode: defer to legacy mode/profile helpers.
             try:
                 return bool(is_single_user_mode() or is_single_user_profile_mode())
-            except Exception:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                 return False
 
         try:
             single_profile = is_single_user_profile_mode()
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             single_profile = False
 
         if not single_profile:
@@ -1145,7 +1173,7 @@ async def get_org_policy_from_principal(
         # happen to share the single-user id.
         try:
             return getattr(p, "subject", None) == "single_user"
-        except Exception:
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
             return False
 
     # 1) Claim-first: use principal.org_ids when available.
@@ -1175,8 +1203,8 @@ async def get_org_policy_from_principal(
 
 
 async def require_admin(
-    current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-) -> Dict[str, Any]:
+    current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
+) -> dict[str, Any]:
     """
     Require admin role for access (legacy shim).
 
@@ -1229,8 +1257,8 @@ def require_role(role: str):
         Dependency function that checks for the role
     """
     async def role_checker(
-        current_user: Dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
-    ) -> Dict[str, Any]:
+        current_user: dict[str, Any] = Depends(get_current_active_user)  # noqa: B008
+    ) -> dict[str, Any]:
         user_role = current_user.get("role", "user")
 
         # Admin can access everything
@@ -1256,7 +1284,7 @@ async def get_optional_current_user(
     session_manager: SessionManager = Depends(get_session_manager_dep),
     db_pool: DatabasePool = Depends(get_db_pool),
     x_api_key: Optional[str] = Header(None, alias="X-API-KEY"),
-) -> Optional[Dict[str, Any]]:
+) -> Optional[dict[str, Any]]:
     """
     Legacy shim - do not use in new code.
 
@@ -1306,8 +1334,9 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     RG-first rate limit dependency with legacy fallback.
 
     When Resource Governor (RG) has already governed this request, this is a
-    no-op. Otherwise it uses the legacy AuthNZ rate limiter (user-scoped when
-    available, else IP-scoped).
+    no-op. Otherwise it calls the legacy AuthNZ limiter shim (user-scoped when
+    available, else IP-scoped). That shim is intentionally a compatibility
+    no-op in RG cutover mode and primarily preserves call contracts/metadata.
     """
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
@@ -1322,7 +1351,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
             principal = ctx.principal
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         principal = None
 
     if is_single_user_principal(principal):
@@ -1340,7 +1369,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
             rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter unavailable; skipping rate limit check; error={}",
@@ -1355,7 +1384,11 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "unknown"
-    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    client_ip = (
+        resolve_client_ip(request, settings)
+        or (request.client.host if getattr(request, "client", None) else None)
+        or "unknown"
+    )
     user_id = getattr(request.state, "user_id", None)
     user_id_int: Optional[int] = None
     if user_id is not None:
@@ -1380,7 +1413,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
             )
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter check failed; skipping rate limit check; error={}",
@@ -1400,7 +1433,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
+    """RG-first auth rate limit dependency with legacy fallback (IP-scoped no-op shim)."""
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
         return
@@ -1414,7 +1447,7 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         ctx = getattr(request.state, "auth", None)
         if isinstance(ctx, AuthContext):
             principal = ctx.principal
-    except Exception:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         principal = None
 
     if is_single_user_principal(principal):
@@ -1432,7 +1465,7 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
             rate_limiter = get_rate_limiter()
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy rate limiter unavailable; skipping auth rate limit check; error={}",
@@ -1447,17 +1480,40 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         return
 
     endpoint = request.url.path if getattr(request, "url", None) else "auth"
-    client_ip = request.client.host if getattr(request, "client", None) else "unknown"
+    client_ip = (
+        resolve_client_ip(request, settings)
+        or (request.client.host if getattr(request, "client", None) else None)
+        or "unknown"
+    )
+    identifier = f"ip:{client_ip}"
+    fallback_check = getattr(rate_limiter, "check_rate_limit_fallback", None)
     try:
-        allowed, meta = await rate_limiter.check_rate_limit(
-            identifier=f"ip:{client_ip}",
-            endpoint=f"auth:{endpoint}",
-            limit=settings.RATE_LIMIT_PER_MINUTE,
-            window_minutes=1,
-        )
+        if callable(fallback_check):
+            metrics.record_rate_limit_fallback(backend="authnz_fallback_db")
+            allowed, meta = await fallback_check(
+                identifier=identifier,
+                endpoint=f"auth:{endpoint}",
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+            if isinstance(meta, dict) and meta.get("error") == "fallback_limiter_unavailable":
+                logger.warning(
+                    "Auth fallback rate limiter unavailable while RG ingress is inactive; "
+                    "failing open for availability; endpoint={}",
+                    endpoint,
+                )
+        else:
+            allowed, meta = await rate_limiter.check_rate_limit(
+                identifier=identifier,
+                endpoint=f"auth:{endpoint}",
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
     except asyncio.CancelledError:
         raise
-    except Exception as exc:
+    except HTTPException:
+        raise
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()
         logger.warning(
             "Legacy auth rate limiter check failed; skipping auth rate limit check; error={}",
@@ -1557,11 +1613,17 @@ async def enforce_rbac_rate_limit(
         if candidates:
             limit_per_min = min([c[0] for c in candidates if c[0] is not None]) if any(c[0] for c in candidates) else None
             burst = min([c[1] for c in candidates if c[1] is not None]) if any(c[1] for c in candidates) else None
-            logger.debug(f"RBAC rate-limit selected for user {user_id}, resource {resource}: rpm={limit_per_min}, burst={burst}")
+            logger.debug(
+                "RBAC rate-limit selected for user {}, resource {}: rpm={}, burst={}",
+                user_id,
+                resource,
+                limit_per_min,
+                burst,
+            )
         else:
-            logger.debug(f"RBAC rate-limit: no configured limits for user {user_id}, resource {resource}")
-    except Exception as e:
-        logger.debug(f"RBAC rate-limit selection failed: {e}")
+            logger.debug("RBAC rate-limit: no configured limits for user {}, resource {}", user_id, resource)
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as e:
+        logger.debug("RBAC rate-limit selection failed: {}", e)
 
 
 def rbac_rate_limit(resource: str):
@@ -1569,8 +1631,8 @@ def rbac_rate_limit(resource: str):
     async def _dep(request: Request, db_pool: DatabasePool = Depends(get_db_pool)):
         await enforce_rbac_rate_limit(request, resource, db_pool)
     try:
-        setattr(_dep, "_tldw_rate_limit_resource", resource)
-    except Exception as exc:
+        _dep._tldw_rate_limit_resource = resource
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "rbac_rate_limit: unable to attach rate-limit metadata to dependency: {}",
             exc,
@@ -1636,7 +1698,8 @@ def require_token_scope(
       it must match the provided `scope` or 403.
     - If `require_schedule_match=True` and the token includes 'schedule_id', the value must
       match the request path param `schedule_path_param` when present, or header `schedule_header`.
-    - In single-user mode, or when no bearer token is present, this check is bypassed.
+    - When `require_if_present=True`, missing/invalid credentials fail closed (401).
+      API keys are accepted via `X-API-KEY` or Authorization bearer (non-JWT).
     - If `allow_admin_bypass=True`, admin users skip this enforcement.
     - If the bearer token is not a JWT, enforce API key constraints using that token.
     """
@@ -1654,7 +1717,7 @@ def require_token_scope(
                 jwt_service = await get_jwt_service_dep()
             if isinstance(db_pool, _Depends) or db_pool is None:
                 db_pool = await get_db_pool()
-        except Exception as exc:  # noqa: BLE001
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
             # Best effort: if resolution fails, leave as-is; downstream code handles missing services.
             logger.debug(
                 "require_token_scope: dependency resolution failed; continuing with provided services: {}",
@@ -1671,7 +1734,7 @@ def require_token_scope(
                 ctx = getattr(request.state, "auth", None)
                 if isinstance(ctx, AuthContext):
                     principal = ctx.principal
-            except Exception:
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                 principal = None
             if principal is None and credentials:
                 try:
@@ -1682,7 +1745,7 @@ def require_token_scope(
                             override_fn = app.dependency_overrides.get(get_auth_principal)
                             if override_fn is not None:
                                 resolver = override_fn
-                    except Exception:
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         resolver = get_auth_principal
 
                     if resolver is get_auth_principal:
@@ -1702,7 +1765,7 @@ def require_token_scope(
                         principal = result
                 except HTTPException:
                     principal = None
-                except Exception:
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                     principal = None
             if principal is not None and principal.is_admin:
                 return None
@@ -1711,9 +1774,12 @@ def require_token_scope(
         if token and token_is_jwt:
             try:
                 payload = jwt_service.decode_access_token(token)
-            except (InvalidTokenError, TokenExpiredError):
-                # Defensive: malformed tokens should fall back to upstream auth handling.
-                return None
+            except (InvalidTokenError, TokenExpiredError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
             # Enforce revocation/blacklist checks for scoped JWTs.
             try:
                 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
@@ -1723,7 +1789,7 @@ def require_token_scope(
                     raise HTTPException(status_code=401, detail="Token has been revoked")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: token revocation check failed; denying: {}",
                     exc,
@@ -1735,7 +1801,7 @@ def require_token_scope(
                     request.state._token_scope_enforced = True
                     request.state._token_scope_claim = tok_scope
                     request.state._token_scope_required = str(scope)
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     logger.debug("require_token_scope: failed to attach scope enforcement marker to request.state")
             if tok_scope and require_if_present and tok_scope != str(scope):
                 raise HTTPException(status_code=403, detail="Forbidden: invalid token scope")
@@ -1749,7 +1815,7 @@ def require_token_scope(
                             raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: endpoint allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1764,7 +1830,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: method not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: method allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1779,7 +1845,7 @@ def require_token_scope(
                         raise HTTPException(status_code=403, detail="Forbidden: path not permitted for token")
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: path allowlist enforcement failed; continuing: {}",
                     exc,
@@ -1809,7 +1875,7 @@ def require_token_scope(
                                     raise HTTPException(status_code=403, detail="Forbidden: token quota exceeded")
                             except HTTPException:
                                 raise
-                            except Exception as err:
+                            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as err:
                                 # Defensive: fall back to process-local counters if quota backend fails.
                                 if not _vk_usage_check_and_increment(key, int(max_calls)):
                                     raise HTTPException(
@@ -1818,7 +1884,7 @@ def require_token_scope(
                                     ) from err
             except HTTPException:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(
                     "require_token_scope: token constraints evaluation failed; continuing: {}",
                     exc,
@@ -1827,17 +1893,17 @@ def require_token_scope(
             if require_schedule_match:
                 try:
                     tok_sid = payload.get("schedule_id")
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     tok_sid = None
                 expected = None
                 try:
                     expected = request.path_params.get(schedule_path_param)
-                except Exception:  # noqa: BLE001
+                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                     expected = None
                 if expected is None:
                     try:
                         expected = request.headers.get(schedule_header)
-                    except Exception:  # noqa: BLE001
+                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
                         expected = None
                 if tok_sid is not None and expected is not None and str(tok_sid) != str(expected):
                     raise HTTPException(status_code=403, detail="Forbidden: schedule scope mismatch")
@@ -1847,17 +1913,29 @@ def require_token_scope(
         # Fallback: X-API-KEY constraints enforcement (if header present and key is valid)
         try:
             api_key = request.headers.get("X-API-KEY") if getattr(request, "headers", None) else None
-        except Exception:  # noqa: BLE001
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
             # Defensive: request headers access should never block the fallback path.
             api_key = None
         if not api_key and token and not token_is_jwt:
             api_key = token
+        if not api_key:
+            if require_if_present:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return None
         if api_key:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
-                    normalize_scope as _normalize_scope,
-                    has_scope as _has_scope,
                     VALID_SCOPE_VALUES as _VALID_SCOPE_VALUES,
+                )
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+                    has_scope as _has_scope,
+                )
+                from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
+                    normalize_scope as _normalize_scope,
                 )
 
                 def _required_scope_for_api_key(scope_value: str, method: str) -> Optional[str]:
@@ -1872,9 +1950,19 @@ def require_token_scope(
 
                 api_mgr = await get_api_key_manager()
                 client_ip = resolve_client_ip(request, get_settings())
-                info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+                info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    ip_address=client_ip,
+                    record_usage=False,
+                )
                 if not info:
-                    # Let upstream auth fail; do not enforce here
+                    if require_if_present:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Could not validate credentials",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                    # Optional mode: let upstream auth fail.
                     return None
                 # Admin bypass via scope 'admin'
                 key_scopes = _normalize_scope(info.get("scope"))
@@ -1892,8 +1980,20 @@ def require_token_scope(
                     import json as _json
                     try:
                         allowed_eps = _json.loads(allowed_eps)
-                    except (ValueError, TypeError):
-                        allowed_eps = None
+                    except (ValueError, TypeError) as parse_exc:
+                        logger.debug(
+                            "require_token_scope: malformed llm_allowed_endpoints for key {}; denying",
+                            info.get("id"),
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key endpoint constraints",
+                        ) from parse_exc
+                if allowed_eps is not None and not isinstance(allowed_eps, list):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Forbidden: invalid API key endpoint constraints",
+                    )
                 if endpoint_id and isinstance(allowed_eps, list) and allowed_eps:
                     if endpoint_id not in [str(x) for x in allowed_eps]:
                         raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for API key")
@@ -1903,15 +2003,37 @@ def require_token_scope(
                     import json as _json
                     try:
                         meta = _json.loads(meta)
-                    except (ValueError, TypeError):
-                        meta = None
+                    except (ValueError, TypeError) as parse_exc:
+                        logger.debug(
+                            "require_token_scope: malformed metadata constraints for key {}; denying",
+                            info.get("id"),
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        ) from parse_exc
+                if meta is not None and not isinstance(meta, dict):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Forbidden: invalid API key metadata constraints",
+                    )
                 if isinstance(meta, dict):
                     am = meta.get("allowed_methods")
+                    if am is not None and not isinstance(am, list):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        )
                     if isinstance(am, list) and am:
                         method = str(getattr(request, "method", "")).upper()
                         if method and method not in [str(x).upper() for x in am]:
                             raise HTTPException(status_code=403, detail="Forbidden: method not permitted for API key")
                     ap = meta.get("allowed_paths")
+                    if ap is not None and not isinstance(ap, list):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        )
                     if isinstance(ap, list) and ap:
                         path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
                         if path and not any(str(path).startswith(str(pfx)) for pfx in ap):
@@ -1937,7 +2059,7 @@ def require_token_scope(
                                         raise HTTPException(status_code=403, detail="Forbidden: API key quota exceeded")
                                 except HTTPException:
                                     raise
-                                except Exception as err:
+                                except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as err:
                                     # Defensive: fall back to process-local counters if quota backend fails.
                                     key = (f"apikey:{key_id}", str(count_as))
                                     if not _vk_usage_check_and_increment(key, int(quota)):
@@ -1947,17 +2069,23 @@ def require_token_scope(
                                         ) from err
             except HTTPException:
                 raise
-            except Exception:  # noqa: BLE001
-                # Best-effort: do not block if metadata not available
-                return None
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: API key constraint evaluation failed; denying: {}",
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: unable to validate API key constraints",
+                ) from exc
         return None
 
     try:
-        setattr(_checker, "_tldw_endpoint_id", endpoint_id)
-        setattr(_checker, "_tldw_scope_name", scope)
-        setattr(_checker, "_tldw_token_scope", True)
-        setattr(_checker, "_tldw_token_scope_required", str(scope))
-    except Exception as exc:  # noqa: BLE001
+        _checker._tldw_endpoint_id = endpoint_id
+        _checker._tldw_scope_name = scope
+        _checker._tldw_token_scope = True
+        _checker._tldw_token_scope_required = str(scope)
+    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
         logger.debug(
             "require_token_scope: unable to attach metadata to dependency: {}",
             exc,

@@ -1,7 +1,6 @@
 # prompt_decomposer.py
 # Simple heuristic task/prompt decomposition utilities
 
-from typing import List
 import re
 
 
@@ -15,7 +14,7 @@ class PromptDecomposer:
     - examples
     """
 
-    def decompose_text(self, text: str) -> List[str]:
+    def decompose_text(self, text: str) -> list[str]:
         if not text:
             return []
         # Split by common delimiters/sections

@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any
 
 import yaml
 from loguru import logger
@@ -20,9 +21,9 @@ def _parse_scalar(value: str) -> Any:
     return value if parsed is None else parsed
 
 
-def section_to_nested_dict(section: Dict[str, str]) -> Dict[str, Any]:
+def section_to_nested_dict(section: dict[str, str]) -> dict[str, Any]:
     """Convert a flat config section into a nested dict using dot notation."""
-    nested: Dict[str, Any] = {}
+    nested: dict[str, Any] = {}
     for raw_key, raw_value in section.items():
         key = raw_key.strip()
         value = _parse_scalar(str(raw_value))
@@ -38,8 +39,8 @@ def section_to_nested_dict(section: Dict[str, str]) -> Dict[str, Any]:
 
 def load_module_yaml(
     module_name: str,
-    filename_override: Optional[str] = None,
-) -> Tuple[Dict[str, Any], Optional[Path]]:
+    filename_override: str | None = None,
+) -> tuple[dict[str, Any], Path | None]:
     """Load module YAML config using the shared config root."""
     path = resolve_module_yaml(module_name, filename_override=filename_override)
     if path is None:
@@ -50,7 +51,7 @@ def load_module_yaml(
         return {}, path
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if isinstance(data, dict):
             logger.debug(f"Loaded module YAML for {module_name}: {path}")
@@ -63,10 +64,10 @@ def load_module_yaml(
 
 
 def _merge_layer(
-    base: Dict[str, Any],
-    layer: Dict[str, Any],
+    base: dict[str, Any],
+    layer: dict[str, Any],
     source: str,
-    sources: Dict[str, Any],
+    sources: dict[str, Any],
 ) -> None:
     for key, value in layer.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -81,11 +82,11 @@ def _merge_layer(
 
 
 def merge_config_layers(
-    layers: Iterable[Tuple[str, Dict[str, Any]]]
-) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    layers: Iterable[tuple[str, dict[str, Any]]]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge config layers and return merged config + source map."""
-    merged: Dict[str, Any] = {}
-    sources: Dict[str, Any] = {}
+    merged: dict[str, Any] = {}
+    sources: dict[str, Any] = {}
     for source, layer in layers:
         if not layer:
             continue
@@ -94,9 +95,9 @@ def merge_config_layers(
 
 
 def apply_default_sources(
-    values: Dict[str, Any],
-    sources: Dict[str, Any],
-) -> Dict[str, Any]:
+    values: dict[str, Any],
+    sources: dict[str, Any],
+) -> dict[str, Any]:
     """Fill missing source tags with 'default'."""
     for key, value in values.items():
         if key not in sources:

@@ -3,12 +3,13 @@ Stateless dependency resolution service.
 Efficiently resolves task dependencies without maintaining state.
 """
 
-from typing import List, Dict, Set, Optional
+from typing import Optional
+
 from loguru import logger
 
-from ..base.queue_backend import QueueBackend
 from ..base import Task, TaskStatus
 from ..base.exceptions import DependencyError
+from ..base.queue_backend import QueueBackend
 
 
 class DependencyService:
@@ -28,7 +29,7 @@ class DependencyService:
         """
         self.backend = backend
 
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
         Get tasks that are ready to run (all dependencies satisfied).
 
@@ -71,7 +72,7 @@ class DependencyService:
 
         return True
 
-    async def get_dependency_graph(self, root_task_id: str) -> Dict[str, List[str]]:
+    async def get_dependency_graph(self, root_task_id: str) -> dict[str, list[str]]:
         """
         Build dependency graph starting from a root task.
 
@@ -81,8 +82,8 @@ class DependencyService:
         Returns:
             Dictionary mapping task IDs to their dependencies
         """
-        graph: Dict[str, List[str]] = {}
-        visited: Set[str] = set()
+        graph: dict[str, list[str]] = {}
+        visited: set[str] = set()
 
         async def traverse(task_id: str):
             if task_id in visited:
@@ -118,8 +119,8 @@ class DependencyService:
             return False
 
         # Use DFS to detect cycles
-        visited: Set[str] = set()
-        rec_stack: Set[str] = set()
+        visited: set[str] = set()
+        rec_stack: set[str] = set()
 
         async def has_cycle(current_id: str) -> bool:
             visited.add(current_id)
@@ -139,7 +140,7 @@ class DependencyService:
 
         return await has_cycle(task_id)
 
-    async def get_dependent_tasks(self, task_id: str) -> List[str]:
+    async def get_dependent_tasks(self, task_id: str) -> list[str]:
         """
         Get tasks that depend on the given task.
 
@@ -156,7 +157,7 @@ class DependencyService:
         logger.warning("get_dependent_tasks not fully implemented")
         return []
 
-    async def validate_dependencies(self, task: Task) -> List[str]:
+    async def validate_dependencies(self, task: Task) -> list[str]:
         """
         Validate that all dependencies exist and return any missing ones.
 
@@ -177,7 +178,7 @@ class DependencyService:
 
         return missing
 
-    async def get_execution_order(self, task_ids: List[str]) -> List[str]:
+    async def get_execution_order(self, task_ids: list[str]) -> list[str]:
         """
         Get optimal execution order for a set of tasks based on dependencies.
 
@@ -190,8 +191,8 @@ class DependencyService:
             Ordered list of task IDs
         """
         # Build adjacency list
-        graph: Dict[str, List[str]] = {}
-        in_degree: Dict[str, int] = {}
+        graph: dict[str, list[str]] = {}
+        in_degree: dict[str, int] = {}
 
         for task_id in task_ids:
             task = await self.backend.get_task(task_id)

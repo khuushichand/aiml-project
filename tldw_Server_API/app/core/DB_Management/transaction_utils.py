@@ -5,16 +5,17 @@
 import asyncio
 import functools
 from contextlib import asynccontextmanager
-from typing import Any, Callable, Optional, TypeVar
+from typing import Callable, Optional, TypeVar
+
 from loguru import logger
 
+from tldw_Server_API.app.core.DB_Management.async_db_wrapper import AsyncDatabaseWrapper
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
     CharactersRAGDBError,
     ConflictError,
-    InputError
+    InputError,
 )
-from tldw_Server_API.app.core.DB_Management.async_db_wrapper import AsyncDatabaseWrapper
 
 #######################################################################################################################
 #
@@ -50,15 +51,20 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
     last_error = None
 
     while retry_count < max_retries:
+        entered_context = False
         try:
-            # Start transaction
+            # Retry is only safe before entering/yielding the transactional block.
+            # After the caller's block runs, we must not attempt a second yield.
             with db.transaction():
+                entered_context = True
                 yield db
-                # If we get here, transaction was successful
                 return
 
         except ConflictError as e:
-            # Conflict due to concurrent modification - retry
+            if entered_context:
+                # Conflict occurred after the caller's block started; an async
+                # context manager cannot safely re-yield to replay user code.
+                raise
             retry_count += 1
             last_error = e
             if retry_count < max_retries:
@@ -82,7 +88,7 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
         except Exception as e:
             # Unexpected error - log and re-raise
             logger.error(f"Unexpected error in transaction: {e}", exc_info=True)
-            raise CharactersRAGDBError(f"Transaction failed: {str(e)}")
+            raise CharactersRAGDBError(f"Transaction failed: {str(e)}") from e
 
     # If we get here, all retries exhausted
     if last_error:
@@ -137,12 +143,12 @@ async def run_transaction(
                 raise
         except InputError:
             raise
-        except CharactersRAGDBError as e:
+        except CharactersRAGDBError:
             # Non-conflict DB errors: surface to caller
-            raise e
+            raise
         except Exception as e:  # noqa: BLE001
             # Unexpected error
-            raise CharactersRAGDBError(f"Transaction failed: {e}")
+            raise CharactersRAGDBError(f"Transaction failed: {e}") from e
 
     # Exhausted retries
     if last_err:
@@ -212,8 +218,9 @@ async def save_conversation_with_messages(
                 raise CharactersRAGDBError("Failed to create conversation")
             message_ids: list[str] = []
             for message in messages:
-                message['conversation_id'] = conversation_id
-                message_id = sync_db.add_message(message)
+                message_payload = dict(message)
+                message_payload['conversation_id'] = conversation_id
+                message_id = sync_db.add_message(message_payload)
                 if not message_id:
                     raise CharactersRAGDBError(
                         f"Failed to add message to conversation {conversation_id}"
@@ -230,8 +237,9 @@ async def save_conversation_with_messages(
             raise CharactersRAGDBError("Failed to create conversation")
         message_ids = []
         for message in messages:
-            message['conversation_id'] = conversation_id
-            message_id = db.add_message(message)  # type: ignore[attr-defined]
+            message_payload = dict(message)
+            message_payload['conversation_id'] = conversation_id
+            message_id = db.add_message(message_payload)  # type: ignore[attr-defined]
             if not message_id:
                 raise CharactersRAGDBError(
                     f"Failed to add message to conversation {conversation_id}"
@@ -269,8 +277,9 @@ async def update_conversation_with_rollback(
                         )
                 if new_messages:
                     for message in new_messages:
-                        message['conversation_id'] = conversation_id
-                        message_id = sync_db.add_message(message)
+                        message_payload = dict(message)
+                        message_payload['conversation_id'] = conversation_id
+                        message_id = sync_db.add_message(message_payload)
                         if not message_id:
                             raise CharactersRAGDBError(
                                 f"Failed to add message to conversation {conversation_id}"
@@ -288,15 +297,16 @@ async def update_conversation_with_rollback(
                     )
             if new_messages:
                 for message in new_messages:
-                    message['conversation_id'] = conversation_id
-                    message_id = db.add_message(message)  # type: ignore[attr-defined]
+                    message_payload = dict(message)
+                    message_payload['conversation_id'] = conversation_id
+                    message_id = db.add_message(message_payload)  # type: ignore[attr-defined]
                     if not message_id:
                         raise CharactersRAGDBError(
                             f"Failed to add message to conversation {conversation_id}"
                         )
             return True
     except Exception as e:
-        logger.error(f"Failed to update conversation {conversation_id}: {e}")
+        logger.error(f"Failed to update conversation {conversation_id}: {e}", exc_info=True)
         return False
 
 

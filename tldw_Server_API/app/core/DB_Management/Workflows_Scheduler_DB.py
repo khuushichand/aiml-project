@@ -11,17 +11,17 @@ Backed by the same DB backend factory used by the content DB
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-
-import os
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
 from .backends.base import BackendType, DatabaseBackend, DatabaseConfig, QueryResult
 from .backends.factory import DatabaseBackendFactory
 
@@ -98,10 +98,10 @@ class WorkflowSchedule:
     id: str
     tenant_id: str
     user_id: str
-    workflow_id: Optional[int]
-    name: Optional[str]
+    workflow_id: int | None
+    name: str | None
     cron: str
-    timezone: Optional[str]
+    timezone: str | None
     inputs_json: str
     run_mode: str
     validation_mode: str
@@ -111,15 +111,15 @@ class WorkflowSchedule:
     misfire_grace_sec: int
     coalesce: bool
     jitter_sec: int
-    last_run_at: Optional[str]
-    next_run_at: Optional[str]
-    last_status: Optional[str]
+    last_run_at: str | None
+    next_run_at: str | None
+    last_status: str | None
     created_at: str
     updated_at: str
 
 
 class WorkflowsSchedulerDB:
-    def __init__(self, backend: Optional[DatabaseBackend] = None, *, user_id: Optional[int] = None) -> None:
+    def __init__(self, backend: DatabaseBackend | None = None, *, user_id: int | None = None) -> None:
         if backend is not None:
             self.backend = backend
         else:
@@ -164,6 +164,16 @@ class WorkflowsSchedulerDB:
                 cfg.backend_type = BackendType.SQLITE
                 cfg.sqlite_path = custom_path
 
+            # Do not inherit arbitrary global SQLite DB paths (e.g. DATABASE_URL
+            # for AuthNZ/content). When scheduler-specific overrides are absent,
+            # default scheduler storage should use the dedicated per-user path.
+            if (
+                not custom_url
+                and not custom_path
+                and cfg.backend_type == BackendType.SQLITE
+            ):
+                cfg.sqlite_path = str(default_path)
+
             if cfg.backend_type == BackendType.SQLITE:
                 sqlite_path_str = (cfg.sqlite_path or "").strip()
                 default_candidates = {
@@ -202,10 +212,7 @@ class WorkflowsSchedulerDB:
             pass
         with self.backend.transaction() as conn:
             backend_type = getattr(getattr(self.backend, "config", None), "backend_type", None)
-            if backend_type == BackendType.POSTGRESQL:
-                schema = SCHED_POSTGRES_SCHEMA
-            else:
-                schema = SCHED_SQLITE_SCHEMA
+            schema = SCHED_POSTGRES_SCHEMA if backend_type == BackendType.POSTGRESQL else SCHED_SQLITE_SCHEMA
             self.backend.create_tables(schema, connection=conn)
 
             existing_columns = {
@@ -241,9 +248,9 @@ class WorkflowsSchedulerDB:
                 if column not in existing_columns:
                     self.backend.execute(statement, connection=conn)
 
-    def _rows(self, result: QueryResult) -> List[Dict[str, Any]]:
+    def _rows(self, result: QueryResult) -> list[dict[str, Any]]:
         cols = [c[0] for c in (result.description or [])]
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for row in (result.rows or []):
             if isinstance(row, dict):
                 # Already a mapping from the backend
@@ -251,7 +258,7 @@ class WorkflowsSchedulerDB:
                 continue
             try:
                 # Sequence row -> map by description
-                mapping: Dict[str, Any] = {}
+                mapping: dict[str, Any] = {}
                 for i, col in enumerate(cols):
                     mapping[col] = row[i]
                 out.append(mapping)
@@ -269,11 +276,11 @@ class WorkflowsSchedulerDB:
         id: str,
         tenant_id: str,
         user_id: str,
-        workflow_id: Optional[int],
-        name: Optional[str],
+        workflow_id: int | None,
+        name: str | None,
         cron: str,
-        timezone: Optional[str],
-        inputs: Dict[str, Any],
+        timezone: str | None,
+        inputs: dict[str, Any],
         run_mode: str = "async",
         validation_mode: str = "block",
         enabled: bool = True,
@@ -315,11 +322,11 @@ class WorkflowsSchedulerDB:
         with self.backend.transaction() as conn:
             self.backend.execute(sql, params, connection=conn)
 
-    def update_schedule(self, id: str, update: Dict[str, Any]) -> bool:
+    def update_schedule(self, id: str, update: dict[str, Any]) -> bool:
         if not update:
             return False
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for k, v in update.items():
             if k == "inputs":
                 fields.append("inputs_json = ?")
@@ -349,7 +356,7 @@ class WorkflowsSchedulerDB:
             res = self.backend.execute("DELETE FROM workflow_schedules WHERE id = ?", (id,), connection=conn)
         return (getattr(res, "rowcount", 0) or 0) > 0
 
-    def get_schedule(self, id: str) -> Optional[WorkflowSchedule]:
+    def get_schedule(self, id: str) -> WorkflowSchedule | None:
         with self.backend.transaction() as conn:
             res = self.backend.execute("SELECT * FROM workflow_schedules WHERE id = ?", (id,), connection=conn)
         rows = self._rows(res)
@@ -370,11 +377,11 @@ class WorkflowsSchedulerDB:
         self,
         *,
         tenant_id: str,
-        user_id: Optional[str] = None,
+        user_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> List[WorkflowSchedule]:
-        params: List[Any] = [tenant_id]
+    ) -> list[WorkflowSchedule]:
+        params: list[Any] = [tenant_id]
         sql = "SELECT * FROM workflow_schedules WHERE tenant_id = ?"
         if user_id:
             sql += " AND user_id = ?"
@@ -383,7 +390,7 @@ class WorkflowsSchedulerDB:
         params.extend([limit, offset])
         with self.backend.transaction() as conn:
             res = self.backend.execute(sql, tuple(params), connection=conn)
-        out: List[WorkflowSchedule] = []
+        out: list[WorkflowSchedule] = []
         for r in self._rows(res):
             out.append(
                 WorkflowSchedule(
@@ -399,8 +406,8 @@ class WorkflowsSchedulerDB:
         return out
 
     # Convenience helpers to mutate history
-    def set_history(self, id: str, *, last_run_at: Optional[str] = None, next_run_at: Optional[str] = None, last_status: Optional[str] = None) -> None:
-        update: Dict[str, Any] = {}
+    def set_history(self, id: str, *, last_run_at: str | None = None, next_run_at: str | None = None, last_status: str | None = None) -> None:
+        update: dict[str, Any] = {}
         if last_run_at is not None:
             update["last_run_at"] = last_run_at
         if next_run_at is not None:

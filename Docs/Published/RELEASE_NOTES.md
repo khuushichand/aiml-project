@@ -1,6 +1,15 @@
 Release Notes
 =============
 
+2026-02-06
+
+- Watchlists outputs: optional small-run TTS brief auto-generation now honors per-job `output_prefs` (`tts_brief`/`audio_brief`) and records metadata flags when auto mode is applied.
+- Watchlists API: added per-source dedup/seen inspect/reset endpoints:
+  - `GET /api/v1/watchlists/sources/{source_id}/seen`
+  - `DELETE /api/v1/watchlists/sources/{source_id}/seen`
+- Admin-capable user objects can inspect/reset dedup/seen state for another user via `target_user_id`; non-admin callers are rejected with `403 watchlists_admin_required_for_target_user`.
+- Added focused Stage 5 reliability tests: scheduler controls roundtrip, dedup/seen tooling, and performance sanity for large filter sets.
+
 2025-11-26
 
 - ChaChaNotes schema v10 adds conversation metadata with an `in-progress` default/backfill plus topic and cluster labels.

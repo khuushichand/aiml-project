@@ -1,3 +1,3 @@
-from .service import NotificationsService, NotificationResult
+from .service import NotificationResult, NotificationsService
 
 __all__ = ["NotificationsService", "NotificationResult"]

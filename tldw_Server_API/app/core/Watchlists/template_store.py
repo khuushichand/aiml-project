@@ -3,18 +3,23 @@ File-based template storage for Watchlists outputs.
 
 Templates are persisted under Config_Files/templates/watchlists (or the directory
 specified via WATCHLIST_TEMPLATE_DIR). Each template is stored as <name>.<format>
-where format is 'md' or 'html'. Optional metadata (currently description only) is
-stored in a sibling <name>.meta.json file.
+where format is 'md' or 'html'.
+
+Metadata is stored in a sibling <name>.meta.json file and includes:
+- description
+- current_version
+- history (older template snapshots)
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import os
+from typing import Any
 
 from loguru import logger
 
@@ -39,6 +44,18 @@ class TemplateRecord:
     content: str
     description: str | None
     updated_at: str
+    version: int = 1
+    history_count: int = 0
+    available_versions: list[int] | None = None
+
+
+@dataclass
+class TemplateVersionRecord:
+    version: int
+    format: str
+    description: str | None
+    updated_at: str
+    is_current: bool
 
 
 class TemplateNotFoundError(FileNotFoundError):
@@ -47,6 +64,10 @@ class TemplateNotFoundError(FileNotFoundError):
 
 class TemplateExistsError(FileExistsError):
     """Raised when creating a template that already exists and overwrite=False."""
+
+
+class TemplateVersionNotFoundError(LookupError):
+    """Raised when a requested template version does not exist."""
 
 
 def _resolved_dir() -> Path:
@@ -129,23 +150,89 @@ def _meta_path(name: str) -> Path:
     return path
 
 
-def _load_description(meta_file: Path) -> str | None:
+def _load_metadata(meta_file: Path) -> dict[str, Any]:
     if not meta_file.exists():
-        return None
+        return {}
     try:
-        data = json.loads(meta_file.read_text(encoding="utf-8"))
-        desc = data.get("description")
-        return str(desc) if desc is not None else None
+        raw = json.loads(meta_file.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+        return {}
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         logger.debug(f"Failed to read template metadata from {meta_file}: {exc}")
-        return None
+        return {}
 
 
-def _save_description(meta_file: Path, description: str | None) -> None:
-    if description:
-        meta_file.write_text(json.dumps({"description": description}, ensure_ascii=False, indent=2), encoding="utf-8")
+def _safe_int(value: Any, default: int = 1) -> int:
+    try:
+        parsed = int(value)
+        return parsed if parsed > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_history(meta: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = meta.get("history")
+    if not isinstance(raw, list):
+        return []
+    history: list[dict[str, Any]] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        version = _safe_int(entry.get("version"), default=0)
+        fmt = str(entry.get("format") or "").lower()
+        content = entry.get("content")
+        if version <= 0 or fmt not in {"md", "html"} or not isinstance(content, str):
+            continue
+        history.append(
+            {
+                "version": version,
+                "format": fmt,
+                "content": content,
+                "description": (
+                    str(entry.get("description"))
+                    if entry.get("description") is not None
+                    else None
+                ),
+                "updated_at": (
+                    str(entry.get("updated_at"))
+                    if entry.get("updated_at") is not None
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            }
+        )
+    history.sort(key=lambda item: item["version"])
+    return history
+
+
+def _save_metadata(
+    meta_file: Path,
+    *,
+    description: str | None,
+    current_version: int,
+    history: list[dict[str, Any]],
+) -> None:
+    payload: dict[str, Any] = {}
+    if description is not None:
+        payload["description"] = description
+    if current_version > 1:
+        payload["current_version"] = current_version
+    if history:
+        payload["history"] = history
+
+    if payload:
+        meta_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     elif meta_file.exists():
         meta_file.unlink()
+
+
+def _available_versions(current_version: int, history: list[dict[str, Any]]) -> list[int]:
+    versions = {current_version}
+    for entry in history:
+        version = _safe_int(entry.get("version"), default=0)
+        if version > 0:
+            versions.add(version)
+    return sorted(versions)
 
 
 def _sanitize_name(name: str) -> str:
@@ -162,7 +249,11 @@ def list_templates() -> list[TemplateRecord]:
             continue
         name = path.stem
         fmt = path.suffix.lower().lstrip(".")
-        description = _load_description(_meta_path(name))
+        meta = _load_metadata(_meta_path(name))
+        description = str(meta.get("description")) if meta.get("description") is not None else None
+        history = _load_history(meta)
+        version = _safe_int(meta.get("current_version"), default=1)
+        available_versions = _available_versions(version, history)
         updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat()
         records.append(
             TemplateRecord(
@@ -171,28 +262,56 @@ def list_templates() -> list[TemplateRecord]:
                 content="",
                 description=description,
                 updated_at=updated_at,
+                version=version,
+                history_count=len(history),
+                available_versions=available_versions,
             )
         )
     return records
 
 
-def load_template(name: str) -> TemplateRecord:
+def load_template(name: str, *, version: int | None = None) -> TemplateRecord:
     name = _sanitize_name(name)
     directory = _resolved_dir()
-    for suffix in _SUPPORTED_SUFFIXES:
+    for suffix in sorted(_SUPPORTED_SUFFIXES):
         candidate = directory / f"{name}{suffix}"
         _assert_within_base(candidate, directory)
         if candidate.exists():
             fmt = suffix.lstrip(".")
-            content = candidate.read_text(encoding="utf-8")
-            description = _load_description(_meta_path(name))
-            updated_at = datetime.fromtimestamp(candidate.stat().st_mtime, timezone.utc).isoformat()
+            meta = _load_metadata(_meta_path(name))
+            history = _load_history(meta)
+            current_version = _safe_int(meta.get("current_version"), default=1)
+            requested_version = _safe_int(version, default=current_version) if version is not None else current_version
+            description = str(meta.get("description")) if meta.get("description") is not None else None
+            available_versions = _available_versions(current_version, history)
+
+            if requested_version == current_version:
+                content = candidate.read_text(encoding="utf-8")
+                updated_at = datetime.fromtimestamp(candidate.stat().st_mtime, timezone.utc).isoformat()
+                selected_fmt = fmt
+                selected_description = description
+            else:
+                selected = next((entry for entry in history if entry.get("version") == requested_version), None)
+                if not selected:
+                    raise TemplateVersionNotFoundError(f"{name}:{requested_version}")
+                content = str(selected["content"])
+                updated_at = str(selected.get("updated_at") or datetime.now(timezone.utc).isoformat())
+                selected_fmt = str(selected.get("format") or fmt)
+                selected_description = (
+                    str(selected.get("description"))
+                    if selected.get("description") is not None
+                    else None
+                )
+
             return TemplateRecord(
                 name=name,
-                format=fmt,
+                format=selected_fmt,
                 content=content,
-                description=description,
+                description=selected_description,
                 updated_at=updated_at,
+                version=requested_version,
+                history_count=len(history),
+                available_versions=available_versions,
             )
     raise TemplateNotFoundError(name)
 
@@ -211,10 +330,11 @@ def save_template(
         raise InvalidTemplateFormatError(_INVALID_TEMPLATE_FORMAT_ERROR)
     path = _template_path(name, fmt)
     directory = path.parent
+    meta_path = _meta_path(name)
 
     # Determine if any variant exists
     existing_variants = []
-    for suffix in _SUPPORTED_SUFFIXES:
+    for suffix in sorted(_SUPPORTED_SUFFIXES):
         candidate = directory / f"{name}{suffix}"
         _assert_within_base(candidate, directory)
         if candidate.exists():
@@ -222,21 +342,93 @@ def save_template(
     if existing_variants and not overwrite:
         raise TemplateExistsError(name)
 
+    existing_variants.sort(key=lambda candidate: candidate.stat().st_mtime, reverse=True)
+    existing_meta = _load_metadata(meta_path)
+    existing_history = _load_history(existing_meta)
+    current_version = _safe_int(existing_meta.get("current_version"), default=1)
+
+    if existing_variants:
+        current_file = existing_variants[0]
+        previous_updated_at = datetime.fromtimestamp(current_file.stat().st_mtime, timezone.utc).isoformat()
+        existing_history.append(
+            {
+                "version": current_version,
+                "format": current_file.suffix.lower().lstrip("."),
+                "content": current_file.read_text(encoding="utf-8"),
+                "description": (
+                    str(existing_meta.get("description"))
+                    if existing_meta.get("description") is not None
+                    else None
+                ),
+                "updated_at": previous_updated_at,
+            }
+        )
+        # Keep one snapshot per version for deterministic lookup.
+        deduped: dict[int, dict[str, Any]] = {}
+        for entry in existing_history:
+            version_key = _safe_int(entry.get("version"), default=0)
+            if version_key > 0:
+                deduped[version_key] = entry
+        existing_history = [
+            entry for version_key, entry in sorted(deduped.items(), key=lambda item: item[0]) if version_key > 0
+        ]
+        next_version = current_version + 1
+    else:
+        next_version = 1
+
     # Clean up other variants when overwriting
     for other in existing_variants:
         if other != path:
             other.unlink()
 
     path.write_text(content, encoding="utf-8")
-    _save_description(_meta_path(name), description)
+    _save_metadata(
+        meta_path,
+        description=description,
+        current_version=next_version,
+        history=existing_history,
+    )
     return load_template(name)
+
+
+def list_template_versions(name: str) -> list[TemplateVersionRecord]:
+    record = load_template(name)
+    meta = _load_metadata(_meta_path(name))
+    history = _load_history(meta)
+    version_map: dict[int, TemplateVersionRecord] = {}
+
+    for entry in history:
+        entry_version = _safe_int(entry.get("version"), default=0)
+        if entry_version <= 0:
+            continue
+        version_map[entry_version] = TemplateVersionRecord(
+            version=entry_version,
+            format=str(entry.get("format") or record.format),
+            description=(
+                str(entry.get("description"))
+                if entry.get("description") is not None
+                else None
+            ),
+            updated_at=str(entry.get("updated_at") or record.updated_at),
+            is_current=False,
+        )
+
+    version_map[record.version] = TemplateVersionRecord(
+        version=record.version,
+        format=record.format,
+        description=record.description,
+        updated_at=record.updated_at,
+        is_current=True,
+    )
+
+    return [version_map[key] for key in sorted(version_map.keys())]
 
 
 def delete_template(name: str) -> None:
     name = _sanitize_name(name)
     directory = _resolved_dir()
     removed = False
-    for suffix in _SUPPORTED_SUFFIXES:
+    for suffix in sorted(_SUPPORTED_SUFFIXES):
         candidate = directory / f"{name}{suffix}"
         _assert_within_base(candidate, directory)
         if candidate.exists():

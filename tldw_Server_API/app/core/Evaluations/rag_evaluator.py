@@ -11,21 +11,42 @@ Implements metrics:
 """
 
 import asyncio
-from typing import List, Dict, Any, Optional
-from loguru import logger
+from typing import Any, Optional
+
 import numpy as np
+from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
+
+_RAG_EVAL_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    np.linalg.LinAlgError,
+)
+
 # Safe import of embeddings helpers to avoid heavy deps during app import
 try:
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
+        OpenAIModelCfg,
         create_embedding,
         get_embedding_config,
-        OpenAIModelCfg,
     )
     _RAG_EMBEDDINGS_AVAILABLE = True
-except Exception:
+except ImportError:
     _RAG_EMBEDDINGS_AVAILABLE = False
     def create_embedding(*args, **kwargs):  # type: ignore[misc]
         raise RuntimeError("Embeddings backend unavailable; install required dependencies")
@@ -40,19 +61,19 @@ except Exception:
                 setattr(self, key, value)
 
     OpenAIModelCfg = _FallbackOpenAIModelCfg  # type: ignore[assignment]
-from tldw_Server_API.app.core.Evaluations.circuit_breaker import (
-    llm_circuit_breaker,
-    CircuitOpenError
-)
-from tldw_Server_API.app.core.RAG.rag_service.types import Document
+import contextlib
+
 from tldw_Server_API.app.core.Claims_Extraction.claims_engine import ClaimsEngine
+from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitOpenError, llm_circuit_breaker
+from tldw_Server_API.app.core.RAG.rag_service.types import Document
+
 
 # Module-level alias and helpers
 def analyze(api_name: str, input_data: Any, custom_prompt_arg: Optional[str] = None, api_key: Optional[str] = None, system_message: Optional[str] = None, temp: Optional[float] = None, **kwargs) -> Any:
     """Alias wrapper for sgl.analyze to enable test monkeypatching."""
     return sgl.analyze(api_name, input_data, custom_prompt_arg, api_key, system_message, temp, **kwargs)
 
-def _simple_tokens(text: str) -> List[str]:
+def _simple_tokens(text: str) -> list[str]:
     """Lightweight tokenizer with basic stopword filtering for heuristics."""
     if not isinstance(text, str):
         text = str(text or "")
@@ -97,7 +118,7 @@ class RAGEvaluator:
             self._embedding_available = None  # Will be set on first use
             logger.info(f"RAG evaluator initialized with {embedding_provider}/{embedding_model} configuration")
 
-    def _setup_embedding_config(self) -> Dict[str, Any]:
+    def _setup_embedding_config(self) -> dict[str, Any]:
         """Setup embedding configuration."""
         config = get_embedding_config()
 
@@ -111,14 +132,14 @@ class RAGEvaluator:
             existing = models.get(self.embedding_model)
             try:
                 if existing is not None:
-                    setattr(existing, "api_key", self.api_key)
+                    existing.api_key = self.api_key
                 else:
                     models[self.embedding_model] = OpenAIModelCfg(
                         provider=self.embedding_provider,
                         model_name_or_path=self.embedding_model,
                         api_key=self.api_key
                     )
-            except Exception:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                 models[self.embedding_model] = OpenAIModelCfg(
                     provider=self.embedding_provider,
                     model_name_or_path=self.embedding_model,
@@ -130,7 +151,7 @@ class RAGEvaluator:
             try:
                 oa = config.setdefault("openai_api", {})
                 oa.setdefault("api_key", self.api_key)
-            except Exception:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                 pass
 
         return config
@@ -155,21 +176,21 @@ class RAGEvaluator:
             # Try to get a test embedding
             result = create_embedding("test", self.embedding_config, model_id_override=self.embedding_model)
             return result is not None and len(result) > 0
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Embeddings test failed: {e}")
             return False
 
     async def evaluate(
         self,
         query: str,
-        contexts: List[str],
+        contexts: list[str],
         response: str,
         ground_truth: Optional[str] = None,
-        metrics: Optional[List[str]] = None,
+        metrics: Optional[list[str]] = None,
         api_name: str = "openai",
-        metric_weights: Optional[Dict[str, float]] = None,
+        metric_weights: Optional[dict[str, float]] = None,
         model: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Evaluate RAG system performance.
 
@@ -235,10 +256,10 @@ class RAGEvaluator:
             failed_metrics = []
             explicit_metrics = caller_provided_metrics
             # Provide aliases only when explicitly requested or when using defaults with ground truth
-            requested_aliases = set(metrics or []) & {"answer_relevance", "answer_faithfulness"}
-            alias_by_weights = (
+            set(metrics or []) & {"answer_relevance", "answer_faithfulness"}
+            (
                 isinstance(metric_weights, dict)
-                and any(k in {"answer_relevance", "answer_faithfulness"} for k in metric_weights.keys())
+                and any(k in {"answer_relevance", "answer_faithfulness"} for k in metric_weights)
             )
             for i, result in enumerate(metric_results):
                 if isinstance(result, Exception):
@@ -270,16 +291,14 @@ class RAGEvaluator:
                     try:
                         # Remove canonical to keep metric set compact and OpenAI-style
                         results["metrics"].pop("relevance", None)
-                    except Exception:
+                    except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                         pass
                 if "answer_faithfulness" in results["metrics"] and "faithfulness" in results["metrics"]:
-                    try:
+                    with contextlib.suppress(_RAG_EVAL_NONCRITICAL_EXCEPTIONS):
                         results["metrics"].pop("faithfulness", None)
-                    except Exception:
-                        pass
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Critical failure in evaluation: {e}")
-            raise ValueError(f"Evaluation failed: {str(e)}")
+            raise ValueError(f"Evaluation failed: {str(e)}") from e
 
         # Calculate overall score if we have metrics
         if results["metrics"]:
@@ -290,7 +309,7 @@ class RAGEvaluator:
 
         return results
 
-    async def _evaluate_claim_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
+    async def _evaluate_claim_faithfulness(self, response: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate claim-level faithfulness by verifying extracted claims against contexts.
 
         Uses ClaimsEngine with APS-style extraction (gemma_aps) and hybrid verification.
@@ -298,17 +317,18 @@ class RAGEvaluator:
         """
         try:
             # Wrap contexts into lightweight Document objects
-            docs: List[Document] = []
+            docs: list[Document] = []
             for i, ctx in enumerate(contexts or []):
                 try:
                     docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
-                except Exception:
+                except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
                     # Minimal fallback if Document import shape changes
                     docs.append(Document(id=f"ctx_{i+1}", content=str(ctx or ""), metadata={}))
 
             analyze_fn = analyze
             if model:
-                analyze_fn = lambda *args, **kwargs: analyze(*args, model_override=model, **kwargs)
+                def analyze_fn(*args, **kwargs):
+                    return analyze(*args, model_override=model, **kwargs)
             engine = ClaimsEngine(analyze_fn)
             claims_result = await engine.run(
                 answer=response or "",
@@ -334,9 +354,9 @@ class RAGEvaluator:
                 "raw_score": float(score * 5.0),  # map to 1-5 like other metrics if desired
                 "explanation": "Fraction of claims supported by contexts (APS extraction + hybrid verification)"
             })
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Claim faithfulness evaluation failed: {e}")
-            raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
+            raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}") from e
 
     async def _evaluate_relevance(self, query: str, response: str, api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate relevance of response to query"""
@@ -401,13 +421,13 @@ class RAGEvaluator:
         except CircuitOpenError as e:
             logger.warning(f"Circuit breaker open for relevance evaluation: {e}")
             # Re-raise with more context
-            raise ValueError(f"Service temporarily unavailable for relevance evaluation: {str(e)}")
-        except Exception as e:
+            raise ValueError(f"Service temporarily unavailable for relevance evaluation: {str(e)}") from e
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Relevance evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Relevance evaluation failed: {str(e)}")
+            raise ValueError(f"Relevance evaluation failed: {str(e)}") from e
 
-    async def _evaluate_faithfulness(self, response: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
+    async def _evaluate_faithfulness(self, response: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate if response is grounded in contexts"""
         combined_context = "\n\n".join(contexts)
 
@@ -468,10 +488,10 @@ class RAGEvaluator:
                 "explanation": "Measures if response is grounded in retrieved contexts"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Faithfulness evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Faithfulness evaluation failed: {str(e)}")
+            raise ValueError(f"Faithfulness evaluation failed: {str(e)}") from e
 
     async def _evaluate_answer_similarity(self, response: str, ground_truth: str, api_name: str = "openai", model: Optional[str] = None) -> tuple:
         """Evaluate similarity between response and ground truth"""
@@ -514,7 +534,7 @@ class RAGEvaluator:
                     "method": "embeddings"
                 })
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Embedding-based similarity failed: {e}. Falling back.")
                 # Only synthesize embeddings in TEST_MODE when an API key was explicitly provided
                 import os as _os
@@ -633,17 +653,17 @@ class RAGEvaluator:
                 "method": "llm"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Answer similarity evaluation failed: {e}")
             # Raise exception instead of returning 0.0 (fixing error handling issue)
-            raise ValueError(f"Answer similarity evaluation failed: {str(e)}")
+            raise ValueError(f"Answer similarity evaluation failed: {str(e)}") from e
 
-    async def _evaluate_context_precision(self, query: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
+    async def _evaluate_context_precision(self, query: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate precision of retrieved contexts"""
         # Check each context for relevance
         relevance_scores = []
 
-        for i, context in enumerate(contexts):
+        for _i, context in enumerate(contexts):
             prompt = f"""
             Rate how relevant this context is to the query on a scale of 1-5.
 
@@ -668,7 +688,7 @@ class RAGEvaluator:
 
                 relevance_scores.append(float(score_str.strip()) / 5.0)
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Failed to parse LLM-provided relevance score; defaulting to 0. error={e}")
                 relevance_scores.append(0.0)
 
@@ -685,7 +705,7 @@ class RAGEvaluator:
             "metadata": {"individual_scores": relevance_scores}
         })
 
-    async def _evaluate_context_relevance(self, query: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
+    async def _evaluate_context_relevance(self, query: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate relevance of retrieved contexts to the query"""
         # Check each context for relevance
         relevance_scores = []
@@ -723,7 +743,7 @@ class RAGEvaluator:
                     logger.warning(f"Invalid score format from LLM: {score_str}")
                     relevance_scores.append(0.0)
 
-            except Exception as e:
+            except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Context relevance evaluation failed for a context: {e}")
                 relevance_scores.append(0.0)
 
@@ -739,7 +759,7 @@ class RAGEvaluator:
             "metadata": {"individual_scores": relevance_scores}
         })
 
-    async def _evaluate_context_recall(self, ground_truth: str, contexts: List[str], api_name: str, model: Optional[str] = None) -> tuple:
+    async def _evaluate_context_recall(self, ground_truth: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate if contexts contain necessary information"""
         combined_context = "\n\n".join(contexts)
 
@@ -783,12 +803,12 @@ class RAGEvaluator:
                 "explanation": "Coverage of necessary information in contexts"
             })
 
-        except Exception as e:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Context recall evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Context recall evaluation failed: {str(e)}")
+            raise ValueError(f"Context recall evaluation failed: {str(e)}") from e
 
-    def _generate_suggestions(self, metrics: Dict[str, Dict]) -> List[str]:
+    def _generate_suggestions(self, metrics: dict[str, dict]) -> list[str]:
         """Generate improvement suggestions based on metrics"""
         suggestions = []
 
@@ -829,7 +849,7 @@ class RAGEvaluator:
         # Normalize to 0-1
         return (score - 1) / 4
 
-    def _calculate_overall_score(self, metrics: Dict[str, Dict], weights: Optional[Dict[str, float]] = None) -> float:
+    def _calculate_overall_score(self, metrics: dict[str, dict], weights: Optional[dict[str, float]] = None) -> float:
         """
         Calculate weighted overall score from individual metrics.
 
@@ -845,7 +865,7 @@ class RAGEvaluator:
 
         # Default to equal weights
         if weights is None:
-            weights = {key: 1.0 for key in metrics.keys()}
+            weights = dict.fromkeys(metrics.keys(), 1.0)
 
         total_weight = 0
         weighted_sum = 0
@@ -871,7 +891,7 @@ class RAGEvaluator:
                     result = min_s
                 elif result > max_s:
                     result = max_s
-        except Exception:
+        except _RAG_EVAL_NONCRITICAL_EXCEPTIONS:
             pass
 
         return result

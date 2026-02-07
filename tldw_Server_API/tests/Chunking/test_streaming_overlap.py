@@ -274,6 +274,39 @@ async def test_async_chunk_stream_sentences_overlap_matches_full():
     assert chunks == expected
 
 
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_async_chunk_stream_overlap_clamps_to_max_size() -> None:
+    from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker
+
+    sents = [f"Sentence {i}." for i in range(1, 9)]
+    part1 = " ".join(sents[:4]) + " "
+    part2 = " ".join(sents[4:])
+    full_text = part1 + part2
+
+    async def text_stream():
+        yield part1
+        yield part2
+
+    # chunk_text clamps overlap to max_size - 1
+    expected = Chunker().chunk_text(full_text, method="sentences", max_size=2, overlap=1, language="en")
+
+    async with AsyncChunker() as chunker:
+        chunks = [
+            ch
+            async for ch in chunker.chunk_stream(
+                text_stream(),
+                method="sentences",
+                max_size=2,
+                overlap=5,
+                buffer_size=len(part1),
+                language="en",
+            )
+        ]
+
+    assert chunks == expected
+
+
 @pytest.mark.asyncio
 async def test_async_chunk_stream_sentences_no_overlap_matches_full():
     from tldw_Server_API.app.core.Chunking.async_chunker import AsyncChunker

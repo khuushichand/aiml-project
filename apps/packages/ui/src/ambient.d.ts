@@ -73,3 +73,52 @@ declare module "*.png" {
 declare module "pa-tesseract.js" {
   export const createWorker: any
 }
+
+declare module "xterm" {
+  export interface IDisposable {
+    dispose(): void
+  }
+
+  export interface IEvent<T, U = void> {
+    (
+      listener: (arg1: T, arg2: U) => any,
+      thisArg?: any,
+      disposables?: IDisposable[]
+    ): IDisposable
+  }
+
+  export interface ITerminal extends IDisposable {
+    open(element: HTMLElement): void
+    loadAddon(addon: ITerminalAddon): void
+    write(data: string | Uint8Array, callback?: () => void): void
+    focus(): void
+    onResize: IEvent<{ cols: number; rows: number }>
+    onData: IEvent<string>
+  }
+
+  export interface ITerminalAddon extends IDisposable {
+    activate(terminal: ITerminal): void
+  }
+
+  export class Terminal implements ITerminal {
+    constructor(options?: any)
+    open(element: HTMLElement): void
+    loadAddon(addon: ITerminalAddon): void
+    write(data: string | Uint8Array, callback?: () => void): void
+    focus(): void
+    onResize: IEvent<{ cols: number; rows: number }>
+    onData: IEvent<string>
+    dispose(): void
+  }
+}
+
+declare module "@xterm/addon-fit" {
+  import type { ITerminal, ITerminalAddon } from "xterm"
+
+  export class FitAddon implements ITerminalAddon {
+    constructor()
+    activate(terminal: ITerminal): void
+    fit(): void
+    dispose(): void
+  }
+}

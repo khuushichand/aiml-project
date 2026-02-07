@@ -4,9 +4,9 @@ Pydantic schemas for character chat sessions and messages.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Literal
+from typing import Any, Literal, Optional, Union
+
 from pydantic import BaseModel, Field, field_validator, model_validator
-from uuid import UUID
 
 ALLOWED_CONVERSATION_STATES = ("in-progress", "resolved", "backlog", "non-viable")
 
@@ -89,16 +89,33 @@ class ChatSessionResponse(BaseModel):
     last_modified: datetime = Field(..., description="Last modification timestamp")
     message_count: Optional[int] = Field(0, description="Number of messages in the chat")
     version: int = Field(1, description="Version number for optimistic locking")
+    settings: Optional[dict[str, Any]] = Field(
+        None,
+        description="Optional per-chat settings payload when explicitly requested.",
+    )
 
     model_config = {"from_attributes": True}
 
 
 class ChatSessionListResponse(BaseModel):
     """Schema for listing chat sessions."""
-    chats: List[ChatSessionResponse] = Field(..., description="List of chat sessions")
+    chats: list[ChatSessionResponse] = Field(..., description="List of chat sessions")
     total: int = Field(..., description="Total number of chats")
     limit: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
+
+
+class ChatSettingsUpdate(BaseModel):
+    """Schema for updating chat settings."""
+    settings: dict[str, Any] = Field(..., description="Chat settings payload")
+
+
+class ChatSettingsResponse(BaseModel):
+    """Schema for chat settings responses."""
+    conversation_id: str = Field(..., description="Conversation ID")
+    settings: dict[str, Any] = Field(..., description="Stored chat settings")
+    last_modified: datetime = Field(..., description="Settings last modified timestamp")
+    warnings: Optional[list[str]] = Field(None, description="Optional warnings (e.g. greeting staleness)")
 
 
 # ========================================================================
@@ -138,13 +155,29 @@ class MessageCreate(BaseModel):
 
 class MessageUpdate(BaseModel):
     """Schema for updating a message."""
-    content: str = Field(..., description="New message content", min_length=1)
+    content: Optional[str] = Field(
+        None,
+        description="New message content",
+        min_length=1,
+    )
+    pinned: Optional[bool] = Field(
+        None,
+        description="Optional pin state for this message.",
+    )
 
     model_config = {"json_schema_extra": {
         "example": {
             "content": "Updated message content"
         }
     }}
+
+    @model_validator(mode="after")
+    def _validate_content_or_pin_update(self) -> "MessageUpdate":
+        content_set = bool(self.content and str(self.content).strip())
+        pin_set = self.pinned is not None
+        if not content_set and not pin_set:
+            raise ValueError("Provide either non-empty content or pinned.")
+        return self
 
 
 class MessageResponse(BaseModel):
@@ -158,15 +191,15 @@ class MessageResponse(BaseModel):
     ranking: Optional[int] = Field(None, description="Message ranking/rating")
     has_image: bool = Field(False, description="Whether message has an attached image")
     version: int = Field(1, description="Version number for optimistic locking")
-    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
-    metadata_extra: Optional[Dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
+    tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Tool calls associated with this message (if any)")
+    metadata_extra: Optional[dict[str, Any]] = Field(None, description="Additional stored metadata for this message (if requested)")
 
     model_config = {"from_attributes": True}
 
 
 class MessageListResponse(BaseModel):
     """Schema for listing messages."""
-    messages: List[MessageResponse] = Field(..., description="List of messages")
+    messages: list[MessageResponse] = Field(..., description="List of messages")
     total: int = Field(..., description="Total number of messages")
     limit: int = Field(..., description="Number of items per page")
     offset: int = Field(..., description="Offset for pagination")
@@ -199,7 +232,7 @@ class CharacterChatCompletionV1Response(BaseModel):
     """Schema for chat completion responses."""
     response: str = Field(..., description="AI response")
     message_id: str = Field(..., description="ID of the created message")
-    usage: Optional[Dict[str, int]] = Field(None, description="Token usage statistics")
+    usage: Optional[dict[str, int]] = Field(None, description="Token usage statistics")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -231,13 +264,34 @@ class CharacterChatCompletionPrepRequest(BaseModel):
         description="Optional user message to append to the end",
         max_length=1_000_000,
     )
+    directed_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional participant character ID to direct the next response to.",
+    )
+    continue_as_user: bool = Field(
+        False,
+        description="Single response: continue in the user's voice.",
+    )
+    impersonate_user: bool = Field(
+        False,
+        description="Single response: write the reply as if authored by the user.",
+    )
+    force_narrate: bool = Field(
+        False,
+        description="Single response: force narration style for the assistant reply.",
+    )
+    prompt_preset: Optional[str] = Field(
+        None,
+        description="Optional single-turn prompt preset override.",
+    )
 
 
 class CharacterChatCompletionPrepResponse(BaseModel):
     chat_id: str
     character_id: int
     character_name: Optional[str] = None
-    messages: List[Dict[str, Any]]
+    messages: list[dict[str, Any]]
     total: int
     usage_instructions: str = "Use these messages with POST /api/v1/chat/completions"
 
@@ -257,14 +311,39 @@ class CharacterChatCompletionV2Request(BaseModel):
         description="Optional user message to append and (optionally) persist",
         max_length=1_000_000,
     )
+    directed_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional participant character ID to direct this response to.",
+    )
     save_to_db: Optional[bool] = Field(None, description="Persist appended user and assistant messages to this chat")
+    # Message steering (single-response controls)
+    continue_as_user: bool = Field(
+        False,
+        description="Single response: continue in the user's voice.",
+    )
+    impersonate_user: bool = Field(
+        False,
+        description="Single response: write the reply as if authored by the user.",
+    )
+    force_narrate: bool = Field(
+        False,
+        description="Single response: force narration style for the assistant reply.",
+    )
+    prompt_preset: Optional[str] = Field(
+        None,
+        description="Optional single-turn prompt preset override.",
+    )
     # LLM controls
     provider: Optional[str] = Field(None, description="LLM provider (e.g., openai, anthropic, local-llm). Defaults to local-llm if omitted.")
     model: Optional[str] = Field(None, description="Model identifier. Defaults to a local test model if omitted.")
-    temperature: Optional[float] = Field(None, description="Sampling temperature")
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Sampling temperature")
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Nucleus sampling probability")
+    repetition_penalty: Optional[float] = Field(None, ge=0.0, le=3.0, description="Repetition penalty")
+    stop: Optional[Union[str, list[str]]] = Field(None, description="Stop sequence(s)")
     max_tokens: Optional[int] = Field(None, description="Max tokens in the completion")
-    tools: Optional[List[Dict[str, Any]]] = Field(None, description="Tool definitions")
-    tool_choice: Optional[Dict[str, Any]] = Field(None, description="Tool choice specification")
+    tools: Optional[list[dict[str, Any]]] = Field(None, description="Tool definitions")
+    tool_choice: Optional[dict[str, Any]] = Field(None, description="Tool choice specification")
     stream: Optional[bool] = Field(False, description="If true, stream the assistant response (SSE)")
 
 
@@ -277,6 +356,12 @@ class CharacterChatCompletionV2Response(BaseModel):
     user_message_id: Optional[str] = None
     assistant_message_id: Optional[str] = None
     assistant_content: str
+    speaker_character_id: Optional[int] = None
+    speaker_character_name: Optional[str] = None
+    lorebook_diagnostics: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="Lorebook/world book trigger diagnostics for this turn",
+    )
 
 
 # New: Persist streamed assistant content after SSE
@@ -287,8 +372,17 @@ class CharacterChatStreamPersistRequest(BaseModel):
     """
     assistant_content: str = Field(..., min_length=1, max_length=1_000_000, description="Assistant text to persist (max 1MB)")
     user_message_id: Optional[str] = Field(None, description="Optional parent user message id to link threading")
-    tool_calls: Optional[List[Dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
-    usage: Optional[Dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
+    speaker_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional speaker character ID for multi-character chats.",
+    )
+    speaker_character_name: Optional[str] = Field(
+        None,
+        description="Optional speaker character display name for multi-character chats.",
+    )
+    tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
+    usage: Optional[dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
     chat_rating: Optional[int] = Field(None, ge=1, le=5, description="Optional conversation rating to set (1-5)")
     ranking: Optional[int] = Field(None, description="Optional ranking for the assistant message")
 
@@ -317,8 +411,8 @@ class ChatHistoryExport(BaseModel):
     character_id: int = Field(..., description="Character ID")
     title: Optional[str] = Field(None, description="Chat title")
     created_at: datetime = Field(..., description="Creation timestamp")
-    messages: List[Dict[str, Any]] = Field(..., description="Message history")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    messages: list[dict[str, Any]] = Field(..., description="Message history")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
     model_config = {"json_schema_extra": {
         "example": {
@@ -369,7 +463,7 @@ class ChatErrorResponse(BaseModel):
 
 class CharacterTagFilter(BaseModel):
     """Schema for filtering characters by tags."""
-    tags: List[str] = Field(..., description="Tags to filter by", min_length=1)
+    tags: list[str] = Field(..., description="Tags to filter by", min_length=1)
     match_all: bool = Field(False, description="Require all tags to match (AND) vs any tag (OR)")
 
     model_config = {"json_schema_extra": {
@@ -378,6 +472,133 @@ class CharacterTagFilter(BaseModel):
             "match_all": False
         }
     }}
+
+
+# ========================================================================
+# Greeting List Picker Schemas (PRD 1 Stage A2)
+# ========================================================================
+
+class GreetingItem(BaseModel):
+    """A single greeting entry from the character card."""
+    index: int = Field(..., description="Zero-based index into the greetings list")
+    text: str = Field(..., description="Full greeting text")
+    preview: str = Field(..., description="First 120 characters of the greeting")
+
+
+class GreetingListResponse(BaseModel):
+    """Response for GET /{chat_id}/greetings."""
+    chat_id: str
+    character_id: Optional[str] = None
+    character_name: Optional[str] = None
+    greetings: list[GreetingItem] = Field(default_factory=list)
+    current_selection: Optional[int] = Field(None, description="Currently selected greeting index")
+    staleness_warning: Optional[str] = Field(None, description="Warning if greetings changed since chat creation")
+
+
+class GreetingSelectRequest(BaseModel):
+    """Request body for PUT /{chat_id}/greetings/select."""
+    index: int = Field(..., description="Zero-based index of the greeting to select")
+
+
+class GreetingSelectResponse(BaseModel):
+    """Response for PUT /{chat_id}/greetings/select."""
+    chat_id: str
+    selected_index: int
+    greeting_preview: str
+    checksum_updated: bool
+
+
+# ========================================================================
+# Author Note Info Schemas (PRD 4 Stage D2)
+# ========================================================================
+
+class AuthorNoteInfoResponse(BaseModel):
+    """Response for GET /{chat_id}/author-note/info."""
+    chat_id: str
+    text: str = Field("", description="Author note text for UI display")
+    text_for_prompt: str = Field("", description="Author note text as injected into LLM prompt")
+    tokens_estimated: int = Field(0, description="Estimated token count for UI text")
+    tokens_for_prompt: int = Field(0, description="Estimated token count for prompt text")
+    budget: int = Field(0, description="Token budget for author note")
+    truncated: bool = Field(False, description="Whether the note exceeds the token budget")
+    enabled: bool = Field(True, description="Whether the author note is enabled")
+    gm_only: bool = Field(False, description="Whether the note is GM-only (visible but not in prompt)")
+    exclude_from_prompt: bool = Field(False, description="Whether the note is excluded from prompt")
+    scope: str = Field("shared", description="Memory scope: shared, character, or both")
+    source: str = Field("none", description="Source of the note text: settings, character_default, or none")
+    warnings: list[str] = Field(default_factory=list)
+
+
+# ========================================================================
+# Lorebook Diagnostic Export Schemas (PRD 6 Stage F2)
+# ========================================================================
+
+class DiagnosticTurnEntry(BaseModel):
+    """A single turn's lorebook diagnostics."""
+    message_id: str
+    timestamp: Optional[str] = None
+    turn_number: int
+    message_preview: str = Field("", description="First 120 characters of the assistant message")
+    diagnostics: list[dict] = Field(default_factory=list)
+
+
+class LorebookDiagnosticExportResponse(BaseModel):
+    """Response for GET /{chat_id}/diagnostics/lorebook."""
+    chat_id: str
+    character_id: Optional[str] = None
+    total_turns_with_diagnostics: int = 0
+    turns: list[DiagnosticTurnEntry] = Field(default_factory=list)
+    page: int = 1
+    size: int = 50
+
+
+# ========================================================================
+# Preset Editor Schemas (PRD 2 Stage B2)
+# ========================================================================
+
+class PresetTokenInfo(BaseModel):
+    """Template token with description."""
+    token: str = Field(..., description="Template token, e.g. '{{char}}'")
+    description: str = Field(..., description="What the token resolves to")
+
+
+class PresetDetail(BaseModel):
+    """Full details of a prompt preset."""
+    preset_id: str
+    name: str
+    builtin: bool = Field(False, description="Whether this is a built-in preset")
+    section_order: list[str] = Field(default_factory=list, description="Ordered list of section keys")
+    section_templates: dict[str, str] = Field(default_factory=dict, description="Section key → template string")
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class PresetListResponse(BaseModel):
+    """Response for GET /presets."""
+    presets: list[PresetDetail] = Field(default_factory=list)
+
+
+class PresetCreate(BaseModel):
+    """Request body for POST /presets."""
+    preset_id: str = Field(..., min_length=1, max_length=128, description="Unique identifier for the preset")
+    name: str = Field(..., min_length=1, max_length=256, description="Display name")
+    section_order: list[str] = Field(..., description="Ordered list of section keys")
+    section_templates: dict[str, str] = Field(..., description="Section key → template string")
+
+    @field_validator("preset_id")
+    @classmethod
+    def validate_preset_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v or v in ("default", "st_default"):
+            raise ValueError("Cannot use a built-in preset ID")
+        return v
+
+
+class PresetUpdate(BaseModel):
+    """Request body for PUT /presets/{preset_id}."""
+    name: Optional[str] = Field(None, min_length=1, max_length=256)
+    section_order: Optional[list[str]] = None
+    section_templates: Optional[dict[str, str]] = None
 
 
 #

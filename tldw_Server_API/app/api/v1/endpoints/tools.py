@@ -1,20 +1,30 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Coroutine, List
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
 from tldw_Server_API.app.api.v1.schemas.tools import (
-    ToolListResponse,
     ExecuteToolRequest,
     ExecuteToolResult,
     ToolInfo,
+    ToolListResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Tools.tool_executor import ToolExecutor, ToolExecutionError
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Tools.tool_executor import ToolExecutionError, ToolExecutor
 
 router = APIRouter()
+_TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 @router.get("/tools", response_model=ToolListResponse, summary="List available tools for current user")
@@ -27,10 +37,10 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
             client_id=str(current_user.username or current_user.id),
         )
 
-        def _to_tool_info(t: Dict[str, Any]) -> ToolInfo | None:
+        def _to_tool_info(t: dict[str, Any]) -> ToolInfo | None:
             try:
                 return ToolInfo(**t)
-            except Exception as e:
+            except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(
                     f"Failed to parse tool info, falling back to best-effort mapping. Tool: {t.get('name')}, Error: {e}"
                 )
@@ -42,17 +52,17 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
                         module=t.get("module"),
                         canExecute=bool(t.get("canExecute")),
                     )
-                except Exception as e2:
+                except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e2:
                     logger.error(f"Failed to best-effort map tool info: {e2}; data={t}")
                     return None
 
         raw_tools = (out.get("tools") or []) if isinstance(out, dict) else []
         tools_maybe = [_to_tool_info(t) for t in raw_tools]
-        tools: List[ToolInfo] = [ti for ti in tools_maybe if ti is not None]
+        tools: list[ToolInfo] = [ti for ti in tools_maybe if ti is not None]
         return ToolListResponse(tools=tools)
-    except Exception as e:
+    except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"tools.list failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list tools")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list tools") from e
 
 
 @router.post(
@@ -90,7 +100,7 @@ async def execute_tool_endpoint(
         return ExecuteToolResult(ok=True, result=result.get("result", result), module=result.get("module"))
     except ToolExecutionError as te:
         logger.warning(f"tools.execute denied or invalid: {te}")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(te))
-    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(te)) from te
+    except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"tools.execute failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Tool execution failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Tool execution failed") from e

@@ -26,23 +26,36 @@ Notes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import contextlib
 import json
 import os
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
-
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.content_backend import (
-    load_content_db_settings,
     get_content_backend,
+    load_content_db_settings,
 )
-from .backends.base import DatabaseBackend, DatabaseConfig, BackendType
+
+from .backends.base import BackendType, DatabaseBackend, DatabaseConfig
 from .backends.factory import DatabaseBackendFactory
 from .backends.query_utils import prepare_backend_statement
 from .db_path_utils import DatabasePaths
+
+_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    json.JSONDecodeError,
+)
 
 
 def _utcnow_iso() -> str:
@@ -57,16 +70,16 @@ class SourceRow:
     url: str
     source_type: str
     active: int
-    settings_json: Optional[str]
-    last_scraped_at: Optional[str]
-    etag: Optional[str]
-    last_modified: Optional[str]
-    defer_until: Optional[str]
-    status: Optional[str]
-    consec_not_modified: Optional[int]
+    settings_json: str | None
+    last_scraped_at: str | None
+    etag: str | None
+    last_modified: str | None
+    defer_until: str | None
+    status: str | None
+    consec_not_modified: int | None
     created_at: str
     updated_at: str
-    tags: List[str]
+    tags: list[str]
 
 
 @dataclass
@@ -74,8 +87,8 @@ class GroupRow:
     id: int
     user_id: str
     name: str
-    description: Optional[str]
-    parent_group_id: Optional[int]
+    description: str | None
+    parent_group_id: int | None
 
 
 @dataclass
@@ -90,21 +103,21 @@ class JobRow:
     id: int
     user_id: str
     name: str
-    description: Optional[str]
-    scope_json: Optional[str]
-    schedule_expr: Optional[str]
-    schedule_timezone: Optional[str]
+    description: str | None
+    scope_json: str | None
+    schedule_expr: str | None
+    schedule_timezone: str | None
     active: int
-    max_concurrency: Optional[int]
-    per_host_delay_ms: Optional[int]
-    retry_policy_json: Optional[str]
-    output_prefs_json: Optional[str]
-    job_filters_json: Optional[str]
+    max_concurrency: int | None
+    per_host_delay_ms: int | None
+    retry_policy_json: str | None
+    output_prefs_json: str | None
+    job_filters_json: str | None
     created_at: str
     updated_at: str
-    last_run_at: Optional[str]
-    next_run_at: Optional[str]
-    wf_schedule_id: Optional[str] = None
+    last_run_at: str | None
+    next_run_at: str | None
+    wf_schedule_id: str | None = None
 
 
 @dataclass
@@ -112,11 +125,11 @@ class RunRow:
     id: int
     job_id: int
     status: str
-    started_at: Optional[str]
-    finished_at: Optional[str]
-    stats_json: Optional[str]
-    error_msg: Optional[str]
-    log_path: Optional[str]
+    started_at: str | None
+    finished_at: str | None
+    stats_json: str | None
+    error_msg: str | None
+    log_path: str | None
 
 
 @dataclass
@@ -125,25 +138,25 @@ class ScrapedItemRow:
     run_id: int
     job_id: int
     source_id: int
-    media_id: Optional[int]
-    media_uuid: Optional[str]
-    url: Optional[str]
-    title: Optional[str]
-    summary: Optional[str]
-    published_at: Optional[str]
-    tags_json: Optional[str]
+    media_id: int | None
+    media_uuid: str | None
+    url: str | None
+    title: str | None
+    summary: str | None
+    published_at: str | None
+    tags_json: str | None
     status: str
     reviewed: int
     created_at: str
 
-    def tags(self) -> List[str]:
+    def tags(self) -> list[str]:
         if not self.tags_json:
             return []
         try:
             data = json.loads(self.tags_json)
             if isinstance(data, list):
                 return [str(t) for t in data if isinstance(t, str)]
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return []
         return []
 
@@ -152,9 +165,9 @@ class WatchlistsDatabase:
     # Keep track of schema initialization per DB path to avoid redundant ALTER checks/noise
     _schema_init_keys: set[str] = set()
 
-    def __init__(self, user_id: int | str, backend: Optional[DatabaseBackend] = None):
+    def __init__(self, user_id: int | str, backend: DatabaseBackend | None = None):
         self.user_id = str(user_id)
-        db_key: Optional[str] = None
+        db_key: str | None = None
         if backend is None:
             backend, db_key = self._resolve_backend()
         else:
@@ -170,10 +183,10 @@ class WatchlistsDatabase:
             self.ensure_schema()
 
     @classmethod
-    def for_user(cls, user_id: int | str) -> "WatchlistsDatabase":
+    def for_user(cls, user_id: int | str) -> WatchlistsDatabase:
         return cls(user_id=user_id)
 
-    def _resolve_backend(self) -> Tuple[DatabaseBackend, Optional[str]]:
+    def _resolve_backend(self) -> tuple[DatabaseBackend, str | None]:
         backend_mode_env = (os.getenv("TLDW_CONTENT_DB_BACKEND") or "").strip().lower()
         if backend_mode_env in {"postgres", "postgresql"}:
             parser = load_comprehensive_config()
@@ -184,7 +197,7 @@ class WatchlistsDatabase:
 
         try:
             parser = load_comprehensive_config()
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             parser = None
 
         if parser is not None:
@@ -195,14 +208,14 @@ class WatchlistsDatabase:
                     if resolved is None:
                         raise RuntimeError("PostgreSQL content backend requested but not initialized")
                     return resolved, f"postgres:{resolved.config.connection_string or resolved.config.pg_database}"
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 pass
 
         db_path = str(DatabasePaths.get_media_db_path(int(self.user_id)))
         cfg = DatabaseConfig(backend_type=BackendType.SQLITE, sqlite_path=db_path)
         return DatabaseBackendFactory.create_backend(cfg), f"sqlite:{db_path}"
 
-    def _execute_insert(self, query: str, params: Tuple[Any, ...]) -> Any:
+    def _execute_insert(self, query: str, params: tuple[Any, ...]) -> Any:
         if self.backend.backend_type == BackendType.POSTGRESQL:
             prepared_query, prepared_params = prepare_backend_statement(
                 BackendType.POSTGRESQL,
@@ -215,7 +228,7 @@ class WatchlistsDatabase:
         return self.backend.execute(query, params)
 
     @staticmethod
-    def _extract_lastrowid(result: Any) -> Optional[int]:
+    def _extract_lastrowid(result: Any) -> int | None:
         try:
             if result is None:
                 return None
@@ -225,7 +238,7 @@ class WatchlistsDatabase:
             first = getattr(result, "first", None)
             if isinstance(first, dict) and first.get("id") is not None:
                 return int(first.get("id"))
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return None
         return None
 
@@ -502,43 +515,33 @@ class WatchlistsDatabase:
                 info = self.backend.get_table_info(table)
                 names = {str(c.get("name")) for c in info if c.get("name") is not None}
                 return col in names
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 return False
 
         if not _col_exists("scrape_jobs", "wf_schedule_id"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", tuple())
-            except Exception:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN wf_schedule_id TEXT", ())
         if not _col_exists("scrape_jobs", "job_filters_json"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", tuple())
-            except Exception:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_jobs ADD COLUMN job_filters_json TEXT", ())
         if not _col_exists("sources", "defer_until"):
-            try:
-                self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", tuple())
-            except Exception:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE sources ADD COLUMN defer_until TEXT", ())
         if not _col_exists("sources", "consec_not_modified"):
-            try:
-                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", tuple())
-            except Exception:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE sources ADD COLUMN consec_not_modified INTEGER DEFAULT 0", ())
         if not _col_exists("scrape_run_items", "source_id"):
-            try:
-                self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", tuple())
-            except Exception:
-                pass
+            with contextlib.suppress(_WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS):
+                self.backend.execute("ALTER TABLE scrape_run_items ADD COLUMN source_id INTEGER", ())
     # ------------------------
     # Tags helpers
     # ------------------------
     def _normalize_tag(self, name: str) -> str:
         return name.strip().lower()
 
-    def ensure_tag_ids(self, names: List[str]) -> List[int]:
+    def ensure_tag_ids(self, names: list[str]) -> list[int]:
         normed = [self._normalize_tag(n) for n in names if n and n.strip()]
-        ids: List[int] = []
+        ids: list[int] = []
         select_sql = "SELECT id FROM tags WHERE user_id = ? AND name = ?"
         insert_sql = "INSERT INTO tags (user_id, name) VALUES (?, ?)"
         for nm in normed:
@@ -547,12 +550,12 @@ class WatchlistsDatabase:
             if row:
                 ids.append(int(row.get("id")))
                 continue
-            insert_exc: Optional[Exception] = None
-            tag_id: Optional[int] = None
+            insert_exc: Exception | None = None
+            tag_id: int | None = None
             try:
                 res = self._execute_insert(insert_sql, params)
                 tag_id = self._extract_lastrowid(res)
-            except Exception as exc:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS as exc:
                 insert_exc = exc
             if tag_id is None:
                 row = self.backend.execute(select_sql, params).first
@@ -565,8 +568,8 @@ class WatchlistsDatabase:
             ids.append(tag_id)
         return ids
 
-    def _lookup_tag_ids(self, names: Iterable[str]) -> Dict[str, int]:
-        normed: List[str] = []
+    def _lookup_tag_ids(self, names: Iterable[str]) -> dict[str, int]:
+        normed: list[str] = []
         seen: set[str] = set()
         for raw in names or []:
             if not raw:
@@ -585,7 +588,7 @@ class WatchlistsDatabase:
             f"SELECT name, id FROM tags WHERE user_id = ? AND name IN ({placeholders})",
             tuple(params),
         ).rows
-        out: Dict[str, int] = {}
+        out: dict[str, int] = {}
         for row in rows:
             name_val = row.get("name")
             tag_id = row.get("id")
@@ -593,13 +596,13 @@ class WatchlistsDatabase:
                 continue
             try:
                 out[str(name_val)] = int(tag_id)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return out
 
-    def list_tags(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[TagRow], int]:
+    def list_tags(self, q: str | None, limit: int, offset: int) -> tuple[list[TagRow], int]:
         where = ["user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             where.append("name LIKE ?")
             params.append(f"%{q}%")
@@ -621,20 +624,20 @@ class WatchlistsDatabase:
         url: str,
         source_type: str,
         active: bool = True,
-        settings_json: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        group_ids: Optional[List[int]] = None,
+        settings_json: str | None = None,
+        tags: list[str] | None = None,
+        group_ids: list[int] | None = None,
     ) -> SourceRow:
         now = _utcnow_iso()
         # Try insert; if UNIQUE(user_id,url) violates, fetch existing id and proceed idempotently
-        sid: Optional[int] = None
+        sid: int | None = None
         try:
             res = self._execute_insert(
                 "INSERT INTO sources (user_id, name, url, source_type, active, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (self.user_id, name, url, source_type, 1 if active else 0, settings_json, now, now),
             )
             sid = self._extract_lastrowid(res)
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # Look up existing source for idempotency
             try:
                 row = self.backend.execute(
@@ -645,8 +648,8 @@ class WatchlistsDatabase:
                     sid = int(row.get("id"))
                 else:
                     raise
-            except Exception as e:
-                raise e
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+                raise
         if sid is None:
             raise RuntimeError("failed_to_create_or_lookup_source")
         if tags:
@@ -657,7 +660,7 @@ class WatchlistsDatabase:
                         "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
                         (sid, tid),
                     )
-                except Exception:
+                except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                     # Fallback for engines without ON CONFLICT (should rarely trigger)
                     self.backend.execute(
                         "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
@@ -670,7 +673,7 @@ class WatchlistsDatabase:
                         "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
                         (sid, gid),
                     )
-                except Exception:
+                except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                     self.backend.execute(
                         "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
                         (sid, gid, sid, gid),
@@ -691,13 +694,20 @@ class WatchlistsDatabase:
         tags = [r.get("name") for r in tags_rows if r.get("name")]
         return SourceRow(tags=tags, **row)  # type: ignore[arg-type]
 
-    def list_sources(self, q: Optional[str], tag_names: Optional[List[str]], limit: int, offset: int) -> Tuple[List[SourceRow], int]:
+    def list_sources(self, q: str | None, tag_names: list[str] | None, limit: int, offset: int, group_ids: list[int] | None = None) -> tuple[list[SourceRow], int]:
         where = ["user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             where.append("(name LIKE ? OR url LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like])
+        # Group filter: OR semantics (source belongs to any of the given groups)
+        if group_ids:
+            placeholders = ",".join(["?"] * len(group_ids))
+            where.append(
+                f"EXISTS (SELECT 1 FROM source_groups sg WHERE sg.source_id = sources.id AND sg.group_id IN ({placeholders}))"
+            )
+            params.extend(group_ids)
         # Tag filter: require all tags
         if tag_names:
             normalized_tags = []
@@ -723,7 +733,7 @@ class WatchlistsDatabase:
             f"SELECT id, user_id, name, url, source_type, active, settings_json, last_scraped_at, etag, last_modified, defer_until, status, consec_not_modified, created_at, updated_at FROM sources WHERE {where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?",
             tuple(params + [limit, offset]),
         ).rows
-        out: List[SourceRow] = []
+        out: list[SourceRow] = []
         for r in rows:
             sid = int(r.get("id"))
             trows = self.backend.execute(
@@ -734,11 +744,11 @@ class WatchlistsDatabase:
             out.append(SourceRow(tags=tags, **r))  # type: ignore[arg-type]
         return out, total
 
-    def update_source(self, source_id: int, patch: Dict[str, Any]) -> SourceRow:
+    def update_source(self, source_id: int, patch: dict[str, Any]) -> SourceRow:
         if not patch:
             return self.get_source(source_id)
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for key in ("name", "url", "source_type", "active", "settings_json", "status"):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")
@@ -761,12 +771,12 @@ class WatchlistsDatabase:
         self,
         source_id: int,
         *,
-        last_scraped_at: Optional[str] = None,
-        etag: Optional[str] = None,
-        last_modified: Optional[str] = None,
-        defer_until: Optional[str] = None,
-        status: Optional[str] = None,
-        consec_not_modified: Optional[int] = None,
+        last_scraped_at: str | None = None,
+        etag: str | None = None,
+        last_modified: str | None = None,
+        defer_until: str | None = None,
+        status: str | None = None,
+        consec_not_modified: int | None = None,
     ) -> None:
         """Update scrape metadata fields for a source (idempotent, partial)."""
         fields: list[str] = []
@@ -803,7 +813,7 @@ class WatchlistsDatabase:
             (source_id, self.user_id),
         )
 
-    def set_source_tags(self, source_id: int, tag_names: List[str]) -> List[str]:
+    def set_source_tags(self, source_id: int, tag_names: list[str]) -> list[str]:
         tag_ids = self.ensure_tag_ids(tag_names)
         self.backend.execute("DELETE FROM source_tags WHERE source_id = ?", (source_id,))
         for tid in tag_ids:
@@ -812,7 +822,7 @@ class WatchlistsDatabase:
                     "INSERT INTO source_tags (source_id, tag_id) VALUES (?, ?) ON CONFLICT(source_id, tag_id) DO NOTHING",
                     (source_id, tid),
                 )
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 self.backend.execute(
                     "INSERT INTO source_tags (source_id, tag_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_tags WHERE source_id = ? AND tag_id = ?)",
                     (source_id, tid, source_id, tid),
@@ -823,13 +833,13 @@ class WatchlistsDatabase:
         ).rows
         return [r.get("name") for r in rows if r.get("name")]
 
-    def set_source_groups(self, source_id: int, group_ids: List[int]) -> List[int]:
-        clean_ids: List[int] = []
+    def set_source_groups(self, source_id: int, group_ids: list[int]) -> list[int]:
+        clean_ids: list[int] = []
         seen: set[int] = set()
         for gid in group_ids or []:
             try:
                 val = int(gid)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
             if val in seen:
                 continue
@@ -842,18 +852,43 @@ class WatchlistsDatabase:
                     "INSERT INTO source_groups (source_id, group_id) VALUES (?, ?) ON CONFLICT(source_id, group_id) DO NOTHING",
                     (source_id, gid),
                 )
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 self.backend.execute(
                     "INSERT INTO source_groups (source_id, group_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM source_groups WHERE source_id = ? AND group_id = ?)",
                     (source_id, gid, source_id, gid),
                 )
         return clean_ids
 
+    def get_source_group_ids(self, source_id: int) -> list[int]:
+        """Return group IDs for a single source, ordered."""
+        rows = self.backend.execute(
+            "SELECT group_id FROM source_groups WHERE source_id = ? ORDER BY group_id",
+            (source_id,),
+        ).rows
+        return [int(r.get("group_id")) for r in rows if r.get("group_id") is not None]
+
+    def get_source_group_ids_batch(self, source_ids: list[int]) -> dict[int, list[int]]:
+        """Return {source_id: [group_ids]} for multiple sources in one query."""
+        if not source_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(source_ids))
+        rows = self.backend.execute(
+            f"SELECT source_id, group_id FROM source_groups WHERE source_id IN ({placeholders}) ORDER BY source_id, group_id",
+            tuple(source_ids),
+        ).rows
+        result: dict[int, list[int]] = {sid: [] for sid in source_ids}
+        for r in rows:
+            sid = int(r.get("source_id"))
+            gid = int(r.get("group_id"))
+            if sid in result:
+                result[sid].append(gid)
+        return result
+
     def delete_source(self, source_id: int) -> bool:
         res = self.backend.execute("DELETE FROM sources WHERE id = ? AND user_id = ?", (source_id, self.user_id))
         return res.rowcount > 0
 
-    def list_sources_by_group_ids(self, group_ids: List[int], *, active_only: bool = True) -> List[SourceRow]:
+    def list_sources_by_group_ids(self, group_ids: list[int], *, active_only: bool = True) -> list[SourceRow]:
         """Return sources that belong to any of the provided group IDs (OR semantics)."""
         if not group_ids:
             return []
@@ -874,7 +909,7 @@ class WatchlistsDatabase:
             """,
             tuple([self.user_id] + group_ids),
         ).rows
-        out: List[SourceRow] = []
+        out: list[SourceRow] = []
         for r in rows:
             sid = int(r.get("id"))
             trows = self.backend.execute(
@@ -888,7 +923,7 @@ class WatchlistsDatabase:
     # ------------------------
     # Groups
     # ------------------------
-    def create_group(self, name: str, description: Optional[str], parent_group_id: Optional[int]) -> GroupRow:
+    def create_group(self, name: str, description: str | None, parent_group_id: int | None) -> GroupRow:
         # Idempotent by (user_id, name)
         try:
             res = self._execute_insert(
@@ -899,7 +934,7 @@ class WatchlistsDatabase:
             if not new_id:
                 raise RuntimeError("failed_to_create_group")
             return self.get_group(new_id)
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # On UNIQUE violation, fetch existing
             row = self.backend.execute(
                 "SELECT id FROM groups WHERE user_id = ? AND name = ?",
@@ -919,9 +954,9 @@ class WatchlistsDatabase:
             raise KeyError("group_not_found")
         return GroupRow(**row)
 
-    def list_groups(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[GroupRow], int]:
+    def list_groups(self, q: str | None, limit: int, offset: int) -> tuple[list[GroupRow], int]:
         where = ["user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             where.append("name LIKE ?")
             params.append(f"%{q}%")
@@ -932,9 +967,9 @@ class WatchlistsDatabase:
         ).rows
         return [GroupRow(**r) for r in rows], total
 
-    def update_group(self, group_id: int, patch: Dict[str, Any]) -> GroupRow:
+    def update_group(self, group_id: int, patch: dict[str, Any]) -> GroupRow:
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for key in ("name", "description", "parent_group_id"):
             if key in patch and patch[key] is not None:
                 fields.append(f"{key} = ?")
@@ -958,16 +993,16 @@ class WatchlistsDatabase:
         self,
         *,
         name: str,
-        description: Optional[str],
-        scope_json: Optional[str],
-        schedule_expr: Optional[str],
-        schedule_timezone: Optional[str],
+        description: str | None,
+        scope_json: str | None,
+        schedule_expr: str | None,
+        schedule_timezone: str | None,
         active: bool,
-        max_concurrency: Optional[int],
-        per_host_delay_ms: Optional[int],
-        retry_policy_json: Optional[str],
-        output_prefs_json: Optional[str],
-        job_filters_json: Optional[str] = None,
+        max_concurrency: int | None,
+        per_host_delay_ms: int | None,
+        retry_policy_json: str | None,
+        output_prefs_json: str | None,
+        job_filters_json: str | None = None,
     ) -> JobRow:
         now = _utcnow_iso()
         res = self._execute_insert(
@@ -1012,9 +1047,9 @@ class WatchlistsDatabase:
             raise KeyError("job_not_found")
         return JobRow(**row)
 
-    def list_jobs(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[JobRow], int]:
+    def list_jobs(self, q: str | None, limit: int, offset: int) -> tuple[list[JobRow], int]:
         where = ["user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             where.append("(name LIKE ? OR description LIKE ?)")
             like = f"%{q}%"
@@ -1026,7 +1061,7 @@ class WatchlistsDatabase:
         ).rows
         return [JobRow(**r) for r in rows], total
 
-    def set_job_filters(self, job_id: int, filters: Optional[Any]) -> JobRow:
+    def set_job_filters(self, job_id: int, filters: Any | None) -> JobRow:
         """Replace the job's filters payload.
 
         Accepts either a dict (e.g., {"filters": [...]}) or a raw list of filter objects.
@@ -1045,12 +1080,12 @@ class WatchlistsDatabase:
                     # Fallback to best-effort JSON-serializable form
                     payload = {"filters": filters}
                 payload_json = json.dumps(payload, ensure_ascii=False)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 payload_json = None
         # Use update_job to ensure updated_at is maintained
         return self.update_job(job_id, {"job_filters_json": payload_json})
 
-    def get_job_filters(self, job_id: int) -> Dict[str, Any]:
+    def get_job_filters(self, job_id: int) -> dict[str, Any]:
         """Fetch and parse the job's filters payload.
 
         Returns a dict in the normalized shape {"filters": [...]}. Invalid or missing
@@ -1066,15 +1101,15 @@ class WatchlistsDatabase:
                 return {"filters": list(data.get("filters") or [])}
             if isinstance(data, list):
                 return {"filters": data}
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             pass
         return {"filters": []}
 
-    def update_job(self, job_id: int, patch: Dict[str, Any]) -> JobRow:
+    def update_job(self, job_id: int, patch: dict[str, Any]) -> JobRow:
         if not patch:
             return self.get_job(job_id)
         fields = []
-        params: List[Any] = []
+        params: list[Any] = []
         for key in (
             "name",
             "description",
@@ -1109,13 +1144,13 @@ class WatchlistsDatabase:
         return res.rowcount > 0
 
     # ---- Schedule/history helpers ----
-    def set_job_schedule_id(self, job_id: int, schedule_id: Optional[str]) -> None:
+    def set_job_schedule_id(self, job_id: int, schedule_id: str | None) -> None:
         self.backend.execute(
             "UPDATE scrape_jobs SET wf_schedule_id = ? WHERE id = ? AND user_id = ?",
             (schedule_id, job_id, self.user_id),
         )
 
-    def set_job_history(self, job_id: int, *, last_run_at: Optional[str] = None, next_run_at: Optional[str] = None) -> None:
+    def set_job_history(self, job_id: int, *, last_run_at: str | None = None, next_run_at: str | None = None) -> None:
         sets = []
         params: list[Any] = []
         if last_run_at is not None:
@@ -1151,7 +1186,7 @@ class WatchlistsDatabase:
             raise KeyError("run_not_found")
         return RunRow(**row)
 
-    def list_runs_for_job(self, job_id: int, limit: int, offset: int) -> Tuple[List[RunRow], int]:
+    def list_runs_for_job(self, job_id: int, limit: int, offset: int) -> tuple[list[RunRow], int]:
         total = int(self.backend.execute("SELECT COUNT(*) AS cnt FROM scrape_runs WHERE job_id = ?", (job_id,)).scalar or 0)
         rows = self.backend.execute(
             "SELECT id, job_id, status, started_at, finished_at, stats_json, error_msg, log_path FROM scrape_runs WHERE job_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -1159,13 +1194,13 @@ class WatchlistsDatabase:
         ).rows
         return [RunRow(**r) for r in rows], total
 
-    def list_runs(self, q: Optional[str], limit: int, offset: int) -> Tuple[List[RunRow], int]:
+    def list_runs(self, q: str | None, limit: int, offset: int) -> tuple[list[RunRow], int]:
         """List runs across all jobs for this user.
 
         Optional q filters by job name/description, run status, or run id (text match).
         """
         where = ["j.user_id = ?"]
-        params: List[Any] = [self.user_id]
+        params: list[Any] = [self.user_id]
         if q:
             like = f"%{q}%"
             # Match job name/description or run status/id (text)
@@ -1190,31 +1225,31 @@ class WatchlistsDatabase:
         ).rows
         return [RunRow(**r) for r in rows], total
 
-    def append_run_item(self, run_id: int, media_id: int, source_id: Optional[int] = None) -> None:
+    def append_run_item(self, run_id: int, media_id: int, source_id: int | None = None) -> None:
         stmt = (
             "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
             "VALUES (?, ?, ?) ON CONFLICT(run_id, media_id) DO NOTHING"
         )
         try:
             self.backend.execute(stmt, (run_id, media_id, source_id))
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             self.backend.execute(
                 "INSERT INTO scrape_run_items (run_id, media_id, source_id) "
                 "SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM scrape_run_items WHERE run_id = ? AND media_id = ?)",
                 (run_id, media_id, source_id, run_id, media_id),
             )
 
-    def list_run_media_ids(self, run_id: int, limit: int = 1000) -> List[int]:
+    def list_run_media_ids(self, run_id: int, limit: int = 1000) -> list[int]:
         rows = self.backend.execute(
             "SELECT media_id FROM scrape_run_items WHERE run_id = ? ORDER BY media_id LIMIT ?",
             (run_id, limit),
         ).rows
-        mids: List[int] = []
+        mids: list[int] = []
         for r in rows:
             v = r.get("media_id")
             try:
                 mids.append(int(v))
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return mids
 
@@ -1227,13 +1262,13 @@ class WatchlistsDatabase:
         run_id: int,
         job_id: int,
         source_id: int,
-        media_id: Optional[int],
-        media_uuid: Optional[str],
-        url: Optional[str],
-        title: Optional[str],
-        summary: Optional[str],
-        published_at: Optional[str],
-        tags: Optional[List[str]],
+        media_id: int | None,
+        media_uuid: str | None,
+        url: str | None,
+        title: str | None,
+        summary: str | None,
+        published_at: str | None,
+        tags: list[str] | None,
         status: str,
     ) -> ScrapedItemRow:
         created_at = _utcnow_iso()
@@ -1282,19 +1317,19 @@ class WatchlistsDatabase:
     def list_items(
         self,
         *,
-        run_id: Optional[int] = None,
-        job_id: Optional[int] = None,
-        source_id: Optional[int] = None,
-        status: Optional[str] = None,
-        reviewed: Optional[bool] = None,
-        search: Optional[str] = None,
-        since: Optional[str] = None,
-        until: Optional[str] = None,
+        run_id: int | None = None,
+        job_id: int | None = None,
+        source_id: int | None = None,
+        status: str | None = None,
+        reviewed: bool | None = None,
+        search: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> Tuple[List[ScrapedItemRow], int]:
+    ) -> tuple[list[ScrapedItemRow], int]:
         where = ["1=1"]
-        params: List[Any] = []
+        params: list[Any] = []
         if run_id is not None:
             where.append("run_id = ?")
             params.append(run_id)
@@ -1341,7 +1376,7 @@ class WatchlistsDatabase:
         ).rows
         return [ScrapedItemRow(**r) for r in rows], total
 
-    def get_items_by_ids(self, item_ids: List[int]) -> List[ScrapedItemRow]:
+    def get_items_by_ids(self, item_ids: list[int]) -> list[ScrapedItemRow]:
         if not item_ids:
             return []
         placeholders = ",".join("?" for _ in item_ids)
@@ -1360,11 +1395,11 @@ class WatchlistsDatabase:
         self,
         item_id: int,
         *,
-        reviewed: Optional[bool] = None,
-        status: Optional[str] = None,
+        reviewed: bool | None = None,
+        status: str | None = None,
     ) -> ScrapedItemRow:
-        fields: List[str] = []
-        params: List[Any] = []
+        fields: list[str] = []
+        params: list[Any] = []
         if reviewed is not None:
             fields.append("reviewed = ?")
             params.append(1 if reviewed else 0)
@@ -1384,11 +1419,11 @@ class WatchlistsDatabase:
         self,
         run_id: int,
         *,
-        status: Optional[str] = None,
-        finished_at: Optional[str] = None,
-        stats_json: Optional[str] = None,
-        error_msg: Optional[str] = None,
-        log_path: Optional[str] = None,
+        status: str | None = None,
+        finished_at: str | None = None,
+        stats_json: str | None = None,
+        error_msg: str | None = None,
+        log_path: str | None = None,
     ) -> RunRow:
         fields: list[str] = []
         params: list[Any] = []
@@ -1430,9 +1465,9 @@ class WatchlistsDatabase:
         source_id: int,
         item_key: str,
         *,
-        etag: Optional[str] = None,
-        last_modified: Optional[str] = None,
-        seen_at: Optional[str] = None,
+        etag: str | None = None,
+        last_modified: str | None = None,
+        seen_at: str | None = None,
     ) -> None:
         ts = seen_at or _utcnow_iso()
         # SQLite upsert pattern; backend handles SQL transparently in SQLite/Postgres where available
@@ -1448,7 +1483,7 @@ class WatchlistsDatabase:
                 """,
                 (source_id, item_key, etag, last_modified, ts, ts),
             )
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             # Fallback for engines without ON CONFLICT support
             row = self.backend.execute(
                 "SELECT 1 FROM source_seen_items WHERE source_id = ? AND item_key = ?",
@@ -1465,19 +1500,63 @@ class WatchlistsDatabase:
                     (source_id, item_key, etag, last_modified, ts, ts),
                 )
 
-    def list_seen_item_keys(self, source_id: int, *, limit: Optional[int] = None) -> List[str]:
+    def list_seen_item_keys(self, source_id: int, *, limit: int | None = None) -> list[str]:
         sql = "SELECT item_key FROM source_seen_items WHERE source_id = ? ORDER BY last_seen_at DESC"
-        params: Tuple[Any, ...] = (source_id,)
+        params: tuple[Any, ...] = (source_id,)
         if isinstance(limit, int) and limit > 0:
             sql = sql + " LIMIT ?"
             params = (source_id, limit)
         rows = self.backend.execute(sql, params).rows
-        keys: List[str] = []
+        keys: list[str] = []
         for r in rows:
             k = r.get("item_key")
             if isinstance(k, str) and k:
                 keys.append(k)
         return keys
+
+    def get_seen_item_stats(self, source_id: int) -> dict[str, Any]:
+        row = self.backend.execute(
+            "SELECT COUNT(*) AS seen_count, MAX(last_seen_at) AS latest_seen_at "
+            "FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        ).first
+        if not row:
+            return {"seen_count": 0, "latest_seen_at": None}
+        try:
+            count_val = int(row.get("seen_count") or 0)
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            count_val = 0
+        latest_seen_at = None
+        try:
+            latest_seen_at = row.get("latest_seen_at")
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            latest_seen_at = None
+        return {"seen_count": count_val, "latest_seen_at": latest_seen_at}
+
+    def clear_seen_items(self, source_id: int) -> int:
+        row = self.backend.execute(
+            "SELECT COUNT(*) AS cnt FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        ).first
+        try:
+            before_count = int((row or {}).get("cnt") or 0)
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            before_count = 0
+        self.backend.execute(
+            "DELETE FROM source_seen_items WHERE source_id = ?",
+            (source_id,),
+        )
+        return before_count
+
+    def reset_source_backoff_state(self, source_id: int) -> bool:
+        result = self.backend.execute(
+            "UPDATE sources SET defer_until = NULL, consec_not_modified = 0 WHERE id = ? AND user_id = ?",
+            (source_id, self.user_id),
+        )
+        try:
+            return int(getattr(result, "rowcount", 0) or 0) > 0
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
+            return False
 
     # ------------------------
     # Claim cluster subscriptions
@@ -1497,10 +1576,10 @@ class WatchlistsDatabase:
         )
         try:
             return int(getattr(result, "rowcount", 0) or 0) > 0
-        except Exception:
+        except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
             return False
 
-    def list_watchlist_clusters(self, job_id: int) -> List[Dict[str, Any]]:
+    def list_watchlist_clusters(self, job_id: int) -> list[dict[str, Any]]:
         rows = self.backend.execute(
             "SELECT cluster_id, created_at FROM watchlist_clusters WHERE job_id = ? "
             "ORDER BY created_at DESC",
@@ -1511,10 +1590,10 @@ class WatchlistsDatabase:
     def list_watchlist_cluster_subscriptions(
         self,
         *,
-        cluster_ids: Optional[List[int]] = None,
-    ) -> List[Dict[str, Any]]:
+        cluster_ids: list[int] | None = None,
+    ) -> list[dict[str, Any]]:
         sql = "SELECT job_id, cluster_id, created_at FROM watchlist_clusters"
-        params: List[Any] = []
+        params: list[Any] = []
         if cluster_ids:
             placeholders = ",".join("?" * len(cluster_ids))
             sql += f" WHERE cluster_id IN ({placeholders})"
@@ -1526,21 +1605,21 @@ class WatchlistsDatabase:
     def list_watchlist_cluster_counts(
         self,
         *,
-        cluster_ids: Optional[List[int]] = None,
-    ) -> Dict[int, int]:
+        cluster_ids: list[int] | None = None,
+    ) -> dict[int, int]:
         sql = "SELECT cluster_id, COUNT(*) AS cnt FROM watchlist_clusters"
-        params: List[Any] = []
+        params: list[Any] = []
         if cluster_ids:
             placeholders = ",".join("?" * len(cluster_ids))
             sql += f" WHERE cluster_id IN ({placeholders})"
             params.extend(int(cid) for cid in cluster_ids)
         sql += " GROUP BY cluster_id"
         rows = self.backend.execute(sql, tuple(params)).rows
-        counts: Dict[int, int] = {}
+        counts: dict[int, int] = {}
         for row in rows or []:
             try:
                 cluster_id = int(row.get("cluster_id"))
                 counts[cluster_id] = int(row.get("cnt") or 0)
-            except Exception:
+            except _WATCHLISTS_DB_NONCRITICAL_EXCEPTIONS:
                 continue
         return counts

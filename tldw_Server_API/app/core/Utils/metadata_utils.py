@@ -1,6 +1,6 @@
-from typing import Any, Dict, Mapping, Optional
 import re
-
+from collections.abc import Mapping
+from typing import Any, Optional
 
 _DOI_RE = re.compile(r"^10\.\d{4,9}/[-._;()/:A-Z0-9]+$", re.IGNORECASE)
 _PMID_RE = re.compile(r"^\d{1,9}$")
@@ -15,7 +15,7 @@ def _norm_str(v: Any) -> Optional[str]:
     return s if s else None
 
 
-def normalize_safe_metadata(sm: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_safe_metadata(sm: dict[str, Any]) -> dict[str, Any]:
     """Normalize and lightly validate a safe metadata dict.
 
     - Validates DOI format if provided
@@ -26,7 +26,7 @@ def normalize_safe_metadata(sm: Dict[str, Any]) -> Dict[str, Any]:
 
     Raises ValueError on badly malformed DOI/PMID/PMCID.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
 
     # Copy through simple fields
     for key, val in sm.items():
@@ -103,11 +103,11 @@ def update_version_safe_metadata_in_transaction(
 
     from loguru import logger  # noqa: WPS433
 
-    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # noqa: WPS433
-        DatabaseError,
-    )
     from tldw_Server_API.app.core.DB_Management.backends.base import (  # noqa: WPS433
         BackendType,
+    )
+    from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (  # noqa: WPS433
+        DatabaseError,
     )
 
     try:

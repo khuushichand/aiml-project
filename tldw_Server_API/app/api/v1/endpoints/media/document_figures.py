@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import base64
-from typing import BinaryIO, List, Union
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from loguru import logger
@@ -18,7 +18,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
-
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -36,9 +35,9 @@ def _check_pymupdf_available() -> bool:
 
 
 def _extract_pdf_figures(
-    pdf_data: Union[bytes, BinaryIO],
+    pdf_data: bytes | BinaryIO,
     min_size: int = 50,
-) -> List[Figure]:
+) -> list[Figure]:
     """
     Extract images/figures from PDF using PyMuPDF.
 
@@ -58,12 +57,9 @@ def _extract_pdf_figures(
         raise RuntimeError("PyMuPDF is not installed") from exc
 
     # Handle both bytes and file-like objects
-    if hasattr(pdf_data, "read"):
-        pdf_bytes = pdf_data.read()
-    else:
-        pdf_bytes = pdf_data
+    pdf_bytes = pdf_data.read() if hasattr(pdf_data, "read") else pdf_data
 
-    figures: List[Figure] = []
+    figures: list[Figure] = []
 
     try:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")

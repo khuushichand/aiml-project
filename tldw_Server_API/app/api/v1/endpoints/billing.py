@@ -5,42 +5,36 @@ Billing and subscription management endpoints.
 """
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_auth_principal
 from tldw_Server_API.app.api.v1.API_Deps.org_deps import (
-    OrgContext,
-    require_org_role,
-    require_org_owner,
-    get_active_org_id,
     _get_user_org_membership,
+    get_active_org_id,
 )
 from tldw_Server_API.app.api.v1.schemas.billing_schemas import (
-    PlanListResponse,
-    SubscriptionPlanResponse,
-    PlanLimitsResponse,
-    OrgSubscriptionResponse,
-    SubscriptionUsageResponse,
-    CheckoutRequest,
-    CheckoutResponse,
-    PortalRequest,
-    PortalResponse,
     CancelSubscriptionRequest,
     CancelSubscriptionResponse,
-    ResumeSubscriptionResponse,
+    CheckoutRequest,
+    CheckoutResponse,
     InvoiceListResponse,
     InvoiceResponse,
+    OrgSubscriptionResponse,
+    PlanLimitsResponse,
+    PlanListResponse,
+    PortalRequest,
+    PortalResponse,
     RagUsageDebugResponse,
+    ResumeSubscriptionResponse,
+    SubscriptionPlanResponse,
+    SubscriptionUsageResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.input_validation import validate_email
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Billing.enforcement import get_billing_enforcer
-from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 from tldw_Server_API.app.core.Billing.stripe_client import is_billing_enabled
-
+from tldw_Server_API.app.core.Billing.subscription_service import get_subscription_service
 
 router = APIRouter(
     prefix="/billing",
@@ -61,7 +55,7 @@ async def _require_billing_enabled():
         )
 
 
-async def _resolve_org_id(principal: AuthPrincipal, org_id: Optional[int]) -> int:
+async def _resolve_org_id(principal: AuthPrincipal, org_id: int | None) -> int:
     """
     Resolve org_id from parameter or user's primary organization.
 
@@ -139,7 +133,7 @@ async def list_plans():
     ),
 )
 async def get_subscription(
-    org_id: Optional[int] = Depends(get_active_org_id),
+    org_id: int | None = Depends(get_active_org_id),
 ):
     """Get the subscription status for an organization."""
     if org_id is None:
@@ -174,7 +168,7 @@ async def get_subscription(
     ),
 )
 async def get_usage(
-    org_id: Optional[int] = Depends(get_active_org_id),
+    org_id: int | None = Depends(get_active_org_id),
 ):
     """Get current usage vs limits for an organization."""
     if org_id is None:
@@ -215,7 +209,7 @@ async def get_usage(
     description="Debug endpoint: current day's RAG queries vs plan limit for the organization.",
 )
 async def get_rag_usage_debug(
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),
@@ -255,7 +249,7 @@ async def get_rag_usage_debug(
 )
 async def create_checkout(
     body: CheckoutRequest,
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),
@@ -326,7 +320,7 @@ async def create_checkout(
 )
 async def create_portal(
     body: PortalRequest,
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),
@@ -379,7 +373,7 @@ async def create_portal(
 async def cancel_subscription(
     body: CancelSubscriptionRequest,
     request: Request,
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),
@@ -426,7 +420,7 @@ async def cancel_subscription(
     description="Resume a subscription that was set to cancel.",
 )
 async def resume_subscription(
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),
@@ -467,7 +461,7 @@ async def resume_subscription(
     description="List payment/invoice history for the organization.",
 )
 async def list_invoices(
-    org_id: Optional[int] = Query(
+    org_id: int | None = Query(
         None,
         description="Organization ID (defaults to the first organization in your membership list)",
     ),

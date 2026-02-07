@@ -2,22 +2,26 @@
 Benchmark evaluation commands for the CLI.
 """
 
-import json
 import asyncio
-from pathlib import Path
-from typing import Optional, List, Dict, Any
+import json
+from typing import Any, Optional
 
 import click
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
-from tldw_Server_API.cli.utils.output import (
-    print_table, print_json, print_success, print_error, print_warning, print_info
-)
-from tldw_Server_API.cli.utils.async_runner import run_async
-from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry, BenchmarkConfig
 from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import BenchmarkConfig, get_registry
 from tldw_Server_API.app.core.Evaluations.benchmark_utils import format_benchmark_summary
 from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from tldw_Server_API.cli.utils.async_runner import run_async
+from tldw_Server_API.cli.utils.output import (
+    print_error,
+    print_info,
+    print_json,
+    print_success,
+    print_table,
+    print_warning,
+)
 
 
 @click.group(name='benchmark')
@@ -138,7 +142,7 @@ def run_benchmark(ctx, benchmark_name, model, api_key, limit, output, resume_fro
     results = []
     if resume_from:
         try:
-            with open(resume_from, 'r') as f:
+            with open(resume_from) as f:
                 previous_results = json.load(f)
                 results = previous_results.get('results', [])
                 completed_ids = {r.get('id', r.get('question_id', i))
@@ -310,7 +314,7 @@ def validate_benchmark(ctx, benchmark_name, samples):
             # Try formatting first sample
             if dataset and config.field_mappings:
                 try:
-                    formatted = evaluator.format_for_custom_metric(dataset[0])
+                    evaluator.format_for_custom_metric(dataset[0])
                     print_success("Successfully formatted sample for evaluation")
                 except Exception as e:
                     print_warning(f"Error formatting sample: {e}")
@@ -322,9 +326,9 @@ def validate_benchmark(ctx, benchmark_name, samples):
         return
 
 
-async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator,
+async def _evaluate_batch(batch: list[dict[str, Any]], evaluator,
                          model: str, api_key: Optional[str],
-                         parallel: int) -> List[Dict[str, Any]]:
+                         parallel: int) -> list[dict[str, Any]]:
     """Evaluate a batch of samples."""
     manager = EvaluationManager()
     results = []
@@ -362,7 +366,7 @@ async def _evaluate_batch(batch: List[Dict[str, Any]], evaluator,
     return results
 
 
-def _save_results(results: List[Dict[str, Any]], benchmark_name: str, output_path: str):
+def _save_results(results: list[dict[str, Any]], benchmark_name: str, output_path: str):
     """Save evaluation results to file."""
     output_data = {
         "benchmark": benchmark_name,

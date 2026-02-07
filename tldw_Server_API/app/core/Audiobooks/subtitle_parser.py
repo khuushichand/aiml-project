@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import List
 
 _ASS_DIALOGUE_RE = re.compile(r"^(dialogue|comment):", re.IGNORECASE)
 _ASS_TAG_RE = re.compile(r"\{[^}]*\}")
@@ -20,8 +19,8 @@ def normalize_subtitle_source(text: str, input_type: str) -> str:
 
 
 def _parse_srt_vtt(text: str, *, kind: str) -> str:
-    cues: List[str] = []
-    current: List[str] = []
+    cues: list[str] = []
+    current: list[str] = []
     lines = text.splitlines()
     skip_block = False
 
@@ -74,7 +73,7 @@ def _parse_srt_vtt(text: str, *, kind: str) -> str:
 
 
 def _parse_ass(text: str) -> str:
-    cues: List[str] = []
+    cues: list[str] = []
     for raw_line in text.splitlines():
         stripped = raw_line.strip().lstrip("\ufeff")
         if not stripped:

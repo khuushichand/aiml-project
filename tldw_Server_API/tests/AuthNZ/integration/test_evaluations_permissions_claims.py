@@ -1,14 +1,12 @@
-import os
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request
-from starlette.types import Scope
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
-from tldw_Server_API.app.api.v1.endpoints.evaluations_crud import (
+from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_crud import (
     RBAC_EVALS_CREATE,
     crud_router,
 )
@@ -16,7 +14,7 @@ from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal, AuthC
 
 
 def _build_app_with_overrides(principal: AuthPrincipal):
-    from fastapi import FastAPI, Depends
+    from fastapi import FastAPI
 
     app = FastAPI()
     app.include_router(crud_router, prefix="/api/v1/evaluations")
@@ -40,7 +38,7 @@ def _build_app_with_overrides(principal: AuthPrincipal):
     async def _fake_verify_api_key() -> str:
         return "vk-test"
 
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
     app.dependency_overrides[eval_auth.verify_api_key] = _fake_verify_api_key
 
@@ -168,7 +166,7 @@ async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
     HTTP stack, which also depends on AUTH_MODE and bootstrap state.
     """
     from fastapi import HTTPException
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_auth import require_admin
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import require_admin
 
     user = SimpleNamespace(is_admin=False)
     monkeypatch.setenv("EVALS_HEAVY_ADMIN_ONLY", "true")
@@ -178,8 +176,8 @@ async def test_evaluations_admin_cleanup_respects_require_admin(monkeypatch):
 
 
 def _build_app_with_admin_cleanup(principal: AuthPrincipal):
-    from fastapi import FastAPI, Depends
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_unified
+    from fastapi import FastAPI
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_unified
 
     app = FastAPI()
     app.include_router(eval_unified.router, prefix="/api/v1")
@@ -218,7 +216,7 @@ def _build_app_with_admin_cleanup(principal: AuthPrincipal):
     async def _fake_verify_api_key() -> str:
         return "vk-test"
 
-    from tldw_Server_API.app.api.v1.endpoints import evaluations_auth as eval_auth
+    from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_auth as eval_auth
 
     app.dependency_overrides[eval_auth.verify_api_key] = _fake_verify_api_key
 

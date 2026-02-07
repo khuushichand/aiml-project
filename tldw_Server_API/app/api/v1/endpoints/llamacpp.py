@@ -2,19 +2,22 @@
 # Description: This file contains the API endpoints for managing Llama.cpp server operations in tldw_Server_API.
 #
 # Imports
-from typing import Optional, Dict, Any
+from typing import Any, Optional
+
 #
 # Thid-party Libraries
-from fastapi import APIRouter, HTTPException, Body, Depends, Request
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict, Field
+
+from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
+
 #
 # Local Imports
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelNotFoundError, ServerError, InferenceError
-from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import InferenceError, ModelNotFoundError, ServerError
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Manager import LLMInferenceManager
-from tldw_Server_API.app.core.Local_LLM.LlamaCpp_Handler import LlamaCppHandler
+
 #
 ########################################################################################################################
 #
@@ -66,10 +69,7 @@ def _resolve_llm_manager(request: Request) -> LLMInferenceManager:
 def _llamacpp_unavailable(detail: Optional[str] = None) -> HTTPException:
     base = "Llama.cpp backend is not configured."
     guidance = "Enable [LlamaCpp] enabled=true in Config_Files/config.txt and restart the server."
-    if detail:
-        message = f"{base} ({detail}) {guidance}"
-    else:
-        message = f"{base} {guidance}"
+    message = f"{base} ({detail}) {guidance}" if detail else f"{base} {guidance}"
     return HTTPException(status_code=503, detail=message)
 
 
@@ -91,7 +91,7 @@ def _resolve_llamacpp_target(llm_manager: LLMInferenceManager, required: tuple[s
 async def start_llamacpp_server_endpoint(
         model_filename: str = Body(..., embed=True,
                                    description="Filename of the GGUF model to load (e.g., 'mistral-7b-v0.1.Q4_K_M.gguf')"),
-        server_args: Optional[Dict[str, Any]] = Body({}, embed=True,
+        server_args: Optional[dict[str, Any]] = Body({}, embed=True,
                                                      description="Optional Llama.cpp server arguments (e.g., port, n_gpu_layers)"),
         llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager),
 ):
@@ -110,12 +110,12 @@ async def start_llamacpp_server_endpoint(
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except (ModelNotFoundError, ServerError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error starting Llama.cpp server: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.post("/llamacpp/stop_server", summary="Stop Llama.cpp Server")
@@ -130,12 +130,12 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except ServerError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error stopping Llama.cpp server: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/status", summary="Get Llama.cpp Server Status")
@@ -150,10 +150,10 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp server status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
@@ -164,14 +164,14 @@ async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp metrics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamafile/metrics", summary="Get Llamafile Metrics")
-async def get_llamafile_metrics_endpoint():
+async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depends(_resolve_llm_manager)):
     try:
         if not getattr(llm_manager, "llamafile", None):
             raise HTTPException(status_code=400, detail="Llamafile backend is not enabled or configured.")
@@ -183,7 +183,7 @@ async def get_llamafile_metrics_endpoint():
         raise
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llamafile metrics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/models", summary="List available Llama.cpp models")
@@ -202,10 +202,10 @@ async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error listing Llama.cpp models: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 from tldw_Server_API.app.api.v1.schemas.llamacpp_schemas import LlamaCppInferenceRequest
@@ -250,12 +250,12 @@ async def run_llamacpp_inference_endpoint(
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except ServerError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error during Llama.cpp inference: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 # --- Llama.cpp Reranker (GGUF embeddings) ---
 
@@ -266,7 +266,7 @@ class LlamaCppRerankItem(BaseModel):
 
 class LlamaCppRerankRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Query to rank against passages")
-    passages: List[LlamaCppRerankItem] = Field(..., min_length=1, description="Candidate passages to rerank")
+    passages: list[LlamaCppRerankItem] = Field(..., min_length=1, description="Candidate passages to rerank")
     top_k: Optional[int] = Field(default=None, ge=1, le=100, description="Top-K results to return (defaults to len(passages))")
     # Optional overrides for llama.cpp and model selection
     model: Optional[str] = Field(default=None, description="GGUF model path (overrides config)")
@@ -307,7 +307,7 @@ class LlamaCppRerankResult(BaseModel):
 
 
 class LlamaCppRerankResponse(BaseModel):
-    results: List[LlamaCppRerankResult]
+    results: list[LlamaCppRerankResult]
 
 
 @router.post("/llamacpp/reranking", summary="Rerank passages with llama.cpp embeddings (GGUF)", response_model=LlamaCppRerankResponse, dependencies=[Depends(check_rate_limit)])
@@ -320,14 +320,16 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
     try:
         # Lazy imports to avoid extra startup cost
         from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
-            RerankingConfig, RerankingStrategy, create_reranker
+            RerankingConfig,
+            RerankingStrategy,
+            create_reranker,
         )
-        from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+        from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reranking modules unavailable: {e}")
+        raise HTTPException(status_code=500, detail=f"Reranking modules unavailable: {e}") from e
 
     # Build documents from passages
-    documents: List[Document] = []
+    documents: list[Document] = []
     for i, item in enumerate(payload.passages):
         documents.append(Document(
             id=item.id or str(i),
@@ -373,12 +375,12 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
         if isinstance(scored, list) and cfg.top_k:
             scored = scored[: cfg.top_k]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reranking failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Reranking failed: {e}") from e
 
     # Convert results
     # Map back to original order indices
     id_to_index = { (p.id or str(i)): i for i, p in enumerate(payload.passages) }
-    results: List[LlamaCppRerankResult] = []
+    results: list[LlamaCppRerankResult] = []
     for sd in scored:
         pid = getattr(sd.document, 'id', None)
         idx = id_to_index.get(pid, 0)
@@ -399,7 +401,7 @@ public_router = APIRouter()
 class PublicRerankRequest(BaseModel):
     model: Optional[str] = Field(default=None, description="Reranker model id/path (GGUF for llama.cpp or HF id for transformers)")
     query: str = Field(..., min_length=1)
-    documents: List[str] = Field(..., min_length=1, description="Documents (plain text) to rank")
+    documents: list[str] = Field(..., min_length=1, description="Documents (plain text) to rank")
     top_n: Optional[int] = Field(default=None, ge=1, le=100)
     backend: Optional[str] = Field(default="auto", description="Reranker backend: auto|llamacpp|transformers")
     model_config = ConfigDict(json_schema_extra={
@@ -419,16 +421,18 @@ class PublicRerankRequest(BaseModel):
 
 
 class PublicRerankResponse(BaseModel):
-    results: List[LlamaCppRerankResult]
+    results: list[LlamaCppRerankResult]
 
 
-async def _run_public_rerank(query: str, docs: List[str], model_override: Optional[str], top_k: Optional[int], backend: str) -> List[LlamaCppRerankResult]:
+async def _run_public_rerank(query: str, docs: list[str], model_override: Optional[str], top_k: Optional[int], backend: str) -> list[LlamaCppRerankResult]:
     from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import (
-        RerankingConfig, RerankingStrategy, create_reranker
+        RerankingConfig,
+        RerankingStrategy,
+        create_reranker,
     )
-    from tldw_Server_API.app.core.RAG.rag_service.types import Document, DataSource
+    from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
 
-    documents: List[Document] = [
+    documents: list[Document] = [
         Document(id=str(i), content=txt, metadata={"source": "public_reranking"}, source=DataSource.MEDIA_DB)
         for i, txt in enumerate(docs)
     ]
@@ -463,7 +467,7 @@ async def _run_public_rerank(query: str, docs: List[str], model_override: Option
     # Enforce top_k even if underlying reranker returns more
     if isinstance(scored, list) and cfg.top_k:
         scored = scored[: cfg.top_k]
-    out: List[LlamaCppRerankResult] = []
+    out: list[LlamaCppRerankResult] = []
     for sd in scored:
         idx = int(getattr(sd.document, 'id', '0')) if str(getattr(sd.document, 'id', '0')).isdigit() else 0
         out.append(LlamaCppRerankResult(
@@ -490,7 +494,7 @@ async def public_reranking_endpoint(payload: PublicRerankRequest, current_user: 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Public reranking failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Public reranking failed: {e}") from e
 
 #
 # End of llamacpp.py

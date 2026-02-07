@@ -16,12 +16,10 @@ real scraping is implemented, this stub can be replaced with the actual pipeline
 
 from __future__ import annotations
 
-from typing import Any, Dict
 from datetime import datetime, timezone
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.Scheduler.base.registry import task
-from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
 
 
@@ -44,7 +42,7 @@ def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
 
 
 @task(name="watchlist_run", max_retries=0, timeout=3600, queue="watchlists")
-async def watchlist_run(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def watchlist_run(payload: dict[str, Any]) -> dict[str, Any]:
     inputs = payload.get("inputs") or {}
     if not isinstance(inputs, dict):
         raise ValueError("watchlist_run: inputs must be a dict")
@@ -57,7 +55,7 @@ async def watchlist_run(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         uid_int = int(user_id)
     except Exception:
-        raise ValueError("watchlist_run: user_id must be int-like")
+        raise ValueError("watchlist_run: user_id must be int-like") from None
 
     # Execute the real pipeline (handles run row creation, stats, and job history)
     result = await run_watchlist_job(uid_int, int(job_id))

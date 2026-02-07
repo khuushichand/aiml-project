@@ -7,18 +7,16 @@ and health monitoring to ensure robust operation of the RAG pipeline.
 """
 
 import asyncio
-import time
+import contextlib
 import random
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Union, TypeVar
-from collections import deque, defaultdict
+import time
 import traceback
+from collections import deque
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Optional, TypeVar, cast
 
 from loguru import logger
-
 
 T = TypeVar('T')
 
@@ -56,8 +54,8 @@ class RetryConfig:
     max_delay: float = 60.0
     exponential_base: float = 2.0
     jitter: bool = True
-    retry_on: List[type] = field(default_factory=lambda: [Exception])
-    dont_retry_on: List[type] = field(default_factory=list)
+    retry_on: list[type] = field(default_factory=lambda: [Exception])
+    dont_retry_on: list[type] = field(default_factory=list)
 
 
 @dataclass
@@ -68,7 +66,7 @@ class ErrorContext:
     component: str
     operation: str
     attempt: int
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     traceback: Optional[str] = None
 
     def __post_init__(self):
@@ -97,16 +95,16 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
-        self.last_failure_time = None
+        self.last_failure_time: Optional[float] = None
         self.last_state_change = time.time()
 
         # Rolling window for tracking
-        self.call_results = deque(maxlen=self.config.window_size)
+        self.call_results: deque[bool] = deque(maxlen=self.config.window_size)
 
         # Callbacks
-        self.on_open_callbacks = []
-        self.on_close_callbacks = []
-        self.on_half_open_callbacks = []
+        self.on_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
+        self.on_close_callbacks: list[Callable[[CircuitBreaker], None]] = []
+        self.on_half_open_callbacks: list[Callable[[CircuitBreaker], None]] = []
 
     async def call(self, func: Callable, *args, **kwargs) -> Any:
         """
@@ -140,7 +138,7 @@ class CircuitBreaker:
             self._record_success()
             return result
 
-        except Exception as e:
+        except Exception:  # noqa: BLE001 - record failure for any exception before re-raising
             # Record failure
             self._record_failure()
             raise
@@ -184,11 +182,8 @@ class CircuitBreaker:
         self.failure_count += 1
         self.last_failure_time = time.time()
 
-        if self.state == CircuitState.HALF_OPEN:
+        if self.state == CircuitState.HALF_OPEN or self.state == CircuitState.CLOSED and self.failure_count >= self.config.failure_threshold:
             self._transition_to_open()
-        elif self.state == CircuitState.CLOSED:
-            if self.failure_count >= self.config.failure_threshold:
-                self._transition_to_open()
 
     def _transition_to_open(self):
         """Transition to open state."""
@@ -200,7 +195,7 @@ class CircuitBreaker:
             for callback in self.on_open_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in open callback: {e}")
 
     def _transition_to_closed(self):
@@ -215,7 +210,7 @@ class CircuitBreaker:
             for callback in self.on_close_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in close callback: {e}")
 
     def _transition_to_half_open(self):
@@ -230,7 +225,7 @@ class CircuitBreaker:
             for callback in self.on_half_open_callbacks:
                 try:
                     callback(self)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - callback best-effort
                     logger.error(f"Error in half-open callback: {e}")
 
     def reset(self):
@@ -242,7 +237,7 @@ class CircuitBreaker:
         self.call_results.clear()
         logger.info(f"Circuit breaker '{self.name}' reset")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get circuit breaker statistics."""
         return {
             "name": self.name,
@@ -297,9 +292,9 @@ class RetryPolicy:
                 if attempt > 1:
                     logger.info(f"Retry succeeded on attempt {attempt}")
 
-                return result
+                return cast(T, result)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - retry policy inspects all exceptions
                 last_exception = e
 
                 # Check if we should retry this exception
@@ -319,7 +314,9 @@ class RetryPolicy:
 
                 await asyncio.sleep(delay)
 
-        raise last_exception
+        if last_exception is not None:
+            raise last_exception
+        raise RuntimeError("Retry policy failed without capturing an exception")
 
     def _should_retry(self, exception: Exception) -> bool:
         """Check if exception should be retried."""
@@ -329,11 +326,7 @@ class RetryPolicy:
                 return False
 
         # Check retry_on
-        for exc_type in self.config.retry_on:
-            if isinstance(exception, exc_type):
-                return True
-
-        return False
+        return any(isinstance(exception, exc_type) for exc_type in self.config.retry_on)
 
     def _calculate_delay(self, attempt: int) -> float:
         """Calculate retry delay with exponential backoff."""
@@ -353,7 +346,7 @@ class FallbackChain:
 
     def __init__(self):
         """Initialize fallback chain."""
-        self.strategies = []
+        self.strategies: list[tuple[Callable[..., Any], Optional[Callable[[Exception], bool]]]] = []
 
     def add_strategy(
         self,
@@ -387,7 +380,7 @@ class FallbackChain:
                 return await primary_func(*args, **kwargs)
             else:
                 return await asyncio.to_thread(primary_func, *args, **kwargs)
-        except Exception as primary_error:
+        except Exception as primary_error:  # noqa: BLE001 - fallback chain best-effort
             logger.warning(f"Primary function failed: {primary_error}")
 
             # Try fallback strategies
@@ -401,13 +394,13 @@ class FallbackChain:
                         else:
                             return await asyncio.to_thread(fallback_func, *args, **kwargs)
 
-                    except Exception as fallback_error:
+                    except Exception as fallback_error:  # noqa: BLE001 - fallback chain best-effort
                         logger.warning(f"Fallback failed: {fallback_error}")
                         continue
 
             # All fallbacks failed
             logger.error("All fallback strategies failed")
-            raise primary_error
+            raise
 
 
 class HealthMonitor:
@@ -415,7 +408,7 @@ class HealthMonitor:
 
     def __init__(self):
         """Initialize health monitor."""
-        self.components: Dict[str, ComponentHealth] = {}
+        self.components: dict[str, ComponentHealth] = {}
         self.check_interval = 30  # seconds
         self.monitoring_task = None
 
@@ -448,10 +441,8 @@ class HealthMonitor:
         """Stop health monitoring."""
         if self.monitoring_task:
             self.monitoring_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.monitoring_task
-            except asyncio.CancelledError:
-                pass
             self.monitoring_task = None
 
     async def _monitoring_loop(self):
@@ -460,11 +451,11 @@ class HealthMonitor:
             try:
                 await self.check_all_health()
                 await asyncio.sleep(self.check_interval)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - keep monitoring loop alive
                 logger.error(f"Error in health monitoring: {e}")
                 await asyncio.sleep(self.check_interval)
 
-    async def check_all_health(self) -> Dict[str, HealthStatus]:
+    async def check_all_health(self) -> dict[str, HealthStatus]:
         """Check health of all components."""
         results = {}
 
@@ -481,7 +472,7 @@ class HealthMonitor:
                 if not is_healthy and component.critical:
                     logger.error(f"Critical component '{name}' is unhealthy")
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - health checks are best-effort
                 logger.error(f"Health check failed for '{name}': {e}")
                 component.update_health(False)
                 results[name] = HealthStatus.UNKNOWN
@@ -544,9 +535,9 @@ class ErrorRecoveryCoordinator:
 
     def __init__(self):
         """Initialize error recovery coordinator."""
-        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
-        self.retry_policies: Dict[str, RetryPolicy] = {}
-        self.fallback_chains: Dict[str, FallbackChain] = {}
+        self.circuit_breakers: dict[str, CircuitBreaker] = {}
+        self.retry_policies: dict[str, RetryPolicy] = {}
+        self.fallback_chains: dict[str, FallbackChain] = {}
         self.health_monitor = HealthMonitor()
         self.error_history: deque = deque(maxlen=100)
 
@@ -596,7 +587,7 @@ class ErrorRecoveryCoordinator:
                 f"{len(recent_errors)} errors in last minute"
             )
 
-    def get_recovery_stats(self) -> Dict[str, Any]:
+    def get_recovery_stats(self) -> dict[str, Any]:
         """Get recovery system statistics."""
         return {
             "circuit_breakers": {
@@ -744,7 +735,7 @@ async def check_component_health(
         if not is_healthy and kwargs.get("critical", False):
             raise Exception(f"Critical component '{component}' is unhealthy")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - health checks are best-effort
         logger.error(f"Health check failed for '{component}': {e}")
         context.metadata[f"health_{component}"] = "unknown"
 

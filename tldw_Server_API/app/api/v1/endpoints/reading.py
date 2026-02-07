@@ -6,7 +6,6 @@ import json
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -14,7 +13,7 @@ from loguru import logger
 
 try:
     import bleach  # type: ignore
-except Exception:  # pragma: no cover - optional dependency fallback
+except ImportError:  # pragma: no cover - optional dependency fallback
     bleach = None
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
@@ -115,6 +114,25 @@ _ARCHIVE_ALLOWED_PROTOCOLS = ["http", "https", "mailto"]
 
 router = APIRouter(prefix="/reading", tags=["reading"])
 
+_READING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 
 def _service_for_user(user: User) -> ReadingService:
     if not user or user.id is None:
@@ -199,7 +217,7 @@ def _build_reading_citation(row: ContentItemRow) -> ReadingCitation:
     )
 
 
-def _tts_content_type(response_format: str) -> Optional[str]:
+def _tts_content_type(response_format: str) -> str | None:
     mapping = {
         "mp3": "audio/mpeg",
         "opus": "audio/opus",
@@ -229,7 +247,7 @@ def _raise_for_tts_error(exc: Exception) -> None:
     raise HTTPException(status_code=500, detail="TTS generation failed")
 
 
-def _parse_import_job_result(result: object) -> Optional[ReadingImportResponse]:
+def _parse_import_job_result(result: object) -> ReadingImportResponse | None:
     if result is None:
         return None
     if isinstance(result, str):
@@ -260,7 +278,7 @@ def _to_import_job_status(job: dict[str, object]) -> ReadingImportJobStatus:
     )
 
 
-def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
     try:
@@ -272,26 +290,26 @@ def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
     return dt
 
 
-def _parse_digest_filters(raw: Optional[str]) -> Optional[ReadingDigestScheduleFilters]:
+def _parse_digest_filters(raw: str | None) -> ReadingDigestScheduleFilters | None:
     if not raw:
         return None
     try:
         payload = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception:
+    except json.JSONDecodeError:
         return None
     if not isinstance(payload, dict) or not payload:
         return None
     try:
         return ReadingDigestScheduleFilters(**payload)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
-def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
+def _validate_cron_or_422(cron: str, timezone_str: str | None) -> None:
     try:
         from apscheduler.triggers.cron import CronTrigger
         CronTrigger.from_crontab(cron, timezone=timezone_str or "UTC")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -301,7 +319,7 @@ def _validate_cron_or_422(cron: str, timezone_str: Optional[str]) -> None:
         ) from exc
 
 
-def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> Optional[str]:
+def _resolve_archive_retention(payload: ReadingArchiveCreateRequest) -> str | None:
     if payload.retention_until:
         dt = _parse_iso_datetime(payload.retention_until)
         if dt is None:
@@ -331,16 +349,13 @@ def _sanitize_archive_html(value: str) -> str:
 def _render_archive_html(
     *,
     title: str,
-    url: Optional[str],
-    body_html: Optional[str],
-    body_text: Optional[str],
+    url: str | None,
+    body_html: str | None,
+    body_text: str | None,
 ) -> str:
     safe_title = html.escape(title or "Untitled")
     safe_url = html.escape(url or "")
-    if body_html:
-        content_html = _sanitize_archive_html(body_html)
-    else:
-        content_html = f"<pre>{html.escape(body_text or '')}</pre>"
+    content_html = _sanitize_archive_html(body_html) if body_html else f"<pre>{html.escape(body_text or '')}</pre>"
     header = f"<h1>{safe_title}</h1>"
     if safe_url:
         header = f"{header}<p><a href=\"{safe_url}\">{safe_url}</a></p>"
@@ -418,9 +433,9 @@ async def save_reading_item(
             notes=payload.notes,
         )
         return _to_reading_item(result.item)
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_save_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_save_failed")
+        raise HTTPException(status_code=400, detail="reading_save_failed") from exc
 
 
 @router.get(
@@ -430,18 +445,18 @@ async def save_reading_item(
     dependencies=[Depends(rbac_rate_limit("reading.list"))],
 )
 async def list_reading_items(
-    status: Optional[list[str]] = Query(None),
-    tags: Optional[list[str]] = Query(None),
-    favorite: Optional[bool] = Query(None),
-    q: Optional[str] = Query(None),
-    domain: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None, description="ISO start date inclusive"),
-    date_to: Optional[str] = Query(None, description="ISO end date inclusive"),
+    status: list[str] | None = Query(None),
+    tags: list[str] | None = Query(None),
+    favorite: bool | None = Query(None),
+    q: str | None = Query(None),
+    domain: str | None = Query(None),
+    date_from: str | None = Query(None, description="ISO start date inclusive"),
+    date_to: str | None = Query(None, description="ISO end date inclusive"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=200),
-    offset: Optional[int] = Query(None, ge=0),
-    limit: Optional[int] = Query(None, ge=1, le=200),
-    sort: Optional[str] = Query(
+    offset: int | None = Query(None, ge=0),
+    limit: int | None = Query(None, ge=1, le=200),
+    sort: str | None = Query(
         None,
         description="updated_desc|updated_asc|created_desc|created_asc|title_asc|title_desc|relevance",
     ),
@@ -457,8 +472,8 @@ async def list_reading_items(
             date_from_iso = start_dt.isoformat()
         if end_dt:
             date_to_iso = end_dt.isoformat()
-    except Exception:
-        raise HTTPException(status_code=422, detail="invalid_date_range")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="invalid_date_range") from None
     resolved_limit = limit if limit is not None else size
     resolved_offset = offset if offset is not None else max(0, (page - 1) * size)
     if limit is not None:
@@ -517,7 +532,7 @@ async def import_reading_items(
 ) -> ReadingImportJobResponse:
     try:
         raw = await file.read()
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_import_read_failed: {exc}")
         raise HTTPException(status_code=400, detail="reading_import_failed") from exc
     if not raw:
@@ -547,7 +562,7 @@ async def import_reading_items(
             priority=5,
             max_retries=3,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_import_job_create_failed: {exc}")
         if staged_path is not None:
             try:
@@ -570,7 +585,7 @@ async def import_reading_items(
     dependencies=[Depends(rbac_rate_limit("reading.import.status"))],
 )
 async def list_reading_import_jobs(
-    status: Optional[str] = Query(None),
+    status: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -631,10 +646,10 @@ async def get_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_get_failed")
+        raise HTTPException(status_code=400, detail="reading_get_failed") from exc
     return _to_reading_detail(row)
 
 
@@ -665,10 +680,10 @@ async def summarize_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summary_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
+        raise HTTPException(status_code=400, detail="reading_item_fetch_failed") from exc
 
     metadata = _parse_metadata(row)
     text = _select_text_for_action(row, metadata, None)
@@ -699,9 +714,9 @@ async def summarize_reading_item(
                 model_override=payload.model,
             ),
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summarize_failed: {exc}")
-        raise HTTPException(status_code=503, detail="reading_summarize_failed")
+        raise HTTPException(status_code=503, detail="reading_summarize_failed") from exc
 
     if not isinstance(summary, str):
         summary = str(summary)
@@ -750,10 +765,10 @@ async def tts_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_tts_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
+        raise HTTPException(status_code=400, detail="reading_item_fetch_failed") from exc
 
     metadata = _parse_metadata(row)
     text = _select_text_for_action(row, metadata, payload.text_source)
@@ -769,7 +784,7 @@ async def tts_reading_item(
     try:
         sanitized_text = validator.sanitize_text(text)
     except TTSValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not sanitized_text.strip():
         raise HTTPException(status_code=400, detail="reading_tts_empty_input")
@@ -796,7 +811,7 @@ async def tts_reading_item(
             fallback=True,
             user_id=current_user.id,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc)
 
     headers = {
@@ -811,7 +826,7 @@ async def tts_reading_item(
             async for chunk in speech_iter:
                 if chunk:
                     yield chunk
-        except Exception as exc:
+        except _READING_NONCRITICAL_EXCEPTIONS as exc:
             _raise_for_tts_error(exc)
 
     if payload.stream:
@@ -822,7 +837,7 @@ async def tts_reading_item(
         async for chunk in speech_iter:
             if chunk:
                 audio_bytes += chunk
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc)
 
     audio_bytes = audio_bytes.replace(b"--final_boundary_for_non_streamed--", b"")
@@ -862,10 +877,10 @@ async def update_reading_item(
         )
         return _to_reading_item(row)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_update_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_update_failed")
+        raise HTTPException(status_code=400, detail="reading_update_failed") from exc
 
 
 @router.delete(
@@ -887,10 +902,10 @@ async def delete_reading_item(
         row = service.update_item(item_id, status="archived")
         return ReadingDeleteResponse(status=row.status or "archived", item_id=item_id, hard=False)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
-    except Exception as exc:
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_delete_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_delete_failed")
+        raise HTTPException(status_code=400, detail="reading_delete_failed") from exc
 
 
 @router.post(
@@ -908,7 +923,7 @@ async def create_reading_archive(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
 
     metadata = _parse_metadata(row)
     clean_html = metadata.get("clean_html") if isinstance(metadata, dict) else None
@@ -917,8 +932,8 @@ async def create_reading_archive(
 
     source = payload.source
     format_value = payload.format
-    body_html: Optional[str] = None
-    body_text: Optional[str] = None
+    body_html: str | None = None
+    body_text: str | None = None
     if source == "clean_html":
         if not clean_html:
             raise HTTPException(status_code=409, detail="reading_archive_no_html")
@@ -972,7 +987,7 @@ async def create_reading_archive(
     out_dir = _outputs_dir_for_user(user_id)
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to create outputs dir: {exc}")
         raise HTTPException(status_code=500, detail="storage_unavailable") from exc
 
@@ -984,7 +999,7 @@ async def create_reading_archive(
 
     try:
         path.write_text(content, encoding="utf-8")
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to write archive file: {exc}")
         raise HTTPException(status_code=500, detail="reading_archive_write_failed") from exc
 
@@ -1007,7 +1022,7 @@ async def create_reading_archive(
             media_item_id=row.media_id,
             retention_until=retention_until,
         )
-    except Exception as exc:
+    except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_archive: failed to insert output record: {exc}")
         try:
             path.unlink(missing_ok=True)
@@ -1033,11 +1048,11 @@ async def create_reading_archive(
     dependencies=[Depends(rbac_rate_limit("reading.export"))],
 )
 async def export_reading_items(
-    status: Optional[list[str]] = Query(None),
-    tags: Optional[list[str]] = Query(None),
-    favorite: Optional[bool] = Query(None),
-    q: Optional[str] = Query(None),
-    domain: Optional[str] = Query(None),
+    status: list[str] | None = Query(None),
+    tags: list[str] | None = Query(None),
+    favorite: bool | None = Query(None),
+    q: str | None = Query(None),
+    domain: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(1000, ge=1, le=10000),
     include_metadata: bool = Query(True),
@@ -1060,12 +1075,11 @@ async def export_reading_items(
 
     def _serialize_row(row: ContentItemRow) -> dict:
         metadata = {}
-        if include_metadata or include_clean_html or include_text:
-            if getattr(row, "metadata_json", None):
-                try:
-                    metadata = json.loads(row.metadata_json) if row.metadata_json else {}
-                except Exception:
-                    metadata = {}
+        if (include_metadata or include_clean_html or include_text) and getattr(row, "metadata_json", None):
+            try:
+                metadata = json.loads(row.metadata_json) if row.metadata_json else {}
+            except (json.JSONDecodeError, TypeError, ValueError):
+                metadata = {}
         if not isinstance(metadata, dict):
             metadata = {}
         payload = {
@@ -1094,7 +1108,7 @@ async def export_reading_items(
         if include_highlights:
             try:
                 highlights = service.collections.list_highlights_by_item(item_id=row.id)
-            except Exception as exc:
+            except _READING_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Failed to fetch highlights for item {row.id}: {exc}")
                 highlights = []
             payload["highlights"] = [_serialize_highlight_row(h) for h in highlights]
@@ -1269,7 +1283,7 @@ async def delete_reading_digest_schedule(
     dependencies=[Depends(rbac_rate_limit("reading.digests"))],
 )
 async def list_reading_digest_outputs(
-    schedule_id: Optional[str] = Query(None, description="Optional schedule id filter"),
+    schedule_id: str | None = Query(None, description="Optional schedule id filter"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     _current_user: User = Depends(get_request_user),
@@ -1295,7 +1309,7 @@ async def list_reading_digest_outputs(
             try:
                 if row.metadata_json:
                     meta = json.loads(row.metadata_json)
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 meta = {}
             if schedule_id and str(meta.get("schedule_id")) != str(schedule_id):
                 continue

@@ -69,11 +69,16 @@ The Evaluations module provides a unified, API- and CLI-driven system for model 
 - Configuration & AuthNZ
   - Rate limits: `evaluations_auth.check_evaluation_rate_limit`; per-user limits + `GET /rate-limits`
   - RBAC: `rbac_rate_limit`, `require_token_scope` on sensitive endpoints; admin checks for A/B runs and cleanup
+  - Endpoint access policy:
+    - `GET /api/v1/evaluations/health` is public.
+    - `GET /api/v1/evaluations/metrics` requires authenticated `EVALS_READ`.
+    - Dataset routes use explicit permissions: create/delete require `EVALS_MANAGE`; list/get require `EVALS_READ`.
   - Idempotency: `Idempotency-Key` header for create/run endpoints; replay indicated via `X-Idempotent-Replay`
   - Test overrides: `EVALUATIONS_TEST_DB_PATH` to redirect DB in tests; single-user vs multi-user logic
 
 - Concurrency & Performance
   - Async evaluators; background tasks for long-running processes (A/B runs)
+  - Batch endpoint parallel mode honors strict fail-fast when `continue_on_error=false` (cancel remaining work and stop scheduling new items)
   - Connection pooling and circuit breakers; streaming where supported
 
 - Error Handling & Security

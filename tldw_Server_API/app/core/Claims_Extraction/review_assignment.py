@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 
 
-def _normalize_predicate_values(value: Any) -> List[str]:
+def _normalize_predicate_values(value: Any) -> list[str]:
     """Normalize predicate values into a lowercased list of strings."""
     if value is None:
         return []
@@ -16,7 +16,7 @@ def _normalize_predicate_values(value: Any) -> List[str]:
     return [str(value).strip().lower()] if str(value).strip() else []
 
 
-def _extract_domain(url: Optional[str]) -> str:
+def _extract_domain(url: str | None) -> str:
     """Extract a lowercase domain from a URL or host-like string."""
     if not url:
         return ""
@@ -36,8 +36,8 @@ def _extract_domain(url: Optional[str]) -> str:
 
 
 def _get_media_review_context(
-    db: MediaDatabase, media_id: int, extractor: Optional[str]
-) -> Optional[Dict[str, Any]]:
+    db: MediaDatabase, media_id: int, extractor: str | None
+) -> dict[str, Any] | None:
     """Return media metadata used for claim review rule evaluation."""
     row = db.execute_query(
         "SELECT id, url, title, type, visibility, org_id, team_id, owner_user_id, client_id "
@@ -52,7 +52,7 @@ def _get_media_review_context(
     return ctx
 
 
-def _claim_review_rule_matches(predicate: Dict[str, Any], context: Dict[str, Any]) -> bool:
+def _claim_review_rule_matches(predicate: dict[str, Any], context: dict[str, Any]) -> bool:
     """Return True if a rule predicate matches the claim/media context."""
     if not predicate:
         return True
@@ -70,11 +70,11 @@ def _claim_review_rule_matches(predicate: Dict[str, Any], context: Dict[str, Any
         "media_id",
         "extractor",
     }
-    for key in predicate.keys():
+    for key in predicate:
         if key not in supported_keys:
             return False
 
-    def _contains_any(haystack: str, needles: List[str]) -> bool:
+    def _contains_any(haystack: str, needles: list[str]) -> bool:
         if not needles:
             return True
         return any(needle in haystack for needle in needles if needle)
@@ -114,17 +114,15 @@ def _claim_review_rule_matches(predicate: Dict[str, Any], context: Dict[str, Any
         return False
     if "media_id" in predicate and not _match_exact(context.get("id"), predicate.get("media_id")):
         return False
-    if "extractor" in predicate and not _match_exact(ctx_extractor, predicate.get("extractor")):
-        return False
-    return True
+    return not ("extractor" in predicate and not _match_exact(ctx_extractor, predicate.get("extractor")))
 
 
 def resolve_claim_review_assignment(
     *,
     db: MediaDatabase,
     media_id: int,
-    extractor: Optional[str],
-) -> Tuple[Optional[int], Optional[str]]:
+    extractor: str | None,
+) -> tuple[int | None, str | None]:
     """Return reviewer_id/review_group for a claim based on review rules."""
     context = _get_media_review_context(db, media_id, extractor)
     if not context:
@@ -160,12 +158,12 @@ def resolve_claim_review_assignment(
 def apply_review_rules(
     *,
     db: MediaDatabase,
-    claims: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+    claims: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Apply review rules to a list of claims in-place."""
     if not claims:
         return claims
-    assignment_cache: Dict[Tuple[int, str], Tuple[Optional[int], Optional[str]]] = {}
+    assignment_cache: dict[tuple[int, str], tuple[int | None, str | None]] = {}
     for claim in claims:
         try:
             media_id = int(claim.get("media_id"))

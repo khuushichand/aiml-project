@@ -3,9 +3,10 @@
 #
 #######################################################################################################################
 import asyncio
+import contextlib
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -31,8 +32,8 @@ class VoiceSessionManager:
 
     def __init__(self):
         """Initialize the session manager."""
-        self._sessions: Dict[str, VoiceSessionContext] = {}
-        self._user_sessions: Dict[int, set] = {}
+        self._sessions: dict[str, VoiceSessionContext] = {}
+        self._user_sessions: dict[int, set] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
@@ -45,10 +46,8 @@ class VoiceSessionManager:
         """Stop the session manager."""
         if self._cleanup_task:
             self._cleanup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
             self._cleanup_task = None
             logger.info("Voice session manager stopped")
 
@@ -83,7 +82,7 @@ class VoiceSessionManager:
     async def create_session(
         self,
         user_id: int,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> VoiceSessionContext:
         """
         Create a new voice session.
@@ -96,12 +95,11 @@ class VoiceSessionManager:
             The new session context
         """
         # Check session limit per user
-        if user_id in self._user_sessions:
-            if len(self._user_sessions[user_id]) >= self.MAX_SESSIONS_PER_USER:
-                # Remove oldest session
-                oldest = await self._get_oldest_session(user_id)
-                if oldest:
-                    await self.end_session(oldest)
+        if user_id in self._user_sessions and len(self._user_sessions[user_id]) >= self.MAX_SESSIONS_PER_USER:
+            # Remove oldest session
+            oldest = await self._get_oldest_session(user_id)
+            if oldest:
+                await self.end_session(oldest)
 
         session_id = str(uuid.uuid4())
         session = VoiceSessionContext(
@@ -159,7 +157,7 @@ class VoiceSessionManager:
         self,
         session_id: Optional[str],
         user_id: int,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[VoiceSessionContext, bool]:
         """
         Get an existing session or create a new one.
@@ -224,7 +222,7 @@ class VoiceSessionManager:
         session_id: str,
         role: str,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """
         Add a conversation turn to the session.
@@ -285,7 +283,7 @@ class VoiceSessionManager:
     async def set_last_action_result(
         self,
         session_id: str,
-        result: Dict[str, Any],
+        result: dict[str, Any],
     ) -> bool:
         """
         Store the result of the last executed action.

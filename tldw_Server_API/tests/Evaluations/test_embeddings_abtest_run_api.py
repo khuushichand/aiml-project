@@ -16,7 +16,7 @@ def evals_client() -> Tuple[TestClient, dict]:
     os.environ.setdefault("TEST_MODE", "true")
 
     from fastapi import FastAPI
-    from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as evals_router
+    from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as evals_router
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
     app = FastAPI()
@@ -47,7 +47,7 @@ def test_run_embeddings_abtest_synchronous_success(evals_client, monkeypatch):
         def __init__(self):
             self.db = _DBStub()
 
-    import tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest as ab
+    import tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest as ab
     monkeypatch.setattr(ab, "get_unified_evaluation_service_for_user", lambda uid: _SvcStub())
 
     async def _fake_run_abtest_full(db, cfg, test_id, user_id, media_db):

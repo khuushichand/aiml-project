@@ -5,8 +5,10 @@ and normalization. Some features may require institutional entitlements.
 """
 from __future__ import annotations
 
+import contextlib
 import os
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Any
+
 from tldw_Server_API.app.core.http_client import fetch, fetch_json
 
 
@@ -20,7 +22,7 @@ BASE_URL = "https://api.elsevier.com/content/search/scopus"
 
 
 
-def _headers() -> Dict[str, str]:
+def _headers() -> dict[str, str]:
     h = {
         "X-ELS-APIKey": os.getenv("ELSEVIER_API_KEY", ""),
         "Accept": "application/json",
@@ -31,19 +33,19 @@ def _headers() -> Dict[str, str]:
     return h
 
 
-def _join_authors(entry: Dict[str, Any]) -> Optional[str]:
+def _join_authors(entry: dict[str, Any]) -> str | None:
     # Scopus search returns 'dc:creator' (first author) and 'author' array in detailed endpoints.
     # Here we best-effort use 'dc:creator'.
     name = entry.get("dc:creator")
     return name if name else None
 
 
-def _pdf_url(entry: Dict[str, Any]) -> Optional[str]:
+def _pdf_url(entry: dict[str, Any]) -> str | None:
     # Scopus search usually does not return direct PDFs
     return None
 
 
-def _normalize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_entry(entry: dict[str, Any]) -> dict[str, Any]:
     doi = entry.get("prism:doi")
     return {
         "id": entry.get("eid") or entry.get("dc:identifier"),
@@ -60,18 +62,18 @@ def _normalize_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def search_scopus(
-    q: Optional[str],
+    q: str | None,
     offset: int,
     limit: int,
-    from_year: Optional[int] = None,
-    to_year: Optional[int] = None,
+    from_year: int | None = None,
+    to_year: int | None = None,
     open_access_only: bool = False,
-) -> Tuple[Optional[List[Dict]], int, Optional[str]]:
+) -> tuple[list[dict] | None, int, str | None]:
     api_key = os.getenv("ELSEVIER_API_KEY")
     if not api_key:
         return None, 0, _missing_key_error()
     try:
-        query_parts: List[str] = []
+        query_parts: list[str] = []
         if q:
             query_parts.append(q)
         if from_year or to_year:
@@ -87,7 +89,7 @@ def search_scopus(
             # Best-effort OA filter in Scopus advanced query
             query_parts.append("OPENACCESS(1)")
 
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "query": " AND ".join(query_parts) if query_parts else "ALL(*)",
             "start": offset,
             "count": limit,
@@ -95,7 +97,7 @@ def search_scopus(
         }
         data = fetch_json(method="GET", url=BASE_URL, headers=_headers(), params=params, timeout=20)
         sr = data.get("search-results") or {}
-        total = int((sr.get("opensearch:totalResults") or 0))
+        total = int(sr.get("opensearch:totalResults") or 0)
         entries = sr.get("entry") or []
         items = [_normalize_entry(e) for e in entries]
         return items, total, None
@@ -103,7 +105,7 @@ def search_scopus(
         return None, 0, f"Scopus error: {str(e)}"
 
 
-def get_scopus_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
+def get_scopus_by_doi(doi: str) -> tuple[dict | None, str | None]:
     api_key = os.getenv("ELSEVIER_API_KEY")
     if not api_key:
         return None, _missing_key_error()
@@ -116,10 +118,8 @@ def get_scopus_by_doi(doi: str) -> Tuple[Optional[Dict], Optional[str]]:
         }
         r = fetch(method="GET", url=BASE_URL, headers=_headers(), params=params, timeout=20)
         if r.status_code == 404:
-            try:
+            with contextlib.suppress(Exception):
                 r.close()
-            except Exception:
-                pass
             return None, None
         data = r.json() or {}
         sr = data.get("search-results") or {}

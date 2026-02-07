@@ -1,10 +1,10 @@
 # test_runner.py
 # Runs test cases against prompts
 
-import json
 import asyncio
 import time
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
+
 from loguru import logger
 
 from ....core.Chat.Chat_Deps import ChatConfigurationError
@@ -17,6 +17,7 @@ from ....core.LLM_Calls.adapter_utils import (
     split_system_message,
 )
 from .program_evaluator import ProgramEvaluator
+
 
 class TestRunner:
     """Runs test cases against prompts using LLM."""
@@ -35,11 +36,11 @@ class TestRunner:
         *,
         provider: str,
         model: Optional[str],
-        messages_payload: List[Dict[str, Any]],
+        messages_payload: list[dict[str, Any]],
         system_message: Optional[str],
         temperature: float,
         max_tokens: int,
-        app_config: Optional[Dict[str, Any]] = None,
+        app_config: Optional[dict[str, Any]] = None,
     ) -> Any:
         provider_name = normalize_provider(provider)
         if not provider_name:
@@ -52,7 +53,7 @@ class TestRunner:
         cleaned_messages = messages_payload
         if not sys_msg:
             sys_msg, cleaned_messages = split_system_message(messages_payload)
-        request: Dict[str, Any] = {
+        request: dict[str, Any] = {
             "messages": cleaned_messages,
             "system_message": sys_msg,
             "model": resolved_model,
@@ -70,7 +71,7 @@ class TestRunner:
         model: str = "gpt-3.5-turbo",
         temperature: float = 0.7,
         max_tokens: int = 1000
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run a single test case against a prompt.
 
@@ -193,9 +194,9 @@ class TestRunner:
         *,
         prompt_id: int,
         test_case_id: int,
-        model_config: Dict[str, Any],
-        metrics: Optional[List[Any]] = None,
-    ) -> Dict[str, Any]:
+        model_config: dict[str, Any],
+        metrics: Optional[list[Any]] = None,
+    ) -> dict[str, Any]:
         """Compatibility wrapper used by optimizers.
 
         Executes a single test case using model_config and returns a dict that
@@ -278,12 +279,12 @@ class TestRunner:
     async def run_multiple_tests(
         self,
         prompt_id: int,
-        test_case_ids: List[int],
+        test_case_ids: list[int],
         model: str = "gpt-3.5-turbo",
         temperature: float = 0.7,
         max_tokens: int = 1000,
         parallel: bool = False
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Run multiple test cases.
 

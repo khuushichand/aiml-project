@@ -6,8 +6,9 @@ for production deployment.
 """
 
 import os
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+from typing import Any
+
 from loguru import logger
 
 
@@ -24,9 +25,9 @@ class EvaluationConfigValidator:
     """Validates configuration for the Evaluations module."""
 
     def __init__(self):
-        self.issues: List[ConfigurationIssue] = []
+        self.issues: list[ConfigurationIssue] = []
 
-    def validate(self) -> Dict[str, Any]:
+    def validate(self) -> dict[str, Any]:
         """
         Perform comprehensive configuration validation.
 
@@ -246,7 +247,7 @@ class EvaluationConfigValidator:
                 recommendation="Set SESSION_ENCRYPTION_KEY for secure sessions"
             ))
 
-    def _issue_to_dict(self, issue: ConfigurationIssue) -> Dict[str, str]:
+    def _issue_to_dict(self, issue: ConfigurationIssue) -> dict[str, str]:
         """Convert issue to dictionary."""
         return {
             "severity": issue.severity,
@@ -256,7 +257,7 @@ class EvaluationConfigValidator:
         }
 
 
-def validate_configuration() -> Dict[str, Any]:
+def validate_configuration() -> dict[str, Any]:
     """
     Convenience function to validate configuration.
 

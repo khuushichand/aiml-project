@@ -9,24 +9,44 @@ import asyncio
 import re
 import time
 import types
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry, get_adapter
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import get_adapter, registry
 from tldw_Server_API.app.core.Workflows.adapters.control._config import (
-    PromptConfig,
+    BranchConfig,
     DelayConfig,
     LogConfig,
-    BranchConfig,
     MapConfig,
     ParallelConfig,
+    PromptConfig,
+)
+
+_FLOW_NONCRITICAL_EXCEPTIONS = (
+    AdapterError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    re.error,
 )
 
 
@@ -38,7 +58,7 @@ from tldw_Server_API.app.core.Workflows.adapters.control._config import (
     tags=["core", "template"],
     config_model=PromptConfig,
 )
-async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_prompt_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Render a prompt using the sandboxed Jinja engine.
 
     Config:
@@ -55,12 +75,12 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     try:
         if isinstance(data.get("inputs"), dict):
             data["inputs"] = types.SimpleNamespace(**data["inputs"])  # type: ignore[arg-type]
-    except Exception as e:
+    except _FLOW_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Prompt adapter: failed to namespace inputs: {e}", exc_info=True)
     try:
         # Keep a shallow namespace for convenience
         data.update(variables)
-    except Exception as e:
+    except _FLOW_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Prompt adapter: failed to merge variables into context: {e}", exc_info=True)
 
     # Pre-pass: replacements for common tokens to be robust in sandbox
@@ -76,7 +96,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 key = m.group(1)
                 return str(context["inputs"].get(key, ""))
             template = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, template)
-    except Exception as e:
+    except _FLOW_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Prompt adapter: pre-pass templating fallback failed: {e}", exc_info=True)
 
     # Optional simulated delay/error for testing retries/timeouts
@@ -91,7 +111,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 sl = min(0.05, remaining)
                 await asyncio.sleep(sl)
                 remaining -= sl
-    except Exception as e:
+    except _FLOW_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Prompt adapter: simulate_delay handling failed: {e}", exc_info=True)
     # Force-error handling (test-friendly)
     fe = config.get("force_error")
@@ -117,7 +137,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 mime_type="text/plain",
                 metadata={"step": "prompt"},
             )
-    except Exception as e:
+    except _FLOW_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Prompt adapter: failed to persist prompt artifact: {e}", exc_info=True)
     return {"text": rendered}
 
@@ -130,7 +150,7 @@ async def run_prompt_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["control", "utility"],
     config_model=DelayConfig,
 )
-async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_delay_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Simple delay step; waits for the specified milliseconds.
 
     Config:
@@ -139,7 +159,7 @@ async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     """
     try:
         ms = int(config.get("milliseconds", 1000))
-    except Exception:
+    except (TypeError, ValueError):
         ms = 1000
     remaining = max(0, ms) / 1000.0
     while remaining > 0:
@@ -159,7 +179,7 @@ async def run_delay_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> 
     tags=["control", "debug"],
     config_model=LogConfig,
 )
-async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_log_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Log a templated message; useful for debugging pipelines.
 
     Config:
@@ -183,11 +203,11 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                 key = m.group(1)
                 return str(context["inputs"].get(key, ""))
             msg_t = re.sub(r"\{\{\s*inputs\.(\w+)\s*\}\}", repl_simple, msg_t)
-    except Exception:
+    except _FLOW_NONCRITICAL_EXCEPTIONS:
         pass
     try:
         message = _tmpl(msg_t, context) or msg_t
-    except Exception:
+    except _FLOW_NONCRITICAL_EXCEPTIONS:
         # Fall back to the pre-pass content if templating fails
         message = msg_t
     # Optional PII redaction in logs
@@ -198,7 +218,7 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             try:
                 from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
                 message = PIIDetector().redact(message)
-            except Exception:
+            except _FLOW_NONCRITICAL_EXCEPTIONS:
                 pass
         if level == "debug":
             logger.debug(message)
@@ -208,7 +228,7 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             logger.error(message)
         else:
             logger.info(message)
-    except Exception:
+    except _FLOW_NONCRITICAL_EXCEPTIONS:
         pass
     return {"logged": True, "message": message, "level": level}
 
@@ -221,7 +241,7 @@ async def run_log_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["control", "conditional"],
     config_model=BranchConfig,
 )
-async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_branch_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Evaluate a simple boolean condition and select the next step.
 
     Config:
@@ -236,7 +256,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     is_true = rendered in {"1", "true", "yes", "on"}
     next_id = str(config.get("true_next") if is_true else config.get("false_next") or "").strip()
     # Do not force if not provided; engine will fall back to natural order
-    out: Dict[str, Any] = {"branch": "true" if is_true else "false"}
+    out: dict[str, Any] = {"branch": "true" if is_true else "false"}
     if next_id:
         out["__next__"] = next_id
     # Trace decision as a child span for better visibility
@@ -248,7 +268,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             "next_id": next_id or ""
         }):
             pass
-    except Exception:
+    except _FLOW_NONCRITICAL_EXCEPTIONS:
         pass
     return out
 
@@ -261,7 +281,7 @@ async def run_branch_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["control", "parallel"],
     config_model=MapConfig,
 )
-async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_map_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Fan-out over a list of items and apply a simple step to each item.
 
     Config:
@@ -283,7 +303,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
             import json as _json
             parsed = _json.loads(raw)
             items = parsed if isinstance(parsed, list) else [raw]
-        except Exception:
+        except (TypeError, ValueError):
             items = [s.strip() for s in str(raw).split(",") if str(s).strip()]
 
     sub = config.get("step") or {}
@@ -300,13 +320,13 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     concurrency = max(1, int(config.get("concurrency", 4)))
     sem = asyncio.Semaphore(concurrency)
 
-    async def _run_one(idx: int, item: Any) -> Dict[str, Any]:
+    async def _run_one(idx: int, item: Any) -> dict[str, Any]:
         async with sem:
             # Honour cancellation before running each sub-step
             try:
                 if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                     return {"__status__": "cancelled"}
-            except Exception:
+            except _FLOW_NONCRITICAL_EXCEPTIONS:
                 pass
             sub_ctx = {**context, "item": item}
             # Child span per item
@@ -314,7 +334,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                 preview = str(item)
                 if len(preview) > 80:
                     preview = preview[:77] + "…"
-            except Exception:
+            except _FLOW_NONCRITICAL_EXCEPTIONS:
                 preview = ""
             try:
                 async with _start_span("workflows.map.item", attributes={
@@ -326,7 +346,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
                     if adapter is not None:
                         return await adapter(sub_cfg, sub_ctx)
                     return {"error": f"unsupported_substep:{sub_type}"}
-            except Exception:
+            except _FLOW_NONCRITICAL_EXCEPTIONS:
                 # If tracing fails, still attempt the sub-step
                 adapter = get_adapter(sub_type)
                 if adapter is not None:
@@ -345,7 +365,7 @@ async def run_map_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Di
     tags=["control", "parallel"],
     config_model=ParallelConfig,
 )
-async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_parallel_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Execute multiple steps in parallel.
 
     Config:
@@ -368,7 +388,7 @@ async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
     results: list = [None] * len(steps)
     errors: list = []
 
-    async def run_step(idx: int, step_config: Dict[str, Any]) -> None:
+    async def run_step(idx: int, step_config: dict[str, Any]) -> None:
         async with semaphore:
             if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                 return
@@ -383,7 +403,7 @@ async def run_parallel_adapter(config: Dict[str, Any], context: Dict[str, Any]) 
                     results[idx] = result
                 else:
                     results[idx] = {"error": f"unknown_step_type: {step_type}"}
-            except Exception as e:
+            except _FLOW_NONCRITICAL_EXCEPTIONS as e:
                 results[idx] = {"error": str(e)}
                 if fail_fast:
                     errors.append(str(e))

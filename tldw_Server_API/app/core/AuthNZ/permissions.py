@@ -7,13 +7,15 @@
 ########################################################################################################################
 
 import functools
-from typing import List, Optional, Union, Callable, Any
+from typing import Callable
+
 from loguru import logger
+
+from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
-from tldw_Server_API.app.core.AuthNZ.db_config import get_configured_user_database
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, is_single_user_mode
 
 # Once-per-process flags for observability when falling back to DB-based
 # permission/role checks instead of claim-first paths.
@@ -177,7 +179,7 @@ def is_single_user_mode_cached() -> bool:
         logger.debug("is_single_user_mode_cached: failed to resolve mode: {}", exc)
         return False
 
-def check_any_permission(user: User, permissions: List[str]) -> bool:
+def check_any_permission(user: User, permissions: list[str]) -> bool:
     """
     Check if a user has any of the specified permissions.
 
@@ -188,12 +190,9 @@ def check_any_permission(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has at least one permission
     """
-    for permission in permissions:
-        if check_permission(user, permission):
-            return True
-    return False
+    return any(check_permission(user, permission) for permission in permissions)
 
-def check_all_permissions(user: User, permissions: List[str]) -> bool:
+def check_all_permissions(user: User, permissions: list[str]) -> bool:
     """
     Check if a user has all specified permissions.
 
@@ -204,10 +203,7 @@ def check_all_permissions(user: User, permissions: List[str]) -> bool:
     Returns:
         bool: True if user has all permissions
     """
-    for permission in permissions:
-        if not check_permission(user, permission):
-            return False
-    return True
+    return all(check_permission(user, permission) for permission in permissions)
 
 ########################################################################################################################
 # Decorator Functions (for non-FastAPI use)
@@ -255,7 +251,7 @@ def require_role(role: str):
         return wrapper
     return decorator
 
-def require_any_permission(permissions: List[str]):
+def require_any_permission(permissions: list[str]):
     """
     Decorator to require at least one of the specified permissions.
 
@@ -276,7 +272,7 @@ def require_any_permission(permissions: List[str]):
         return wrapper
     return decorator
 
-def require_all_permissions(permissions: List[str]):
+def require_all_permissions(permissions: list[str]):
     """
     Decorator to require all specified permissions.
 

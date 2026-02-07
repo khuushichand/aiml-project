@@ -1,10 +1,13 @@
 # tldw_Server_API/app/api/v1/schemas/prompts_schemas.py
 #
 # Imports
-from typing import List, Optional, Dict, Any
-from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, validator
 from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
 #
 # Third-party Imports
 #
@@ -41,7 +44,7 @@ class PromptBase(BaseModel):
 
 
 class PromptCreate(PromptBase):
-    keywords: Optional[List[str]] = Field(None, description="List of keyword strings to associate with the prompt.")
+    keywords: Optional[list[str]] = Field(None, description="List of keyword strings to associate with the prompt.")
 
 
 class PromptUpdate(BaseModel):  # For partial updates if we add a PATCH endpoint
@@ -50,7 +53,7 @@ class PromptUpdate(BaseModel):  # For partial updates if we add a PATCH endpoint
     details: Optional[str] = Field(None, max_length=4000)
     system_prompt: Optional[str] = Field(None, max_length=20000)
     user_prompt: Optional[str] = Field(None, max_length=20000)
-    keywords: Optional[List[str]] = None  # To update keywords
+    keywords: Optional[list[str]] = None  # To update keywords
 
 
 class PromptResponse(PromptBase):
@@ -58,7 +61,7 @@ class PromptResponse(PromptBase):
     uuid: UUID
     last_modified: datetime
     version: int
-    keywords: List[str] = Field(default_factory=list, description="Keywords associated with the prompt.")
+    keywords: list[str] = Field(default_factory=list, description="Keywords associated with the prompt.")
     deleted: bool = Field(..., description="Indicates if the prompt is soft-deleted.")
 
     model_config = ConfigDict(from_attributes=True)
@@ -75,7 +78,7 @@ class PromptBriefResponse(BaseModel):
 
 
 class PaginatedPromptsResponse(BaseModel):
-    items: List[PromptBriefResponse]
+    items: list[PromptBriefResponse]
     total_pages: int
     current_page: int
     total_items: int
@@ -86,7 +89,7 @@ class PromptSearchResultItem(PromptResponse):  # Or a more specific search resul
 
 
 class PromptSearchResponse(BaseModel):
-    items: List[PromptSearchResultItem]
+    items: list[PromptSearchResultItem]
     total_matches: int
     page: int
     per_page: int
@@ -120,7 +123,7 @@ class SyncLogEntryResponse(BaseModel):
     timestamp: datetime
     client_id: str
     version: int
-    payload: Optional[Dict[str, Any]]
+    payload: Optional[dict[str, Any]]
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,11 +136,11 @@ class PromptImportItem(BaseModel):
     author: Optional[str] = Field(None, max_length=100)
     system_prompt: Optional[str] = Field(None, max_length=20000)
     user_prompt: Optional[str] = Field(None, max_length=20000)
-    keywords: List[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
 
 
 class PromptImportRequest(BaseModel):
-    prompts: List[PromptImportItem] = Field(..., min_length=1)
+    prompts: list[PromptImportItem] = Field(..., min_length=1)
     skip_duplicates: bool = False
 
 
@@ -145,7 +148,7 @@ class PromptImportResponse(BaseModel):
     imported: int
     failed: int
     skipped: int
-    prompt_ids: List[int] = Field(default_factory=list)
+    prompt_ids: list[int] = Field(default_factory=list)
 
 
 # --- Template Processing ---
@@ -154,12 +157,12 @@ class TemplateVariablesRequest(BaseModel):
 
 
 class TemplateVariablesResponse(BaseModel):
-    variables: List[str]
+    variables: list[str]
 
 
 class TemplateRenderRequest(BaseModel):
     template: str = Field(..., min_length=1)
-    variables: Dict[str, Any]
+    variables: dict[str, Any]
 
 
 class TemplateRenderResponse(BaseModel):
@@ -168,25 +171,25 @@ class TemplateRenderResponse(BaseModel):
 
 # --- Bulk Operations ---
 class PromptBulkDeleteRequest(BaseModel):
-    prompt_ids: List[int] = Field(..., min_length=1)
+    prompt_ids: list[int] = Field(..., min_length=1)
 
 
 class PromptBulkDeleteResponse(BaseModel):
     deleted: int
     failed: int
-    failed_ids: List[int] = Field(default_factory=list)
+    failed_ids: list[int] = Field(default_factory=list)
 
 
 class PromptBulkKeywordsRequest(BaseModel):
-    prompt_ids: List[int] = Field(..., min_length=1)
-    add_keywords: List[str] = Field(default_factory=list)
-    remove_keywords: List[str] = Field(default_factory=list)
+    prompt_ids: list[int] = Field(..., min_length=1)
+    add_keywords: list[str] = Field(default_factory=list)
+    remove_keywords: list[str] = Field(default_factory=list)
 
 
 class PromptBulkKeywordsResponse(BaseModel):
     updated: int
     failed: int
-    failed_ids: List[int] = Field(default_factory=list)
+    failed_ids: list[int] = Field(default_factory=list)
 
 #
 # End of prompts_schemas.py
@@ -207,7 +210,7 @@ class LegacyPromptCreateRequest(BaseModel):
     content: Optional[str] = None
     system_prompt: Optional[str] = None
     user_prompt: Optional[str] = None
-    keywords: List[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
 
     @property
     def effective_details(self) -> Optional[str]:
@@ -224,4 +227,4 @@ class PromptCollectionCreateRequest(BaseModel):
 
     name: str
     description: Optional[str] = None
-    prompt_ids: List[int] = Field(default_factory=list)
+    prompt_ids: list[int] = Field(default_factory=list)

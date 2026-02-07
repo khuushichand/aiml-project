@@ -5,8 +5,8 @@ Health and monitoring endpoints for the RAG service.
 Provides health checks, cache statistics, and system monitoring.
 """
 
-from typing import Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from loguru import logger
@@ -16,12 +16,12 @@ from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 
 # Import RAG components
 from ....core.RAG.rag_service.advanced_cache import RAGCache
-from ....core.RAG.rag_service.metrics_collector import get_metrics_collector
-from ....core.RAG.rag_service.resilience import get_coordinator, HealthStatus
+
 # Avoid importing optional quick_wins at module import time to prevent test collection failures
 # get_cost_tracker will be imported lazily inside the cost summary endpoint
 from ....core.RAG.rag_service.batch_processing import BatchProcessor
-
+from ....core.RAG.rag_service.metrics_collector import get_metrics_collector
+from ....core.RAG.rag_service.resilience import get_coordinator
 
 router = APIRouter(prefix="/api/v1/rag", tags=["rag-health"])
 
@@ -48,7 +48,7 @@ def get_batch_processor() -> BatchProcessor:
 
 
 @router.get("/health", summary="RAG service health check")
-async def health_check() -> Dict[str, Any]:
+async def health_check() -> dict[str, Any]:
     """
     Comprehensive health check for RAG service.
 
@@ -89,7 +89,7 @@ async def health_check() -> Dict[str, Any]:
                 "hit_rate": cache_stats.get("hit_rate", 0),
                 "size": cache_stats.get("size", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Cache health check failed: {e}")
             health_status["components"]["cache"] = {
                 "status": "unhealthy",
@@ -106,7 +106,7 @@ async def health_check() -> Dict[str, Any]:
                 "status": "healthy" if metrics_healthy else "unhealthy",
                 "recent_queries": current_metrics.get("recent_queries", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Metrics health check failed: {e}")
             health_status["components"]["metrics"] = {
                 "status": "unhealthy",
@@ -124,7 +124,7 @@ async def health_check() -> Dict[str, Any]:
                 "active_jobs": len(batch.active_jobs),
                 "success_rate": batch_stats.get("job_success_rate", 0)
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
             logger.error(f"Batch processor health check failed: {e}")
             health_status["components"]["batch_processor"] = {
                 "status": "unhealthy",
@@ -147,19 +147,19 @@ async def health_check() -> Dict[str, Any]:
         elif not all_healthy:
             health_status["status"] = "degraded"
 
-        return health_status
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - health checks should not fail on unexpected errors
         logger.error(f"Health check error: {e}")
         return {
             "status": "unhealthy",
             "timestamp": datetime.now().isoformat(),
             "error": "Error occured during RAG health check"
         }
+    else:
+        return health_status
 
 
 @router.get("/health/live", summary="Simple liveness check")
-async def liveness_check() -> Dict[str, str]:
+async def liveness_check() -> dict[str, str]:
     """
     Simple liveness check for container orchestration.
 
@@ -169,7 +169,7 @@ async def liveness_check() -> Dict[str, str]:
 
 
 @router.get("/health/ready", summary="Readiness check")
-async def readiness_check() -> Dict[str, Any]:
+async def readiness_check() -> dict[str, Any]:
     """
     Readiness check for container orchestration.
 
@@ -177,18 +177,18 @@ async def readiness_check() -> Dict[str, Any]:
     """
     try:
         # Quick checks for critical components
-        cache = get_rag_cache()
-        metrics = get_metrics_collector()
+        get_rag_cache()
+        get_metrics_collector()
 
         return {
             "status": "ready",
             "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - readiness should return 503 on any failure
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service not ready: {str(e)}"
-        )
+        ) from e
 
 
 @router.get(
@@ -196,7 +196,7 @@ async def readiness_check() -> Dict[str, Any]:
     summary="Get cache statistics",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cache_statistics() -> Dict[str, Any]:
+async def get_cache_statistics() -> dict[str, Any]:
     """
     Get detailed cache statistics.
 
@@ -208,8 +208,9 @@ async def get_cache_statistics() -> Dict[str, Any]:
 
         # Add additional computed metrics
         if isinstance(stats, dict):
-            # For multi-level cache
-            overall_stats = stats.get("overall", {})
+            # Support both multi-level format ({"overall": {...}}) and
+            # flat SemanticCache format ({"hit_rate": ..., ...}).
+            overall_stats = stats.get("overall", stats)
             hit_rate = overall_stats.get("hit_rate", 0)
 
             # Determine cache effectiveness
@@ -231,12 +232,12 @@ async def get_cache_statistics() -> Dict[str, Any]:
                 "statistics": stats
             }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get cache statistics: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve cache statistics: {str(e)}"
-        )
+        ) from e
 
 
 @router.post(
@@ -244,7 +245,7 @@ async def get_cache_statistics() -> Dict[str, Any]:
     summary="Clear cache",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def clear_cache() -> Dict[str, str]:
+async def clear_cache() -> dict[str, str]:
     """
     Clear all cache entries.
 
@@ -261,12 +262,12 @@ async def clear_cache() -> Dict[str, str]:
             "message": "Cache cleared successfully",
             "timestamp": datetime.now().isoformat()
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to clear cache: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clear cache: {str(e)}"
-        )
+        ) from e
 
 
 @router.get(
@@ -274,7 +275,7 @@ async def clear_cache() -> Dict[str, str]:
     summary="Get cache warming status",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cache_warming_status() -> Dict[str, Any]:
+async def get_cache_warming_status() -> dict[str, Any]:
     """Get status of cache warming operations."""
     try:
         cache = get_rag_cache()
@@ -293,12 +294,12 @@ async def get_cache_warming_status() -> Dict[str, Any]:
                 "message": "Cache warming not configured"
             }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get warming status: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
 
 
 @router.get(
@@ -306,7 +307,7 @@ async def get_cache_warming_status() -> Dict[str, Any]:
     summary="Get metrics summary",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_metrics_summary() -> Dict[str, Any]:
+async def get_metrics_summary() -> dict[str, Any]:
     """Get summary of RAG pipeline metrics."""
     try:
         metrics = get_metrics_collector()
@@ -330,14 +331,14 @@ async def get_metrics_summary() -> Dict[str, Any]:
             } if aggregated else None
         }
 
-        return summary
-
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get metrics summary: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
+    else:
+        return summary
 
 
 @router.get(
@@ -345,13 +346,13 @@ async def get_metrics_summary() -> Dict[str, Any]:
     summary="Get cost tracking summary",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_cost_summary() -> Dict[str, Any]:
+async def get_cost_summary() -> dict[str, Any]:
     """Get summary of LLM API costs."""
     try:
         # Lazy import to avoid hard dependency during module import
         try:
             from ....core.RAG.rag_service.quick_wins import get_cost_tracker  # type: ignore
-        except Exception:
+        except ImportError:
             # Cost tracking not available; return minimal summary
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -378,12 +379,12 @@ async def get_cost_summary() -> Dict[str, Any]:
             "warnings": budget_warnings
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get cost summary: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
-        )
+        ) from e
 
 
 @router.get(
@@ -391,7 +392,7 @@ async def get_cost_summary() -> Dict[str, Any]:
     summary="Get batch job statuses",
     dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
 )
-async def get_batch_jobs() -> Dict[str, Any]:
+async def get_batch_jobs() -> dict[str, Any]:
     """Get status of all batch processing jobs."""
     try:
         processor = get_batch_processor()
@@ -417,15 +418,181 @@ async def get_batch_jobs() -> Dict[str, Any]:
             "jobs": jobs[:20]  # Last 20 jobs
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - surface as HTTP 500 with context
         logger.error(f"Failed to get batch jobs: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
+        ) from e
+
+
+@router.post(
+    "/quality-gate",
+    summary="Run quality gate evaluation",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def quality_gate_endpoint(
+    metrics: dict[str, float],
+) -> dict[str, Any]:
+    """Evaluate metrics against gating thresholds.
+
+    Returns pass/warn/fail with per-metric details and a CI exit code.
+    """
+    try:
+        from ....core.RAG.rag_service.quality_gating import GatingEvaluator
+
+        evaluator = GatingEvaluator()
+        result = evaluator.evaluate(metrics)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            **result.to_dict(),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Quality gating module not available.",
+        ) from None
+    except Exception as e:
+        logger.error(f"Quality gate evaluation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.post(
+    "/baseline/save",
+    summary="Save metric baseline",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def save_baseline_endpoint(
+    metrics: dict[str, float],
+    baseline_id: Optional[str] = None,
+    pipeline_config: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Save a metric baseline for regression detection."""
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        baseline = detector.save_baseline(
+            metrics=metrics,
+            pipeline_config=pipeline_config,
+            baseline_id=baseline_id,
         )
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "baseline_id": baseline.baseline_id,
+            "metrics_count": len(baseline.metrics),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        ) from None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.error(f"Baseline save failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
 
 
-def _get_cache_recommendations(stats: Dict[str, Any]) -> list:
+@router.get(
+    "/regression/check",
+    summary="Check for metric regression",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def check_regression_endpoint(
+    baseline_id: str = "latest",
+) -> dict[str, Any]:
+    """Compare current metrics against a stored baseline.
+
+    Note: This endpoint requires metrics to be provided as query parameters.
+    For a full check, POST to /api/v1/rag/regression/check with current_metrics body.
+    """
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        baseline = detector.load_baseline(baseline_id)
+        if baseline is None:
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "baseline_id": baseline_id,
+                "has_regression": False,
+                "summary": f"No baseline '{baseline_id}' found.",
+            }
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "baseline_id": baseline.baseline_id,
+            "created_at": baseline.created_at,
+            "metrics": dict(baseline.metrics),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        ) from None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.error(f"Regression check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+@router.post(
+    "/regression/check",
+    summary="Check for metric regression with current values",
+    dependencies=[Depends(require_permissions(SYSTEM_LOGS))],
+)
+async def check_regression_post_endpoint(
+    current_metrics: dict[str, float],
+    baseline_id: str = "latest",
+) -> dict[str, Any]:
+    """Compare provided current metrics against a stored baseline."""
+    try:
+        from ....core.RAG.rag_service.regression import RegressionDetector
+
+        detector = RegressionDetector()
+        report = detector.check_regression(
+            current_metrics=current_metrics,
+            baseline_id=baseline_id,
+        )
+        return {
+            "timestamp": datetime.now().isoformat(),
+            **report.to_dict(),
+        }
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Regression module not available.",
+        ) from None
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        logger.error(f"Regression check failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e),
+        ) from e
+
+
+def _get_cache_recommendations(stats: dict[str, Any]) -> list:
     """Generate cache recommendations based on statistics."""
     recommendations = []
 

@@ -5,11 +5,29 @@ Search/get character cards via ChaChaNotes DB FTS.
 """
 
 import asyncio
-from typing import Dict, Any, List, Optional
+from sqlite3 import Error as SQLiteError
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
+from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
+
+_CHARACTERS_HEALTHCHECK_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
+_CHARACTERS_CLOSE_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
 
 
 class CharactersModule(BaseModule):
@@ -19,20 +37,19 @@ class CharactersModule(BaseModule):
     async def on_shutdown(self) -> None:
         logger.info(f"Shutting down Characters module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         checks = {"initialized": True, "driver_available": False, "disk_space": False}
         try:
             _ = CharactersRAGDB  # noqa: F401
             checks["driver_available"] = True
-        except Exception:
+        except NameError:
             checks["driver_available"] = False
         try:
             import os
             base = os.path.dirname("./Databases/test.db") or "."
-            stat = os.statvfs(base)
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
-        except Exception:
+        except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False
         # Optional ephemeral DB write test (heavy) for deeper validation
         try:
@@ -44,12 +61,12 @@ class CharactersModule(BaseModule):
                     # Trivial read
                     _ = db.get_character_card_by_id(-1)
                 checks["ephemeral_db_ok"] = True
-        except Exception:
+        except _CHARACTERS_HEALTHCHECK_EXCEPTIONS:
             checks["ephemeral_db_ok"] = False
 
         return checks
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         return [
             create_tool_definition(
                 name="characters.search",
@@ -78,12 +95,12 @@ class CharactersModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         args = self.sanitize_input(arguments)
         try:
             self.validate_tool_arguments(tool_name, args)
-        except Exception as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+        except (TypeError, ValueError) as ve:
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
         if tool_name == "characters.search":
             return await self._search(args, context)
         if tool_name == "characters.get":
@@ -98,7 +115,7 @@ class CharactersModule(BaseModule):
             raise ValueError("ChaChaNotes DB path not available in context")
         return CharactersRAGDB(db_path=chacha_path, client_id=f"mcp_characters_{self.config.name}")
 
-    async def _search(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _search(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         query: str = args.get("query")
         limit: int = int(args.get("limit", 10))
         offset: int = int(args.get("offset", 0))
@@ -112,7 +129,7 @@ class CharactersModule(BaseModule):
             snippet_len,
         )
 
-    async def _get(self, args: Dict[str, Any], context: Any | None) -> Dict[str, Any]:
+    async def _get(self, args: dict[str, Any], context: Any | None) -> dict[str, Any]:
         character_id: int = int(args.get("character_id"))
         return await asyncio.to_thread(self._get_sync, context, character_id)
 
@@ -123,7 +140,7 @@ class CharactersModule(BaseModule):
         limit: int,
         offset: int,
         snippet_len: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             rows = db.search_character_cards(query, limit=limit + offset)
@@ -149,10 +166,10 @@ class CharactersModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHARACTERS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after characters search: {}", exc)
 
-    def _get_sync(self, context: Any | None, character_id: int) -> Dict[str, Any]:
+    def _get_sync(self, context: Any | None, character_id: int) -> dict[str, Any]:
         db = self._open_db(context)
         try:
             r = db.get_character_card_by_id(character_id)
@@ -182,10 +199,10 @@ class CharactersModule(BaseModule):
         finally:
             try:
                 db.close_all_connections()
-            except Exception as exc:
+            except _CHARACTERS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after characters get: {}", exc)
 
-    def validate_tool_arguments(self, tool_name: str, arguments: Dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
         if tool_name == "characters.search":
             q = arguments.get("query")
             if not isinstance(q, str) or not (1 <= len(q) <= 1000):

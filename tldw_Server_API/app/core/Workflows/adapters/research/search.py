@@ -15,19 +15,19 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import _resolve_artifacts_dir
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.research._config import (
-    ArxivSearchConfig,
     ArxivDownloadConfig,
-    PubmedSearchConfig,
-    SemanticScholarSearchConfig,
+    ArxivSearchConfig,
     GoogleScholarSearchConfig,
     PatentSearchConfig,
+    PubmedSearchConfig,
+    SemanticScholarSearchConfig,
 )
 
 
@@ -39,7 +39,7 @@ from tldw_Server_API.app.core.Workflows.adapters.research._config import (
     tags=["research", "academic"],
     config_model=ArxivSearchConfig,
 )
-async def run_arxiv_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_arxiv_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search arXiv for papers.
 
     Config:
@@ -139,7 +139,7 @@ async def run_arxiv_search_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["research", "academic"],
     config_model=ArxivDownloadConfig,
 )
-async def run_arxiv_download_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_arxiv_download_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Download paper PDF from arXiv.
 
     Config:
@@ -222,7 +222,7 @@ async def run_arxiv_download_adapter(config: Dict[str, Any], context: Dict[str, 
     tags=["research", "academic"],
     config_model=PubmedSearchConfig,
 )
-async def run_pubmed_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_pubmed_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search PubMed for biomedical papers.
 
     Config:
@@ -232,8 +232,9 @@ async def run_pubmed_search_adapter(config: Dict[str, Any], context: Dict[str, A
       - papers: list[dict]
       - total_results: int
     """
-    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     import httpx
+
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -324,7 +325,7 @@ async def run_pubmed_search_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["research", "academic"],
     config_model=SemanticScholarSearchConfig,
 )
-async def run_semantic_scholar_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_semantic_scholar_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search Semantic Scholar for papers.
 
     Config:
@@ -335,8 +336,9 @@ async def run_semantic_scholar_search_adapter(config: Dict[str, Any], context: D
       - papers: list[dict]
       - total_results: int
     """
-    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     import httpx
+
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -411,7 +413,7 @@ async def run_semantic_scholar_search_adapter(config: Dict[str, Any], context: D
     tags=["research", "academic"],
     config_model=GoogleScholarSearchConfig,
 )
-async def run_google_scholar_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_google_scholar_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search Google Scholar for papers.
 
     Config:
@@ -490,7 +492,7 @@ async def run_google_scholar_search_adapter(config: Dict[str, Any], context: Dic
     tags=["research", "patents"],
     config_model=PatentSearchConfig,
 )
-async def run_patent_search_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_patent_search_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Search patent databases.
 
     Config:
@@ -501,8 +503,9 @@ async def run_patent_search_adapter(config: Dict[str, Any], context: Dict[str, A
       - patents: list[dict]
       - total_results: int
     """
-    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     import httpx
+
+    from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
 
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}

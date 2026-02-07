@@ -4,16 +4,17 @@ Benchmark API endpoints for the evaluation system.
 Provides endpoints for running and managing benchmarks.
 """
 
-from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Query, status
-from pydantic import BaseModel, Field
-from loguru import logger
 import asyncio
+from typing import Any, Optional
 
-from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
-from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
-from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from loguru import logger
+from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
+from tldw_Server_API.app.core.Evaluations.benchmark_loaders import load_benchmark_dataset
+from tldw_Server_API.app.core.Evaluations.benchmark_registry import get_registry
+from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
 
 # Create router
 router = APIRouter(prefix="/benchmarks", tags=["benchmarks"])
@@ -25,7 +26,7 @@ evaluation_manager = EvaluationManager()
 # Request/Response schemas
 class BenchmarkListResponse(BaseModel):
     """Response for benchmark list."""
-    benchmarks: List[Dict[str, Any]] = Field(..., description="List of available benchmarks")
+    benchmarks: list[dict[str, Any]] = Field(..., description="List of available benchmarks")
     total: int = Field(..., description="Total number of benchmarks")
 
 
@@ -35,7 +36,7 @@ class BenchmarkInfoResponse(BaseModel):
     description: str = Field(..., description="Benchmark description")
     evaluation_type: str = Field(..., description="Type of evaluation")
     dataset_source: str = Field(..., description="Dataset source")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -45,21 +46,21 @@ class BenchmarkRunRequest(BaseModel):
     api_key: Optional[str] = Field(None, description="API key if not in config")
     parallel: int = Field(4, ge=1, le=16, description="Number of parallel workers")
     save_results: bool = Field(True, description="Save results to database")
-    filter_categories: Optional[List[str]] = Field(None, description="Filter by categories")
+    filter_categories: Optional[list[str]] = Field(None, description="Filter by categories")
 
 
 class BenchmarkRunResponse(BaseModel):
     """Response from benchmark run."""
     benchmark: str = Field(..., description="Benchmark name")
     total_samples: int = Field(..., description="Total samples evaluated")
-    results_summary: Dict[str, Any] = Field(..., description="Summary of results")
+    results_summary: dict[str, Any] = Field(..., description="Summary of results")
     evaluation_id: Optional[str] = Field(None, description="Evaluation ID if saved")
 
 
 class BenchmarkSampleResponse(BaseModel):
     """Response with benchmark samples."""
     benchmark: str = Field(..., description="Benchmark name")
-    samples: List[Dict[str, Any]] = Field(..., description="Sample questions/items")
+    samples: list[dict[str, Any]] = Field(..., description="Sample questions/items")
     total_available: int = Field(..., description="Total samples in dataset")
 
 
@@ -91,7 +92,7 @@ async def list_benchmarks():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list benchmarks: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/{benchmark_name}/info", response_model=BenchmarkInfoResponse)
@@ -125,7 +126,7 @@ async def get_benchmark_info(benchmark_name: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get benchmark info: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/{benchmark_name}/samples", response_model=BenchmarkSampleResponse)
@@ -175,7 +176,7 @@ async def get_benchmark_samples(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get samples: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/{benchmark_name}/run", response_model=BenchmarkRunResponse)
@@ -336,7 +337,7 @@ async def run_benchmark(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to run benchmark: {str(e)}"
-        )
+        ) from e
 
 
 # Special endpoint for SimpleQA with its grading system
@@ -355,7 +356,7 @@ async def evaluate_simpleqa(
     try:
         from tldw_Server_API.app.core.Evaluations.simpleqa_eval import SimpleQAEvaluation
 
-        evaluator = SimpleQAEvaluation(
+        SimpleQAEvaluation(
             grading_model=api_name,
             strict_grading=strict_grading
         )
@@ -374,4 +375,4 @@ async def evaluate_simpleqa(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Evaluation failed: {str(e)}"
-        )
+        ) from e

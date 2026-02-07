@@ -11,7 +11,7 @@ export interface AnnotationResponse {
   text: string
   color: AnnotationColor
   note?: string
-  annotation_type: "highlight" | "page_note"
+  annotation_type: AnnotationType
   chapter_title?: string
   percentage?: number
   created_at: string
@@ -57,6 +57,9 @@ export function useAnnotations(mediaId: number | null) {
   const setAnnotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.setAnnotationSyncStatus
   )
+  const setAnnotationsHealth = useDocumentWorkspaceStore(
+    (s) => s.setAnnotationsHealth
+  )
 
   return useQuery<AnnotationsListResponse | null>({
     queryKey: ["document-annotations", mediaId],
@@ -71,9 +74,16 @@ export function useAnnotations(mediaId: number | null) {
         setAnnotations(annotations)
         setAnnotationSyncStatus("synced")
 
+        setAnnotationsHealth("ok")
         return response
       } catch (error) {
         setAnnotationSyncStatus("error")
+        const status = (error as { status?: number })?.status
+        if (status && status >= 500) {
+          setAnnotationsHealth("error")
+        } else {
+          setAnnotationsHealth("unknown")
+        }
         throw error
       }
     },
@@ -89,7 +99,6 @@ export function useAnnotations(mediaId: number | null) {
  */
 export function useCreateAnnotation() {
   const queryClient = useQueryClient()
-  const addAnnotation = useDocumentWorkspaceStore((s) => s.addAnnotation)
   const setAnnotationSyncStatus = useDocumentWorkspaceStore(
     (s) => s.setAnnotationSyncStatus
   )
@@ -105,7 +114,7 @@ export function useCreateAnnotation() {
         text: string
         color?: AnnotationColor
         note?: string
-        annotation_type?: "highlight" | "page_note"
+        annotation_type?: AnnotationType
       }
     }) => {
       const response = await tldwClient.createAnnotation(mediaId, annotation)

@@ -79,7 +79,7 @@ Good fit for:
 
 ## Current Status
 
-Latest release: 0.1.18 (2026-01-29). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
+Latest release: 0.1.20 (2026-02-07). Beta. Expect rough edges; please report issues. See `CHANGELOG.md` for release history.
 
 <details>
 <summary>Current focus and migration notes</summary>
@@ -232,8 +232,20 @@ pip install -e ".[otel]"          # OpenTelemetry metrics/tracing
 # macOS: brew install portaudio && pip install pyaudio
 ```
 
-MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated for quickstart.
-For production, set these explicitly and rotate regularly.
+MCP secrets (`MCP_JWT_SECRET`, `MCP_API_KEY_SALT`) are auto-generated per-process
+when MCP runs with local-only defaults (loopback IP/origin restrictions).
+These ephemeral secrets do not persist across restarts.
+
+For shared or production deployments (when MCP is accessible beyond localhost),
+set these explicitly in `.env` and rotate regularly.
+Run these commands in your shell and paste the resulting values into your `.env`
+(do not paste the command templates themselves):
+```bash
+# Generate secure secrets — run each command, then copy the output into .env
+openssl rand -base64 32   # paste the output as the value for MCP_JWT_SECRET
+openssl rand -base64 32   # paste the output as the value for MCP_API_KEY_SALT
+```
+See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details.
 </details>
 
 ### Next Steps by Goal

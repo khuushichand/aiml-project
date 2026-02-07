@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
 
 from loguru import logger
 
@@ -19,14 +19,14 @@ class AlignmentAnchor:
 def apply_alignment_anchors(
     words: Sequence[AlignmentWord],
     anchors: Sequence[AlignmentAnchor],
-) -> List[AlignmentWord]:
+) -> list[AlignmentWord]:
     if not anchors:
         return list(words)
     if not words:
         return []
 
     ordered = sorted(anchors, key=lambda a: a.offset)
-    valid_pairs: List[tuple[AlignmentAnchor, int]] = []
+    valid_pairs: list[tuple[AlignmentAnchor, int]] = []
     for anchor in ordered:
         idx = _find_anchor_word_index(words, anchor.offset)
         if idx is None:
@@ -34,7 +34,7 @@ def apply_alignment_anchors(
             continue
         valid_pairs.append((anchor, idx))
 
-    adjusted: List[AlignmentWord] = []
+    adjusted: list[AlignmentWord] = []
     active_delta = 0
     next_anchor_idx = 0
     next_word_boundary = len(words)
@@ -76,7 +76,7 @@ def scale_alignment_payload(payload: AlignmentPayload, speed_ratio: float) -> Al
     if speed_ratio == 1.0:
         return payload
     scale = 1.0 / speed_ratio
-    words: List[AlignmentWord] = []
+    words: list[AlignmentWord] = []
     for word in payload.words:
         start_ms = int(round(word.start_ms * scale))
         end_ms = int(round(word.end_ms * scale))
@@ -90,7 +90,7 @@ def stitch_alignment_payloads(
     payloads: Sequence[AlignmentPayload],
     *,
     segment_offsets_ms: Sequence[int],
-    segment_offsets_chars: Optional[Sequence[int]] = None,
+    segment_offsets_chars: Sequence[int] | None = None,
 ) -> AlignmentPayload:
     if not payloads:
         raise ValueError("payloads must not be empty")
@@ -100,7 +100,7 @@ def stitch_alignment_payloads(
         raise ValueError("segment_offsets_chars must align with payloads")
     engine = payloads[0].engine
     sample_rate = payloads[0].sample_rate
-    words: List[AlignmentWord] = []
+    words: list[AlignmentWord] = []
     for idx, payload in enumerate(payloads):
         if payload.engine != engine or payload.sample_rate != sample_rate:
             logger.warning("alignment stitch: mismatched engine or sample_rate in segment %s", idx)

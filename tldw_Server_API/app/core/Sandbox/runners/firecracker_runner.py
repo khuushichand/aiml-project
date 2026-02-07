@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -12,15 +13,24 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple
 
-from loguru import logger
-
-from ..models import RunSpec, RunStatus, RunPhase
+from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
+_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    subprocess.SubprocessError,
+)
 
-def _truthy(v: Optional[str]) -> bool:
+
+def _truthy(v: str | None) -> bool:
     return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
@@ -47,8 +57,8 @@ def _virtiofsd_bin() -> str:
     return os.getenv("SANDBOX_FC_VIRTIOFSD") or "virtiofsd"
 
 
-def _preflight_errors() -> List[str]:
-    errors: List[str] = []
+def _preflight_errors() -> list[str]:
+    errors: list[str] = []
     if not sys.platform.startswith("linux"):
         errors.append("linux_required")
     if not os.path.exists("/dev/kvm"):
@@ -74,7 +84,7 @@ def firecracker_available() -> bool:
     return False
 
 
-def firecracker_version() -> Optional[str]:
+def firecracker_version() -> str | None:
     env = os.getenv("TLDW_SANDBOX_FIRECRACKER_VERSION")
     if env:
         return env
@@ -86,7 +96,7 @@ def firecracker_version() -> Optional[str]:
             if tok.lower().startswith("v"):
                 return tok.lstrip("vV")
         return out
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -98,7 +108,7 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[dict] = None) -> None:
+def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None = None) -> None:
     body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
     req = (
         f"{method} {path} HTTP/1.1\r\n"
@@ -106,13 +116,13 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[di
         f"Content-Type: application/json\r\n"
         f"Content-Length: {len(body)}\r\n"
         f"\r\n"
-    ).encode("utf-8") + body
+    ).encode() + body
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         sock.settimeout(3)
         sock.connect(sock_path)
         sock.sendall(req)
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         while True:
             data = sock.recv(4096)
             if not data:
@@ -129,16 +139,14 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: Optional[di
                 code = int(parts[1])
                 if code >= 300:
                     raise RuntimeError(f"firecracker API error: {line}")
-        except Exception as e:
-            raise RuntimeError(f"firecracker API parse failed: {e}")
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
+            raise RuntimeError(f"firecracker API parse failed: {e}") from e
     finally:
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             sock.close()
-        except Exception:
-            pass
 
 
-def _write_entry_script(workspace: str, command: List[str]) -> None:
+def _write_entry_script(workspace: str, command: list[str]) -> None:
     import shlex
 
     log_path = "/workspace/run.log"
@@ -168,7 +176,7 @@ exit $exit_code
     os.chmod(entry, 0o755)
 
 
-def _write_env_file(workspace: str, env: Dict[str, str]) -> None:
+def _write_env_file(workspace: str, env: dict[str, str]) -> None:
     if not env:
         return
     lines = []
@@ -192,18 +200,16 @@ def _copy_tree(src: str, dst: str) -> None:
         for fn in files:
             s = os.path.join(root, fn)
             t = os.path.join(tgt_root, fn)
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 shutil.copy2(s, t)
-            except Exception:
-                pass
 
 
-def _tail_log(run_id: str, log_path: str, stop_flag: Dict[str, bool]) -> None:
+def _tail_log(run_id: str, log_path: str, stop_flag: dict[str, bool]) -> None:
     hub = get_hub()
     max_log = None
     try:
         max_log = int(os.getenv("SANDBOX_MAX_LOG_BYTES", "10485760"))
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         max_log = 10 * 1024 * 1024
     try:
         with open(log_path, "rb") as fh:
@@ -213,7 +219,7 @@ def _tail_log(run_id: str, log_path: str, stop_flag: Dict[str, bool]) -> None:
                     time.sleep(0.05)
                     continue
                 hub.publish_stdout(run_id, line, max_log)
-    except Exception:
+    except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
         return
 
 
@@ -228,7 +234,7 @@ class FirecrackerRunner:
     def __init__(self) -> None:
         pass
 
-    def start_run(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+    def start_run(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         if _truthy(os.getenv("TLDW_SANDBOX_FIRECRACKER_FAKE_EXEC")) or not _real_enabled():
             return self._run_fake(run_id, spec)
         # Real mode preflight
@@ -237,13 +243,11 @@ class FirecrackerRunner:
             raise RuntimeError(f"Firecracker preflight failed: {errs}")
         return self._run_real(run_id, spec, session_workspace=session_workspace)
 
-    def _run_real(self, run_id: str, spec: RunSpec, session_workspace: Optional[str] = None) -> RunStatus:
+    def _run_real(self, run_id: str, spec: RunSpec, session_workspace: str | None = None) -> RunStatus:
         started = datetime.utcnow()
         hub = get_hub()
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except Exception:
-            pass
 
         kernel_path = os.getenv("SANDBOX_FC_KERNEL_PATH")
         rootfs_path = None
@@ -259,7 +263,7 @@ class FirecrackerRunner:
         image_digest = None
         try:
             image_digest = f"sha256:{_sha256_file(rootfs_path)}"
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
 
         run_dir = tempfile.mkdtemp(prefix="tldw_fc_")
@@ -339,7 +343,7 @@ class FirecrackerRunner:
             import threading
             tail_thread = threading.Thread(target=_tail_log, args=(run_id, log_path, stop_flag), daemon=True)
             tail_thread.start()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             tail_thread = None
 
         timeout_sec = int(spec.timeout_sec or 300)
@@ -347,16 +351,15 @@ class FirecrackerRunner:
         deadline = time.time() + timeout_sec
         exit_code = None
         reason = None
-        duration_ms = None
         while time.time() < deadline:
             if os.path.exists(status_path):
                 try:
-                    with open(status_path, "r", encoding="utf-8") as rf:
+                    with open(status_path, encoding="utf-8") as rf:
                         payload = json.load(rf)
                     exit_code = payload.get("exit_code")
                     reason = payload.get("reason")
-                    duration_ms = payload.get("duration_ms")
-                except Exception:
+                    payload.get("duration_ms")
+                except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                     pass
                 break
             time.sleep(0.1)
@@ -364,29 +367,23 @@ class FirecrackerRunner:
         if exit_code is None:
             # Timeout: kill VM
             reason = "execution_timeout"
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 fc_proc.terminate()
-            except Exception:
-                pass
             phase = RunPhase.timed_out
         else:
             phase = RunPhase.completed if int(exit_code or 0) == 0 else RunPhase.failed
 
         stop_flag["stop"] = True
         if tail_thread is not None:
-            try:
+            with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 tail_thread.join(timeout=1)
-            except Exception:
-                pass
 
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": exit_code})
-        except Exception:
-            pass
 
         finished = datetime.utcnow()
         # Collect artifacts
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
         try:
             if spec.capture_patterns:
                 for root, _dirs, files in os.walk(workspace):
@@ -397,18 +394,18 @@ class FirecrackerRunner:
                             try:
                                 with open(os.path.join(root, fn), "rb") as rf:
                                     artifacts_map[rel_posix] = rf.read()
-                            except Exception:
+                            except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
                                 pass
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
         # Usage
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
         art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,
@@ -420,16 +417,12 @@ class FirecrackerRunner:
         try:
             if virtiofs_proc is not None:
                 virtiofs_proc.terminate()
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             pass
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             fc_proc.terminate()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             shutil.rmtree(run_dir, ignore_errors=True)
-        except Exception:
-            pass
 
         return RunStatus(
             id="",
@@ -449,13 +442,11 @@ class FirecrackerRunner:
         started = datetime.utcnow()
         hub = get_hub()
         # Publish start
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "start", {"ts": started.isoformat(), "runtime": "firecracker", "net": "off"})
-        except Exception:
-            pass
 
         # Compute pseudo image digest (string hash or file hash)
-        image_digest: Optional[str] = None
+        image_digest: str | None = None
         base = spec.base_image or ""
         try:
             if base and os.path.exists(base) and os.path.isfile(base):
@@ -468,16 +459,16 @@ class FirecrackerRunner:
             else:
                 # Hash the descriptor string (e.g., "python:3.11-slim") for traceability
                 image_digest = f"sha256:{hashlib.sha256(base.encode('utf-8')).hexdigest()}" if base else None
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             image_digest = None
 
         # Simulate execution time minimally for observability
         time.sleep(0.01)
 
         # Placeholder artifacts: match capture_patterns against a virtual workspace tree
-        artifacts_map: Dict[str, bytes] = {}
+        artifacts_map: dict[str, bytes] = {}
         try:
-            patterns: List[str] = list(spec.capture_patterns or [])
+            patterns: list[str] = list(spec.capture_patterns or [])
             # In fake mode, generate a tiny artifact per pattern for visibility
             for pat in patterns:
                 # Normalize to posix-like
@@ -489,27 +480,25 @@ class FirecrackerRunner:
                     artifacts_map[sample_name] = b""
                 else:
                     artifacts_map[key] = b""
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             artifacts_map = {}
 
         # Publish end
-        try:
+        with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             hub.publish_event(run_id, "end", {"exit_code": 0})
-        except Exception:
-            pass
 
         finished = datetime.utcnow()
         # Usage accounting
         try:
             log_bytes_total = int(hub.get_log_bytes(run_id))
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             log_bytes_total = 0
         art_bytes = 0
         try:
             art_bytes = sum(len(v) for v in artifacts_map.values()) if artifacts_map else 0
-        except Exception:
+        except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS:
             art_bytes = 0
-        usage: Dict[str, int] = {
+        usage: dict[str, int] = {
             "cpu_time_sec": 0,
             "wall_time_sec": int(max(0.0, (finished - started).total_seconds())),
             "peak_rss_mb": 0,

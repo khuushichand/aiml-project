@@ -5,14 +5,15 @@ Manages module lifecycle and provides intelligent routing with failover.
 """
 
 import asyncio
-from typing import Dict, Any, Optional, List, Set, Type
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+import contextlib
 from dataclasses import dataclass, field
-from loguru import logger
-import time
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Optional
 
-from .base import BaseModule, ModuleConfig, HealthStatus, ModuleHealth
+from loguru import logger
+
+from .base import BaseModule, HealthStatus, ModuleConfig, ModuleHealth
 
 
 class ModuleStatus(str, Enum):
@@ -29,14 +30,14 @@ class ModuleStatus(str, Enum):
 class ModuleRegistration:
     """Module registration information"""
     module_id: str
-    module_type: Type[BaseModule]
+    module_type: type[BaseModule]
     module_instance: Optional[BaseModule]
     config: ModuleConfig
     status: ModuleStatus
     registered_at: datetime
     last_health_check: Optional[datetime] = None
     error_message: Optional[str] = None
-    capabilities: Set[str] = field(default_factory=set)
+    capabilities: set[str] = field(default_factory=set)
 
     def is_operational(self) -> bool:
         """Check if module is operational"""
@@ -56,17 +57,17 @@ class ModuleRegistry:
     """
 
     def __init__(self, health_check_interval: int = 60):
-        self._modules: Dict[str, ModuleRegistration] = {}
-        self._module_instances: Dict[str, BaseModule] = {}
+        self._modules: dict[str, ModuleRegistration] = {}
+        self._module_instances: dict[str, BaseModule] = {}
         self._lock = asyncio.Lock()
         self._health_check_interval = health_check_interval
         self._health_check_task = None
         self._shutdown = False
 
         # Tool/Resource/Prompt to module mapping for fast lookup
-        self._tool_registry: Dict[str, str] = {}  # tool_name -> module_id
-        self._resource_registry: Dict[str, str] = {}  # resource_uri -> module_id
-        self._prompt_registry: Dict[str, str] = {}  # prompt_name -> module_id
+        self._tool_registry: dict[str, str] = {}  # tool_name -> module_id
+        self._resource_registry: dict[str, str] = {}  # resource_uri -> module_id
+        self._prompt_registry: dict[str, str] = {}  # prompt_name -> module_id
 
         logger.info("Module registry initialized")
 
@@ -86,10 +87,8 @@ class ModuleRegistry:
         self._shutdown = True
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
             logger.info("Health monitoring stopped")
         self._health_check_task = None
 
@@ -106,7 +105,7 @@ class ModuleRegistry:
     async def register_module(
         self,
         module_id: str,
-        module_type: Type[BaseModule],
+        module_type: type[BaseModule],
         config: ModuleConfig
     ) -> None:
         """
@@ -242,29 +241,42 @@ class ModuleRegistry:
 
     async def get_module(self, module_id: str) -> Optional[BaseModule]:
         """Get a module by ID"""
-        registration = self._modules.get(module_id)
-        if registration and registration.is_operational():
-            return registration.module_instance
-        return None
+        async with self._lock:
+            registration = self._modules.get(module_id)
+            if registration and registration.is_operational():
+                return registration.module_instance
+            return None
 
-    async def get_all_modules(self) -> Dict[str, BaseModule]:
+    async def get_all_modules(self) -> dict[str, BaseModule]:
         """Get all operational modules"""
         result = {}
-        for module_id, registration in self._modules.items():
+        async with self._lock:
+            registrations = list(self._modules.items())
+        for module_id, registration in registrations:
             if registration.is_operational() and registration.module_instance:
                 result[module_id] = registration.module_instance
         return result
 
     async def find_module_for_tool(self, tool_name: str) -> Optional[BaseModule]:
         """Find module that provides a specific tool"""
-        module_id = self._tool_registry.get(tool_name)
+        async with self._lock:
+            module_id = self._tool_registry.get(tool_name)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._tool_registry.get(tool_name) == module_id:
+                    self._tool_registry.pop(tool_name, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_tool(tool_name):
-                self._tool_registry[tool_name] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._tool_registry[tool_name] = module_id  # Cache for next time
                 return module
 
         return None
@@ -275,14 +287,24 @@ class ModuleRegistry:
 
     async def find_module_for_resource(self, uri: str) -> Optional[BaseModule]:
         """Find module that provides a specific resource"""
-        module_id = self._resource_registry.get(uri)
+        async with self._lock:
+            module_id = self._resource_registry.get(uri)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._resource_registry.get(uri) == module_id:
+                    self._resource_registry.pop(uri, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_resource(uri):
-                self._resource_registry[uri] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._resource_registry[uri] = module_id  # Cache for next time
                 return module
 
         return None
@@ -293,14 +315,24 @@ class ModuleRegistry:
 
     async def find_module_for_prompt(self, name: str) -> Optional[BaseModule]:
         """Find module that provides a specific prompt"""
-        module_id = self._prompt_registry.get(name)
+        async with self._lock:
+            module_id = self._prompt_registry.get(name)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._prompt_registry.get(name) == module_id:
+                    self._prompt_registry.pop(name, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_prompt(name):
-                self._prompt_registry[name] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._prompt_registry[name] = module_id  # Cache for next time
                 return module
 
         return None
@@ -309,7 +341,7 @@ class ModuleRegistry:
         """Return module id for a prompt name, if cached."""
         return self._prompt_registry.get(name)
 
-    async def check_all_health(self) -> Dict[str, ModuleHealth]:
+    async def check_all_health(self) -> dict[str, ModuleHealth]:
         """Check health of all modules"""
         health_results = {}
 
@@ -347,7 +379,7 @@ class ModuleRegistry:
 
         return health_results
 
-    async def get_module_status(self, module_id: str) -> Optional[Dict[str, Any]]:
+    async def get_module_status(self, module_id: str) -> Optional[dict[str, Any]]:
         """Get detailed status for a module"""
         registration = self._modules.get(module_id)
         if not registration:
@@ -377,11 +409,11 @@ class ModuleRegistry:
 
         return status
 
-    async def list_registrations(self) -> List[Dict[str, Any]]:
+    async def list_registrations(self) -> list[dict[str, Any]]:
         """List all module registrations"""
         registrations = []
 
-        for module_id, registration in self._modules.items():
+        for module_id, _registration in self._modules.items():
             registrations.append(await self.get_module_status(module_id))
 
         return registrations
@@ -395,7 +427,7 @@ class ModuleRegistry:
 
         # Shutdown modules concurrently
         tasks = []
-        for module_id, registration in self._modules.items():
+        for _module_id, registration in self._modules.items():
             if registration.module_instance:
                 tasks.append(registration.module_instance.shutdown())
 
@@ -418,7 +450,7 @@ class ModuleRegistry:
     async def execute_with_failover(
         self,
         primary_module_id: str,
-        fallback_module_ids: List[str],
+        fallback_module_ids: list[str],
         operation: str,
         *args,
         **kwargs
@@ -482,16 +514,14 @@ async def reset_module_registry() -> None:
     """Reset module registry singleton (used in tests)."""
     global _module_registry
     if _module_registry is not None:
-        try:
+        with contextlib.suppress(Exception):
             await _module_registry.shutdown_all()
-        except Exception:
-            pass
     _module_registry = None
 
 
 async def register_module(
     module_id: str,
-    module_type: Type[BaseModule],
+    module_type: type[BaseModule],
     config: ModuleConfig
 ) -> None:
     """Convenience function to register a module"""

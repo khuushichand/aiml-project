@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import List, Optional
-
 from fastapi import Form, HTTPException, status
 from pydantic import ValidationError
 
@@ -14,9 +12,9 @@ except AttributeError:  # Starlette < 0.27
 
 
 async def get_process_code_form(
-    urls: Optional[List[str]] = Form(None),
+    urls: list[str] | None = Form(None),
     perform_chunking: bool = Form(True),
-    chunk_method: Optional[str] = Form("code"),
+    chunk_method: str | None = Form("code"),
     chunk_size: int = Form(4000),
     chunk_overlap: int = Form(200),
 ) -> ProcessCodeForm:

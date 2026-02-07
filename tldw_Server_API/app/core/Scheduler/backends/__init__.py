@@ -2,15 +2,9 @@
 Queue backend implementations.
 """
 
-from .factory import (
-    create_backend,
-    test_backend_connection,
-    get_backend_info,
-    BackendManager
-)
-
-from .sqlite_backend import SQLiteBackend
+from .factory import BackendManager, create_backend, get_backend_info, test_backend_connection
 from .memory_backend import MemoryBackend
+from .sqlite_backend import SQLiteBackend
 
 # PostgreSQL backend is optional
 try:

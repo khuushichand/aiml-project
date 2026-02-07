@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, validator
-
 
 TemplateType = Literal[
     "newsletter_markdown",
@@ -24,12 +23,12 @@ class OutputTemplateCreate(BaseModel):
     type: TemplateType
     format: TemplateFormat
     body: str = Field(..., description="Template body (e.g., Jinja2/Markdown/HTML)")
-    description: Optional[str] = Field(None, max_length=500)
+    description: str | None = Field(None, max_length=500)
     is_default: bool = False
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Arbitrary template metadata. For tts, supports keys tts_default_model, tts_default_voice, tts_default_speed.")
+    metadata: dict[str, Any] | None = Field(default=None, description="Arbitrary template metadata. For tts, supports keys tts_default_model, tts_default_voice, tts_default_speed.")
 
     @validator("format")
-    def validate_format_matches_type(cls, v: TemplateFormat, values: Dict[str, object]):  # type: ignore[override]
+    def validate_format_matches_type(cls, v: TemplateFormat, values: dict[str, object]):  # type: ignore[override]
         t = values.get("type")
         if t in ("newsletter_markdown", "briefing_markdown", "mece_markdown") and v != "md":
             raise ValueError("Markdown-type templates must use format 'md'.")
@@ -43,33 +42,33 @@ class OutputTemplateCreate(BaseModel):
 class OutputTemplateUpdate(BaseModel):
     """Partial update for an existing template."""
 
-    name: Optional[str] = Field(None, min_length=1, max_length=200)
-    type: Optional[TemplateType] = None
-    format: Optional[TemplateFormat] = None
-    body: Optional[str] = None
-    description: Optional[str] = Field(None, max_length=500)
-    is_default: Optional[bool] = None
-    metadata: Optional[Dict[str, Any]] = None
+    name: str | None = Field(None, min_length=1, max_length=200)
+    type: TemplateType | None = None
+    format: TemplateFormat | None = None
+    body: str | None = None
+    description: str | None = Field(None, max_length=500)
+    is_default: bool | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class OutputTemplate(BaseModel):
     """Template model used in responses."""
 
     id: int
-    user_id: Optional[str] = None
+    user_id: str | None = None
     name: str
     type: TemplateType
     format: TemplateFormat
     body: str
-    description: Optional[str] = None
+    description: str | None = None
     is_default: bool = False
     created_at: datetime
     updated_at: datetime
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] | None = None
 
 
 class OutputTemplateList(BaseModel):
-    items: List[OutputTemplate]
+    items: list[OutputTemplate]
     total: int
 
 
@@ -81,10 +80,10 @@ class TemplatePreviewRequest(BaseModel):
     """
 
     template_id: int
-    item_ids: Optional[List[int]] = Field(default=None, description="Items to render.")
-    run_id: Optional[int] = Field(default=None, description="Use items from this run.")
+    item_ids: list[int] | None = Field(default=None, description="Items to render.")
+    run_id: int | None = Field(default=None, description="Use items from this run.")
     limit: int = Field(default=50, ge=1, le=1000)
-    data: Optional[Dict[str, object]] = Field(
+    data: dict[str, object] | None = Field(
         default=None,
         description="Inline context for preview. Example: { 'items': [...], 'date': '...', 'job': {...} }",
     )

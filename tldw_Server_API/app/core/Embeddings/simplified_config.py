@@ -3,13 +3,12 @@
 
 import copy
 import os
-import yaml
-from typing import Dict, Any, Optional, List
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Optional
 
+import yaml
 from loguru import logger
-from pydantic import BaseModel, Field, validator
 
 from tldw_Server_API.app.core.config import get_config_section
 from tldw_Server_API.app.core.config_utils import (
@@ -27,7 +26,7 @@ class ProviderConfig:
     enabled: bool = True
     api_key: Optional[str] = None
     api_url: Optional[str] = None
-    models: List[str] = field(default_factory=list)
+    models: list[str] = field(default_factory=list)
     max_connections: int = 10
     timeout_seconds: int = 30
     rate_limit: Optional[str] = None  # e.g., "100/min"
@@ -57,7 +56,7 @@ class ResourceConfig:
     max_memory_gb: float = 8.0
     model_ttl_seconds: int = 3600
     enable_model_warmup: bool = False
-    warmup_models: List[str] = field(default_factory=list)
+    warmup_models: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -91,7 +90,7 @@ class MonitoringConfig:
 @dataclass
 class EmbeddingsConfig:
     """Main configuration for embeddings module"""
-    providers: List[ProviderConfig] = field(default_factory=list)
+    providers: list[ProviderConfig] = field(default_factory=list)
     cache: CacheConfig = field(default_factory=CacheConfig)
     resources: ResourceConfig = field(default_factory=ResourceConfig)
     batching: BatchingConfig = field(default_factory=BatchingConfig)
@@ -107,13 +106,19 @@ class EmbeddingsConfig:
     @classmethod
     def from_yaml(cls, path: str) -> 'EmbeddingsConfig':
         """Load configuration from YAML file"""
-        with open(path, 'r') as f:
-            data = yaml.safe_load(f)
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise ValueError("Embeddings config YAML root must be a mapping/object.")
         return cls.from_dict(data)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'EmbeddingsConfig':
+    def from_dict(cls, data: dict[str, Any]) -> 'EmbeddingsConfig':
         """Create configuration from dictionary"""
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("Embeddings config must be a mapping/object.")
         # Parse providers
         providers = []
         for provider_data in data.get('providers', []):
@@ -135,7 +140,7 @@ class EmbeddingsConfig:
 
         return config
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary"""
         return {
             'providers': [asdict(p) for p in self.providers],
@@ -162,12 +167,12 @@ class EmbeddingsConfig:
                 return provider
         return None
 
-    def get_enabled_providers(self) -> List[ProviderConfig]:
+    def get_enabled_providers(self) -> list[ProviderConfig]:
         """Get list of enabled providers sorted by priority"""
         enabled = [p for p in self.providers if p.enabled]
         return sorted(enabled, key=lambda x: x.priority)
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """Validate configuration and return list of issues"""
         issues = []
 
@@ -268,7 +273,7 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
     env_overrides = _load_env_overrides()
     providers = base_data.pop("providers", [])
     if isinstance(providers, dict):
-        normalized: List[Dict[str, Any]] = []
+        normalized: list[dict[str, Any]] = []
         for name, provider_cfg in providers.items():
             if isinstance(provider_cfg, dict):
                 entry = dict(provider_cfg)
@@ -277,10 +282,10 @@ def load_config(path: Optional[str] = None) -> EmbeddingsConfig:
         providers = normalized
     if providers is None:
         providers = []
-    provider_overrides: List[tuple[str, str, Dict[str, Any]]] = []
+    provider_overrides: list[tuple[str, str, dict[str, Any]]] = []
     provider_overrides.extend(_provider_updates_from_config_txt())
     provider_overrides.extend(_provider_updates_from_env())
-    for source, name, updates in provider_overrides:
+    for _source, name, updates in provider_overrides:
         if isinstance(providers, list):
             _apply_provider_override(providers, name, updates)
 
@@ -324,9 +329,9 @@ def _coerce_float(value: Optional[str]) -> Optional[float]:
 
 
 def _apply_provider_override(
-    providers: List[Dict[str, Any]],
+    providers: list[dict[str, Any]],
     name: str,
-    updates: Dict[str, Any],
+    updates: dict[str, Any],
 ) -> None:
     for provider in providers:
         if provider.get("name") == name:
@@ -335,12 +340,12 @@ def _apply_provider_override(
     providers.append({"name": name, **updates})
 
 
-def _load_config_txt_overrides() -> Dict[str, Any]:
+def _load_config_txt_overrides() -> dict[str, Any]:
     section = get_config_section("Embeddings")
     if not section:
         return {}
 
-    overrides: Dict[str, Any] = {}
+    overrides: dict[str, Any] = {}
     provider = section.get("embedding_provider")
     model = section.get("embedding_model")
     chunk_size = _coerce_int(section.get("chunk_size"))
@@ -370,7 +375,7 @@ def _load_config_txt_overrides() -> Dict[str, Any]:
     return overrides
 
 
-def _provider_updates_from_config_txt() -> List[tuple[str, str, Dict[str, Any]]]:
+def _provider_updates_from_config_txt() -> list[tuple[str, str, dict[str, Any]]]:
     section = get_config_section("Embeddings")
     if not section:
         return []
@@ -380,8 +385,8 @@ def _provider_updates_from_config_txt() -> List[tuple[str, str, Dict[str, Any]]]
     return [("config", "local", {"api_url": api_url})]
 
 
-def _load_env_overrides() -> Dict[str, Any]:
-    overrides: Dict[str, Any] = {}
+def _load_env_overrides() -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
 
     def _env_first(*names: str) -> Optional[str]:
         for name in names:
@@ -407,7 +412,7 @@ def _load_env_overrides() -> Dict[str, Any]:
     return overrides
 
 
-def _provider_updates_from_env() -> List[tuple[str, str, Dict[str, Any]]]:
+def _provider_updates_from_env() -> list[tuple[str, str, dict[str, Any]]]:
     api_url = os.getenv("EMBEDDINGS_API_URL") or os.getenv("EMBEDDINGS_LOCAL_API_URL")
     if not api_url:
         return []
@@ -505,7 +510,7 @@ def create_example_config(path: str = "./embeddings_config.yaml"):
 
 # Global configuration instance
 _config: Optional[EmbeddingsConfig] = None
-_config_sources: Dict[str, Any] = {}
+_config_sources: dict[str, Any] = {}
 
 
 def get_config() -> EmbeddingsConfig:
@@ -516,7 +521,7 @@ def get_config() -> EmbeddingsConfig:
     return _config
 
 
-def get_config_sources() -> Dict[str, Any]:
+def get_config_sources() -> dict[str, Any]:
     """Get source tags for the current configuration."""
     global _config
     if not _config_sources:

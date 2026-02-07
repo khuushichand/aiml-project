@@ -3,18 +3,45 @@
 # Description: This script is used to clone cookies from the user's browser to be used in web scraping.
 #
 # Imports
-from Cryptodome.Cipher import AES
-from Cryptodome.Protocol.KDF import PBKDF2
-from datetime import datetime
 import base64
 import datetime
 import json
-import keyring
 import os
 import shutil
 import sqlite3
 import struct
 import sys
+
+from Cryptodome.Cipher import AES
+from Cryptodome.Protocol.KDF import PBKDF2
+
+_COOKIE_DECRYPT_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_COOKIE_COLLECTION_EXCEPTIONS = (
+    FileNotFoundError,
+    json.JSONDecodeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    sqlite3.Error,
+    struct.error,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+_SAFARI_PARSE_EXCEPTIONS = (
+    IndexError,
+    struct.error,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
+
 #
 ########################################################################################################################
 #
@@ -24,12 +51,10 @@ def get_chrome_cookies(domain_name):
     global win32crypt
     if sys.platform == 'win32':
         import win32crypt
-        from Cryptodome.Cipher import AES
         appdata_path = os.getenv('LOCALAPPDATA')
         cookie_path = os.path.join(appdata_path, r'Google\Chrome\User Data\Default\Cookies')
         local_state_path = os.path.join(appdata_path, r'Google\Chrome\User Data\Local State')
     elif sys.platform == 'darwin':
-        from Cryptodome.Cipher import AES
         import keyring
         cookie_path = os.path.expanduser('~/Library/Application Support/Google/Chrome/Default/Cookies')
         local_state_path = os.path.expanduser('~/Library/Application Support/Google/Chrome/Local State')
@@ -38,7 +63,7 @@ def get_chrome_cookies(domain_name):
         local_state_path = os.path.expanduser('~/.config/google-chrome/Local State')
 
     # Read the encryption key
-    with open(local_state_path, 'r', encoding='utf-8') as f:
+    with open(local_state_path, encoding='utf-8') as f:
         local_state = json.load(f)
     encrypted_key = base64.b64decode(local_state['os_crypt']['encrypted_key'])
     encrypted_key = encrypted_key[5:]  # Remove 'DPAPI' prefix
@@ -48,9 +73,9 @@ def get_chrome_cookies(domain_name):
         key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
     elif sys.platform == 'darwin':
         # Decrypt using Keychain
-        from Cryptodome.Protocol.KDF import PBKDF2
+
         import keyring
-        import hashlib
+        from Cryptodome.Protocol.KDF import PBKDF2
 
         password = keyring.get_password("Chrome Safe Storage", "Chrome")
         if password is None:
@@ -60,8 +85,8 @@ def get_chrome_cookies(domain_name):
         key = PBKDF2(password.encode('utf-8'), salt, dkLen=16, count=iterations)
     else:  # Linux
         # On Linux, Chrome uses the 'peanuts' password by default
+
         from Cryptodome.Protocol.KDF import PBKDF2
-        import hashlib
 
         password = 'peanuts'
         iterations = 1
@@ -79,11 +104,11 @@ def get_chrome_cookies(domain_name):
     try:
         cursor.execute("SELECT host_key, name, path, encrypted_value, expires_utc FROM cookies WHERE host_key LIKE ?",
                        ('%' + domain_name + '%',))
-        for host_key, name, path, encrypted_value, expires_utc in cursor.fetchall():
+        for _host_key, name, _path, encrypted_value, expires_utc in cursor.fetchall():
             if sys.platform == 'win32':
                 try:
                     decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                except Exception as e:
+                except _COOKIE_DECRYPT_EXCEPTIONS:
                     # Fallback to edge cookie decryption if CryptUnprotectData fails
                     decrypted_value = decrypt_edge_cookie(encrypted_value, key)
             else:
@@ -147,7 +172,7 @@ def get_firefox_cookies(domain_name):
         try:
             cursor.execute("SELECT host, name, value, expiry FROM moz_cookies WHERE host LIKE ?",
                            ('%' + domain_name + '%',))
-            for host, name, value, expiry in cursor.fetchall():
+            for _host, name, value, expiry in cursor.fetchall():
                 expires = datetime.datetime.fromtimestamp(expiry)
                 if expires < datetime.datetime.now():
                     continue  # Skip expired cookies
@@ -156,7 +181,7 @@ def get_firefox_cookies(domain_name):
             cursor.close()
             conn.close()
             os.remove(temp_cookie_db)
-            break  # Use the first profile found
+        break  # Use the first profile found
 
     return cookies
 
@@ -192,7 +217,7 @@ def get_edge_cookies(domain_name):
             raise FileNotFoundError(f"Local State file not found at {local_state_path}")
 
         # Read and decode the encryption key
-        with open(local_state_path, 'r', encoding='utf-8') as f:
+        with open(local_state_path, encoding='utf-8') as f:
             local_state = json.load(f)
 
         encrypted_key = base64.b64decode(local_state['os_crypt']['encrypted_key'])
@@ -230,12 +255,12 @@ def get_edge_cookies(domain_name):
                 FROM cookies WHERE host_key LIKE ?
             """, ('%' + domain_name + '%',))
 
-            for host_key, name, path, encrypted_value, expires_utc in cursor.fetchall():
+            for _host_key, name, _path, encrypted_value, expires_utc in cursor.fetchall():
                 if sys.platform == 'win32':
                     try:
                         # Try to decrypt using CryptUnprotectData
                         decrypted_value = win32crypt.CryptUnprotectData(encrypted_value, None, None, None, 0)[1]
-                    except Exception as e:
+                    except _COOKIE_DECRYPT_EXCEPTIONS:
                         # If failed, use custom decryption
                         decrypted_value = decrypt_edge_cookie(encrypted_value, key)
                 else:
@@ -254,7 +279,7 @@ def get_edge_cookies(domain_name):
 
         return cookies
 
-    except Exception as e:
+    except _COOKIE_COLLECTION_EXCEPTIONS as e:
         print(f"An error occurred while retrieving Edge cookies: {e}")
         return {}
 
@@ -310,7 +335,7 @@ def get_safari_cookies(domain_name):
 
 def parse_safari_page(page_data, domain_name):
     cookies = {}
-    page_header = page_data[:4]
+    page_data[:4]
     num_cookies = struct.unpack('>i', page_data[4:8])[0]
     cookie_offsets = []
     for i in range(num_cookies):
@@ -324,10 +349,10 @@ def parse_safari_page(page_data, domain_name):
 
 def parse_safari_cookie(data, domain_name):
     try:
-        flags = struct.unpack('<i', data[0:4])[0]
+        struct.unpack('<i', data[0:4])[0]
         url_offset = struct.unpack('<i', data[4:8])[0]
         name_offset = struct.unpack('<i', data[8:12])[0]
-        path_offset = struct.unpack('<i', data[12:16])[0]
+        struct.unpack('<i', data[12:16])[0]
         value_offset = struct.unpack('<i', data[16:20])[0]
         end_of_cookie = data.find(b'\x00', value_offset)
         cookie_name = data[name_offset:data.find(b'\x00', name_offset)].decode('utf-8')
@@ -335,7 +360,7 @@ def parse_safari_cookie(data, domain_name):
         cookie_domain = data[url_offset:data.find(b'\x00', url_offset)].decode('utf-8')
         if domain_name in cookie_domain:
             return {'name': cookie_name, 'value': cookie_value}
-    except Exception as e:
+    except _SAFARI_PARSE_EXCEPTIONS:
         pass
     return None
 
@@ -356,7 +381,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             chrome_cookies = get_chrome_cookies(domain_name)
             cookies.update(chrome_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Chrome cookies: {e}")
 
     if browser in ('all', 'firefox'):
@@ -364,7 +389,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             firefox_cookies = get_firefox_cookies(domain_name)
             cookies.update(firefox_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Firefox cookies: {e}")
 
     if browser in ('all', 'edge'):
@@ -372,7 +397,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             edge_cookies = get_edge_cookies(domain_name)
             cookies.update(edge_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Edge cookies: {e}")
 
     if sys.platform == 'darwin' and browser in ('all', 'safari'):
@@ -380,7 +405,7 @@ def get_cookies(domain_name, browser='all'):
         try:
             safari_cookies = get_safari_cookies(domain_name)
             cookies.update(safari_cookies)
-        except Exception as e:
+        except _COOKIE_COLLECTION_EXCEPTIONS as e:
             print(f"Failed to get Safari cookies: {e}")
 
     if not cookies:

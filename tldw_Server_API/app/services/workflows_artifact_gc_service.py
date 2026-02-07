@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+
+_GC_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+)
 
 
 def _now_utc() -> datetime:
@@ -48,20 +58,18 @@ async def run_workflows_artifact_gc_worker(stop_event: asyncio.Event) -> None:
                         try:
                             if fp.exists() and fp.is_file():
                                 fp.unlink()
-                        except Exception as fe:
+                        except OSError as fe:
                             logger.warning(f"Artifact GC: failed to delete file {fp}: {fe}")
                     db.delete_artifact(str(r.get("artifact_id")))
                     deleted += 1
-                except Exception as e:
+                except _GC_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Artifact GC: error deleting artifact {r.get('artifact_id')}: {e}")
             if deleted:
                 logger.info(f"Artifact GC: deleted {deleted} artifacts older than {retention_days} days")
-        except Exception as e:
+        except _GC_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Artifact GC loop error: {e}")
 
-        try:
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
-        except asyncio.TimeoutError:
-            pass
 
     logger.info("Workflows artifact GC worker stopped")

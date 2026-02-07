@@ -6,17 +6,18 @@ add operations during database writes.
 """
 
 import asyncio
+import contextlib
 import json
-from typing import List, Optional, Any, Deque
 from collections import deque
-from datetime import datetime, timezone
-from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
-from ..base import Task, BufferError, BufferClosedError, BufferFlushError
+from ..base import BufferClosedError, BufferError, Task
 from ..base.queue_backend import QueueBackend
 from ..config import SchedulerConfig
 
@@ -80,17 +81,17 @@ class AsyncWriteBuffer:
         self.current_flush_interval = self.base_flush_interval
 
         # Active buffer for new tasks
-        self.active_buffer: List[Task] = []
+        self.active_buffer: list[Task] = []
         self.active_lock = asyncio.Lock()
 
         # Flush queue for tasks ready to be written
-        self.flush_queue: Deque[List[Task]] = deque()
+        self.flush_queue: deque[list[Task]] = deque()
         self.flush_queue_size = 0  # Track total tasks in queue
         self.flush_event = asyncio.Event()
 
         # Disk spill for overflow (if using SPILL_TO_DISK strategy)
         self.spill_path = config.base_path / 'buffer_spill'
-        self.spill_files: List[Path] = []
+        self.spill_files: list[Path] = []
         self._auto_start = auto_start
         self._workers_running = False
         # Background tasks
@@ -382,7 +383,7 @@ class AsyncWriteBuffer:
         """Recover tasks from spill files"""
         for spill_file in self.spill_files:
             try:
-                with open(spill_file, 'r') as f:
+                with open(spill_file) as f:
                     spill_data = json.load(f)
 
                 tasks = []
@@ -432,10 +433,8 @@ class AsyncWriteBuffer:
         # Stop timer
         if self._timer_task:
             self._timer_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._timer_task
-            except asyncio.CancelledError:
-                pass
 
         # Recover any spilled tasks
         if self.spill_files:
@@ -456,10 +455,8 @@ class AsyncWriteBuffer:
         # Stop flush worker
         if self._flush_worker:
             self._flush_worker.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_worker
-            except asyncio.CancelledError:
-                pass
 
         self._closed = True
 

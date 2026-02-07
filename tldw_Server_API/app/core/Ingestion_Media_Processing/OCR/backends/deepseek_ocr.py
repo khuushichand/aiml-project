@@ -4,17 +4,38 @@ import importlib.util
 import os
 import tempfile
 import threading
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
-
 
 _TF_MODEL = None
 _TF_TOKENIZER = None
 _TF_LOCK = threading.Lock()
 
 _DEFAULT_PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
+
+_DEEPSEEK_COERCE_EXCEPTIONS = (
+    TypeError,
+    ValueError,
+    OverflowError,
+)
+
+_DEEPSEEK_IMPORT_EXCEPTIONS = (
+    ImportError,
+    OSError,
+    RuntimeError,
+    AttributeError,
+)
+
+_DEEPSEEK_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ImportError,
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -30,7 +51,7 @@ def _env_int(name: str, default: int) -> int:
         return default
     try:
         return int(raw)
-    except Exception:
+    except _DEEPSEEK_COERCE_EXCEPTIONS:
         return default
 
 
@@ -41,7 +62,7 @@ def _resolve_device() -> str:
             import torch
 
             return "cuda" if torch.cuda.is_available() else "cpu"
-        except Exception:
+        except _DEEPSEEK_IMPORT_EXCEPTIONS:
             return "cpu"
     return device
 
@@ -60,11 +81,11 @@ def _resolve_dtype():
             "fp32": torch.float32,
         }
         return mapping.get(dtype_name, torch.bfloat16)
-    except Exception:
+    except _DEEPSEEK_IMPORT_EXCEPTIONS:
         return None
 
 
-def _resolve_attn_impl(device: Optional[str] = None) -> str:
+def _resolve_attn_impl(device: str | None = None) -> str:
     env_val = os.getenv("DEEPSEEK_OCR_ATTN_IMPL")
     attn_impl = (env_val or "flash_attention_2").strip()
     if env_val is None and device and not device.startswith("cuda") and attn_impl == "flash_attention_2":
@@ -97,7 +118,7 @@ def _resolve_output_dir(save_results: bool, default_dir: str) -> str:
 
     try:
         os.makedirs(base_dir, exist_ok=True)
-    except Exception as exc:
+    except OSError as exc:
         logging.warning(
             f"DeepSeek OCR: failed to create DEEPSEEK_OCR_OUTPUT_DIR '{base_dir}': {exc}. "
             "Falling back to temporary directory."
@@ -106,7 +127,7 @@ def _resolve_output_dir(save_results: bool, default_dir: str) -> str:
 
     try:
         return tempfile.mkdtemp(prefix="deepseek_ocr_", dir=base_dir)
-    except Exception:
+    except (OSError, ValueError):
         return base_dir
 
 
@@ -134,7 +155,7 @@ class DeepSeekOCRBackend(OCRBackend):
 
                     if not torch.cuda.is_available():
                         return False
-                except Exception:
+                except _DEEPSEEK_IMPORT_EXCEPTIONS:
                     return False
 
             attn_impl = _resolve_attn_impl(device)
@@ -142,7 +163,7 @@ class DeepSeekOCRBackend(OCRBackend):
                 if importlib.util.find_spec("flash_attn") is None:
                     return False
             return True
-        except Exception:
+        except _DEEPSEEK_NONCRITICAL_EXCEPTIONS:
             return False
 
     def describe(self) -> dict:
@@ -163,7 +184,7 @@ class DeepSeekOCRBackend(OCRBackend):
             "output_dir": os.getenv("DEEPSEEK_OCR_OUTPUT_DIR"),
         }
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning(
                 "DeepSeekOCRBackend not available: install transformers+torch and ensure GPU/FlashAttention if required."
@@ -172,7 +193,7 @@ class DeepSeekOCRBackend(OCRBackend):
 
         try:
             model, tokenizer = _load_transformers()
-        except Exception as exc:
+        except _DEEPSEEK_NONCRITICAL_EXCEPTIONS as exc:
             logging.error(f"DeepSeek OCR model load failed: {exc}", exc_info=True)
             return ""
 
@@ -186,7 +207,7 @@ class DeepSeekOCRBackend(OCRBackend):
             try:
                 with open(img_path, "wb") as f:
                     f.write(image_bytes)
-            except Exception as exc:
+            except (OSError, ValueError, TypeError) as exc:
                 logging.error(f"DeepSeek OCR: failed to write temp image: {exc}", exc_info=True)
                 return ""
 
@@ -194,7 +215,7 @@ class DeepSeekOCRBackend(OCRBackend):
             if output_path.startswith(tmpdir):
                 try:
                     os.makedirs(output_path, exist_ok=True)
-                except Exception:
+                except OSError:
                     output_path = tmpdir
 
             try:
@@ -209,7 +230,7 @@ class DeepSeekOCRBackend(OCRBackend):
                     save_results=save_results,
                     test_compress=test_compress,
                 )
-            except Exception as exc:
+            except _DEEPSEEK_NONCRITICAL_EXCEPTIONS as exc:
                 logging.error(f"DeepSeek OCR inference failed: {exc}", exc_info=True)
                 return ""
 
@@ -225,8 +246,7 @@ def _load_transformers():
         if _TF_MODEL is not None and _TF_TOKENIZER is not None:
             return _TF_MODEL, _TF_TOKENIZER
 
-        from transformers import AutoTokenizer, AutoModel
-        import torch
+        from transformers import AutoModel, AutoTokenizer
 
         model_id = os.getenv("DEEPSEEK_OCR_MODEL_ID", "deepseek-ai/DeepSeek-OCR")
         device = _resolve_device()
@@ -243,7 +263,7 @@ def _load_transformers():
 
         try:
             _TF_MODEL = AutoModel.from_pretrained(model_id, use_safetensors=True, **model_kwargs)
-        except Exception as exc:
+        except _DEEPSEEK_NONCRITICAL_EXCEPTIONS as exc:
             logging.warning(
                 f"DeepSeek OCR: safetensors load failed ({exc}); retrying with use_safetensors=False."
             )
@@ -254,7 +274,7 @@ def _load_transformers():
                 _TF_MODEL = _TF_MODEL.cuda()
             elif device:
                 _TF_MODEL = _TF_MODEL.to(device)
-        except Exception:
+        except _DEEPSEEK_NONCRITICAL_EXCEPTIONS:
             pass
 
         _TF_MODEL.eval()
@@ -295,5 +315,5 @@ def _extract_text_from_any(obj) -> str:
                         parts.append(txt)
             return "\n".join(parts)
         return str(obj)
-    except Exception:
+    except _DEEPSEEK_NONCRITICAL_EXCEPTIONS:
         return ""

@@ -12,28 +12,29 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from contextlib import contextmanager
 from configparser import ConfigParser
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     BackendType,
     DatabaseBackend,
     DatabaseConfig,
-    DatabaseError as BackendDatabaseError,
     QueryResult,
+)
+from tldw_Server_API.app.core.DB_Management.backends.base import (
+    DatabaseError as BackendDatabaseError,
 )
 from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
 from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
     prepare_backend_statement,
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend
-from tldw_Server_API.app.core.config import load_comprehensive_config
-
 
 DEFAULT_ANALYTICS_DB_PATH = "Databases/Analytics.db"
 
@@ -58,7 +59,7 @@ class BackendCursorAdapter:
         self._index += 1
         return row
 
-    def fetchmany(self, size: Optional[int] = None):
+    def fetchmany(self, size: int | None = None):
         if size is None or size <= 0:
             size = len(self._result.rows) - self._index
         end = min(self._index + size, len(self._result.rows))
@@ -340,7 +341,7 @@ class AnalyticsDatabase:
     );
     """
 
-    _INDEX_STATEMENTS: Tuple[str, ...] = (
+    _INDEX_STATEMENTS: tuple[str, ...] = (
         "CREATE INDEX IF NOT EXISTS idx_search_timestamp ON search_analytics(timestamp DESC)",
         "CREATE INDEX IF NOT EXISTS idx_document_hash ON document_performance(document_hash)",
         "CREATE INDEX IF NOT EXISTS idx_feedback_session ON feedback_analytics(session_hash)",
@@ -356,8 +357,8 @@ class AnalyticsDatabase:
         self,
         db_path: str = DEFAULT_ANALYTICS_DB_PATH,
         *,
-        backend: Optional[DatabaseBackend] = None,
-        config: Optional[ConfigParser] = None,
+        backend: DatabaseBackend | None = None,
+        config: ConfigParser | None = None,
     ) -> None:
         self.db_path = db_path
         self._lock = threading.RLock()
@@ -379,10 +380,11 @@ class AnalyticsDatabase:
         )
         self._initialize_database()
 
-    def _load_config(self) -> Optional[ConfigParser]:
+    def _load_config(self) -> ConfigParser | None:
         try:
-            return load_comprehensive_config()
-        except Exception:
+            cfg = load_comprehensive_config()
+            return cfg if isinstance(cfg, ConfigParser) else None
+        except Exception:  # noqa: BLE001 - best-effort config loading
             return None
 
     def _describe_backend(self) -> str:
@@ -399,15 +401,15 @@ class AnalyticsDatabase:
         self,
         *,
         db_path: str,
-        backend: Optional[DatabaseBackend],
-        config: Optional[ConfigParser],
+        backend: DatabaseBackend | None,
+        config: ConfigParser | None,
     ) -> DatabaseBackend:
         if backend is not None:
             return backend
 
         parser = config or self._load_config()
         if parser is not None:
-            candidate = get_content_backend(parser)
+            candidate: DatabaseBackend | None = get_content_backend(parser)
             if candidate and candidate.backend_type == BackendType.POSTGRESQL:
                 return candidate
 
@@ -432,8 +434,8 @@ class AnalyticsDatabase:
     def _prepare_backend_statement(
         self,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> Tuple[str, Optional[Union[Tuple, Dict]]]:
+        params: tuple | list | dict | None = None,
+    ) -> tuple[str, tuple | dict | None]:
         return prepare_backend_statement(
             self.backend_type,
             query,
@@ -445,7 +447,7 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
+        params: tuple | list | dict | None = None,
     ):
         prepared_query, prepared_params = self._prepare_backend_statement(query, params)
 
@@ -469,8 +471,8 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> Optional[Dict[str, Any]]:
+        params: tuple | list | dict | None = None,
+    ) -> dict[str, Any] | None:
         cursor = self._execute(conn, query, params)
         row = cursor.fetchone()
         if row is None:
@@ -481,8 +483,8 @@ class AnalyticsDatabase:
         self,
         conn,
         query: str,
-        params: Optional[Union[Tuple, List, Dict]] = None,
-    ) -> List[Dict[str, Any]]:
+        params: tuple | list | dict | None = None,
+    ) -> list[dict[str, Any]]:
         cursor = self._execute(conn, query, params)
         rows = cursor.fetchall() or []
         return [dict(r) for r in rows]
@@ -492,7 +494,7 @@ class AnalyticsDatabase:
         with self.backend.transaction() as conn:
             yield conn
 
-    def record_search(self, search_data: Dict[str, Any]) -> None:
+    def record_search(self, search_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 query_hash = hashlib.sha256(search_data.get('query', '').encode()).hexdigest()[:16]
@@ -525,10 +527,10 @@ class AnalyticsDatabase:
                 prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
                 self._execute(conn, prepared_query, prepared_params)
                 logger.debug("Recorded search analytics for query hash: %s", query_hash)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record search analytics: %s", exc)
 
-    def record_document_performance(self, doc_data: Dict[str, Any]) -> None:
+    def record_document_performance(self, doc_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 doc_hash = hashlib.sha256(str(doc_data.get('document_id', '')).encode()).hexdigest()[:16]
@@ -589,10 +591,10 @@ class AnalyticsDatabase:
                         ),
                     )
                 logger.debug("Recorded document performance for hash: %s", doc_hash)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record document performance: %s", exc)
 
-    def record_feedback(self, feedback_data: Dict[str, Any]) -> None:
+    def record_feedback(self, feedback_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 session_hash = hashlib.sha256(str(feedback_data.get('session_id', '')).encode()).hexdigest()[:16]
@@ -619,10 +621,10 @@ class AnalyticsDatabase:
                     ),
                 )
                 logger.debug("Recorded feedback for session: %s", session_hash)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record feedback: %s", exc)
 
-    def record_event(self, event_data: Dict[str, Any]) -> None:
+    def record_event(self, event_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 event_type = event_data.get("event_type")
@@ -632,6 +634,7 @@ class AnalyticsDatabase:
                     metrics = json.dumps(metrics)
 
                 timestamp = event_data.get("timestamp")
+                raw_params: tuple[Any, ...]
                 if timestamp:
                     raw_query = """
                         INSERT INTO analytics_events (timestamp, event_type, query_hash, metrics)
@@ -648,10 +651,10 @@ class AnalyticsDatabase:
                 prepared_query, prepared_params = self._prepare_backend_statement(raw_query, raw_params)
                 self._execute(conn, prepared_query, prepared_params)
                 logger.debug("Recorded analytics event type: %s", event_type)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record analytics event: %s", exc)
 
-    def record_error(self, error_data: Dict[str, Any]) -> None:
+    def record_error(self, error_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 error_hash = hashlib.sha256(
@@ -700,10 +703,10 @@ class AnalyticsDatabase:
                         ),
                     )
                 logger.debug("Recorded error: %s", error_hash)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record error: %s", exc)
 
-    def record_feature_usage(self, feature_data: Dict[str, Any]) -> None:
+    def record_feature_usage(self, feature_data: dict[str, Any]) -> None:
         try:
             with self.transaction() as conn:
                 feature_name = feature_data.get('feature_name')
@@ -763,10 +766,10 @@ class AnalyticsDatabase:
                         ),
                     )
                 logger.debug("Recorded feature usage: %s", feature_name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics should not break request flow
             logger.error("Failed to record feature usage: %s", exc)
 
-    def get_analytics_summary(self, days: int = 7) -> Dict[str, Any]:
+    def get_analytics_summary(self, days: int = 7) -> dict[str, Any]:
         try:
             with self._lock:
                 threshold = datetime.utcnow() - timedelta(days=days)
@@ -862,7 +865,7 @@ class AnalyticsDatabase:
                     'top_errors': top_errors,
                     'generated_at': datetime.utcnow().isoformat(),
                 }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - analytics summary best-effort
             logger.error("Failed to get analytics summary: %s", exc)
             return {}
 
@@ -893,28 +896,29 @@ class AnalyticsDatabase:
             if total_deleted and self.backend_type == BackendType.SQLITE:
                 try:
                     self.backend.vacuum()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - vacuum best-effort
                     logger.warning("SQLite vacuum failed after cleanup: %s", exc)
 
             logger.info("Cleanup complete. Deleted %s total records", total_deleted)
-            return total_deleted
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - cleanup best-effort
             logger.error("Failed to cleanup old data: %s", exc)
             return 0
+        else:
+            return total_deleted
 
     def close(self) -> None:
         logger.debug("AnalyticsDatabase.close called for backend %s", self.backend_type.value)
 
 
-_analytics_db: Optional[AnalyticsDatabase] = None
+_analytics_db: AnalyticsDatabase | None = None
 _analytics_lock = threading.Lock()
 
 
 def get_analytics_db(
     db_path: str = DEFAULT_ANALYTICS_DB_PATH,
     *,
-    backend: Optional[DatabaseBackend] = None,
-    config: Optional[ConfigParser] = None,
+    backend: DatabaseBackend | None = None,
+    config: ConfigParser | None = None,
 ) -> AnalyticsDatabase:
     global _analytics_db
 

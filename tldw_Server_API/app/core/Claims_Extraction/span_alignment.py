@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
-
 _WINDOW_SIZES = (160, 128, 96, 64, 48, 32)
 
 
-def _normalize_text_with_map(text: str) -> Tuple[str, List[int]]:
+def _normalize_text_with_map(text: str) -> tuple[str, list[int]]:
     if not text:
         return "", []
-    normalized: List[str] = []
-    index_map: List[int] = []
+    normalized: list[str] = []
+    index_map: list[int] = []
     prev_space = False
     for idx, ch in enumerate(text):
         if ch.isspace():
@@ -32,7 +29,7 @@ def _normalize_text_with_map(text: str) -> Tuple[str, List[int]]:
     return "".join(normalized[start:end]), index_map[start:end]
 
 
-def _map_normalized_span(index_map: List[int], start: int, end: int) -> Optional[Tuple[int, int]]:
+def _map_normalized_span(index_map: list[int], start: int, end: int) -> tuple[int, int] | None:
     if not index_map or start < 0 or end <= start:
         return None
     if start >= len(index_map) or end - 1 >= len(index_map):
@@ -40,7 +37,7 @@ def _map_normalized_span(index_map: List[int], start: int, end: int) -> Optional
     return index_map[start], index_map[end - 1] + 1
 
 
-def _window_candidates(text: str, size: int) -> List[str]:
+def _window_candidates(text: str, size: int) -> list[str]:
     if size <= 0 or len(text) < size:
         return []
     candidates = [text[:size]]
@@ -48,7 +45,7 @@ def _window_candidates(text: str, size: int) -> List[str]:
     candidates.append(text[mid_start: mid_start + size])
     candidates.append(text[-size:])
     seen: set[str] = set()
-    unique: List[str] = []
+    unique: list[str] = []
     for cand in candidates:
         if cand and cand not in seen:
             seen.add(cand)
@@ -58,9 +55,9 @@ def _window_candidates(text: str, size: int) -> List[str]:
 
 def _find_window_span(
     normalized_doc: str,
-    index_map: List[int],
+    index_map: list[int],
     normalized_query: str,
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     fallback = None
     for size in _WINDOW_SIZES:
         if len(normalized_query) < size:
@@ -85,8 +82,8 @@ def find_text_span(
     doc_text: str,
     query_text: str,
     *,
-    fallback_text: Optional[str] = None,
-) -> Optional[Tuple[int, int]]:
+    fallback_text: str | None = None,
+) -> tuple[int, int] | None:
     if not isinstance(doc_text, str) or not doc_text:
         return None
     query = (query_text or "").strip()

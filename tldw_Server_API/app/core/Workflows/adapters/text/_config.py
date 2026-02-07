@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -13,7 +13,7 @@ class HTMLToMarkdownConfig(BaseAdapterConfig):
     """Config for HTML to Markdown conversion adapter."""
 
     html: str = Field(..., description="HTML content to convert (templated)")
-    strip_tags: Optional[List[str]] = Field(None, description="HTML tags to strip")
+    strip_tags: list[str] | None = Field(None, description="HTML tags to strip")
     preserve_links: bool = Field(True, description="Preserve hyperlinks")
     preserve_images: bool = Field(True, description="Preserve image references")
     heading_style: Literal["atx", "setext"] = Field("atx", description="Heading style")
@@ -23,7 +23,7 @@ class MarkdownToHTMLConfig(BaseAdapterConfig):
     """Config for Markdown to HTML conversion adapter."""
 
     markdown: str = Field(..., description="Markdown content to convert (templated)")
-    extensions: Optional[List[str]] = Field(None, description="Markdown extensions to enable")
+    extensions: list[str] | None = Field(None, description="Markdown extensions to enable")
     safe_mode: bool = Field(True, description="Enable safe mode (sanitize HTML)")
     include_toc: bool = Field(False, description="Include table of contents")
 
@@ -50,16 +50,16 @@ class JSONTransformConfig(BaseAdapterConfig):
     """Config for JSON transformation adapter."""
 
     input: Any = Field(..., description="Input JSON data")
-    jq_expression: Optional[str] = Field(None, description="JQ expression for transformation")
-    jsonpath: Optional[str] = Field(None, description="JSONPath expression")
-    template: Optional[str] = Field(None, description="Jinja template for transformation")
+    jq_expression: str | None = Field(None, description="JQ expression for transformation")
+    jsonpath: str | None = Field(None, description="JSONPath expression")
+    template: str | None = Field(None, description="Jinja template for transformation")
 
 
 class JSONValidateConfig(BaseAdapterConfig):
     """Config for JSON validation adapter."""
 
     data: Any = Field(..., description="JSON data to validate")
-    schema: Dict[str, Any] = Field(..., description="JSON Schema for validation")
+    schema: dict[str, Any] = Field(..., description="JSON Schema for validation")
     strict: bool = Field(False, description="Strict validation mode")
 
 
@@ -67,8 +67,8 @@ class XMLTransformConfig(BaseAdapterConfig):
     """Config for XML transformation adapter."""
 
     xml: str = Field(..., description="XML content to transform (templated)")
-    xslt: Optional[str] = Field(None, description="XSLT stylesheet for transformation")
-    xpath: Optional[str] = Field(None, description="XPath expression for extraction")
+    xslt: str | None = Field(None, description="XSLT stylesheet for transformation")
+    xpath: str | None = Field(None, description="XPath expression for extraction")
     output_format: Literal["xml", "json", "text"] = Field("xml", description="Output format")
 
 
@@ -76,7 +76,7 @@ class TemplateRenderConfig(BaseAdapterConfig):
     """Config for Jinja template rendering adapter."""
 
     template: str = Field(..., description="Jinja2 template (templated)")
-    variables: Optional[Dict[str, Any]] = Field(None, description="Template variables")
+    variables: dict[str, Any] | None = Field(None, description="Template variables")
     strict: bool = Field(False, description="Strict undefined variable handling")
     autoescape: bool = Field(False, description="Enable HTML autoescaping")
 
@@ -86,10 +86,10 @@ class RegexExtractConfig(BaseAdapterConfig):
 
     text: str = Field(..., description="Text to extract from (templated)")
     pattern: str = Field(..., description="Regex pattern")
-    flags: Optional[List[Literal["i", "m", "s", "x"]]] = Field(
+    flags: list[Literal["i", "m", "s", "x"]] | None = Field(
         None, description="Regex flags (i=ignorecase, m=multiline, s=dotall, x=verbose)"
     )
-    group: Optional[int] = Field(None, ge=0, description="Capture group to extract")
+    group: int | None = Field(None, ge=0, description="Capture group to extract")
     all_matches: bool = Field(False, description="Return all matches")
 
 
@@ -114,10 +114,10 @@ class KeywordExtractConfig(BaseAdapterConfig):
         "yake", description="Extraction method"
     )
     max_keywords: int = Field(10, ge=1, le=100, description="Maximum keywords to extract")
-    min_score: Optional[float] = Field(None, ge=0, le=1, description="Minimum keyword score")
+    min_score: float | None = Field(None, ge=0, le=1, description="Minimum keyword score")
     ngram_range: tuple = Field((1, 3), description="N-gram range for extraction")
-    provider: Optional[str] = Field(None, description="LLM provider (for llm method)")
-    model: Optional[str] = Field(None, description="Model (for llm method)")
+    provider: str | None = Field(None, description="LLM provider (for llm method)")
+    model: str | None = Field(None, description="Model (for llm method)")
 
 
 class SentimentAnalyzeConfig(BaseAdapterConfig):
@@ -130,9 +130,9 @@ class SentimentAnalyzeConfig(BaseAdapterConfig):
     granularity: Literal["document", "sentence", "aspect"] = Field(
         "document", description="Analysis granularity"
     )
-    aspects: Optional[List[str]] = Field(None, description="Aspects for aspect-based analysis")
-    provider: Optional[str] = Field(None, description="LLM provider (for llm method)")
-    model: Optional[str] = Field(None, description="Model (for llm method)")
+    aspects: list[str] | None = Field(None, description="Aspects for aspect-based analysis")
+    provider: str | None = Field(None, description="LLM provider (for llm method)")
+    model: str | None = Field(None, description="Model (for llm method)")
 
 
 class LanguageDetectConfig(BaseAdapterConfig):
@@ -149,14 +149,14 @@ class LanguageDetectConfig(BaseAdapterConfig):
 class TopicModelConfig(BaseAdapterConfig):
     """Config for topic modeling adapter."""
 
-    texts: List[str] = Field(..., description="Texts for topic modeling")
+    texts: list[str] = Field(..., description="Texts for topic modeling")
     method: Literal["lda", "nmf", "bertopic", "llm"] = Field(
         "lda", description="Topic modeling method"
     )
     num_topics: int = Field(5, ge=2, le=50, description="Number of topics to extract")
     words_per_topic: int = Field(10, ge=3, le=30, description="Words per topic")
-    provider: Optional[str] = Field(None, description="LLM provider (for llm method)")
-    model: Optional[str] = Field(None, description="Model (for llm method)")
+    provider: str | None = Field(None, description="LLM provider (for llm method)")
+    model: str | None = Field(None, description="Model (for llm method)")
 
 
 class EntityExtractConfig(BaseAdapterConfig):
@@ -166,12 +166,12 @@ class EntityExtractConfig(BaseAdapterConfig):
     method: Literal["spacy", "transformers", "llm"] = Field(
         "spacy", description="Extraction method"
     )
-    entity_types: Optional[List[str]] = Field(
+    entity_types: list[str] | None = Field(
         None, description="Entity types to extract (PERSON, ORG, LOC, etc.)"
     )
     link_entities: bool = Field(False, description="Link entities to knowledge base")
-    provider: Optional[str] = Field(None, description="LLM provider (for llm method)")
-    model: Optional[str] = Field(None, description="Model (for llm method)")
+    provider: str | None = Field(None, description="LLM provider (for llm method)")
+    model: str | None = Field(None, description="Model (for llm method)")
 
 
 class TokenCountConfig(BaseAdapterConfig):
@@ -179,4 +179,4 @@ class TokenCountConfig(BaseAdapterConfig):
 
     text: str = Field(..., description="Text to count tokens in (templated)")
     model: str = Field("gpt-4", description="Model to use for tokenization")
-    encoding: Optional[str] = Field(None, description="Specific encoding to use")
+    encoding: str | None = Field(None, description="Specific encoding to use")

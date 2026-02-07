@@ -8,30 +8,29 @@ Implements request/response models using outputs_templates_schemas.
 DB access must be implemented via app.core.DB_Management (no raw SQL here).
 """
 
-from datetime import datetime, timezone
-from typing import Any, Optional
+import json
+import sqlite3
+from datetime import datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Path, Query
 from loguru import logger
 
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.outputs_templates_schemas import (
     OutputTemplate,
     OutputTemplateCreate,
-    OutputTemplateUpdate,
     OutputTemplateList,
+    OutputTemplateUpdate,
     TemplatePreviewRequest,
     TemplatePreviewResponse,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.services.outputs_service import (
     build_items_context_from_content_items,
     render_output_template,
 )
-from datetime import datetime
-import json
-
 
 router = APIRouter(prefix="/outputs/templates", tags=["outputs-templates"])
 
@@ -106,7 +105,7 @@ async def get_output_template(
     try:
         row = db.get_output_template(template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return OutputTemplate(
         id=row.id,
         user_id=row.user_id,
@@ -136,7 +135,7 @@ async def update_output_template(
     try:
         row = db.update_output_template(template_id, patch)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return OutputTemplate(
         id=row.id,
         user_id=row.user_id,
@@ -170,7 +169,7 @@ def _domain_from_url(url: str | None) -> str:
     try:
         from urllib.parse import urlparse
         return urlparse(url).hostname or ""
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return ""
 
 
@@ -187,8 +186,8 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
             include_deleted=False,
             include_trash=False,
         )
-    except Exception:
-        rows, total = [], 0
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        rows, _total = [], 0
 
     items: list[dict[str, object]] = []
     for r in rows:
@@ -199,10 +198,13 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
         # Latest version to get analysis/safe_metadata
         latest = None
         try:
-            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import get_document_version, fetch_keywords_for_media
+            from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import (
+                fetch_keywords_for_media,
+                get_document_version,
+            )
             latest = get_document_version(media_db, media_id=mid, version_number=None, include_content=False)
             tags = fetch_keywords_for_media(media_id=mid, db_instance=media_db) or []
-        except Exception:
+        except (ImportError, AttributeError, ValueError, TypeError, KeyError, RuntimeError):
             tags = []
         published_at = None
         if isinstance(latest, dict):
@@ -211,7 +213,7 @@ def _build_items_context_from_media_ids(media_db, item_ids: list[int], limit: in
                 try:
                     import json as _json
                     sm = _json.loads(sm)
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     sm = None
             if isinstance(sm, dict):
                 published_at = sm.get("published_at") or sm.get("date")
@@ -260,7 +262,7 @@ def _select_media_ids_for_run(media_db, run_id: int, limit: int) -> list[int]:
             mids = [int(r["media_id"]) if isinstance(r, dict) else int(r[0]) for r in rows]
             if mids:
                 return mids
-        except Exception:
+        except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
             continue
     # Fallback: try if Media has run_id (unlikely)
     try:
@@ -268,7 +270,7 @@ def _select_media_ids_for_run(media_db, run_id: int, limit: int) -> list[int]:
         rows = cur.fetchall()
         mids = [int(r["id"]) if isinstance(r, dict) else int(r[0]) for r in rows]
         return mids
-    except Exception:
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
         return []
 
 
@@ -285,7 +287,7 @@ async def preview_output_template(
     try:
         row = db.get_output_template(template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     if row.format == "mp3":
         raise HTTPException(status_code=422, detail="tts_audio templates cannot be previewed as text")
 
@@ -297,8 +299,8 @@ async def preview_output_template(
             ctx.setdefault("items", [])
             ctx.setdefault("date", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
             context = ctx
-        except Exception as e:
-            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}")
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}") from e
     else:
         # Build real or sample context for rendering
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
@@ -310,7 +312,7 @@ async def preview_output_template(
             try:
                 rows, _ = db.list_content_items(run_id=payload.run_id, page=1, size=payload.limit)
                 items = build_items_context_from_content_items(rows)
-            except Exception as exc:
+            except (ValueError, TypeError, KeyError, AttributeError, RuntimeError, sqlite3.Error) as exc:
                 logger.opt(exception=True).warning(
                     f"Content items lookup failed for run_id={payload.run_id}, falling back to media IDs: {exc}"
                 )

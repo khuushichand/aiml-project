@@ -1,12 +1,104 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, List, Tuple
+import json
+from collections.abc import Mapping
+from typing import Any
 
+from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.Utils.Utils import logging
-from tldw_Server_API.app.core.config import load_and_log_configs, settings
+
+_UNSUPPORTED_MEDIA_CHUNKING_KEYS = (
+    "tokenizer_name_or_path",
+    "code_mode",
+    "semantic_similarity_threshold",
+    "json_chunkable_data_key",
+    "summarization_detail",
+    "llm_options_for_internal_steps",
+    "enable_frontmatter_parsing",
+    "frontmatter_sentinel_key",
+)
+
+_ALLOWED_MEDIA_CHUNKING_KEYS = (
+    "method",
+    "max_size",
+    "overlap",
+    "adaptive",
+    "multi_level",
+    "language",
+    "custom_chapter_pattern",
+    "enable_contextual_chunking",
+    "contextual_llm_model",
+    "context_window_size",
+    "context_strategy",
+    "context_token_budget",
+    "proposition_engine",
+    "proposition_aggressiveness",
+    "proposition_min_proposition_length",
+    "proposition_prompt_profile",
+)
+
+_CHUNKING_OPTIONS_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
+
+_CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    json.JSONDecodeError,
+)
 
 
-def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
+def _get_raw_form_value(form_data: Any, key: str) -> Any:
+    if isinstance(form_data, Mapping):
+        return form_data.get(key)
+    if hasattr(form_data, "model_dump"):
+        try:
+            dumped = form_data.model_dump()
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
+            dumped = {}
+        if isinstance(dumped, Mapping):
+            return dumped.get(key)
+    return getattr(form_data, key, None)
+
+
+def _find_unsupported_chunking_keys(form_data: Any) -> list[str]:
+    unsupported: list[str] = []
+    for key in _UNSUPPORTED_MEDIA_CHUNKING_KEYS:
+        value = _get_raw_form_value(form_data, key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, bool) and value is False:
+            continue
+        unsupported.append(key)
+    return unsupported
+
+
+def _validate_media_chunking_options(form_data: Any) -> None:
+    unsupported = _find_unsupported_chunking_keys(form_data)
+    if not unsupported:
+        return
+    allowed = ", ".join(_ALLOWED_MEDIA_CHUNKING_KEYS)
+    raise ValueError(
+        "Unsupported chunking options for media processing: "
+        f"{', '.join(unsupported)}. Supported options: {allowed}."
+    )
+
+
+def prepare_chunking_options_dict(form_data: Any) -> dict[str, Any] | None:
     """
     Prepare the dictionary of chunking options based on form data.
 
@@ -16,6 +108,8 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
     if not getattr(form_data, "perform_chunking", False):
         logging.info("Chunking disabled.")
         return None
+
+    _validate_media_chunking_options(form_data)
 
     default_chunk_method = "sentences"
     media_type = str(getattr(form_data, "media_type", "") or "")
@@ -34,14 +128,14 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
         try:
             if chunk_size_used is None or int(chunk_size_used) == 500:
                 chunk_size_used = 1000
-        except Exception:
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
             chunk_size_used = 1000
 
     if media_type == "email":
         try:
             if chunk_overlap_used is None or int(chunk_overlap_used) == 200:
                 chunk_overlap_used = 150
-        except Exception:
+        except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
             chunk_overlap_used = 150
 
     if media_type == "ebook":
@@ -52,7 +146,7 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
         or getattr(form_data, "context_window_size", None)
     )
 
-    language: Optional[str]
+    language: str | None
     if media_type in ["audio", "video"]:
         language = getattr(form_data, "chunk_language", None) or getattr(
             form_data, "transcription_language", None
@@ -60,7 +154,7 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
     else:
         language = getattr(form_data, "chunk_language", None)
 
-    chunk_options: Dict[str, Any] = {
+    chunk_options: dict[str, Any] = {
         "method": final_chunk_method,
         "max_size": chunk_size_used,
         "overlap": chunk_overlap_used,
@@ -78,6 +172,19 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
         "context_token_budget": getattr(form_data, "context_token_budget", None),
     }
 
+    proposition_engine = getattr(form_data, "proposition_engine", None)
+    if proposition_engine:
+        chunk_options["proposition_engine"] = proposition_engine
+    proposition_aggressiveness = getattr(form_data, "proposition_aggressiveness", None)
+    if proposition_aggressiveness is not None:
+        chunk_options["proposition_aggressiveness"] = proposition_aggressiveness
+    proposition_min_len = getattr(form_data, "proposition_min_proposition_length", None)
+    if proposition_min_len is not None:
+        chunk_options["proposition_min_proposition_length"] = proposition_min_len
+    proposition_prompt_profile = getattr(form_data, "proposition_prompt_profile", None)
+    if proposition_prompt_profile:
+        chunk_options["proposition_prompt_profile"] = proposition_prompt_profile
+
     try:
         hier_flag = getattr(form_data, "hierarchical_chunking", None)
         hier_template = getattr(form_data, "hierarchical_template", None)
@@ -86,7 +193,7 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
             if isinstance(hier_template, dict):
                 chunk_options["hierarchical_template"] = hier_template
             chunk_options.setdefault("method", "sentences")
-    except Exception:
+    except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
         pass
 
     if final_chunk_method == "propositions":
@@ -94,27 +201,32 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
             cfg = load_and_log_configs()
             cfg_dict = cfg if isinstance(cfg, dict) else {}
             c = cfg_dict.get("chunking_config", {}) if isinstance(cfg_dict, dict) else {}
-            if "proposition_engine" in c:
+            if "proposition_engine" in c and "proposition_engine" not in chunk_options:
                 chunk_options["proposition_engine"] = c.get("proposition_engine")
-            if "proposition_prompt_profile" in c:
+            if (
+                "proposition_prompt_profile" in c
+                and "proposition_prompt_profile" not in chunk_options
+            ):
                 chunk_options["proposition_prompt_profile"] = c.get(
                     "proposition_prompt_profile"
                 )
             if "proposition_aggressiveness" in c:
                 try:
-                    chunk_options["proposition_aggressiveness"] = int(
-                        c.get("proposition_aggressiveness")
-                    )
-                except Exception:
+                    if "proposition_aggressiveness" not in chunk_options:
+                        chunk_options["proposition_aggressiveness"] = int(
+                            c.get("proposition_aggressiveness")
+                        )
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     pass
             if "proposition_min_proposition_length" in c:
                 try:
-                    chunk_options["proposition_min_proposition_length"] = int(
-                        c.get("proposition_min_proposition_length")
-                    )
-                except Exception:
+                    if "proposition_min_proposition_length" not in chunk_options:
+                        chunk_options["proposition_min_proposition_length"] = int(
+                            c.get("proposition_min_proposition_length")
+                        )
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     pass
-        except Exception as cfg_err:
+        except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as cfg_err:
             logging.debug(f"Proposition config defaults not loaded: {cfg_err}")
 
     logging.info("Chunking enabled with options: {}", chunk_options)
@@ -124,12 +236,12 @@ def prepare_chunking_options_dict(form_data: Any) -> Optional[Dict[str, Any]]:
 def apply_chunking_template_if_any(
     form_data: Any,
     db: Any,
-    chunking_options_dict: Optional[Dict[str, Any]],
+    chunking_options_dict: dict[str, Any] | None,
     *,
-    TemplateClassifier: Optional[Any] = None,
-    first_url: Optional[str] = None,
-    first_filename: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    TemplateClassifier: Any | None = None,
+    first_url: str | None = None,
+    first_filename: str | None = None,
+) -> dict[str, Any] | None:
     """
     Apply an explicit or auto-selected chunking template to the provided
     chunking options dictionary.
@@ -149,7 +261,7 @@ def apply_chunking_template_if_any(
         if template_name:
             try:
                 tpl = db.get_chunking_template(name=template_name)
-            except Exception as db_err:
+            except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as db_err:
                 logging.warning("Failed to load chunking template '%s': %s", template_name, db_err)
                 return opts
 
@@ -159,7 +271,7 @@ def apply_chunking_template_if_any(
                 raw_cfg = tpl["template_json"]
                 try:
                     cfg = _json.loads(raw_cfg) if isinstance(raw_cfg, str) else raw_cfg
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     cfg = {}
                 cfg = cfg or {}
                 hier_cfg = (cfg.get("chunking") or {}).get("config", {}) or {}
@@ -203,12 +315,12 @@ def apply_chunking_template_if_any(
                     user_id=None,
                     include_deleted=False,
                 )
-            except Exception as list_err:
+            except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as list_err:
                 logging.warning("Failed to list chunking templates for auto-apply: {}", list_err)
                 return opts
 
-            best_cfg: Optional[Dict[str, Any]] = None
-            best_key: Optional[Tuple[float, int]] = None
+            best_cfg: dict[str, Any] | None = None
+            best_key: tuple[float, int] | None = None
 
             for t in candidates:
                 try:
@@ -217,7 +329,7 @@ def apply_chunking_template_if_any(
                     cfg = _json.loads(t.get("template_json") or "{}")
                     if not isinstance(cfg, dict):
                         cfg = {}
-                except Exception:
+                except _CHUNKING_OPTIONS_COERCE_EXCEPTIONS:
                     cfg = {}
 
                 try:
@@ -228,7 +340,7 @@ def apply_chunking_template_if_any(
                         url=first_url,
                         filename=first_filename,
                     )
-                except Exception:
+                except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS:
                     score = 0.0
 
                 if score <= 0:
@@ -260,15 +372,15 @@ def apply_chunking_template_if_any(
                     opts["hierarchical_template"] = tpl
 
         return opts
-    except Exception as auto_err:  # Defensive: never break callers
+    except _CHUNKING_OPTIONS_NONCRITICAL_EXCEPTIONS as auto_err:  # Defensive: never break callers
         logging.warning("Auto-apply chunking template helper failed: {}", auto_err)
         return chunking_options_dict
 
 
 def prepare_common_options(
     form_data: Any,
-    chunk_options: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    chunk_options: dict[str, Any] | None,
+) -> dict[str, Any]:
     """
     Prepare the dictionary of common processing options for ingestion.
 

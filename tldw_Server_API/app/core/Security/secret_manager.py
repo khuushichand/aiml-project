@@ -8,15 +8,15 @@ and other sensitive configuration data.
 Integrates with existing tldw config system and prepares for aiosqlite migration.
 """
 
-import os
 import base64
+import os
 import secrets
-from typing import Dict, Any, Optional
 from dataclasses import dataclass, field, replace
-from enum import Enum
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
-from dotenv import load_dotenv
+from typing import Any, Optional
+
 from loguru import logger
 
 # Import existing config system
@@ -65,7 +65,7 @@ class SecretValue:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
     rotation_required: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class SecretValidationError(Exception):
@@ -88,7 +88,7 @@ class SecretManager:
         Args:
             validate_on_startup: Whether to validate all secrets on startup
         """
-        self._secrets_cache: Dict[str, SecretValue] = {}
+        self._secrets_cache: dict[str, SecretValue] = {}
 
         # Load .env file if it exists
         self._load_env_file()
@@ -129,7 +129,7 @@ class SecretManager:
         except Exception:
             return fallback
 
-    def _init_secret_configs(self) -> Dict[str, SecretConfig]:
+    def _init_secret_configs(self) -> dict[str, SecretConfig]:
         """Initialize standard secret configurations."""
         return {
             # Authentication secrets (using existing config sections)
@@ -423,7 +423,7 @@ class SecretManager:
         logger.warning(f"Rotated secret '{name}' - update environment/config!")
         return new_value
 
-    def list_secrets(self, include_values: bool = False) -> Dict[str, Dict[str, Any]]:
+    def list_secrets(self, include_values: bool = False) -> dict[str, dict[str, Any]]:
         """
         List all configured secrets with metadata.
 
@@ -463,7 +463,7 @@ class SecretManager:
 
         return secrets_info
 
-    def get_production_health_check(self) -> Dict[str, Any]:
+    def get_production_health_check(self) -> dict[str, Any]:
         """
         Get production readiness check for secrets.
 

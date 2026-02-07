@@ -4,10 +4,11 @@ Template Module for Unified MCP
 Use this as a starting point for new MCP modules.
 """
 
-from typing import Dict, Any, List
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseModule, ModuleConfig, create_tool_definition
+from ..base import BaseModule, create_tool_definition
 
 
 class TemplateModule(BaseModule):
@@ -21,11 +22,11 @@ class TemplateModule(BaseModule):
         # Cleanup resources
         logger.info(f"Shutting down module: {self.name}")
 
-    async def check_health(self) -> Dict[str, bool]:
+    async def check_health(self) -> dict[str, bool]:
         # Keep checks quick and resilient
         return {"initialized": True, "dependencies_ok": True}
 
-    async def get_tools(self) -> List[Dict[str, Any]]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         # Define tools with JSON Schema input definitions
         return [
             create_tool_definition(
@@ -39,7 +40,7 @@ class TemplateModule(BaseModule):
             ),
         ]
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any], context: Any | None = None) -> Any:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any], context: Any | None = None) -> Any:
         # Sanitize inputs and dispatch
         args = self.sanitize_input(arguments)
         if tool_name == "echo":

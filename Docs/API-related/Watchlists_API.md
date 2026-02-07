@@ -23,8 +23,10 @@ Sources:
 - `POST /sources`
 - `GET /sources`
 - `GET /sources/{source_id}`
+- `GET /sources/{source_id}/seen` (dedup/seen counters + optional recent keys)
 - `PATCH /sources/{source_id}`
 - `DELETE /sources/{source_id}`
+- `DELETE /sources/{source_id}/seen` (clear dedup/seen state, optional backoff reset)
 - `POST /sources/{source_id}/test` (preview without ingestion)
 - `POST /sources/bulk` (bulk create)
 - `GET /sources/export` (OPML)
@@ -143,6 +145,77 @@ Payload shape:
 
 Filter types: `keyword`, `author`, `date_range`, `regex`, `all`  
 Actions: `include`, `exclude`, `flag`
+
+## Include-only quick semantics
+
+`require_include` can come from:
+- Job filters payload (`job_filters.require_include`)
+- Org/admin default (when the job value is unset)
+
+Decision summary:
+
+| Effective `require_include` | Any active include rule | Include match found | Result |
+| --- | --- | --- | --- |
+| `false` | no | n/a | Item may ingest unless excluded |
+| `false` | yes | no | Item may ingest unless excluded |
+| `false` | yes | yes | Item ingests (and can be flagged) |
+| `true` | no | n/a | Item is filtered (include-only guard) |
+| `true` | yes | no | Item is filtered |
+| `true` | yes | yes | Item ingests (unless excluded by higher-priority rule) |
+
+Notes:
+- Exclude rules still win when they match.
+- Invalid regex filters fail safely (no crash); include-only mode can still filter all items when no include matches.
+
+## OPML import/export examples
+
+Import OPML with optional defaults:
+```bash
+curl -X POST "$BASE/api/v1/watchlists/sources/import" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@subscriptions.opml" \
+  -F "active=true" \
+  -F "group_id=12" \
+  -F "tags=research" \
+  -F "tags=ai"
+```
+
+Export all sources as OPML:
+```bash
+curl "$BASE/api/v1/watchlists/sources/export" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o watchlists_sources.opml
+```
+
+Export with filters (`group` supports repeated params for OR semantics):
+```bash
+curl "$BASE/api/v1/watchlists/sources/export?type=rss&tag=ai&group=12&group=19" \
+  -H "Authorization: Bearer $TOKEN" \
+  -o watchlists_rss_ai_groups_12_19.opml
+```
+
+Filter semantics for OPML export:
+- Repeated `group` values are OR-ed.
+- `tag` + `group` are combined with AND semantics.
+- Unknown `group` ids return HTTP 200 with an empty OPML source list.
+
+## Dedup/seen tools
+
+Inspect per-source seen state:
+```bash
+curl "$BASE/api/v1/watchlists/sources/123/seen?keys_limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Clear seen state for a source (also clears source backoff by default):
+```bash
+curl -X DELETE "$BASE/api/v1/watchlists/sources/123/seen?clear_backoff=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Admin-only inspect/reset for another user:
+- Add `target_user_id=<user_id>` query param.
+- Non-admin calls with `target_user_id` return `403` (`watchlists_admin_required_for_target_user`).
 
 ## Ingestion and persistence
 

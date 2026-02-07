@@ -48,11 +48,12 @@ Usage example:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
-
 import asyncio
+import contextlib
 import heapq
+from collections.abc import Awaitable
+from typing import Any, Callable
+
 import numpy as np
 from loguru import logger
 
@@ -67,10 +68,10 @@ except Exception:
 
 
 # Types
-EmbedderCallable = Callable[[List[str]], Awaitable[List[List[float]]]]
+EmbedderCallable = Callable[[list[str]], Awaitable[list[list[float]]]]
 
 
-DEFAULT_CONFIGS: Dict[str, Any] = {
+DEFAULT_CONFIGS: dict[str, Any] = {
     "MIN_SEGMENT_SIZE": 5,
     "LAMBDA_BALANCE": 0.01,
     "UTTERANCE_EXPANSION_WIDTH": 2,
@@ -95,18 +96,18 @@ class SegNode:
     minimizes total loss subject to a minimum segment size.
     """
 
-    def __init__(self, identifier: str, entries: List[Dict[str, Any]], configs: Dict[str, Any]):
+    def __init__(self, identifier: str, entries: list[dict[str, Any]], configs: dict[str, Any]):
         self.configs = configs
         self.MIN_SEGMENT_SIZE: int = int(configs["MIN_SEGMENT_SIZE"])
         self.LAMBDA_BALANCE: float = float(configs["LAMBDA_BALANCE"])
 
-        self.entries: List[Dict[str, Any]] = entries
-        self.segment: List[int] = [int(entry["index"]) for entry in entries]
+        self.entries: list[dict[str, Any]] = entries
+        self.segment: list[int] = [int(entry["index"]) for entry in entries]
         self.embs: np.ndarray = np.array([entry["embedding"] for entry in entries], dtype=float)
         self.mu: np.ndarray = np.mean(self.embs, axis=0)
 
-        self.left: Optional[SegNode] = None
-        self.right: Optional[SegNode] = None
+        self.left: SegNode | None = None
+        self.right: SegNode | None = None
         self.identifier: str = identifier
         self.is_leaf: bool = len(entries) < 2 * self.MIN_SEGMENT_SIZE
 
@@ -179,7 +180,7 @@ class SegNode:
     def split_loss_delta(self) -> float:
         return float(self.split_negative_log_likelihood - self.negative_log_likelihood)
 
-    def split(self) -> Tuple["SegNode", "SegNode"]:
+    def split(self) -> tuple[SegNode, SegNode]:
         left_entries, right_entries = self.split_entries
         self.left = SegNode(
             identifier=self.identifier + "L",
@@ -206,9 +207,9 @@ class TreeSegmenter:
 
     def __init__(
         self,
-        configs: Dict[str, Any],
-        entries: List[Dict[str, Any]],
-        embedder: Optional[EmbedderCallable] = None,
+        configs: dict[str, Any],
+        entries: list[dict[str, Any]],
+        embedder: EmbedderCallable | None = None,
         *,
         auto_embed: bool = True,
     ) -> None:
@@ -216,9 +217,9 @@ class TreeSegmenter:
         self.entries = list(entries)
         self.embedder = embedder
 
-        self.blocks: List[Dict[str, Any]] = []
-        self.leaves: List[SegNode] = []
-        self.transitions_hat: List[int] = []
+        self.blocks: list[dict[str, Any]] = []
+        self.leaves: list[SegNode] = []
+        self.transitions_hat: list[int] = []
 
         self.extract_blocks()
         if auto_embed:
@@ -227,10 +228,10 @@ class TreeSegmenter:
     @classmethod
     async def create_async(
         cls,
-        configs: Dict[str, Any],
-        entries: List[Dict[str, Any]],
-        embedder: Optional[EmbedderCallable] = None,
-    ) -> "TreeSegmenter":
+        configs: dict[str, Any],
+        entries: list[dict[str, Any]],
+        embedder: EmbedderCallable | None = None,
+    ) -> TreeSegmenter:
         """Async factory: builds blocks and embeds asynchronously (no event loop conflicts)."""
         self = cls(configs=configs, entries=entries, embedder=embedder, auto_embed=False)
         await self.embed_blocks_async()
@@ -240,13 +241,13 @@ class TreeSegmenter:
         entries = self.entries
         width = int(self.configs["UTTERANCE_EXPANSION_WIDTH"]) or 0
 
-        blocks: List[Dict[str, Any]] = []
+        blocks: list[dict[str, Any]] = []
         for i, entry in enumerate(entries):
-            convo_parts: List[str] = []
+            convo_parts: list[str] = []
             for idx in range(max(0, i - width), i + 1):
                 convo_parts.append(str(entries[idx].get("composite", "")))
 
-            block: Dict[str, Any] = {
+            block: dict[str, Any] = {
                 "convo": "\n".join(convo_parts),
                 "index": i,
             }
@@ -260,7 +261,7 @@ class TreeSegmenter:
 
         self.blocks = blocks
 
-    async def _default_embedder(self, chunks: List[str]) -> List[List[float]]:
+    async def _default_embedder(self, chunks: list[str]) -> list[list[float]]:
         if not _EMBED_SERVICE_AVAILABLE:
             raise RuntimeError(
                 "Async embeddings service not available. Provide an embedder callable."
@@ -278,9 +279,9 @@ class TreeSegmenter:
         chunks = [block["convo"] for block in self.blocks]
         batch_size = int(self.configs.get("EMBEDDING_BATCH_SIZE", 256) or 256)
 
-        async def run_embed() -> List[List[float]]:
+        async def run_embed() -> list[list[float]]:
             # Process in batches to control concurrency and payload sizes
-            all_embs: List[List[float]] = []
+            all_embs: list[list[float]] = []
             for i in range(0, len(chunks), batch_size):
                 sub = chunks[i:i + batch_size]
                 if self.embedder is not None:
@@ -292,7 +293,7 @@ class TreeSegmenter:
 
         for attempt in range(1, retries + 1):
             try:
-                embs: List[List[float]] = await run_embed()
+                embs: list[list[float]] = await run_embed()
                 if len(embs) != len(chunks):
                     raise ValueError(
                         f"Embedding count mismatch: got {len(embs)} for {len(chunks)} chunks"
@@ -320,7 +321,7 @@ class TreeSegmenter:
 
         chunks = [block["convo"] for block in self.blocks]
 
-        async def run_embed() -> List[List[float]]:
+        async def run_embed() -> list[list[float]]:
             if self.embedder is not None:
                 return await self.embedder(chunks)
             return await self._default_embedder(chunks)
@@ -333,11 +334,9 @@ class TreeSegmenter:
                     # Cannot block a running loop; advise callers to use create_async() in async contexts.
                     raise RuntimeError("TreeSegmenter: use create_async() in async contexts")
                 # Run the coroutine to completion on our temporary loop
-                try:
+                with contextlib.suppress(Exception):
                     asyncio.set_event_loop(loop)
-                except Exception:
-                    pass
-                embs: List[List[float]] = loop.run_until_complete(run_embed())
+                embs: list[list[float]] = loop.run_until_complete(run_embed())
                 if len(embs) != len(chunks):
                     raise ValueError(
                         f"Embedding count mismatch: got {len(embs)} for {len(chunks)} chunks"
@@ -360,7 +359,7 @@ class TreeSegmenter:
                     except Exception:
                         pass
 
-    def segment_meeting(self, K: int) -> List[int]:
+    def segment_meeting(self, K: int) -> list[int]:
         """Segment the meeting into up to K segments.
 
         Returns a transitions_hat vector of length N: 1 at the start index
@@ -380,9 +379,9 @@ class TreeSegmenter:
             self.transitions_hat = [0] * len(root.segment)
             return self.transitions_hat
 
-        leaves_heap: List[Tuple[int, SegNode]] = []
+        leaves_heap: list[tuple[int, SegNode]] = []
         # Use a numeric tiebreaker (start index) to avoid comparing SegNode on equal loss
-        boundary: List[Tuple[float, int, SegNode]] = []
+        boundary: list[tuple[float, int, SegNode]] = []
         heapq.heappush(boundary, (root.split_loss_delta(), root.segment[0], root))
 
         total_loss = root.negative_log_likelihood
@@ -418,15 +417,15 @@ class TreeSegmenter:
                     heapq.heappush(boundary, (child.split_loss_delta(), child.segment[0], child))
 
         # Sort leaves by first index to produce ordered segments
-        ordered_leaves: List[SegNode] = []
+        ordered_leaves: list[SegNode] = []
         while leaves_heap:
             ordered_leaves.append(heapq.heappop(leaves_heap)[1])
 
         self.leaves = ordered_leaves
 
         # transitions_hat marks segment starts (except the first)
-        transitions_hat: List[int] = [0] * len(self.leaves[0].segment)
-        transition_indices: List[int] = []
+        transitions_hat: list[int] = [0] * len(self.leaves[0].segment)
+        transition_indices: list[int] = []
         for leaf in self.leaves[1:]:
             seg_trans = [0] * len(leaf.segment)
             seg_trans[0] = 1
@@ -437,7 +436,7 @@ class TreeSegmenter:
         self.transition_indices = transition_indices  # type: ignore[attr-defined]
         return transitions_hat
 
-    def get_segments(self) -> List[Dict[str, Any]]:
+    def get_segments(self) -> list[dict[str, Any]]:
         """Return segments with indices and aggregated metadata.
 
         Each segment dictionary contains:
@@ -450,7 +449,7 @@ class TreeSegmenter:
         if not self.leaves:
             return []
 
-        segments: List[Dict[str, Any]] = []
+        segments: list[dict[str, Any]] = []
         for leaf in self.leaves:
             indices = list(leaf.segment)
             seg_entries = [self.blocks[i] for i in indices]
@@ -476,9 +475,9 @@ class TreeSegmenter:
 
         return segments
 
-    def get_transition_indices(self) -> List[int]:
+    def get_transition_indices(self) -> list[int]:
         if hasattr(self, "transition_indices"):
-            return list(getattr(self, "transition_indices"))
+            return list(self.transition_indices)
         if not getattr(self, "leaves", None):
             return []
         return [leaf.segment[0] for leaf in self.leaves[1:]]

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 from loguru import logger
+
 from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 
 
-async def list_roles(db) -> List[Dict[str, Any]]:
+async def list_roles(db) -> list[dict[str, Any]]:
     is_pg = await is_postgres_backend()
     try:
         if is_pg:
@@ -18,7 +20,7 @@ async def list_roles(db) -> List[Dict[str, Any]]:
         raise
 
 
-async def create_role(db, name: str, description: Optional[str] = None, is_system: bool = False) -> Dict[str, Any]:
+async def create_role(db, name: str, description: str | None = None, is_system: bool = False) -> dict[str, Any]:
     from tldw_Server_API.app.core.AuthNZ.exceptions import DuplicateRoleError
     is_pg = await is_postgres_backend()
     try:
@@ -66,7 +68,7 @@ async def delete_role(db, role_id: int) -> bool:
         raise
 
 
-async def list_role_permissions(db, role_id: int) -> List[Dict[str, Any]]:
+async def list_role_permissions(db, role_id: int) -> list[dict[str, Any]]:
     is_pg = await is_postgres_backend()
     try:
         if is_pg:
@@ -97,7 +99,7 @@ async def list_role_permissions(db, role_id: int) -> List[Dict[str, Any]]:
         raise
 
 
-async def list_tool_permissions(db) -> List[Dict[str, Any]]:
+async def list_tool_permissions(db) -> list[dict[str, Any]]:
     is_pg = await is_postgres_backend()
     try:
         if is_pg:
@@ -126,7 +128,7 @@ async def delete_tool_permission(db, full_name: str) -> bool:
         raise
 
 
-async def ensure_permission(db, name: str, description: str, category: str = 'tools') -> Dict[str, Any]:
+async def ensure_permission(db, name: str, description: str, category: str = 'tools') -> dict[str, Any]:
     """Idempotently create a permission and return its row."""
     is_pg = await is_postgres_backend()
     if is_pg:
@@ -150,7 +152,7 @@ async def ensure_permission(db, name: str, description: str, category: str = 'to
     return {"id": r[0], "name": r[1], "description": r[2], "category": r[3]}
 
 
-async def grant_tool_permission_to_role(db, role_id: int, permission_name: str, description: str) -> Dict[str, Any]:
+async def grant_tool_permission_to_role(db, role_id: int, permission_name: str, description: str) -> dict[str, Any]:
     perm = await ensure_permission(db, permission_name, description, category='tools')
     is_pg = await is_postgres_backend()
     try:

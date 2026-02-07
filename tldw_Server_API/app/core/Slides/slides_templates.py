@@ -7,7 +7,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -31,12 +31,12 @@ class SlidesTemplate:
     template_id: str
     name: str
     theme: str
-    marp_theme: Optional[str]
-    settings: Optional[Dict[str, Any]]
-    default_slides: Optional[List[Dict[str, Any]]]
-    custom_css: Optional[str]
+    marp_theme: str | None
+    settings: dict[str, Any] | None
+    default_slides: list[dict[str, Any]] | None
+    custom_css: str | None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.template_id,
             "name": self.name,
@@ -48,7 +48,7 @@ class SlidesTemplate:
         }
 
 
-def _resolve_templates_path(path_override: Optional[Path | str] = None) -> Path:
+def _resolve_templates_path(path_override: Path | str | None = None) -> Path:
     if path_override:
         return Path(path_override).expanduser().resolve()
     env_path = os.getenv("SLIDES_TEMPLATES_PATH")
@@ -63,7 +63,7 @@ def _resolve_templates_path(path_override: Optional[Path | str] = None) -> Path:
 
 
 @lru_cache(maxsize=4)
-def _load_templates_from_path(path_str: str) -> List[Dict[str, Any]]:
+def _load_templates_from_path(path_str: str) -> list[dict[str, Any]]:
     path = Path(path_str)
     if not path.exists():
         logger.debug("slides templates file not found: %s", path)
@@ -80,7 +80,7 @@ def _load_templates_from_path(path_str: str) -> List[Dict[str, Any]]:
     return templates
 
 
-def _normalize_template(raw: Dict[str, Any]) -> SlidesTemplate:
+def _normalize_template(raw: dict[str, Any]) -> SlidesTemplate:
     if not isinstance(raw, dict):
         raise SlidesTemplateInvalidError("template_entry_invalid")
     template_id = str(raw.get("id") or "").strip()
@@ -111,10 +111,10 @@ def _normalize_template(raw: Dict[str, Any]) -> SlidesTemplate:
     )
 
 
-def list_slide_templates(path_override: Optional[Path | str] = None) -> List[SlidesTemplate]:
+def list_slide_templates(path_override: Path | str | None = None) -> list[SlidesTemplate]:
     path = _resolve_templates_path(path_override)
     raw_templates = _load_templates_from_path(str(path))
-    templates: List[SlidesTemplate] = []
+    templates: list[SlidesTemplate] = []
     seen: set[str] = set()
     for entry in raw_templates:
         template = _normalize_template(entry)
@@ -125,7 +125,7 @@ def list_slide_templates(path_override: Optional[Path | str] = None) -> List[Sli
     return templates
 
 
-def get_slide_template(template_id: str, path_override: Optional[Path | str] = None) -> SlidesTemplate:
+def get_slide_template(template_id: str, path_override: Path | str | None = None) -> SlidesTemplate:
     lookup = (template_id or "").strip()
     if not lookup:
         raise SlidesTemplateNotFoundError("template_id_required")

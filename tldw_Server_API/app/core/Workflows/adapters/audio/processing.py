@@ -15,22 +15,46 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
     resolve_workflow_file_path,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.audio._config import (
-    AudioNormalizeConfig,
     AudioConcatConfig,
-    AudioTrimConfig,
     AudioConvertConfig,
     AudioExtractConfig,
     AudioMixConfig,
+    AudioNormalizeConfig,
+    AudioTrimConfig,
+)
+
+_AUDIO_PROCESSING_PATH_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+
+_AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    subprocess.CalledProcessError,
+    subprocess.TimeoutExpired,
 )
 
 
@@ -42,7 +66,7 @@ from tldw_Server_API.app.core.Workflows.adapters.audio._config import (
     config_model=AudioNormalizeConfig,
     tags=["audio"],
 )
-async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_normalize_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Normalize audio volume levels using ffmpeg.
 
     Config:
@@ -71,7 +95,7 @@ async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str,
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except _AUDIO_PROCESSING_PATH_EXCEPTIONS as e:
         return {"error": f"input_path_error: {e}", "normalized": False}
 
     target_loudness = float(config.get("target_loudness", -23))
@@ -115,7 +139,7 @@ async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str,
         return {"error": "ffmpeg_timeout", "normalized": False}
     except subprocess.CalledProcessError as e:
         return {"error": f"ffmpeg_error: {e.stderr.decode() if e.stderr else str(e)}", "normalized": False}
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio normalize error: {e}")
         return {"error": str(e), "normalized": False}
 
@@ -128,7 +152,7 @@ async def run_audio_normalize_adapter(config: Dict[str, Any], context: Dict[str,
     config_model=AudioConcatConfig,
     tags=["audio"],
 )
-async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_concat_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Concatenate multiple audio files into one.
 
     Config:
@@ -161,7 +185,7 @@ async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, An
             p = _tmpl(p, context) or p
         try:
             resolved_inputs.append(str(resolve_workflow_file_path(p, context, config)))
-        except Exception:
+        except _AUDIO_PROCESSING_PATH_EXCEPTIONS:
             continue
 
     if len(resolved_inputs) < 2:
@@ -223,7 +247,7 @@ async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, An
 
         return {"output_path": output_path, "concatenated": True, "file_count": len(resolved_inputs)}
 
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio concat error: {e}")
         return {"error": str(e), "concatenated": False}
 
@@ -236,7 +260,7 @@ async def run_audio_concat_adapter(config: Dict[str, Any], context: Dict[str, An
     config_model=AudioTrimConfig,
     tags=["audio"],
 )
-async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_trim_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Trim an audio file to a specific time range.
 
     Config:
@@ -261,7 +285,7 @@ async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except _AUDIO_PROCESSING_PATH_EXCEPTIONS as e:
         return {"error": f"input_path_error: {e}", "trimmed": False}
 
     start = config.get("start", "0")
@@ -285,7 +309,7 @@ async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
 
         return {"output_path": output_path, "trimmed": True, "start": start, "end": end or duration}
 
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio trim error: {e}")
         return {"error": str(e), "trimmed": False}
 
@@ -298,7 +322,7 @@ async def run_audio_trim_adapter(config: Dict[str, Any], context: Dict[str, Any]
     config_model=AudioConvertConfig,
     tags=["audio"],
 )
-async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_convert_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Convert audio file to a different format.
 
     Config:
@@ -328,7 +352,7 @@ async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, A
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except _AUDIO_PROCESSING_PATH_EXCEPTIONS as e:
         return {"error": f"input_path_error: {e}", "converted": False}
 
     output_format = config.get("format", "mp3")
@@ -352,7 +376,7 @@ async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, A
 
         return {"output_path": output_path, "converted": True, "format": output_format}
 
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio convert error: {e}")
         return {"error": str(e), "converted": False}
 
@@ -365,7 +389,7 @@ async def run_audio_convert_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=AudioExtractConfig,
     tags=["audio"],
 )
-async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_extract_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Extract audio track from a video file.
 
     Config:
@@ -393,7 +417,7 @@ async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, A
 
     try:
         resolved_input = resolve_workflow_file_path(input_path, context, config)
-    except Exception as e:
+    except _AUDIO_PROCESSING_PATH_EXCEPTIONS as e:
         return {"error": f"input_path_error: {e}", "extracted": False}
 
     output_format = config.get("format", "mp3")
@@ -418,7 +442,7 @@ async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, A
 
         return {"output_path": output_path, "extracted": True, "format": output_format}
 
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio extract error: {e}")
         return {"error": str(e), "extracted": False}
 
@@ -431,7 +455,7 @@ async def run_audio_extract_adapter(config: Dict[str, Any], context: Dict[str, A
     config_model=AudioMixConfig,
     tags=["audio"],
 )
-async def run_audio_mix_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_audio_mix_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Mix multiple audio tracks together.
 
     Config:
@@ -446,7 +470,7 @@ async def run_audio_mix_adapter(config: Dict[str, Any], context: Dict[str, Any])
         return {"__status__": "cancelled"}
 
     input_paths = config.get("input_paths") or []
-    volumes = config.get("volumes") or []
+    config.get("volumes") or []
 
     if len(input_paths) < 2:
         return {"error": "need_at_least_2_files", "mixed": False}
@@ -458,7 +482,7 @@ async def run_audio_mix_adapter(config: Dict[str, Any], context: Dict[str, Any])
             p = _tmpl(p, context) or p
         try:
             resolved_inputs.append(str(resolve_workflow_file_path(p, context, config)))
-        except Exception:
+        except _AUDIO_PROCESSING_PATH_EXCEPTIONS:
             continue
 
     if len(resolved_inputs) < 2:
@@ -480,6 +504,6 @@ async def run_audio_mix_adapter(config: Dict[str, Any], context: Dict[str, Any])
 
         return {"output_path": output_path, "mixed": True, "track_count": len(resolved_inputs)}
 
-    except Exception as e:
+    except _AUDIO_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Audio mix error: {e}")
         return {"error": str(e), "mixed": False}

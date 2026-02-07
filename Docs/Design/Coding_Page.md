@@ -14,6 +14,7 @@ https://www.fuzzycomputer.com/posts/onboarding?=&aid=recqrDNk2WPeiRuha
 https://www.youtube.com/watch?v=Jw-4oC5HtK4
 https://www.npmjs.com/package/@nendo/tree-sitter-mcp
 https://potpie.ai/
+https://github.com/Dimillian/CodexMonitor
 https://github.com/presstab/jrdev
 https://github.com/rmusser01/slice
 https://github.com/coderabbitai/git-worktree-runner

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import Request, HTTPException
 import os
 
+from fastapi import HTTPException, Request
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 
 async def enforce_llm_budget(request: Request) -> None:
@@ -30,7 +28,7 @@ async def enforce_llm_budget(request: Request) -> None:
         return
 
     # Already bound by earlier auth dependency?
-    key_id: Optional[int] = getattr(request.state, "api_key_id", None)
+    key_id: int | None = getattr(request.state, "api_key_id", None)
 
     # Otherwise, resolve from headers deterministically
     if not key_id:
@@ -80,7 +78,7 @@ async def enforce_llm_budget(request: Request) -> None:
     # Construct an AuthPrincipal for governance decisions. Prefer an existing
     # AuthContext when available; otherwise derive a minimal principal from
     # request.state.
-    principal: Optional[AuthPrincipal] = None
+    principal: AuthPrincipal | None = None
     existing_ctx = getattr(request.state, "auth", None)
     if isinstance(existing_ctx, AuthContext):
         principal = existing_ctx.principal

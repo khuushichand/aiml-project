@@ -12,19 +12,18 @@ This module includes adapters for RAG operations:
 - search_aggregate: Aggregate search results
 """
 
-from tldw_Server_API.app.core.Workflows.adapters.rag.search import (
-    run_rag_search_adapter,
-    run_web_search_adapter,
-    run_rss_fetch_adapter,
-    run_atom_fetch_adapter,
-)
-
 from tldw_Server_API.app.core.Workflows.adapters.rag.query import (
-    run_query_rewrite_adapter,
-    run_query_expand_adapter,
     run_hyde_generate_adapter,
-    run_semantic_cache_check_adapter,
+    run_query_expand_adapter,
+    run_query_rewrite_adapter,
     run_search_aggregate_adapter,
+    run_semantic_cache_check_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.rag.search import (
+    run_atom_fetch_adapter,
+    run_rag_search_adapter,
+    run_rss_fetch_adapter,
+    run_web_search_adapter,
 )
 
 __all__ = [

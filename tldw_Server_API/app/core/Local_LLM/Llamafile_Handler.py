@@ -1,31 +1,35 @@
 # Llamafile_Handler.py
 #
 # Imports
+#
+# Third-party imports
+import asyncio
+import contextlib
 import os
 import platform
-import re
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
-import zipfile
-import shutil
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-#
-# Third-party imports
-import asyncio
-import socket
 import time
+import zipfile
+from pathlib import Path
+from typing import Any, Optional
+
+from tldw_Server_API.app.core.Local_LLM import handler_utils, http_utils
+
 #
 # Local imports
 from tldw_Server_API.app.core.Local_LLM.LLM_Base_Handler import BaseLLMHandler
-from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import ModelDownloadError, ServerError, \
-    ModelNotFoundError, InferenceError
+from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Exceptions import (
+    InferenceError,
+    ModelDownloadError,
+    ModelNotFoundError,
+    ServerError,
+)
 from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamafileConfig
-from tldw_Server_API.app.core.Utils.Utils import download_file, verify_checksum
-from tldw_Server_API.app.core.Local_LLM import http_utils
-from tldw_Server_API.app.core.Local_LLM import handler_utils
+from tldw_Server_API.app.core.Utils.Utils import verify_checksum
 
 
 def redact_cmd_args(*args, **kwargs):
@@ -47,13 +51,24 @@ async def wait_for_http_ready(*args, **kwargs):
     """Proxy readiness poller preserving test expectations."""
     return await http_utils.wait_for_http_ready(*args, **kwargs)
 
+_LLAMAFILE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    subprocess.SubprocessError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 ########################################################################################################################
 #
 # Functions:
 
 
 class LlamafileHandler(BaseLLMHandler):
-    def __init__(self, config: LlamafileConfig, global_app_config: Dict[str, Any]):
+    def __init__(self, config: LlamafileConfig, global_app_config: dict[str, Any]):
         super().__init__(config, global_app_config)
         self.config: LlamafileConfig  # For type hinting
 
@@ -64,8 +79,8 @@ class LlamafileHandler(BaseLLMHandler):
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         # Corrected type hint for asyncio.subprocess.Process
-        self._active_servers: Dict[int, asyncio.subprocess.Process] = {}
-        self._stream_tasks: Dict[int, list[asyncio.Task]] = {}
+        self._active_servers: dict[int, asyncio.subprocess.Process] = {}
+        self._stream_tasks: dict[int, list[asyncio.Task]] = {}
 
         # Apply environment overrides
         handler_utils.apply_env_overrides(self.config)
@@ -92,7 +107,7 @@ class LlamafileHandler(BaseLLMHandler):
             except ProcessLookupError:
                 if hasattr(process, "terminate"):
                     process.terminate()
-            except Exception:
+            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                 if hasattr(process, "terminate"):
                     process.terminate()
         try:
@@ -105,13 +120,11 @@ class LlamafileHandler(BaseLLMHandler):
                 try:
                     pgid = await asyncio.to_thread(os.getpgid, process.pid)
                     await asyncio.to_thread(os.killpg, pgid, signal.SIGKILL)
-                except Exception:
+                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                     if hasattr(process, "kill"):
                         process.kill()
-            try:
+            with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                 await process.wait()
-            except Exception:
-                pass
 
     async def _drain_stream(self, stream, label: str) -> None:
         if stream is None:
@@ -123,7 +136,7 @@ class LlamafileHandler(BaseLLMHandler):
                     break
         except asyncio.CancelledError:
             return
-        except Exception:
+        except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
             # Best-effort drain; ignore errors
             return
 
@@ -175,7 +188,7 @@ class LlamafileHandler(BaseLLMHandler):
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(extracted_path), str(output_path))
 
-    def get_metrics(self) -> Dict[str, Any]:
+    def get_metrics(self) -> dict[str, Any]:
         return dict(self.metrics)
 
     def _is_port_free(self, host: str, port: int) -> bool:
@@ -192,14 +205,14 @@ class LlamafileHandler(BaseLLMHandler):
                 return candidate
         return start_port  # Fallback
 
-    def _denylist_check(self, args: Dict[str, Any]):
+    def _denylist_check(self, args: dict[str, Any]):
         try:
             handler_utils.check_denylist(
                 args,
                 allow_secrets=getattr(self.config, "allow_cli_secrets", False),
             )
         except ValueError as e:
-            raise ServerError(str(e))
+            raise ServerError(str(e)) from e
 
     def _is_path_allowed(self, p: Path) -> bool:
         """Check if path is under allowed directories."""
@@ -222,7 +235,7 @@ class LlamafileHandler(BaseLLMHandler):
         repo = "Mozilla-Ocho/llamafile"
         latest_release_url = f"https://api.github.com/repos/{repo}/releases/latest"
 
-        from tldw_Server_API.app.core.Local_LLM.http_utils import request_json, async_stream_download
+        from tldw_Server_API.app.core.Local_LLM.http_utils import async_stream_download, request_json
 
         async with create_async_client(timeout=60.0) as client:  # Increased timeout for fetching release info
             try:
@@ -342,11 +355,11 @@ class LlamafileHandler(BaseLLMHandler):
                         f"Failed to fetch llamafile release info/download: {status} - {error_text}",
                         exc_info=True,
                     )
-                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}")
+                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}") from e
                 self.logger.error(f"Unexpected error downloading llamafile: {e}", exc_info=True)
                 if output_path.exists():
                     output_path.unlink(missing_ok=True)
-                raise ModelDownloadError(f"Unexpected error downloading llamafile: {e}")
+                raise ModelDownloadError(f"Unexpected error downloading llamafile: {e}") from e
 
     # --- Model Management ---
     async def download_model_file(self, model_name: str, model_url: str, model_filename: Optional[str] = None,
@@ -392,10 +405,11 @@ class LlamafileHandler(BaseLLMHandler):
             return model_path
         except Exception as e:
             self.logger.error(f"Failed to download model {model_name}: {e}", exc_info=True)
-            if model_path.exists(): model_path.unlink(missing_ok=True)
-            raise ModelDownloadError(f"Failed to download model {model_name}: {e}")
+            if model_path.exists():
+                model_path.unlink(missing_ok=True)
+            raise ModelDownloadError(f"Failed to download model {model_name}: {e}") from e
 
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         if not self.models_dir.exists():
             return []
 
@@ -411,7 +425,7 @@ class LlamafileHandler(BaseLLMHandler):
         return (self.models_dir / model_filename).is_file()  # Check if it's a file
 
     # --- Server Management ---
-    async def start_server(self, model_filename: str, server_args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def start_server(self, model_filename: str, server_args: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         llamafile_exe = await self.download_latest_llamafile_executable()
         if not llamafile_exe or not llamafile_exe.exists():
             raise ServerError("Llamafile executable not found or could not be downloaded.")
@@ -448,7 +462,7 @@ class LlamafileHandler(BaseLLMHandler):
                     "model": model_filename}
 
         # Allowlist of supported args
-        allowed_formatters: Dict[str, Any] = {
+        allowed_formatters: dict[str, Any] = {
             "port": lambda v: ["--port", str(int(v))],
             "host": lambda v: ["--host", str(v)],
             "threads": lambda v: ["-t", str(int(v))],
@@ -500,7 +514,7 @@ class LlamafileHandler(BaseLLMHandler):
             command += ["--host", host]
 
         # Validate keys
-        invalid = [k for k in args.keys() if k not in allowed_formatters]
+        invalid = [k for k in args if k not in allowed_formatters]
         if invalid and not getattr(self.config, "allow_unvalidated_args", False):
             raise ServerError(f"Unsupported llamafile server args: {sorted(invalid)}")
 
@@ -570,7 +584,8 @@ class LlamafileHandler(BaseLLMHandler):
                         stdout_output = out_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stdout_output = "(stdout read timed out after 5s)"
-                if stdout_output: self.logger.error(f"Llamafile server stdout: {stdout_output}")
+                if stdout_output:
+                    self.logger.error(f"Llamafile server stdout: {stdout_output}")
                 await self._terminate_process(process)
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llamafile server failed to start. Stderr: {stderr_output}")
@@ -586,7 +601,7 @@ class LlamafileHandler(BaseLLMHandler):
                     "command": ' '.join(redacted_cmd)}  # Return redacted command
         except Exception as e:
             self.logger.error(f"Exception starting llamafile server for {model_filename}: {e}", exc_info=True)
-            raise ServerError(f"Exception starting llamafile: {e}")
+            raise ServerError(f"Exception starting llamafile: {e}") from e
 
     async def stop_server(self, port: Optional[int] = None, pid: Optional[int] = None) -> str:
         process_to_stop: Optional[asyncio.subprocess.Process] = None
@@ -612,11 +627,11 @@ class LlamafileHandler(BaseLLMHandler):
                 except ProcessLookupError:
                     return f"No process found with PID {pid}."
                 except subprocess.CalledProcessError as e_taskkill:
-                    self.logger.error(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
+                    self.logger.exception(f"taskkill failed for PID {pid}: {e_taskkill.stderr.decode()}")
                     return f"Failed to stop unmanaged PID {pid} with taskkill."
                 except Exception as e:
                     self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
-                    raise ServerError(f"Error stopping unmanaged PID {pid}: {e}")
+                    raise ServerError(f"Error stopping unmanaged PID {pid}: {e}") from e
         elif port:
             if port in self._active_servers:
                 process_to_stop = self._active_servers[port]
@@ -672,7 +687,7 @@ class LlamafileHandler(BaseLLMHandler):
                             except ProcessLookupError:
                                 self.logger.warning(
                                     f"Process {current_pid} already exited when attempting SIGKILL fallback.")
-                            except Exception as e_killpid:
+                            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e_killpid:
                                 self.logger.debug(
                                     f"os.kill fallback failed for PID {current_pid}: {e_killpid}; "
                                     f"checking for process.kill() availability"
@@ -683,7 +698,7 @@ class LlamafileHandler(BaseLLMHandler):
                                         self.logger.info(
                                             f"Invoked process.kill() for PID {current_pid} (final fallback)."
                                         )
-                                    except Exception as e_pkill:
+                                    except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e_pkill:
                                         self.logger.warning(
                                             f"process.kill() failed for PID {current_pid}: {e_pkill}")
 
@@ -703,7 +718,7 @@ class LlamafileHandler(BaseLLMHandler):
             if port_to_clear and port_to_clear in self._active_servers:
                 self._stop_stream_drainers(port_to_clear)
                 del self._active_servers[port_to_clear]
-            raise ServerError(f"Error stopping llamafile server: {e}")
+            raise ServerError(f"Error stopping llamafile server: {e}") from e
 
     async def inference(self,
                         prompt: str,
@@ -715,7 +730,7 @@ class LlamafileHandler(BaseLLMHandler):
                         top_k: int = 40,
                         top_p: float = 0.95,
                         api_key: Optional[str] = None,
-                        **kwargs) -> Dict[str, Any]:
+                        **kwargs) -> dict[str, Any]:
         if port is None:
             port = self.config.default_port
         if port is None:
@@ -735,22 +750,24 @@ class LlamafileHandler(BaseLLMHandler):
                 conn_made = True
                 self.logger.debug(f"Successfully connected to {client_host}:{port}. Assuming external server.")
             except ConnectionRefusedError:
-                self.logger.error(
+                self.logger.exception(
                     f"No managed llamafile server on port {port} (or it terminated), and connection refused to {client_host}:{port}.")
-                raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.")
+                raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.") from None
             except Exception as e:
                 self.logger.error(f"Error checking connection to {client_host}:{port}: {e}", exc_info=True)
-                raise ServerError(f"Error connecting to Llamafile server at {client_host}:{port}: {e}")
+                raise ServerError(f"Error connecting to Llamafile server at {client_host}:{port}: {e}") from e
             if not conn_made:
                 raise ServerError(f"Llamafile server not found/responding on {client_host}:{port} (conn test failed).")
         else:
             self.logger.debug(f"Using managed llamafile server on port {port}.")
 
         headers = {"Content-Type": "application/json"}
-        if api_key: headers["Authorization"] = f"Bearer {api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         messages = []
-        if system_prompt: messages.append({"role": "system", "content": system_prompt})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         timeout = kwargs.pop("timeout", None)
@@ -781,15 +798,15 @@ class LlamafileHandler(BaseLLMHandler):
                         f"Llamafile API error ({status}) from {api_url}: {error_text}",
                         exc_info=True
                     )
-                    raise InferenceError(f"Llamafile API error ({status}): {error_text}")
+                    raise InferenceError(f"Llamafile API error ({status}): {error_text}") from e
                 if http_utils.is_network_error(e):
                     self.logger.error(
                         f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
                         exc_info=True
                     )
-                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
+                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}") from e
                 self.logger.error(f"Unexpected error during llamafile inference to {api_url}: {e}", exc_info=True)
-                raise InferenceError(f"Unexpected error during llamafile inference: {e}")
+                raise InferenceError(f"Unexpected error during llamafile inference: {e}") from e
 
     def _cleanup_all_managed_servers_sync(self):
         """Synchronous cleanup for signal handlers or app shutdown.
@@ -834,25 +851,21 @@ class LlamafileHandler(BaseLLMHandler):
 
                 except ProcessLookupError:
                     self._safe_log("warning", f"Process {pid} not found during termination, likely already exited.")
-                except Exception as e:
+                except _LLAMAFILE_NONCRITICAL_EXCEPTIONS as e:
                     self._safe_log("error", f"Error during cleanup of PID {pid}: {e}. Attempting kill.")
                     if proc.returncode is None:
                         if platform.system() == "Windows":
                             if hasattr(proc, "kill"):
-                                try:
+                                with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                                     proc.kill()
-                                except Exception:
-                                    pass
                         else:
                             try:
                                 pgid = os.getpgid(pid)
                                 os.killpg(pgid, signal.SIGKILL)
-                            except Exception:
+                            except _LLAMAFILE_NONCRITICAL_EXCEPTIONS:
                                 if hasattr(proc, "kill"):
-                                    try:
+                                    with contextlib.suppress(_LLAMAFILE_NONCRITICAL_EXCEPTIONS):
                                         proc.kill()
-                                    except Exception:
-                                        pass
             if port in self._active_servers:
                 self._stop_stream_drainers(port)
                 del self._active_servers[port]

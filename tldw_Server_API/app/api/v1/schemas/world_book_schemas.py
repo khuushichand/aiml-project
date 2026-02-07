@@ -9,20 +9,25 @@ API endpoints, ensuring proper validation and serialization.
 """
 
 from datetime import datetime
-from typing import Dict, List, Optional, Any
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from typing import Any, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorldBookEntryBase(BaseModel):
     """Base schema for world book entries."""
-    keywords: List[str] = Field(..., min_length=1, description="Keywords to match")
+    keywords: list[str] = Field(..., min_length=1, description="Keywords to match")
     content: str = Field(..., min_length=1, description="Content to inject when matched")
+    appendable: Optional[bool] = Field(
+        None,
+        description="Whether this entry can be concatenated with other appendable blocks",
+    )
     priority: int = Field(0, description="Priority for ordering (higher = more important)")
     enabled: bool = Field(True, description="Whether entry is active")
     case_sensitive: bool = Field(False, description="Whether keyword matching is case-sensitive")
     regex_match: bool = Field(False, description="Whether keywords are regex patterns")
     whole_word_match: bool = Field(True, description="Whether to match whole words only")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
+    metadata: Optional[dict[str, Any]] = Field(default_factory=dict, description="Additional metadata")
 
 
 class WorldBookEntryCreate(WorldBookEntryBase):
@@ -32,14 +37,15 @@ class WorldBookEntryCreate(WorldBookEntryBase):
 
 class WorldBookEntryUpdate(BaseModel):
     """Schema for updating a world book entry."""
-    keywords: Optional[List[str]] = Field(None, description="New keywords")
+    keywords: Optional[list[str]] = Field(None, description="New keywords")
     content: Optional[str] = Field(None, description="New content (empty string allowed; validated server-side)")
+    appendable: Optional[bool] = Field(None, description="New appendable flag")
     priority: Optional[int] = Field(None, description="New priority")
     enabled: Optional[bool] = Field(None, description="New enabled status")
     case_sensitive: Optional[bool] = Field(None, description="New case sensitivity")
     regex_match: Optional[bool] = Field(None, description="New regex match setting")
     whole_word_match: Optional[bool] = Field(None, description="New whole word match setting")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="New metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="New metadata")
 
 
 class WorldBookEntryResponse(WorldBookEntryBase):
@@ -95,7 +101,7 @@ class WorldBookResponse(WorldBookBase):
 
 class WorldBookWithEntries(WorldBookResponse):
     """Schema for world book with its entries."""
-    entries: List[WorldBookEntryResponse] = Field(default_factory=list, description="World book entries")
+    entries: list[WorldBookEntryResponse] = Field(default_factory=list, description="World book entries")
 
 
 class CharacterWorldBookAttachment(BaseModel):
@@ -115,11 +121,24 @@ class CharacterWorldBookResponse(WorldBookResponse):
 class ProcessContextRequest(BaseModel):
     """Request schema for processing text with world info."""
     text: str = Field(..., description="Text to scan for keywords")
-    world_book_ids: Optional[List[int]] = Field(None, description="Specific world books to use")
+    world_book_ids: Optional[list[int]] = Field(None, description="Specific world books to use")
     character_id: Optional[int] = Field(None, description="Character whose world books to use")
     scan_depth: int = Field(3, ge=1, le=20, description="Override for scan depth")
     token_budget: int = Field(500, ge=50, le=5000, description="Maximum tokens to inject")
     recursive_scanning: bool = Field(False, description="Enable recursive scanning")
+
+
+class ProcessContextDiagnostic(BaseModel):
+    """Per-entry diagnostics for world book context processing."""
+    entry_id: Optional[int] = Field(None, description="Matched entry ID")
+    world_book_id: Optional[int] = Field(None, description="Parent world book ID")
+    activation_reason: str = Field(..., description="Activation reason: keyword_match, regex_match, or depth")
+    keyword: Optional[str] = Field(None, description="Keyword or regex pattern that matched when available")
+    token_cost: int = Field(..., description="Estimated token cost for this entry")
+    priority: int = Field(..., description="Entry priority")
+    regex_match: bool = Field(..., description="Whether this entry uses regex matching")
+    content_preview: str = Field(..., description="Preview of matched entry content")
+    depth_level: Optional[int] = Field(None, description="Recursive depth level for depth-triggered matches")
 
 
 class ProcessContextResponse(BaseModel):
@@ -128,12 +147,28 @@ class ProcessContextResponse(BaseModel):
     entries_matched: int = Field(..., description="Number of entries that matched")
     tokens_used: int = Field(..., description="Estimated tokens used")
     books_used: int = Field(..., description="Number of world books that had matches")
-    entry_ids: List[int] = Field(..., description="IDs of matched entries")
+    entry_ids: list[int] = Field(..., description="IDs of matched entries")
+    token_budget: Optional[int] = Field(
+        None,
+        description="Token budget used for this processing call",
+    )
+    budget_exhausted: Optional[bool] = Field(
+        None,
+        description="Whether token budget was fully consumed during matching",
+    )
+    skipped_entries_due_to_budget: Optional[int] = Field(
+        None,
+        description="Number of matched entries skipped due to token budget",
+    )
+    diagnostics: list[ProcessContextDiagnostic] = Field(
+        default_factory=list,
+        description="Matched entry diagnostics for debugging",
+    )
 
 
 class WorldBookListResponse(BaseModel):
     """Response schema for listing world books."""
-    world_books: List[WorldBookResponse] = Field(..., description="List of world books")
+    world_books: list[WorldBookResponse] = Field(..., description="List of world books")
     total: int = Field(..., description="Total number of world books")
     enabled_count: int = Field(..., description="Number of enabled world books")
     disabled_count: int = Field(..., description="Number of disabled world books")
@@ -141,23 +176,23 @@ class WorldBookListResponse(BaseModel):
 
 class EntryListResponse(BaseModel):
     """Response schema for listing entries."""
-    entries: List[WorldBookEntryResponse] = Field(..., description="List of entries")
+    entries: list[WorldBookEntryResponse] = Field(..., description="List of entries")
     total: int = Field(..., description="Total number of entries")
     world_book_id: Optional[int] = Field(None, description="World book ID if filtered")
 
 
 class WorldBookExport(BaseModel):
     """Schema for world book export."""
-    world_book: Dict[str, Any] = Field(..., description="World book data")
-    entries: List[Dict[str, Any]] = Field(..., description="World book entries")
+    world_book: dict[str, Any] = Field(..., description="World book data")
+    entries: list[dict[str, Any]] = Field(..., description="World book entries")
     export_date: datetime = Field(default_factory=datetime.now, description="Export timestamp")
     format_version: str = Field("1.0", description="Export format version")
 
 
 class WorldBookImportRequest(BaseModel):
     """Request schema for importing a world book."""
-    world_book: Dict[str, Any] = Field(..., description="World book data")
-    entries: List[Dict[str, Any]] = Field(default_factory=list, description="World book entries")
+    world_book: dict[str, Any] = Field(..., description="World book data")
+    entries: list[dict[str, Any]] = Field(default_factory=list, description="World book entries")
     merge_on_conflict: bool = Field(False, description="Merge with existing book of same name")
 
 
@@ -186,7 +221,7 @@ class WorldBookStatistics(BaseModel):
 
 class BulkEntryOperation(BaseModel):
     """Schema for bulk entry operations."""
-    entry_ids: List[int] = Field(..., min_length=1, description="List of entry IDs")
+    entry_ids: list[int] = Field(..., min_length=1, description="List of entry IDs")
     operation: str = Field(..., pattern="^(enable|disable|delete|set_priority)$", description="Operation to perform")
     priority: Optional[int] = Field(None, description="New priority (for set_priority operation)")
 
@@ -195,7 +230,7 @@ class BulkOperationResponse(BaseModel):
     """Response schema for bulk operations."""
     success: bool = Field(..., description="Whether operation succeeded")
     affected_count: int = Field(..., description="Number of entries affected")
-    failed_ids: List[int] = Field(default_factory=list, description="IDs that failed")
+    failed_ids: list[int] = Field(default_factory=list, description="IDs that failed")
     message: str = Field(..., description="Operation result message")
 
 
@@ -204,7 +239,7 @@ class WorldBookError(BaseModel):
     """Error response for world book operations."""
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: Optional[dict[str, Any]] = Field(None, description="Additional error details")
 
 
 class WorldBookConflictError(WorldBookError):

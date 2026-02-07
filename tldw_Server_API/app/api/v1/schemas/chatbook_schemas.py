@@ -9,11 +9,10 @@ Pydantic models for chatbook creation, import, export, and preview operations.
 """
 
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Literal, Union
-from pydantic import BaseModel, Field, field_validator
-from pydantic import ConfigDict
 from enum import Enum
+from typing import Any, Literal, Optional, Union
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Enums
 
@@ -93,7 +92,7 @@ class CreateChatbookRequest(BaseModel):
         max_length=5000,
         description="Description of the chatbook"
     )
-    content_selections: Dict[ContentType, List[str]] = Field(
+    content_selections: dict[ContentType, list[str]] = Field(
         ...,
         description="Content to include by type and IDs"
     )
@@ -109,8 +108,8 @@ class CreateChatbookRequest(BaseModel):
     )
     include_embeddings: bool = Field(False, description="Include embeddings")
     include_generated_content: bool = Field(True, description="Include generated documents")
-    tags: List[str] = Field(default_factory=list, max_length=50, description="Chatbook tags")
-    categories: List[str] = Field(default_factory=list, max_length=20, description="Chatbook categories")
+    tags: list[str] = Field(default_factory=list, max_length=50, description="Chatbook tags")
+    categories: list[str] = Field(default_factory=list, max_length=20, description="Chatbook categories")
     async_mode: bool = Field(False, description="Run as background job")
 
     @field_validator('tags', 'categories', mode='before')
@@ -148,7 +147,7 @@ class CreateChatbookRequest(BaseModel):
 
 class ImportChatbookRequest(BaseModel):
     """Request for importing a chatbook."""
-    content_selections: Optional[Dict[ContentType, List[str]]] = Field(
+    content_selections: Optional[dict[ContentType, list[str]]] = Field(
         None,
         description="Specific content to import, or None for all"
     )
@@ -185,8 +184,8 @@ class ContentItemResponse(BaseModel):
     description: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    tags: List[str] = Field(default_factory=list, max_length=50)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list, max_length=50)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     file_path: Optional[str] = None
     checksum: Optional[str] = None
 
@@ -202,7 +201,7 @@ class ChatbookManifestResponse(BaseModel):
     export_id: Optional[str] = None
 
     # Content summary
-    content_items: List[ContentItemResponse] = Field(default_factory=list)
+    content_items: list[ContentItemResponse] = Field(default_factory=list)
 
     # Configuration
     include_media: bool = False
@@ -225,12 +224,12 @@ class ChatbookManifestResponse(BaseModel):
     total_size_bytes: int = 0
 
     # Metadata
-    tags: List[str] = Field(default_factory=list)
-    categories: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    categories: list[str] = Field(default_factory=list)
     language: str = "en"
     license: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    truncation: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    truncation: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExportJobResponse(BaseModel):
@@ -266,8 +265,8 @@ class ImportJobResponse(BaseModel):
     successful_items: int = Field(default=0, ge=0)
     failed_items: int = Field(default=0, ge=0)
     skipped_items: int = Field(default=0, ge=0)
-    conflicts: List[Dict[str, Any]] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ImportConflictResponse(BaseModel):
@@ -296,11 +295,11 @@ class ImportChatbookResponse(BaseModel):
     success: bool
     message: str
     job_id: Optional[str] = Field(None, description="Job ID if async mode")
-    imported_items: Optional[Dict[str, int]] = Field(
+    imported_items: Optional[dict[str, int]] = Field(
         None,
         description="Count of imported items by type"
     )
-    warnings: Optional[List[str]] = Field(
+    warnings: Optional[list[str]] = Field(
         None,
         description="Validator and import warnings (sync imports only)"
     )
@@ -314,13 +313,13 @@ class PreviewChatbookResponse(BaseModel):
 
 class ListExportJobsResponse(BaseModel):
     """Response for listing export jobs."""
-    jobs: List[ExportJobResponse]
+    jobs: list[ExportJobResponse]
     total: int
 
 
 class ListImportJobsResponse(BaseModel):
     """Response for listing import jobs."""
-    jobs: List[ImportJobResponse]
+    jobs: list[ImportJobResponse]
     total: int
 
 
@@ -388,4 +387,4 @@ class ChatbookErrorResponse(BaseModel):
     detail: str
     error_type: str
     job_id: Optional[str] = None
-    suggestions: List[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)

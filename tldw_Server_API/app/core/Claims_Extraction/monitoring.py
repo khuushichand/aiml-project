@@ -2,14 +2,32 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
 import threading
 import time
-from typing import Optional, Dict, Any, Tuple
+from dataclasses import dataclass
 
+_CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 _CLAIMS_METRICS_REGISTERED = False
-_CLAIMS_PROVIDER_STATS: Dict[Tuple[str, str], "ClaimsProviderStats"] = {}
+_CLAIMS_PROVIDER_STATS: dict[tuple[str, str], ClaimsProviderStats] = {}
 _CLAIMS_PROVIDER_STATS_LOCK = threading.Lock()
 
 
@@ -17,9 +35,9 @@ _CLAIMS_PROVIDER_STATS_LOCK = threading.Lock()
 class ClaimsProviderStats:
     requests: int = 0
     errors: int = 0
-    latency_ewma_ms: Optional[float] = None
-    cost_ewma_usd: Optional[float] = None
-    last_error_ts: Optional[float] = None
+    latency_ewma_ms: float | None = None
+    cost_ewma_usd: float | None = None
+    last_error_ts: float | None = None
 
     def error_rate(self) -> float:
         if self.requests <= 0:
@@ -31,7 +49,7 @@ def _claims_monitoring_enabled() -> bool:
     """Return True when claims monitoring is enabled in settings."""
     try:
         from tldw_Server_API.app.core.config import settings
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return True
     return bool(settings.get("CLAIMS_MONITORING_ENABLED", False))
 
@@ -43,11 +61,11 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 4))
 
 
-def estimate_claims_cost(*, provider: str, model: str, text: str) -> Optional[float]:
+def estimate_claims_cost(*, provider: str, model: str, text: str) -> float | None:
     """Estimate provider cost using configured multipliers and a token heuristic."""
     try:
         from tldw_Server_API.app.core.config import settings
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return None
     multipliers = settings.get("CLAIMS_PROVIDER_COST_MULTIPLIERS") or {}
     if not isinstance(multipliers, dict):
@@ -70,7 +88,7 @@ def estimate_claims_cost(*, provider: str, model: str, text: str) -> Optional[fl
         return None
     try:
         multiplier_val = float(multiplier)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return None
     tokens = _estimate_tokens(text)
     if tokens <= 0:
@@ -84,11 +102,11 @@ def _register_claims_metrics() -> None:
         return
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import (
-            get_metrics_registry,
             MetricDefinition,
             MetricType,
+            get_metrics_registry,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
 
     reg = get_metrics_registry()
@@ -332,14 +350,14 @@ def record_postcheck_metrics(total_claims: int, unsupported_claims: int) -> None
         return
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     try:
         if total_claims > 0:
             increment_counter("rag_total_claims_checked_total", total_claims)
         if unsupported_claims > 0:
             increment_counter("rag_unsupported_claims_total", unsupported_claims)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -348,9 +366,9 @@ def record_claims_provider_request(
     provider: str,
     model: str,
     mode: str,
-    latency_s: Optional[float] = None,
-    error: Optional[str] = None,
-    estimated_cost: Optional[float] = None,
+    latency_s: float | None = None,
+    error: str | None = None,
+    estimated_cost: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -360,7 +378,7 @@ def record_claims_provider_request(
             increment_counter,
             observe_histogram,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     labels = {
         "provider": str(provider),
@@ -410,7 +428,7 @@ def record_claims_budget_exhausted(
     _register_claims_metrics()
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_provider_budget_exhausted_total",
@@ -436,7 +454,7 @@ def record_claims_throttle(
     _register_claims_metrics()
     try:
         from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_provider_throttled_total",
@@ -454,9 +472,9 @@ def _update_claims_provider_stats(
     *,
     provider: str,
     model: str,
-    latency_s: Optional[float],
-    error: Optional[str],
-    estimated_cost: Optional[float],
+    latency_s: float | None,
+    error: str | None,
+    estimated_cost: float | None,
 ) -> None:
     key = (str(provider or ""), str(model or ""))
     with _CLAIMS_PROVIDER_STATS_LOCK:
@@ -501,11 +519,11 @@ def should_throttle_claims_provider(
     *,
     provider: str,
     model: str,
-    budget_ratio: Optional[float] = None,
-) -> Tuple[bool, Optional[str]]:
+    budget_ratio: float | None = None,
+) -> tuple[bool, str | None]:
     try:
         from tldw_Server_API.app.core.config import settings
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         settings = {}
     if not bool(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ENABLED", False)):
         return False, None
@@ -513,15 +531,15 @@ def should_throttle_claims_provider(
     stats = get_claims_provider_stats(provider, model)
     try:
         latency_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         latency_threshold = 0.0
     try:
         error_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         error_threshold = 0.0
     try:
         budget_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         budget_threshold = 0.0
 
     if latency_threshold > 0 and stats.latency_ewma_ms is not None and stats.latency_ewma_ms > latency_threshold:
@@ -538,11 +556,11 @@ def suggest_claims_concurrency(
     provider: str,
     model: str,
     requested: int,
-    budget_ratio: Optional[float] = None,
+    budget_ratio: float | None = None,
 ) -> int:
     try:
         from tldw_Server_API.app.core.config import settings
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         settings = {}
     if not bool(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ENABLED", False)):
         return requested
@@ -551,15 +569,15 @@ def suggest_claims_concurrency(
     target = int(requested)
     try:
         latency_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_LATENCY_MS", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         latency_threshold = 0.0
     try:
         error_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_ERROR_RATE", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         error_threshold = 0.0
     try:
         budget_threshold = float(settings.get("CLAIMS_ADAPTIVE_THROTTLE_BUDGET_RATIO", 0) or 0)
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         budget_threshold = 0.0
 
     if latency_threshold > 0 and stats.latency_ewma_ms is not None and stats.latency_ewma_ms > latency_threshold:
@@ -573,11 +591,11 @@ def suggest_claims_concurrency(
 
 def record_claims_rebuild_metrics(
     *,
-    queue_size: Optional[int] = None,
-    processed: Optional[int] = None,
-    failed: Optional[int] = None,
-    duration_s: Optional[float] = None,
-    heartbeat_ts: Optional[float] = None,
+    queue_size: int | None = None,
+    processed: int | None = None,
+    failed: int | None = None,
+    duration_s: float | None = None,
+    heartbeat_ts: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -588,7 +606,7 @@ def record_claims_rebuild_metrics(
             observe_histogram,
             set_gauge,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     if queue_size is not None:
         set_gauge("claims_rebuild_queue_size", float(queue_size))
@@ -604,9 +622,9 @@ def record_claims_rebuild_metrics(
 
 def record_claims_review_metrics(
     *,
-    queue_size: Optional[int] = None,
-    processed: Optional[int] = None,
-    latency_s: Optional[float] = None,
+    queue_size: int | None = None,
+    processed: int | None = None,
+    latency_s: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -617,7 +635,7 @@ def record_claims_review_metrics(
             observe_histogram,
             set_gauge,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     if queue_size is not None:
         set_gauge("claims_review_queue_size", float(queue_size))
@@ -630,8 +648,8 @@ def record_claims_review_metrics(
 def record_claims_webhook_delivery(
     *,
     status: str,
-    reason: Optional[str] = None,
-    latency_s: Optional[float] = None,
+    reason: str | None = None,
+    latency_s: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -641,7 +659,7 @@ def record_claims_webhook_delivery(
             increment_counter,
             observe_histogram,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_alert_webhook_delivered_total",
@@ -665,8 +683,8 @@ def record_claims_webhook_delivery(
 def record_claims_alert_email_delivery(
     *,
     status: str,
-    reason: Optional[str] = None,
-    latency_s: Optional[float] = None,
+    reason: str | None = None,
+    latency_s: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -676,7 +694,7 @@ def record_claims_alert_email_delivery(
             increment_counter,
             observe_histogram,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_alert_email_delivered_total",
@@ -700,8 +718,8 @@ def record_claims_alert_email_delivery(
 def record_claims_review_webhook_delivery(
     *,
     status: str,
-    reason: Optional[str] = None,
-    latency_s: Optional[float] = None,
+    reason: str | None = None,
+    latency_s: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -711,7 +729,7 @@ def record_claims_review_webhook_delivery(
             increment_counter,
             observe_histogram,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_review_webhook_delivered_total",
@@ -735,8 +753,8 @@ def record_claims_review_webhook_delivery(
 def record_claims_review_email_delivery(
     *,
     status: str,
-    reason: Optional[str] = None,
-    latency_s: Optional[float] = None,
+    reason: str | None = None,
+    latency_s: float | None = None,
 ) -> None:
     if not _claims_monitoring_enabled():
         return
@@ -746,7 +764,7 @@ def record_claims_review_email_delivery(
             increment_counter,
             observe_histogram,
         )
-    except Exception:
+    except _CLAIMS_MONITORING_NONCRITICAL_EXCEPTIONS:
         return
     increment_counter(
         "claims_review_email_delivered_total",

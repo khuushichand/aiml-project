@@ -5,12 +5,11 @@ This module contains functions for managing character templates.
 """
 
 import copy
-from typing import Dict, List, Optional, Any
+from typing import Any, Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
-
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 # Default character templates
 CHARACTER_TEMPLATES = {
@@ -57,7 +56,7 @@ CHARACTER_TEMPLATES = {
 }
 
 
-def get_character_template(template_name: str) -> Optional[Dict[str, Any]]:
+def get_character_template(template_name: str) -> Optional[dict[str, Any]]:
     """Get a character template by name.
 
     Args:
@@ -75,7 +74,7 @@ def get_character_template(template_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def list_character_templates() -> List[str]:
+def list_character_templates() -> list[str]:
     """List all available character template names.
 
     Returns:

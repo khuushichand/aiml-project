@@ -6,16 +6,18 @@ Uses the project's AuthNZ roles/permissions tables instead of in-memory roles.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+import contextlib
 from functools import lru_cache
+
 from loguru import logger
 
-from .rbac import Resource, Action
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, DatabasePool
+from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
+
+from .rbac import Action, Resource
 
 
 @lru_cache(maxsize=256)
-def _map_to_permission(resource: Resource, action: Action, resource_id: Optional[str] = None) -> Optional[str]:
+def _map_to_permission(resource: Resource, action: Action, resource_id: str | None = None) -> str | None:
     """Map MCP Resource/Action to AuthNZ permission code.
 
     Returns a dotted permission string matching AuthNZ.permissions.name or None if unmapped.
@@ -70,7 +72,7 @@ def _map_to_permission(resource: Resource, action: Action, resource_id: Optional
 class AuthNZRBAC:
     """RBAC checker that consults AuthNZ DB (roles, permissions, overrides)."""
 
-    def __init__(self, db_pool: Optional[DatabasePool] = None):
+    def __init__(self, db_pool: DatabasePool | None = None):
         self._pool = db_pool
 
     async def _get_pool(self) -> DatabasePool:
@@ -81,10 +83,10 @@ class AuthNZRBAC:
 
     async def check_permission(
         self,
-        user_id: Optional[str],
+        user_id: str | None,
         resource: Resource,
         action: Action,
-        resource_id: Optional[str] = None,
+        resource_id: str | None = None,
     ) -> bool:
         if not user_id:
             return False
@@ -113,10 +115,6 @@ class AuthNZRBAC:
             )
             if is_admin is not None:
                 return True
-
-            # Ensure dynamic tool permission exists when applicable
-            if resource == Resource.TOOL and action == Action.EXECUTE and resource_id:
-                await self._ensure_permission_exists(perm, description=f"Execute tool {resource_id}", category='tools')
 
             # Explicit user permission overrides
             row = await pool.fetchone(
@@ -192,7 +190,7 @@ class AuthNZRBAC:
             logger.debug(f"Ensure permission exists failed for {name}: {e}")
 
 
-_authnz_rbac: Optional[AuthNZRBAC] = None
+_authnz_rbac: AuthNZRBAC | None = None
 
 
 def get_rbac_policy() -> AuthNZRBAC:
@@ -206,7 +204,5 @@ def reset_rbac_policy() -> None:
     """Reset cached RBAC policy (used in tests when DB/config changes)."""
     global _authnz_rbac
     _authnz_rbac = None
-    try:
+    with contextlib.suppress(Exception):
         _map_to_permission.cache_clear()
-    except Exception:
-        pass

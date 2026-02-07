@@ -2,15 +2,13 @@
 Testing and development commands for tldw Evaluations CLI.
 """
 
+import contextlib
 import sys
-from typing import Dict, Any
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_table, print_json
-)
+from tldw_Server_API.cli.utils.output import print_error, print_info, print_success, print_table
 
 
 @click.group()
@@ -52,7 +50,7 @@ def test_connection(ctx):
 @click.pass_context
 def test_providers(ctx, provider, test_all):
     """Test LLM provider connections."""
-    cli_context = ctx.obj['cli_context']
+    ctx.obj['cli_context']
 
     providers_to_test = []
     if provider:
@@ -112,16 +110,18 @@ def test_audit(ctx):
 
     try:
         cli_context.load_config()
-        from tldw_Server_API.app.core.Audit.unified_audit_service import UnifiedAuditService, AuditEventType, AuditContext
+        from tldw_Server_API.app.core.Audit.unified_audit_service import (
+            AuditContext,
+            AuditEventType,
+            UnifiedAuditService,
+        )
         svc = UnifiedAuditService()
         import asyncio as _asyncio
         if getattr(svc, "initialize", None):
-            try:
+            with contextlib.suppress(RuntimeError):
                 _asyncio.run(svc.initialize())
-            except RuntimeError:
-                pass
         # Log a test event to unified audit
-        try:
+        with contextlib.suppress(RuntimeError):
             _asyncio.run(
                 svc.log_event(
                     event_type=AuditEventType.SYSTEM_START,
@@ -130,8 +130,6 @@ def test_audit(ctx):
                     metadata={"test": True},
                 )
             )
-        except RuntimeError:
-            pass
 
         print_success("Audit logging test successful")
 
@@ -155,6 +153,7 @@ def benchmark(ctx, duration, concurrent):
 
         # Simple benchmark - database operations
         import time
+
         from tldw_Server_API.app.core.Evaluations.connection_pool import get_connection
 
         start_time = time.time()

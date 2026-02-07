@@ -196,6 +196,29 @@ class TestDatabaseBackends:
         assert result is None
         conn.close()
 
+    def test_sqlite_backend_nested_transaction_does_not_commit_outer(self, sqlite_config):
+        """Nested transactions should not commit the outer transaction."""
+        backend = SQLiteBackend(sqlite_config)
+
+        # Create table outside transaction so we only test row rollback behavior.
+        conn = backend.connect()
+        conn.execute("CREATE TABLE nested_txn_test (id INTEGER PRIMARY KEY, value TEXT)")
+        conn.close()
+
+        with pytest.raises(RuntimeError):
+            with backend.transaction() as conn:
+                conn.execute("INSERT INTO nested_txn_test (value) VALUES ('outer')")
+                with backend.transaction() as inner_conn:
+                    inner_conn.execute("INSERT INTO nested_txn_test (value) VALUES ('inner')")
+                raise RuntimeError("boom")
+
+        conn = backend.connect()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM nested_txn_test")
+        count = cursor.fetchone()[0]
+        conn.close()
+        assert count == 0
+
 
 class TestPostgreSQLBackend:
     """Tests for PostgreSQL backend (requires PostgreSQL server)."""

@@ -49,7 +49,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
       open={open}
       onCancel={handleCancel}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       {!isOnline ? (
         <Empty

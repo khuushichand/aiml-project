@@ -2,12 +2,11 @@
 # Description: Database operations for user management in multi-user mode
 #
 # Imports
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-import hashlib
-import uuid
-import sqlite3
 import asyncio
+import sqlite3
+import uuid
+from datetime import datetime
+from typing import Any, Optional
 
 # Guarded optional imports for async drivers. Users_DB relies on the
 # unified DatabasePool abstraction and should not hard-depend on these
@@ -17,33 +16,56 @@ try:  # pragma: no cover - presence depends on environment
     _ASYNC_PG_AVAILABLE = True
     try:
         _PG_UniqueViolationError = asyncpg.exceptions.UniqueViolationError  # type: ignore[attr-defined]
-    except Exception:  # pragma: no cover
-        class _PG_UniqueViolationError(Exception):  # type: ignore
+    except AttributeError:  # pragma: no cover
+        class _PG_UniqueViolationError(Exception):  # type: ignore  # noqa: N801
             pass
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     _ASYNC_PG_AVAILABLE = False
-    class _PG_UniqueViolationError(Exception):  # type: ignore
+    class _PG_UniqueViolationError(Exception):  # type: ignore  # noqa: N801
         pass
 
 try:  # pragma: no cover - optional in SQLite-only deployments
     import aiosqlite  # type: ignore
     _AIOSQLITE_AVAILABLE = True
     # Provide a safe alias for IntegrityError so except clauses don't NameError
-    _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+    _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]  # noqa: N801
+except ImportError:  # pragma: no cover
     _AIOSQLITE_AVAILABLE = False
     # Fallback placeholder so tuple excepts remain valid even when aiosqlite is absent
-    class _AIOSQLITE_IntegrityError(Exception):  # type: ignore
+    class _AIOSQLITE_IntegrityError(Exception):  # type: ignore  # noqa: N801
         pass
 #
 # 3rd-party imports
+import contextlib
+
 from loguru import logger
+
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+_USERS_DB_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    DatabaseError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    sqlite3.Error,
+)
 
 #######################################################################################################################
 #
@@ -106,11 +128,11 @@ class UsersDB:
                         # Prefer pgcrypto (gen_random_uuid); gracefully fall back to uuid-ossp if unavailable.
                         try:
                             await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-                        except Exception as ext_err:  # pragma: no cover - env dependent
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS as ext_err:  # pragma: no cover - env dependent
                             logger.warning(f"pgcrypto extension not available: {ext_err}. Trying uuid-ossp as fallback.")
                             try:
                                 await conn.execute("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-                            except Exception as ext2_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as ext2_err:
                                 logger.warning(
                                     f"uuid-ossp extension also unavailable: {ext2_err}. Proceeding without extension; "
                                     "UUID defaults may be set separately if functions exist."
@@ -151,10 +173,10 @@ class UsersDB:
                         # Populate missing UUIDs using available function
                         try:
                             await conn.execute("UPDATE users SET uuid = gen_random_uuid() WHERE uuid IS NULL")
-                        except Exception:
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                             try:
                                 await conn.execute("UPDATE users SET uuid = uuid_generate_v4() WHERE uuid IS NULL")
-                            except Exception as uuid_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as uuid_err:
                                 logger.warning(
                                     "Unable to populate UUIDs with gen_random_uuid or uuid_generate_v4: "
                                     f"{uuid_err}"
@@ -162,12 +184,12 @@ class UsersDB:
                         await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET NOT NULL")
                         try:
                             await conn.execute("ALTER TABLE users ALTER COLUMN uuid SET DEFAULT gen_random_uuid()")
-                        except Exception:
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                             try:
                                 await conn.execute(
                                     "ALTER TABLE users ALTER COLUMN uuid SET DEFAULT uuid_generate_v4()"
                                 )
-                            except Exception as def_err:
+                            except _USERS_DB_NONCRITICAL_EXCEPTIONS as def_err:
                                 logger.warning(f"Could not set UUID default via pgcrypto/uuid-ossp: {def_err}")
 
                     else:
@@ -203,7 +225,7 @@ class UsersDB:
                         if "metadata" not in columns:
                             await conn.execute("ALTER TABLE users ADD COLUMN metadata TEXT")
                         if "uuid" not in columns:
-                            await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT UNIQUE")
+                            await conn.execute("ALTER TABLE users ADD COLUMN uuid TEXT")
                         if "storage_quota_mb" not in columns:
                             await conn.execute("ALTER TABLE users ADD COLUMN storage_quota_mb INTEGER DEFAULT 5120")
                         if "storage_used_mb" not in columns:
@@ -211,20 +233,26 @@ class UsersDB:
                         await conn.execute(
                             "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
                         )
+                        try:
+                            await conn.execute(
+                                "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
+                            )
+                        except _USERS_DB_NONCRITICAL_EXCEPTIONS as idx_err:
+                            logger.warning(f"Could not create unique index on users.uuid: {idx_err}")
 
                         await conn.commit()
 
                     logger.debug("Users table and indexes created/verified")
                 return
-            except Exception as e:
+            except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
                 if attempt < attempts - 1 and "locked" in str(e).lower():
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 1.0)
                     continue
                 logger.error(f"Failed to create users table: {e}")
-                raise DatabaseError(f"Failed to create users table: {e}")
+                raise DatabaseError(f"Failed to create users table: {e}") from e
 
-    async def get_user_by_id(self, user_id: int) -> Optional[Dict[str, Any]]:
+    async def get_user_by_id(self, user_id: int) -> Optional[dict[str, Any]]:
         """
         Get user by ID
 
@@ -263,11 +291,11 @@ class UsersDB:
 
         except UserNotFoundError:
             raise
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by ID {user_id}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
-    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_username(self, username: str) -> Optional[dict[str, Any]]:
         """
         Get user by username
 
@@ -301,11 +329,11 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by username {username}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
-    async def get_user_by_uuid(self, user_uuid: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_uuid(self, user_uuid: str) -> Optional[dict[str, Any]]:
         """
         Get user by UUID (textual identifier) when available.
 
@@ -340,11 +368,11 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by uuid {user_uuid}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
-    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+    async def get_user_by_email(self, email: str) -> Optional[dict[str, Any]]:
         """
         Get user by email
 
@@ -378,9 +406,9 @@ class UsersDB:
 
             return user_dict
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by email {email}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
     async def create_user(
         self,
@@ -393,7 +421,7 @@ class UsersDB:
         is_superuser: bool = False,
         storage_quota_mb: int = 5120,
         uuid_value: Optional[uuid.UUID | str] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new user
 
@@ -453,20 +481,33 @@ class UsersDB:
                         cur = await conn.execute("PRAGMA table_info(users)")
                         cols = {row[1] for row in await cur.fetchall()}
                         # Add commonly-missing columns for older installs
+                        added_uuid = False
                         async def _add_col(name: str, decl: str):
                             nonlocal cols
+                            nonlocal added_uuid
                             if name not in cols:
                                 await conn.execute(f"ALTER TABLE users ADD COLUMN {decl}")
                                 cols.add(name)
+                                if name == "uuid":
+                                    added_uuid = True
 
-                        await _add_col('uuid', "uuid TEXT UNIQUE")
+                        await _add_col('uuid', "uuid TEXT")
                         await _add_col('is_active', "is_active INTEGER DEFAULT 1")
                         await _add_col('is_superuser', "is_superuser INTEGER DEFAULT 0")
                         await _add_col('email_verified', "email_verified INTEGER DEFAULT 0")
                         await _add_col('is_verified', "is_verified INTEGER DEFAULT 0")
                         await _add_col('storage_quota_mb', "storage_quota_mb INTEGER DEFAULT 5120")
                         await _add_col('storage_used_mb', "storage_used_mb INTEGER DEFAULT 0")
-                    except Exception:
+                        if added_uuid:
+                            with contextlib.suppress(_USERS_DB_NONCRITICAL_EXCEPTIONS):
+                                await conn.execute(
+                                    "UPDATE users SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''"
+                                )
+                            with contextlib.suppress(_USERS_DB_NONCRITICAL_EXCEPTIONS):
+                                await conn.execute(
+                                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_uuid ON users(uuid)"
+                                )
+                    except _USERS_DB_NONCRITICAL_EXCEPTIONS:
                         # Best-effort; insertion may still succeed if columns already present
                         pass
                     cursor = await conn.execute(
@@ -504,7 +545,7 @@ class UsersDB:
             raise
         except _PG_UniqueViolationError as e:
             logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
-            raise DuplicateUserError("Username or email already exists")
+            raise DuplicateUserError("Username or email already exists") from e
         except (_AIOSQLITE_IntegrityError, sqlite3.IntegrityError) as e:
             message = str(e).lower()
             if "unique constraint failed" in message or "unique constraint violation" in message:
@@ -512,19 +553,19 @@ class UsersDB:
                 raise DuplicateUserError("Username or email already exists") from e
             logger.error(f"Failed to create user {username}: {e}")
             raise DatabaseError(f"Failed to create user: {e}") from e
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             msg = str(e)
             if "UNIQUE constraint failed" in msg and "users" in msg:
                 logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
-                raise DuplicateUserError("Username or email already exists")
+                raise DuplicateUserError("Username or email already exists") from e
             logger.error(f"Failed to create user {username}: {e}")
-            raise DatabaseError(f"Failed to create user: {e}")
+            raise DatabaseError(f"Failed to create user: {e}") from e
 
     async def update_user(
         self,
         user_id: int,
         **kwargs
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Update user information
 
@@ -595,9 +636,9 @@ class UsersDB:
                 # Return updated user
                 return await self.get_user_by_id(user_id)
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update user {user_id}: {e}")
-            raise DatabaseError(f"Failed to update user: {e}")
+            raise DatabaseError(f"Failed to update user: {e}") from e
 
     async def delete_user(self, user_id: int) -> bool:
         """
@@ -618,9 +659,9 @@ class UsersDB:
             logger.info(f"Soft deleted user {user_id}")
             return True
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete user {user_id}: {e}")
-            raise DatabaseError(f"Failed to delete user: {e}")
+            raise DatabaseError(f"Failed to delete user: {e}") from e
 
     async def update_last_login(self, user_id: int):
         """Update user's last login timestamp"""
@@ -632,7 +673,7 @@ class UsersDB:
         limit: int = 100,
         role: Optional[str] = None,
         is_active: Optional[bool] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         List users with optional filtering
 
@@ -681,9 +722,9 @@ class UsersDB:
 
             return users
 
-        except Exception as e:
+        except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list users: {e}")
-            raise DatabaseError(f"Failed to list users: {e}")
+            raise DatabaseError(f"Failed to list users: {e}") from e
 
 
 #######################################################################################################################
@@ -708,22 +749,22 @@ async def reset_users_db() -> None:
     _users_db = None
 
 # Convenience functions for backward compatibility
-async def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
+async def get_user_by_id(user_id: int) -> Optional[dict[str, Any]]:
     """Get user by ID (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_id(user_id)
 
-async def get_user_by_uuid(user_uuid: str) -> Optional[Dict[str, Any]]:
+async def get_user_by_uuid(user_uuid: str) -> Optional[dict[str, Any]]:
     """Get user by UUID (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_uuid(user_uuid)
 
-async def create_user(username: str, email: str, password_hash: str, **kwargs) -> Dict[str, Any]:
+async def create_user(username: str, email: str, password_hash: str, **kwargs) -> dict[str, Any]:
     """Create user (convenience function)"""
     db = await get_users_db()
     return await db.create_user(username, email, password_hash, **kwargs)
 
-async def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+async def get_user_by_username(username: str) -> Optional[dict[str, Any]]:
     """Get user by username (convenience function)"""
     db = await get_users_db()
     return await db.get_user_by_username(username)
@@ -811,7 +852,7 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
 
     except ImportError as e:
         logger.error(f"Failed to import MediaDatabase: {e}")
-        raise ImportError("MediaDatabase class not available")
+        raise ImportError("MediaDatabase class not available") from e
 
 
 async def ensure_user_directories(user_id: int):

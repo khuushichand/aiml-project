@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,10 +74,21 @@ class _FakeQuotaService:
         return True, {"current_usage_mb": 0, "new_size_mb": 0, "quota_mb": 1, "available_mb": 1}
 
 
+@pytest.fixture
+def fake_storage() -> _FakeStorage:
+    return _FakeStorage()
+
+
+@pytest.fixture
+def fake_db() -> _FakeDB:
+    return _FakeDB()
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_original_storage_uses_processing_source(monkeypatch):
-    storage = _FakeStorage()
-    db = _FakeDB()
+async def test_original_storage_uses_processing_source(monkeypatch, fake_db, fake_storage):
+    storage = fake_storage
+    db = fake_db
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
         file_one = Path(temp_dir) / "stored_one.pdf"
@@ -142,9 +154,10 @@ async def test_original_storage_uses_processing_source(monkeypatch):
     assert len(db.insert_calls) == 2
 
 
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tmp_path):
-    db = _FakeDB()
+async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tmp_path, fake_db, fake_storage):
+    db = fake_db
 
     async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
         ok_path = Path(temp_dir) / "ok.txt"
@@ -210,3 +223,145 @@ async def test_add_media_orchestrate_handles_document_exceptions(monkeypatch, tm
         result.get("status") == "Success" and result.get("input_ref") == "ok.txt"
         for result in results
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_partial_upload_errors_returns_multi_status(monkeypatch, fake_db, fake_storage):
+    db = fake_db
+
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        ok_path = Path(temp_dir) / "ok.pdf"
+        ok_path.write_bytes(b"ok")
+        return (
+            [{"path": ok_path, "original_filename": "ok.pdf"}],
+            [
+                {
+                    "original_filename": "bad.exe",
+                    "input_ref": "bad.exe",
+                    "status": "Error",
+                    "error": "File type '.exe' is not allowed for security reasons",
+                }
+            ],
+        )
+
+    async def fake_process_doc_item_fn(
+        *,
+        item_input_ref: str,
+        processing_source: str,
+        media_type: Any,
+        **_kwargs: Any,
+    ) -> Dict[str, Any]:
+        return {
+            "status": "Success",
+            "input_ref": item_input_ref,
+            "processing_source": str(processing_source),
+            "media_type": media_type,
+            "metadata": {},
+            "content": "content",
+            "analysis": None,
+            "summary": None,
+            "analysis_details": None,
+            "db_id": 1,
+            "db_message": "ok",
+        }
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
+
+    form_data = SimpleNamespace(
+        media_type="pdf",
+        urls=[],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    response = await ingestion_persistence.add_media_orchestrate(
+        background_tasks=BackgroundTasks(),
+        form_data=form_data,
+        files=[object(), object()],
+        db=db,
+        current_user=SimpleNamespace(id=1),
+        usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+    )
+
+    assert response.status_code == status.HTTP_207_MULTI_STATUS
+    body = json.loads(response.body)
+    results = body.get("results") or []
+    assert any(r.get("status") == "Error" and r.get("input_ref") == "bad.exe" for r in results)
+    assert any(r.get("status") == "Success" and r.get("input_ref") == "ok.pdf" for r in results)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fake_db, fake_storage):
+    db = fake_db
+    monkeypatch.setenv("DOCUMENT_LIKE_CONCURRENCY", "2")
+
+    async def fake_save_uploaded_files(_files, temp_dir, **_kwargs):
+        saved = []
+        for idx in range(5):
+            path = Path(temp_dir) / f"doc_{idx}.txt"
+            path.write_text("ok")
+            saved.append({"path": path, "original_filename": f"doc_{idx}.txt"})
+        return saved, []
+
+    state = {"current": 0, "max": 0}
+    lock = asyncio.Lock()
+
+    async def fake_process_doc_item_fn(
+        *,
+        item_input_ref: str,
+        processing_source: str,
+        media_type: Any,
+        **_kwargs: Any,
+    ) -> Dict[str, Any]:
+        async with lock:
+            state["current"] += 1
+            state["max"] = max(state["max"], state["current"])
+        await asyncio.sleep(0.05)
+        async with lock:
+            state["current"] -= 1
+        return {
+            "status": "Success",
+            "input_ref": item_input_ref,
+            "processing_source": str(processing_source),
+            "media_type": media_type,
+            "metadata": {},
+            "content": "content",
+            "analysis": None,
+            "summary": None,
+            "analysis_details": None,
+            "db_id": 1,
+            "db_message": "ok",
+        }
+
+    monkeypatch.setattr(media_endpoints, "_save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(media_endpoints, "_process_document_like_item", fake_process_doc_item_fn)
+    monkeypatch.setattr(input_sourcing, "save_uploaded_files", fake_save_uploaded_files)
+    monkeypatch.setattr(ingestion_persistence, "process_document_like_item", fake_process_doc_item_fn)
+
+    form_data = SimpleNamespace(
+        media_type="document",
+        urls=[],
+        keep_original_file=False,
+        perform_chunking=False,
+        perform_analysis=False,
+        generate_embeddings=False,
+    )
+
+    response = await ingestion_persistence.add_media_orchestrate(
+        background_tasks=BackgroundTasks(),
+        form_data=form_data,
+        files=[object() for _ in range(5)],
+        db=db,
+        current_user=SimpleNamespace(id=1),
+        usage_log=SimpleNamespace(log_event=lambda *_args, **_kwargs: None),
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert state["max"] <= 2

@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from functools import partial
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job, increment_jobs_started, get_limits_for_user
-
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_job,
+    finish_job,
+    increment_jobs_started,
+)
 
 DOMAIN = "audio"
 
 
-async def _handle_gpu_audio_transcribe_stage(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_gpu_audio_transcribe_stage(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Handle the GPU `audio_transcribe` stage for a single job payload.
 
@@ -66,7 +70,7 @@ async def _handle_gpu_audio_transcribe_stage(payload: Dict[str, Any]) -> Dict[st
     return updated_payload
 
 
-async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_audio_transcribe_gpu_worker(stop_event: asyncio.Event | None = None) -> None:
     """GPU-focused worker that only processes the `audio_transcribe` stage.
 
     This is a stub container-friendly worker meant to be deployed on GPU nodes.
@@ -109,17 +113,15 @@ async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = 
                 jm.fail_job(int(job["id"]), error=msg or "concurrency limit", retryable=True, backoff_seconds=10, worker_id=worker_id, lease_id=str(job.get("lease_id")))
                 continue
             acquired_slot = True
-            try:
+            with contextlib.suppress(Exception):
                 await increment_jobs_started(int(owner))
-            except Exception:
-                pass
 
-            payload: Dict[str, Any] = job.get("payload") or {}
+            payload: dict[str, Any] = job.get("payload") or {}
             updated_payload = await _handle_gpu_audio_transcribe_stage(payload)
 
             # Complete and enqueue next stage
             jm.complete_job(int(job["id"]), worker_id=worker_id, lease_id=str(job.get("lease_id")))
-            next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
+            next_type: str | None = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
             jm.create_job(
                 domain=DOMAIN,
                 queue="default",
@@ -145,7 +147,5 @@ async def run_audio_transcribe_gpu_worker(stop_event: Optional[asyncio.Event] = 
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_audio_transcribe_gpu_worker())
-    except KeyboardInterrupt:
-        pass

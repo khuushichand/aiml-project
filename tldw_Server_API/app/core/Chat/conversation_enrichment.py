@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import os
 import re
 import threading
-from typing import Dict, List, Optional
+from collections import Counter
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from loguru import logger
 
@@ -17,7 +16,6 @@ from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     InputError,
 )
 from tldw_Server_API.app.core.testing import is_test_mode
-
 
 AUTO_TAG_MIN_NEW_MESSAGES = 3
 AUTO_TAG_MAX_KEYWORDS = 6
@@ -70,8 +68,6 @@ _STOPWORDS = {
     "all",
     "via",
     "per",
-    "per",
-    "via",
     "just",
     "more",
     "most",
@@ -90,8 +86,8 @@ class AutoTagResult:
     conversation_id: str
     updated: bool
     reason: str
-    topic_label: Optional[str]
-    keywords: List[str]
+    topic_label: str | None
+    keywords: list[str]
 
 
 @dataclass(frozen=True)
@@ -120,7 +116,7 @@ def _cluster_id_for_label(label: str) -> str:
     return f"topic-{slug}-{digest}"
 
 
-def _extract_keywords(texts: List[str], max_keywords: int) -> List[str]:
+def _extract_keywords(texts: list[str], max_keywords: int) -> list[str]:
     counts: Counter[str] = Counter()
     for text in texts:
         for token in _TOKEN_PATTERN.findall(text.lower()):
@@ -137,7 +133,7 @@ def _extract_keywords(texts: List[str], max_keywords: int) -> List[str]:
 def _replace_conversation_keywords(
     db: CharactersRAGDB,
     conversation_id: str,
-    keywords: List[str],
+    keywords: list[str],
 ) -> None:
     existing = db.get_keywords_for_conversation(conversation_id)
     existing_map = {
@@ -173,7 +169,7 @@ def _load_recent_message_texts(
     db: CharactersRAGDB,
     conversation_id: str,
     message_window: int,
-) -> List[str]:
+) -> list[str]:
     total_messages = db.count_messages_for_conversation(conversation_id)
     offset = max(total_messages - message_window, 0)
     messages = db.get_messages_for_conversation(
@@ -182,7 +178,7 @@ def _load_recent_message_texts(
         offset=offset,
         order_by_timestamp="ASC",
     )
-    texts: List[str] = []
+    texts: list[str] = []
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str) and content.strip():
@@ -193,7 +189,7 @@ def _load_recent_message_texts(
 def _update_conversation_with_retry(
     db: CharactersRAGDB,
     conversation_id: str,
-    update_data: Dict[str, Optional[str]],
+    update_data: dict[str, str | None],
     max_attempts: int = 3,
 ) -> bool:
     for attempt in range(1, max_attempts + 1):
@@ -285,11 +281,11 @@ def auto_tag_conversation(
 def cluster_conversations_for_user(
     db: CharactersRAGDB,
     *,
-    client_id: Optional[str] = None,
+    client_id: str | None = None,
     allow_opt_out: bool = True,
 ) -> ClusterResult:
     conversations = db.search_conversations(None, client_id=client_id)
-    clusters: Dict[str, Dict[str, object]] = {}
+    clusters: dict[str, dict[str, object]] = {}
     updated = 0
     skipped_opt_out = 0
 
@@ -360,7 +356,7 @@ def schedule_auto_tagging(
 def schedule_conversation_clustering(
     db: CharactersRAGDB,
     *,
-    client_id: Optional[str] = None,
+    client_id: str | None = None,
 ) -> None:
     if _should_run_inline():
         cluster_conversations_for_user(db, client_id=client_id)

@@ -183,9 +183,7 @@ def _is_local_setup_request(
             return False
         if not has_proxy_headers and client_is_local:
             return True
-        if has_proxy_headers and client_is_local and forwarded_is_local:
-            return True
-        return False
+        return bool(has_proxy_headers and client_is_local and forwarded_is_local)
 
     if has_proxy_headers:
         return client_is_local and forwarded_is_local and host_header_is_local

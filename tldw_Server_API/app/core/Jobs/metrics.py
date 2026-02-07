@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Dict, Optional
+import os
 import random
+from datetime import datetime
 
 from loguru import logger
-import os
+
 
 def _parse_buckets(env_key: str, default: list[float]) -> list[float]:
     try:
@@ -24,9 +24,9 @@ def _parse_buckets(env_key: str, default: list[float]) -> list[float]:
 
 try:
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
-        get_metrics_registry,
         MetricDefinition,
         MetricType,
+        get_metrics_registry,
     )
 except Exception:  # pragma: no cover - metrics optional
     get_metrics_registry = None  # type: ignore
@@ -232,7 +232,7 @@ def ensure_jobs_metrics_registered() -> None:
     JOBS_METRICS_REGISTERED = True
 
 
-def _labels(job: Dict) -> Dict[str, str]:
+def _labels(job: dict) -> dict[str, str]:
     return {
         "domain": str(job.get("domain", "")),
         "queue": str(job.get("queue", "")),
@@ -240,7 +240,7 @@ def _labels(job: Dict) -> Dict[str, str]:
     }
 
 
-def observe_queue_latency(job: Dict, acquired_at: Optional[datetime], created_at: Optional[datetime]) -> None:
+def observe_queue_latency(job: dict, acquired_at: datetime | None, created_at: datetime | None) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
@@ -264,7 +264,7 @@ def observe_queue_latency(job: Dict, acquired_at: Optional[datetime], created_at
     get_metrics_registry().observe("jobs.queue_latency_seconds", latency, labels)
 
 
-def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Optional[datetime]) -> None:
+def observe_duration(job: dict, started_at: datetime | None, completed_at: datetime | None) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
@@ -293,14 +293,14 @@ def observe_duration(job: Dict, started_at: Optional[datetime], completed_at: Op
     get_metrics_registry().observe("jobs.duration_seconds", duration, labels)
 
 
-def increment_retries(job: Dict) -> None:
+def increment_retries(job: dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
     get_metrics_registry().increment("jobs.retries_total", 1, _labels(job))
 
 
-def increment_failures(job: Dict, reason: str = "unknown") -> None:
+def increment_failures(job: dict, reason: str = "unknown") -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
@@ -310,7 +310,7 @@ def increment_failures(job: Dict, reason: str = "unknown") -> None:
     get_metrics_registry().increment("jobs.failures_total", 1, labels)
 
 
-def increment_failures_by_code(job: Dict, error_code: str) -> None:
+def increment_failures_by_code(job: dict, error_code: str) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
@@ -320,14 +320,14 @@ def increment_failures_by_code(job: Dict, error_code: str) -> None:
     get_metrics_registry().increment("jobs.failures_by_code_total", 1, labels)
 
 
-def observe_retry_after(job: Dict, seconds: float) -> None:
+def observe_retry_after(job: dict, seconds: float) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
     get_metrics_registry().observe("jobs.retry_after_seconds", float(seconds), _labels(job))
 
 
-def set_queue_gauges(domain: str, queue: str, job_type: Optional[str], queued: int, processing: int, backlog: Optional[int] = None, scheduled: Optional[int] = None) -> None:
+def set_queue_gauges(domain: str, queue: str, job_type: str | None, queued: int, processing: int, backlog: int | None = None, scheduled: int | None = None) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
@@ -348,28 +348,28 @@ def set_stale_processing(domain: str, queue: str, count: int) -> None:
     get_metrics_registry().set_gauge("jobs.stale_processing", float(count), labels)
 
 
-def increment_created(job: Dict) -> None:
+def increment_created(job: dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
     get_metrics_registry().increment("jobs.created_total", 1, _labels(job))
 
 
-def increment_completed(job: Dict) -> None:
+def increment_completed(job: dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
     get_metrics_registry().increment("jobs.completed_total", 1, _labels(job))
 
 
-def increment_cancelled(job: Dict) -> None:
+def increment_cancelled(job: dict) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return
     get_metrics_registry().increment("jobs.cancelled_total", 1, _labels(job))
 
 
-def increment_json_truncated(job: Dict, kind: str) -> None:
+def increment_json_truncated(job: dict, kind: str) -> None:
     """Increment counter when payload/result JSON is truncated due to caps."""
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
@@ -380,7 +380,7 @@ def increment_json_truncated(job: Dict, kind: str) -> None:
     get_metrics_registry().increment("jobs.json_truncated_total", 1, labels)
 
 
-def increment_sla_breach(job: Dict, kind: str) -> None:
+def increment_sla_breach(job: dict, kind: str) -> None:
     ensure_jobs_metrics_registered()
     if not get_metrics_registry:
         return

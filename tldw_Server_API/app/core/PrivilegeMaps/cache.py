@@ -1,17 +1,37 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi.encoders import jsonable_encoder
 from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
-from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.RAG.rag_service.advanced_cache import MemoryCache
+
+_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+)
 
 
 def _truthy(value: str) -> bool:
@@ -25,12 +45,12 @@ class DistributedPrivilegeCache:
     Provides in-process caching with optional Redis persistence and invalidation broadcasts.
     """
 
-    def __init__(self, namespace: Optional[str] = None) -> None:
+    def __init__(self, namespace: str | None = None) -> None:
         self._namespace = (namespace or os.getenv("PRIVILEGE_CACHE_NAMESPACE") or "privmap").strip()
         self._local = MemoryCache()
         self._backend_name = (os.getenv("PRIVILEGE_CACHE_BACKEND", "memory") or "memory").strip().lower()
         self._redis = None
-        self._redis_ttl: Optional[int] = None
+        self._redis_ttl: int | None = None
         self._sliding_ttl = _truthy(os.getenv("PRIVILEGE_CACHE_SLIDING_TTL", "1"))
         self._generation: int = 0
         self._last_generation_sync: float = 0.0
@@ -39,7 +59,7 @@ class DistributedPrivilegeCache:
             float(os.getenv("PRIVILEGE_CACHE_GENERATION_SYNC_SECONDS", "2") or "2"),
         )
         self._pubsub = None
-        self._pubsub_thread: Optional[threading.Thread] = None
+        self._pubsub_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
         if self._backend_name == "redis":
@@ -48,7 +68,7 @@ class DistributedPrivilegeCache:
                 self._backend_name = "memory"
 
         self._metrics = None
-        self._metrics_labels: Dict[str, str] = {}
+        self._metrics_labels: dict[str, str] = {}
         self._init_metrics()
 
         if self._redis is not None:
@@ -58,7 +78,7 @@ class DistributedPrivilegeCache:
             self._set_generation_gauge()
         self._update_entry_gauge()
 
-    def get(self, key: str) -> Optional[Any]:
+    def get(self, key: str) -> Any | None:
         self._sync_generation()
         value = self._local.get(key)
         if value is not None:
@@ -70,7 +90,7 @@ class DistributedPrivilegeCache:
         redis_key = self._redis_key(key)
         try:
             payload = self._redis.get(redis_key)
-        except Exception as exc:  # pragma: no cover - defensive logging only
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging only
             logger.debug("Privilege cache redis get failed: %s", exc)
             self._record_miss(layer="backend")
             return None
@@ -88,19 +108,17 @@ class DistributedPrivilegeCache:
             if redis_ttl is not None:
                 try:
                     self._redis_ttl = int(redis_ttl)
-                except Exception:
+                except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
                     self._redis_ttl = None
             else:
                 self._redis_ttl = None
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege cache redis payload decode failed: %s", exc)
             self._record_miss(layer="backend")
             return None
         if self._sliding_ttl and self._redis_ttl and self._redis_ttl > 0:
-            try:
+            with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
                 self._redis.expire(redis_key, self._redis_ttl)
-            except Exception:
-                pass
         if isinstance(decoded, dict) and decoded.get("__cached_ts"):
             decoded.pop("__cached_ts", None)
         self._local.set(key, decoded, ttl_sec=self._redis_ttl)
@@ -108,7 +126,7 @@ class DistributedPrivilegeCache:
         self._update_entry_gauge()
         return decoded
 
-    def set(self, key: str, value: Any, ttl_sec: Optional[int] = None) -> None:
+    def set(self, key: str, value: Any, ttl_sec: int | None = None) -> None:
         self._redis_ttl = ttl_sec
         self._local.set(key, value, ttl_sec=ttl_sec)
         self._update_entry_gauge()
@@ -125,7 +143,7 @@ class DistributedPrivilegeCache:
                 self._redis.setex(redis_key, ttl_sec, json.dumps(payload, separators=(",", ":")))
             else:
                 self._redis.set(redis_key, json.dumps(payload, separators=(",", ":")))
-        except Exception as exc:  # pragma: no cover - best-effort logging
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - best-effort logging
             logger.debug("Privilege cache redis set failed: %s", exc)
 
     def invalidate(self) -> None:
@@ -140,12 +158,12 @@ class DistributedPrivilegeCache:
         try:
             new_generation = self._redis.incr(self._generation_key())
             self._generation = int(new_generation)
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege cache generation increment failed: %s", exc)
         try:
             channel = self._invalidate_channel()
             self._redis.publish(channel, str(self._generation))
-        except Exception:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
             # Publish is best-effort; fallback generation polling covers rest.
             pass
         self._set_generation_gauge()
@@ -155,10 +173,8 @@ class DistributedPrivilegeCache:
         """Stop background workers."""
         self._stop_event.set()
         if self._pubsub is not None:
-            try:
+            with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
                 self._pubsub.close()
-            except Exception:
-                pass
         if self._pubsub_thread and self._pubsub_thread.is_alive():
             self._pubsub_thread.join(timeout=0.5)
         self._pubsub_thread = None
@@ -180,7 +196,7 @@ class DistributedPrivilegeCache:
                 fallback_to_fake=True,
                 decode_responses=True,
             )
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning("Unable to initialize privilege cache redis client: %s", exc)
             return None
 
@@ -192,7 +208,7 @@ class DistributedPrivilegeCache:
                 self._generation = 0
             else:
                 self._generation = int(raw)
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege cache generation bootstrap failed: %s", exc)
         self._set_generation_gauge()
 
@@ -212,7 +228,7 @@ class DistributedPrivilegeCache:
                     self._generation = remote_generation
                     self._local.clear()
                     self._update_entry_gauge()
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege cache generation sync failed: %s", exc)
         finally:
             self._last_generation_sync = now
@@ -227,7 +243,7 @@ class DistributedPrivilegeCache:
             self._pubsub = self._redis.pubsub(ignore_subscribe_messages=True)
             channel = self._invalidate_channel()
             self._pubsub.subscribe(channel)
-        except Exception as exc:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Privilege cache pubsub subscribe failed: %s", exc)
             self._pubsub = None
             return
@@ -244,14 +260,14 @@ class DistributedPrivilegeCache:
                     data = message.get("data")
                     try:
                         new_generation = int(data)
-                    except Exception:
+                    except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
                         new_generation = None
                     self._local.clear()
                     self._update_entry_gauge()
                     if new_generation is not None:
                         self._generation = new_generation
                         self._set_generation_gauge()
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive logging
                 logger.debug("Privilege cache pubsub listener exited: %s", exc)
 
         self._pubsub_thread = threading.Thread(target=_listen, name="privmap-cache-pubsub", daemon=True)
@@ -269,7 +285,7 @@ class DistributedPrivilegeCache:
     def _init_metrics(self) -> None:
         try:
             registry = get_metrics_registry()
-        except Exception:  # pragma: no cover - metrics optional
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - metrics optional
             self._metrics = None
             self._metrics_labels = {}
             return
@@ -293,7 +309,7 @@ class DistributedPrivilegeCache:
         labels["layer"] = layer
         try:
             self._metrics.increment("privilege_cache_hits_total", 1, labels)
-        except Exception:  # pragma: no cover - defensive
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
             pass
 
     def _record_miss(self, *, layer: str) -> None:
@@ -303,7 +319,7 @@ class DistributedPrivilegeCache:
         labels["layer"] = layer
         try:
             self._metrics.increment("privilege_cache_misses_total", 1, labels)
-        except Exception:  # pragma: no cover - defensive
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive
             pass
 
     def _record_invalidation(self) -> None:
@@ -311,7 +327,7 @@ class DistributedPrivilegeCache:
             return
         try:
             self._metrics.increment("privilege_cache_invalidations_total", 1, self._metrics_labels)
-        except Exception:  # pragma: no cover
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
             pass
 
     def _set_generation_gauge(self) -> None:
@@ -319,7 +335,7 @@ class DistributedPrivilegeCache:
             return
         try:
             self._metrics.set_gauge("privilege_cache_generation", float(self._generation), self._metrics_labels)
-        except Exception:  # pragma: no cover
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
             pass
 
     def _update_entry_gauge(self) -> None:
@@ -329,15 +345,15 @@ class DistributedPrivilegeCache:
         try:
             store = getattr(self._local, "_store", {})
             size = len(store)
-        except Exception:
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:
             size = 0
         try:
             self._metrics.set_gauge("privilege_cache_entries", float(size), self._metrics_labels)
-        except Exception:  # pragma: no cover
+        except _PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS:  # pragma: no cover
             pass
 
 
-_GLOBAL_CACHE: Optional[DistributedPrivilegeCache] = None
+_GLOBAL_CACHE: DistributedPrivilegeCache | None = None
 
 
 def get_privilege_cache() -> DistributedPrivilegeCache:
@@ -354,8 +370,6 @@ def invalidate_privilege_cache() -> None:
 def reset_privilege_cache() -> None:
     global _GLOBAL_CACHE
     if _GLOBAL_CACHE is not None:
-        try:
+        with contextlib.suppress(_PRIVILEGE_CACHE_NONCRITICAL_EXCEPTIONS):
             _GLOBAL_CACHE.close()
-        except Exception:
-            pass
     _GLOBAL_CACHE = None

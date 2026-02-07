@@ -7,17 +7,18 @@ and analytics for RAG pipeline operations.
 """
 
 import asyncio
-import json
-import time
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from enum import Enum
-from typing import Dict, List, Any, Optional, Tuple
-from collections import defaultdict, deque
+import contextlib
+import hashlib
 import statistics
+import time
+from collections import defaultdict, deque
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
 
-from loguru import logger
 import numpy as np
+from loguru import logger
 
 
 class MetricType(Enum):
@@ -43,8 +44,8 @@ class MetricPoint:
     value: float
     timestamp: float
     type: MetricType
-    tags: Dict[str, str] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: dict[str, str] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -71,17 +72,17 @@ class QueryMetrics:
     avg_relevance_score: float = 0.0
     max_relevance_score: float = 0.0
     min_relevance_score: float = 0.0
-    score_distribution: List[float] = field(default_factory=list)
+    score_distribution: list[float] = field(default_factory=list)
 
     # Resource metrics
     memory_used_mb: float = 0.0
     tokens_used: int = 0
 
     # Error tracking
-    errors: List[Dict[str, Any]] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
         return asdict(self)
 
@@ -112,7 +113,7 @@ class AggregatedMetrics:
     error_rate: float
 
     # Component breakdown
-    component_percentages: Dict[str, float] = field(default_factory=dict)
+    component_percentages: dict[str, float] = field(default_factory=dict)
 
 
 class MetricsCollector:
@@ -138,8 +139,8 @@ class MetricsCollector:
 
         # Storage
         self.query_metrics: deque = deque(maxlen=window_size)
-        self.metric_points: List[MetricPoint] = []
-        self.aggregated_metrics: List[AggregatedMetrics] = []
+        self.metric_points: list[MetricPoint] = []
+        self.aggregated_metrics: list[AggregatedMetrics] = []
 
         # Counters
         self.counters: defaultdict[str, int] = defaultdict(int)
@@ -148,16 +149,16 @@ class MetricsCollector:
         self.gauges: defaultdict[str, float] = defaultdict(float)
 
         # Histograms
-        self.histograms: defaultdict[str, List[float]] = defaultdict(list)
+        self.histograms: defaultdict[str, list[float]] = defaultdict(list)
 
         # Timers
-        self.timers: defaultdict[str, List[float]] = defaultdict(list)
+        self.timers: defaultdict[str, list[float]] = defaultdict(list)
 
         # Current query tracking
         self.current_query: Optional[QueryMetrics] = None
 
         # Background aggregation task
-        self.aggregation_task = None
+        self.aggregation_task: Optional[asyncio.Task[None]] = None
 
     def start_query(self, query: str, query_id: str) -> QueryMetrics:
         """Start tracking a new query."""
@@ -242,7 +243,7 @@ class MetricsCollector:
         self,
         retrieved: int,
         after_rerank: Optional[int] = None,
-        scores: Optional[List[float]] = None
+        scores: Optional[list[float]] = None
     ) -> None:
         """Record document metrics."""
         if self.current_query:
@@ -315,7 +316,7 @@ class MetricsCollector:
         if len(self.timers[name]) > self.window_size:
             self.timers[name] = self.timers[name][-self.window_size:]
 
-    def get_current_metrics(self) -> Dict[str, Any]:
+    def get_current_metrics(self) -> dict[str, Any]:
         """Get current metrics snapshot."""
         metrics = {
             "counters": dict(self.counters),
@@ -353,7 +354,7 @@ class MetricsCollector:
         self,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None
-    ) -> AggregatedMetrics:
+    ) -> Optional[AggregatedMetrics]:
         """Aggregate metrics over time window."""
         if not self.query_metrics:
             return None
@@ -422,10 +423,8 @@ class MetricsCollector:
         """Stop background aggregation task."""
         if self.aggregation_task:
             self.aggregation_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self.aggregation_task
-            except asyncio.CancelledError:
-                pass
             self.aggregation_task = None
 
     async def _aggregation_loop(self) -> None:
@@ -477,7 +476,7 @@ class PerformanceAnalyzer:
             "low_cache_hit_rate": 0.2
         }
 
-    def analyze_recent_performance(self) -> Dict[str, Any]:
+    def analyze_recent_performance(self) -> dict[str, Any]:
         """Analyze recent performance and identify issues."""
         if not self.collector.query_metrics:
             return {"status": "no_data"}
@@ -547,7 +546,7 @@ class PerformanceAnalyzer:
             })
 
             # Identify common errors
-            error_components = defaultdict(int)
+            error_components: defaultdict[str, int] = defaultdict(int)
             for q in recent_queries:
                 for error in q.errors:
                     error_components[error["component"]] += 1
@@ -576,14 +575,14 @@ class PerformanceAnalyzer:
 
     def _identify_bottlenecks(
         self,
-        queries: List[QueryMetrics]
-    ) -> Optional[Tuple[str, float]]:
+        queries: list[QueryMetrics]
+    ) -> Optional[tuple[str, float]]:
         """Identify performance bottlenecks."""
         if not queries:
             return None
 
         # Calculate average time per component
-        components = {
+        components: dict[str, list[float]] = {
             "expansion": [],
             "retrieval": [],
             "reranking": [],

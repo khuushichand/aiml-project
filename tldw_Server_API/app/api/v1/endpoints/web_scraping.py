@@ -4,28 +4,40 @@ Additional endpoints for managing the enhanced web scraping service.
 Provides job management, status checking, and service control.
 """
 
-from typing import Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Depends, Query
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
-from tldw_Server_API.app.services.enhanced_web_scraping_service import (
-    get_web_scraping_service, WebScrapingService
-)
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
-
+from tldw_Server_API.app.core.Security.url_validation import assert_url_safe
+from tldw_Server_API.app.services.enhanced_web_scraping_service import get_web_scraping_service
 
 router = APIRouter(
     prefix="/web-scraping",
     tags=["web-scraping"],
 )
 
+_WEB_SCRAPING_ENDPOINT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    HTTPException,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 @router.get("/status")
 async def get_scraping_service_status(
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the status of the web scraping service including queue statistics.
 
@@ -38,16 +50,16 @@ async def get_scraping_service_status(
     try:
         service = get_web_scraping_service()
         return service.get_service_status()
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get scraping service status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/job/{job_id}")
 async def get_scraping_job_status(
     job_id: str,
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get the status of a specific scraping job.
 
@@ -60,16 +72,16 @@ async def get_scraping_job_status(
     try:
         service = get_web_scraping_service()
         return await service.get_job_status(job_id, current_user)
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get job status for {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/job/{job_id}")
 async def cancel_scraping_job(
     job_id: str,
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Cancel a pending or active scraping job.
 
@@ -82,15 +94,15 @@ async def cancel_scraping_job(
     try:
         service = get_web_scraping_service()
         return await service.cancel_job(job_id, current_user)
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to cancel job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/service/initialize")
 async def initialize_scraping_service(
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Initialize the web scraping service if not already initialized.
 
@@ -104,15 +116,15 @@ async def initialize_scraping_service(
             "message": "Web scraping service initialized",
             "service_status": service.get_service_status()
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to initialize scraping service: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/service/shutdown")
 async def shutdown_scraping_service(
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Shutdown the web scraping service gracefully.
 
@@ -130,16 +142,16 @@ async def shutdown_scraping_service(
             "status": "success",
             "message": "Web scraping service shutdown completed"
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to shutdown scraping service: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/progress/{task_id}")
 async def get_scraping_progress(
     task_id: str,
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get progress information for a scraping task.
 
@@ -167,16 +179,16 @@ async def get_scraping_progress(
         }
     except HTTPException:
         raise
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get progress for task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/cookies/{domain}")
 async def get_cookies_for_domain(
     domain: str,
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get stored cookies for a specific domain.
 
@@ -198,17 +210,17 @@ async def get_cookies_for_domain(
             "cookies": cookies or [],
             "cookie_count": len(cookies) if cookies else 0
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get cookies for {domain}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/cookies/{domain}")
 async def set_cookies_for_domain(
     domain: str,
-    cookies: list[Dict[str, Any]],
+    cookies: list[dict[str, Any]],
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Set cookies for a specific domain.
 
@@ -233,16 +245,16 @@ async def set_cookies_for_domain(
             "message": f"Added {len(cookies)} cookies for {domain}",
             "domain": domain
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to set cookies for {domain}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/duplicates/check")
 async def check_url_duplicate(
     url: str = Query(..., description="URL to check for duplicate content"),
     current_user: User = Depends(get_request_user)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Check if a URL's content has already been scraped (duplicate detection).
 
@@ -256,9 +268,9 @@ async def check_url_duplicate(
         # SSRF guard
         try:
             assert_url_safe(url)
-        except HTTPException as he:
+        except HTTPException:
             get_metrics_registry().increment("security_ssrf_block_total", 1)
-            raise he
+            raise
 
         service = get_web_scraping_service()
         if not service._initialized:
@@ -273,9 +285,9 @@ async def check_url_duplicate(
             "is_duplicate": False,  # Placeholder
             "message": "Duplicate checking requires content analysis"
         }
-    except Exception as e:
+    except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to check duplicate for {url}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # Include this router in your main app

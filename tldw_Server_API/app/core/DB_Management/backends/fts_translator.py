@@ -7,7 +7,8 @@ consistently across different database backends.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
+
 from loguru import logger
 
 MAX_FTS_QUERY_LENGTH = 8192
@@ -105,9 +106,7 @@ class FTSQueryTranslator:
                 skip_next = False
                 continue
 
-            if word in ('|', '&', '<->', '!'):
-                result_parts.append(word)
-            elif i < len(words) - 1 and words[i + 1] in ('|', '<->'):
+            if word in ('|', '&', '<->', '!') or i < len(words) - 1 and words[i + 1] in ('|', '<->'):
                 result_parts.append(word)
             elif i < len(words) - 1 and words[i + 1] not in ('|', '&', '<->', '!'):
                 result_parts.append(word + ' &')
@@ -217,7 +216,7 @@ class FTSQueryTranslator:
         return query
 
     @staticmethod
-    def extract_search_terms(query: str) -> List[str]:
+    def extract_search_terms(query: str) -> list[str]:
         """
         Extract individual search terms from a query.
 
@@ -309,8 +308,8 @@ class FTSRankNormalizer:
 
     @staticmethod
     def compare_rankings(
-        results_a: List[Tuple[str, float]],
-        results_b: List[Tuple[str, float]],
+        results_a: list[tuple[str, float]],
+        results_b: list[tuple[str, float]],
         backend_a: str,
         backend_b: str
     ) -> float:

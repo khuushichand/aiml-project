@@ -26,7 +26,7 @@ export function useDiscoSkills() {
 
   const [stats, setStats] = useStorage<Record<string, number>>(
     STORAGE_KEYS.stats,
-    () => createDefaultStats()
+    createDefaultStats()
   )
 
   const [triggerProbabilityBase, setTriggerProbabilityBase] = useStorage(

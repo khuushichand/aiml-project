@@ -2,19 +2,18 @@
 # Description: Session management with Redis caching, encryption, and automatic cleanup
 #
 # Imports
-import json
-import hmac
-import hashlib
-import secrets
+import asyncio
 import base64
+import hashlib
+import hmac
+import json
 import os
 import stat
 import threading
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List, Tuple
-import asyncio
 from pathlib import Path
-from contextlib import contextmanager
+from typing import Any, Optional
 
 # File locking support (Unix/Windows)
 try:
@@ -25,37 +24,66 @@ except ImportError:
     fcntl = None  # type: ignore
 #
 # 3rd-party imports
-from redis import asyncio as redis_async
-from redis.exceptions import RedisError, ConnectionError as RedisConnectionError
+import time
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from loguru import logger
 from jose import jwt as jose_jwt
-import time
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from loguru import logger
+from redis import asyncio as redis_async
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import RedisError
+
 from tldw_Server_API.app.core.AuthNZ.crypto_utils import (
     derive_hmac_key,
     derive_hmac_key_candidates,
 )
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
 from tldw_Server_API.app.core.AuthNZ.exceptions import (
-    SessionError,
     InvalidSessionError,
+    SessionError,
     SessionRevokedException,
-    DatabaseError
 )
-from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+
+_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    RedisError,
+    RedisConnectionError,
+    InvalidSessionError,
+    SessionError,
+    SessionRevokedException,
+)
 
 try:
     from tldw_Server_API.app.core.config import settings as core_settings
-except Exception:  # pragma: no cover - defensive fallback
+except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive fallback
     core_settings = {}
 
 #######################################################################################################################
@@ -79,9 +107,9 @@ class SessionManager:
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
         self.cipher_suite: Optional[Fernet] = None
-        self._fernet_candidates: List[Fernet] = []
+        self._fernet_candidates: list[Fernet] = []
         self._persisted_key_path: Optional[Path] = None
-        self._ephemeral_cache: Dict[str, Tuple[str, float]] = {}
+        self._ephemeral_cache: dict[str, tuple[str, float]] = {}
         self._ephemeral_lock = threading.Lock()
         self._init_encryption()
 
@@ -123,7 +151,7 @@ class SessionManager:
             # In general test mode, default to disabled unless explicitly overridden
             if (str(os.getenv("TEST_MODE", "")).strip().lower() in _truthy or str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in _truthy) and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
                 disable_sched = True
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
         if (not disable_sched) and self.settings.SESSION_CLEANUP_INTERVAL_HOURS > 0:
             self.scheduler.add_job(
@@ -197,9 +225,9 @@ class SessionManager:
         self.cipher_suite = self._fernet_candidates[0]
         logger.debug("Session token encryption initialized")
 
-    def _get_or_create_encryption_key(self) -> List[bytes]:
+    def _get_or_create_encryption_key(self) -> list[bytes]:
         """Resolve ordered list of candidate encryption keys (primary first)."""
-        key_bytes: List[bytes] = []
+        key_bytes: list[bytes] = []
         seen: set[bytes] = set()
 
         def _append(candidate: Optional[bytes]) -> None:
@@ -220,7 +248,7 @@ class SessionManager:
                 raise ValueError("SESSION_ENCRYPTION_KEY must be str or bytes containing a Fernet key")
             try:
                 decoded = base64.urlsafe_b64decode(raw)
-            except Exception as exc:  # pragma: no cover - defensive
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - defensive
                 raise ValueError("SESSION_ENCRYPTION_KEY must be urlsafe base64-encoded") from exc
             if len(decoded) != 32:
                 raise ValueError("SESSION_ENCRYPTION_KEY must decode to 32 bytes for Fernet compatibility")
@@ -232,14 +260,14 @@ class SessionManager:
             preferred_path: Optional[Path] = None
             try:
                 preferred_path = self._resolve_persisted_key_path()
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Session key: failed to resolve preferred persisted key path: {exc}")
                 preferred_path = None
 
             def _exists_and_invalid(p: Optional[Path]) -> bool:
                 try:
                     return bool(p) and Path(p).exists() and (not self._is_valid_key_file(Path(p)))
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Session key: failed to inspect preferred path {p}: {exc}")
                     return False
 
@@ -265,7 +293,7 @@ class SessionManager:
                             # Record discovered valid path
                             self._persisted_key_path = p
                             return content.encode("utf-8")
-                        except Exception as _exc:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _exc:
                             logger.debug(f"Session key: failed reading candidate key at {p}: {_exc}")
                             return None
 
@@ -275,7 +303,7 @@ class SessionManager:
                         ap = self._resolve_api_key_path()
                         if ap and preferred_path and ap != preferred_path:
                             other_candidates.append(ap)
-                    except Exception as _e:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"Session key: failed resolving API key path: {_e}")
                     try:
                         preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
@@ -283,7 +311,7 @@ class SessionManager:
                         pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
                         if pp and preferred_path and pp != preferred_path:
                             other_candidates.append(pp)
-                    except Exception as _e:
+                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                         logger.debug(f"Session key: failed constructing project-root key path: {_e}")
 
                     persisted_key: Optional[bytes] = None
@@ -315,7 +343,7 @@ class SessionManager:
                             ap = self._resolve_api_key_path()
                             if ap and (not preferred_path or ap != preferred_path):
                                 alt_candidates.append(ap)
-                        except Exception as _e:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                             logger.debug(f"Session key: could not resolve API key path for alternate persistence: {_e}")
                         try:
                             preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
@@ -323,7 +351,7 @@ class SessionManager:
                             pp = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
                             if pp and (not preferred_path or pp != preferred_path):
                                 alt_candidates.append(pp)
-                        except Exception as _e:
+                        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _e:
                             logger.debug(f"Session key: could not compute project-root path for alternate persistence: {_e}")
 
                         persisted_anywhere = False
@@ -340,9 +368,9 @@ class SessionManager:
                                             try:
                                                 dest.rename(backup)
                                                 logger.info(f"Session key: backed up invalid key file to {backup}")
-                                            except Exception as _be:
+                                            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _be:
                                                 logger.debug(f"Session key: backup of invalid key file failed: {_be}")
-                                    except Exception as _ce:
+                                    except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _ce:
                                         logger.debug(f"Session key: could not check/backup invalid key file: {_ce}")
 
                                 # Force persistence target
@@ -353,7 +381,7 @@ class SessionManager:
                                     break
                                 else:
                                     logger.debug(f"Session key: alternate persistence attempt failed for {dest}")
-                            except Exception as _pe:
+                            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as _pe:
                                 logger.debug(f"Session key: exception during alternate persistence to {dest}: {_pe}")
                             finally:
                                 # If persistence failed, restore original pointer before next attempt
@@ -422,9 +450,9 @@ class SessionManager:
                 )
         return key_bytes
 
-    def _derive_secret_key_candidates(self) -> List[bytes]:
+    def _derive_secret_key_candidates(self) -> list[bytes]:
         """Derive deterministic Fernet keys from configured secret material."""
-        secrets_order: List[Optional[str | bytes]] = []
+        secrets_order: list[Optional[str | bytes]] = []
 
         def _add_secret(value: Optional[str | bytes]) -> None:
             if value:
@@ -442,7 +470,7 @@ class SessionManager:
         _add_secret(getattr(self.settings, "JWT_SECONDARY_PRIVATE_KEY", None))
         # NOTE: JWT_SECONDARY_PUBLIC_KEY is also excluded for the same reason
 
-        derived_keys: List[bytes] = []
+        derived_keys: list[bytes] = []
         seen: set[bytes] = set()
 
         for secret in secrets_order:
@@ -496,11 +524,11 @@ class SessionManager:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
-                    except (IOError, OSError):
+                    except OSError:
                         if time.time() - start_time > timeout:
                             raise RuntimeError(
                                 f"Failed to acquire lock on {lock_path} within {timeout}s"
-                            )
+                            ) from None
                         time.sleep(0.1)
             else:
                 # Windows/other: Use exclusive file creation as a lock
@@ -526,7 +554,7 @@ class SessionManager:
                         if time.time() - start_time > timeout:
                             raise RuntimeError(
                                 f"Failed to acquire lock on {lock_path} within {timeout}s"
-                            )
+                            ) from None
                         time.sleep(0.1)
 
             yield  # Lock acquired, execute protected code
@@ -535,20 +563,14 @@ class SessionManager:
             # Release lock
             if lock_fd is not None:
                 if _HAS_FCNTL:
-                    try:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    except Exception:
-                        pass
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     os.close(lock_fd)
-                except Exception:
-                    pass
             # Clean up lock file (best effort)
             if not _HAS_FCNTL:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     lock_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
 
     def _persist_session_key(self, key: bytes) -> bool:
         """Persist generated session key to disk for reuse across restarts."""
@@ -574,7 +596,7 @@ class SessionManager:
                 raise RuntimeError(f"Failed to prepare session key directory {path.parent}: {exc}") from exc
             try:
                 os.chmod(path.parent, 0o700)
-            except Exception:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                 # Ignore if chmod not supported (e.g., on Windows)
                 pass
 
@@ -595,11 +617,9 @@ class SessionManager:
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as handle:
                         handle.write(key.decode("utf-8"))
-                except Exception:
-                    try:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         os.close(fd)
-                    except Exception:
-                        pass
                     raise
             except OSError as exc:
                 raise RuntimeError(f"Failed to open session encryption key file {path}: {exc}") from exc
@@ -610,7 +630,7 @@ class SessionManager:
 
             try:
                 os.chmod(path, 0o600)
-            except Exception as chmod_exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as chmod_exc:
                 # Log warning instead of silently ignoring - this could be a security issue
                 logger.warning(f"Failed to set permissions on session key file {path}: {chmod_exc}")
 
@@ -629,15 +649,13 @@ class SessionManager:
                             f"Session encryption key {path} has permissive mode {oct(mode)}. "
                             "Expected 0o600 (owner read/write only)."
                         )
-            except Exception as exc:
-                try:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     path.unlink(missing_ok=True)
-                except Exception:
-                    pass
                 raise RuntimeError(f"Persisted session encryption key failed validation: {exc}") from exc
             self._persisted_key_path = path
             return True
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Unable to persist session encryption key to {path}: {exc}")
             return False
 
@@ -657,18 +675,15 @@ class SessionManager:
         api_path: Optional[Path] = None
         # Resolve both paths safely
         try:
-            if self._persisted_key_path:
-                api_path = self._persisted_key_path
-            else:
-                api_path = self._resolve_api_key_path()
-        except Exception as e:
+            api_path = self._persisted_key_path or self._resolve_api_key_path()
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to resolve persisted API key path: {e}")
             api_path = None
         try:
             preferred_root = core_settings.get("PROJECT_ROOT") if core_settings else None
             preferred_root_path = Path(preferred_root) if preferred_root else Path.cwd()
             primary_path = (preferred_root_path / "Config_Files" / "session_encryption.key").resolve()
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"failed to construct primary session_encryption.key path: {e}")
             primary_path = None
 
@@ -688,7 +703,7 @@ class SessionManager:
         if prefer_api_path and api_path and primary_path:
             try:
                 self._maybe_migrate_key_to_api_path(primary_path, api_path)
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Session key migration skipped due to error: {exc}")
 
         for path in candidate_paths:
@@ -714,7 +729,7 @@ class SessionManager:
                 ):
                     logger.warning(f"Using persisted session_encryption.key at alternate location: {path}")
                 return content.encode("utf-8")
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to read persisted session encryption key from {path}: {exc}")
                 continue
         return None
@@ -724,7 +739,7 @@ class SessionManager:
         try:
             api_root = Path(__file__).resolve().parent.parent.parent.parent
             return (api_root / "Config_Files" / "session_encryption.key").resolve()
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None
 
     def _resolve_persisted_key_path(self) -> Optional[Path]:
@@ -749,7 +764,7 @@ class SessionManager:
                 project_root = core_settings.get("PROJECT_ROOT")
             if project_root:
                 return (Path(project_root) / "Config_Files" / "session_encryption.key").resolve()
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Fallback to API component path
@@ -759,7 +774,7 @@ class SessionManager:
         try:
             decoded = base64.urlsafe_b64decode(content.encode("utf-8"))
             return len(decoded) == 32
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _is_valid_key_file(self, path: Path) -> bool:
@@ -781,12 +796,12 @@ class SessionManager:
                         f"Session key file {path} has insecure permissions {oct(mode)}; ignoring."
                     )
                     return False
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"Failed to inspect session key file {path}: {exc}")
                 return False
             content = path.read_text(encoding="utf-8").strip()
             return bool(content) and self._is_valid_key_content(content)
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return False
 
     def _maybe_migrate_key_to_api_path(self, source_primary: Path, dest_api: Path) -> None:
@@ -801,10 +816,8 @@ class SessionManager:
             # If source has a valid key, copy to dest
             if not self._is_valid_key_file(source_primary):
                 return
-            try:
+            with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                 dest_api.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
             payload = source_primary.read_text(encoding="utf-8").strip()
 
             # Write atomically; if file exists but is invalid, replace it
@@ -816,42 +829,40 @@ class SessionManager:
                 # Replace destination
                 try:
                     tmp_path.replace(dest_api)
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     # If replace fails, try unlink + rename
-                    try:
+                    with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                         dest_api.unlink(missing_ok=True)
-                    except Exception:
-                        pass
                     tmp_path.rename(dest_api)
             finally:
                 try:
                     if tmp_path.exists():
                         tmp_path.unlink()
-                except Exception:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                     pass
             # Validate destination and record
             if not self._is_valid_key_file(dest_api):
                 raise RuntimeError("Migrated session key failed validation at API path")
             self._persisted_key_path = dest_api
             logger.info(f"Migrated session_encryption.key to API path: {dest_api}")
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             # Preserve visibility but allow critical validation failures to propagate
             logger.warning(f"Failed to migrate session_encryption.key to API path: {exc}")
             if isinstance(exc, RuntimeError):
                 # Re-raise to allow callers to handle invalid-migration errors explicitly
                 raise
 
-    def _token_hash_candidates(self, token: str) -> List[str]:
+    def _token_hash_candidates(self, token: str) -> list[str]:
         """Return ordered hash candidates for a token across active/legacy secrets."""
-        hashes: List[str] = []
-        candidate_keys: List[bytes] = []
+        hashes: list[str] = []
+        candidate_keys: list[bytes] = []
 
         def _extend_from_settings(s: Optional[Settings]) -> None:
             if not s:
                 return
             try:
                 keys = derive_hmac_key_candidates(s)
-            except Exception:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
                 keys = [derive_hmac_key(s)]
             for key in keys:
                 if key not in candidate_keys:
@@ -896,14 +907,14 @@ class SessionManager:
 
         try:
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_token.encode('utf-8'))
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to decode stored session token: {e}")
             log_counter("session_token_decode_error")
             raise InvalidSessionError("Failed to decrypt session token") from e
 
         last_error: Optional[Exception] = None
         num_candidates = len(self._fernet_candidates or [])
-        errors_by_candidate: List[str] = []
+        errors_by_candidate: list[str] = []
 
         for idx, cipher in enumerate(self._fernet_candidates or []):
             try:
@@ -913,7 +924,7 @@ class SessionManager:
                     log_counter("session_decrypt_secondary_key_used")
                     logger.info(f"Session token decrypted with secondary key candidate {idx}")
                 return decrypted.decode('utf-8')
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 last_error = exc
                 errors_by_candidate.append(f"candidate[{idx}]: {type(exc).__name__}")
                 logger.debug(f"Session token decryption failed with candidate {idx}: {exc}")
@@ -928,7 +939,7 @@ class SessionManager:
         raise InvalidSessionError("Failed to decrypt session token") from last_error
 
     @staticmethod
-    def _extract_token_metadata(token: Optional[str]) -> Tuple[Optional[str], Optional[datetime]]:
+    def _extract_token_metadata(token: Optional[str]) -> tuple[Optional[str], Optional[datetime]]:
         """Return (jti, expires_at) tuple without verifying signature."""
         if not token:
             return None, None
@@ -943,24 +954,24 @@ class SessionManager:
                 # Use timezone-aware datetime to avoid naive datetime issues
                 expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
             return jti, expires_at
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None, None
 
     @staticmethod
-    def _get_unverified_claims(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    def _get_unverified_claims(token: Optional[str]) -> Optional[dict[str, Any]]:
         """Return unverified JWT claims dict (best-effort)."""
         if not token:
             return None
         try:
             claims = jose_jwt.get_unverified_claims(token)
             return claims if isinstance(claims, dict) else None
-        except Exception:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             return None
 
     @staticmethod
     def _validate_token_binding(
-        claims: Optional[Dict[str, Any]],
-        session_data: Dict[str, Any],
+        claims: Optional[dict[str, Any]],
+        session_data: dict[str, Any],
         *,
         token_label: str,
     ) -> None:
@@ -976,7 +987,7 @@ class SessionManager:
             subject_id = int(subject)
         except (TypeError, ValueError):
             logger.debug(f"Refresh session: {token_label} token subject is invalid")
-            raise InvalidSessionError()
+            raise InvalidSessionError() from None
         if subject_id != int(session_data.get("user_id")):
             logger.debug(f"Refresh session: {token_label} token subject mismatch")
             raise InvalidSessionError()
@@ -986,7 +997,7 @@ class SessionManager:
                 session_claim_id = int(session_claim)
             except (TypeError, ValueError):
                 logger.debug(f"Refresh session: {token_label} token session_id is invalid")
-                raise InvalidSessionError()
+                raise InvalidSessionError() from None
             if session_claim_id != int(session_data.get("id")):
                 logger.debug(f"Refresh session: {token_label} token session_id mismatch")
                 raise InvalidSessionError()
@@ -1001,7 +1012,7 @@ class SessionManager:
         device_id: Optional[str] = None,
         expires_at_override: Optional[datetime] = None,
         refresh_expires_at_override: Optional[datetime] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new session for a user
 
@@ -1096,16 +1107,16 @@ class SessionManager:
                 "refresh_token": refresh_token,
             }
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create session: {e}")
             log_counter("auth_session_create_error")
             log_histogram(
                 "auth_session_create_duration",
                 time.perf_counter() - start_time,
             )
-            raise SessionError(f"Failed to create session: {e}")
+            raise SessionError(f"Failed to create session: {e}") from e
 
-    async def validate_session(self, access_token: str) -> Optional[Dict[str, Any]]:
+    async def validate_session(self, access_token: str) -> Optional[dict[str, Any]]:
         """
         Validate a session by access token
 
@@ -1125,7 +1136,7 @@ class SessionManager:
         token_hash_primary = token_hash_candidates[0]
         matched_hash: Optional[str] = None
         cache_normalize_required = False
-        cached: Optional[Dict[str, Any]] = None
+        cached: Optional[dict[str, Any]] = None
         if self.redis_client:
             for candidate_hash in token_hash_candidates:
                 cached = await self._get_cached_session(candidate_hash)
@@ -1135,7 +1146,7 @@ class SessionManager:
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            session_data: Optional[Dict[str, Any]] = None
+            session_data: Optional[dict[str, Any]] = None
 
             # Attempt to reuse cached session_id to minimize lookups,
             # but always verify current DB state.
@@ -1195,7 +1206,7 @@ class SessionManager:
                     )
                     session_data["token_hash"] = token_hash_primary
                     cache_normalize_required = True
-                except Exception as normalize_exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as normalize_exc:
                     logger.warning(
                         "Failed to normalize session token hash for session %s: %s",
                         session_data.get("id"),
@@ -1236,7 +1247,7 @@ class SessionManager:
 
         except SessionRevokedException:
             raise
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error validating session: {e}")
             return None
 
@@ -1250,7 +1261,7 @@ class SessionManager:
         if not self._initialized:
             await self.initialize()
 
-        session_details: Optional[Dict[str, Any]] = None
+        session_details: Optional[dict[str, Any]] = None
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
@@ -1269,9 +1280,9 @@ class SessionManager:
             else:
                 logger.info(f"Revoked session {session_id}")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke session: {e}")
-            raise SessionError(f"Failed to revoke session: {e}")
+            raise SessionError(f"Failed to revoke session: {e}") from e
         else:
             if session_details:
                 await self._blacklist_session_tokens(
@@ -1283,18 +1294,22 @@ class SessionManager:
     async def revoke_all_user_sessions(
         self,
         user_id: int,
-        except_session_id: Optional[int] = None
-    ):
+        except_session_id: Optional[int] = None,
+        reason: str = "User requested logout from all devices",
+    ) -> int:
         """Revoke all sessions for a user, optionally except one"""
         if not self._initialized:
             await self.initialize()
 
+        affected = 0
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            await repo.revoke_all_sessions_for_user(
-                user_id=user_id,
-                except_session_id=except_session_id,
+            affected = int(
+                await repo.revoke_all_sessions_for_user(
+                    user_id=user_id,
+                    except_session_id=except_session_id,
+                )
             )
 
             # Clear from cache
@@ -1306,26 +1321,28 @@ class SessionManager:
             else:
                 logger.info(f"Revoked all sessions for user {user_id}")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke user sessions: {e}")
-            raise SessionError(f"Failed to revoke sessions: {e}")
+            raise SessionError(f"Failed to revoke sessions: {e}") from e
 
         # After sessions are marked revoked, ensure associated JTIs are blacklisted
         try:
             blacklist = get_token_blacklist()
-            await blacklist.revoke_all_user_tokens(user_id)
-        except Exception as bl_error:
+            await blacklist.revoke_all_user_tokens(user_id, reason=reason)
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as bl_error:
             if self.settings.PII_REDACT_LOGS:
                 logger.warning(f"Failed to blacklist tokens for authenticated user (details redacted): {bl_error}")
             else:
                 logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
+
+        return affected
 
     async def refresh_session(
         self,
         refresh_token: str,
         new_access_token: str,
         new_refresh_token: Optional[str] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Refresh a session with new tokens"""
         if not self._initialized:
             await self.initialize()
@@ -1357,6 +1374,10 @@ class SessionManager:
             )
             if not session_data:
                 raise InvalidSessionError()
+            expected_access_hash = session_data.get("token_hash")
+            expected_refresh_hash = session_data.get("refresh_token_hash")
+            if not expected_access_hash or not expected_refresh_hash:
+                raise InvalidSessionError()
 
             # Validate token subject/session binding before updating session records.
             try:
@@ -1367,9 +1388,9 @@ class SessionManager:
                     self._validate_token_binding(refresh_claims, session_data, token_label="refresh")
             except InvalidSessionError:
                 raise
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Refresh session: token binding validation failed: {exc}")
-                raise InvalidSessionError()
+                raise InvalidSessionError() from exc
 
             if new_refresh_token:
                 refresh_hash_update = self.hash_token(new_refresh_token)
@@ -1379,8 +1400,10 @@ class SessionManager:
                 encrypted_refresh_token = self.encrypt_token(refresh_token)
 
             # Update session with new tokens
-            await repo.update_session_tokens_for_refresh(
+            updated = await repo.update_session_tokens_for_refresh(
                 session_id=session_data["id"],
+                expected_access_hash=expected_access_hash,
+                expected_refresh_hash=expected_refresh_hash,
                 new_access_hash=new_access_hash,
                 access_jti=access_jti,
                 expires_at=expires_at,
@@ -1390,6 +1413,9 @@ class SessionManager:
                 refresh_expires_at=refresh_expires_at,
                 encrypted_refresh_token=encrypted_refresh_token,
             )
+            if not updated:
+                # Compare-and-swap failed: session was refreshed/revoked/expired concurrently.
+                raise InvalidSessionError()
 
             # Update cache
             if self.redis_client:
@@ -1416,9 +1442,9 @@ class SessionManager:
 
         except InvalidSessionError:
             raise
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to refresh session: {e}")
-            raise SessionError(f"Failed to refresh session: {e}")
+            raise SessionError(f"Failed to refresh session: {e}") from e
 
     async def update_session_tokens(
         self,
@@ -1480,9 +1506,9 @@ class SessionManager:
 
             logger.debug(f"Updated session {session_id} with token hashes")
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update session tokens: {e}")
-            raise SessionError(f"Failed to update session tokens: {e}")
+            raise SessionError(f"Failed to update session tokens: {e}") from e
 
     async def is_token_blacklisted(self, token: str, jti: Optional[str] = None) -> bool:
         """
@@ -1511,7 +1537,7 @@ class SessionManager:
                     from jose import jwt as _jwt  # Lazy import to avoid top-level dependency
                     claims = _jwt.get_unverified_claims(token)
                     jti_value = claims.get("jti")
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.warning(f"Failed to extract JTI from token; treating as revoked: {exc}")
                     return True
 
@@ -1524,7 +1550,7 @@ class SessionManager:
                 blacklist = get_token_blacklist()
                 if await blacklist.is_blacklisted(jti_value):
                     return True
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"Token blacklist check failed; treating token as revoked: {exc}")
                 return True
 
@@ -1542,19 +1568,17 @@ class SessionManager:
             # Check database for revoked sessions
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            if await repo.has_revoked_session_for_token_hash_candidates(token_hashes):
-                return True
-            return False
+            return bool(await repo.has_revoked_session_for_token_hash_candidates(token_hashes))
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error checking token blacklist; treating token as revoked: {e}")
             return True
 
-    async def get_user_sessions(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_user_sessions(self, user_id: int) -> list[dict[str, Any]]:
         """Get all sessions for a user (alias for get_active_sessions)"""
         return await self.get_active_sessions(user_id)
 
-    async def get_active_sessions(self, user_id: int) -> List[Dict[str, Any]]:
+    async def get_active_sessions(self, user_id: int) -> list[dict[str, Any]]:
         """Get all active sessions for a user"""
         if not self._initialized:
             await self.initialize()
@@ -1563,7 +1587,7 @@ class SessionManager:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
             return await repo.get_active_sessions_for_user(user_id)
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get active sessions: {e}")
             return []
 
@@ -1588,7 +1612,7 @@ class SessionManager:
 
             return int(deleted or 0)
 
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Session cleanup failed: {e}")
             return 0
 
@@ -1617,10 +1641,7 @@ class SessionManager:
             }
 
             # Calculate TTL - ensure expires_at is timezone-aware for comparison
-            if expires_at.tzinfo is None:
-                expires_at_aware = expires_at.replace(tzinfo=timezone.utc)
-            else:
-                expires_at_aware = expires_at
+            expires_at_aware = expires_at.replace(tzinfo=timezone.utc) if expires_at.tzinfo is None else expires_at
             ttl = int((expires_at_aware - datetime.now(timezone.utc)).total_seconds())
             if ttl > 0:
                 # Cache session data
@@ -1637,7 +1658,7 @@ class SessionManager:
         except RedisError as e:
             logger.warning(f"Failed to cache session: {e}")
 
-    async def _get_cached_session(self, token_hash: str) -> Optional[Dict[str, Any]]:
+    async def _get_cached_session(self, token_hash: str) -> Optional[dict[str, Any]]:
         """Get session metadata from Redis cache (if still valid)."""
         if not self.redis_client:
             return None
@@ -1763,7 +1784,7 @@ class SessionManager:
                 return None
             except RedisError as exc:
                 logger.warning("Failed to read ephemeral value from Redis: {}", exc)
-            except Exception as exc:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug("Failed to decrypt ephemeral value: {}", exc)
                 return None
         now = time.monotonic()
@@ -1777,7 +1798,7 @@ class SessionManager:
                 return None
         try:
             return self.decrypt_token(encrypted)
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Failed to decrypt ephemeral value: {}", exc)
             return None
 
@@ -1811,7 +1832,7 @@ class SessionManager:
 
     async def _blacklist_session_tokens(
         self,
-        sessions: List[Dict[str, Any]],
+        sessions: list[dict[str, Any]],
         *,
         reason: Optional[str],
         revoked_by: Optional[int],
@@ -1820,7 +1841,7 @@ class SessionManager:
             return
         try:
             blacklist = get_token_blacklist()
-        except Exception as exc:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"AuthNZ blacklist unavailable for session revocation: {exc}")
             return
 
@@ -1832,10 +1853,8 @@ class SessionManager:
             refresh_exp = self._coerce_datetime(entry.get("refresh_expires_at"))
 
             if access_jti and access_exp:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     blacklist.hint_blacklisted(access_jti, access_exp)
-                except Exception:
-                    pass
                 try:
                     await blacklist.revoke_token(
                         jti=access_jti,
@@ -1846,14 +1865,12 @@ class SessionManager:
                         revoked_by=revoked_by,
                         ip_address=None,
                     )
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to persist access-token blacklist entry {access_jti}: {exc}")
 
             if refresh_jti and refresh_exp:
-                try:
+                with suppress(_SESSION_MANAGER_NONCRITICAL_EXCEPTIONS):
                     blacklist.hint_blacklisted(refresh_jti, refresh_exp)
-                except Exception:
-                    pass
                 try:
                     await blacklist.revoke_token(
                         jti=refresh_jti,
@@ -1864,7 +1881,7 @@ class SessionManager:
                         revoked_by=revoked_by,
                         ip_address=None,
                     )
-                except Exception as exc:
+                except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                     logger.debug(f"Failed to persist refresh-token blacklist entry {refresh_jti}: {exc}")
 
     async def shutdown(self):
@@ -1879,14 +1896,14 @@ class SessionManager:
                     loop = None
                 if loop is None or not loop.is_closed():
                     self.scheduler.shutdown(wait=False)
-        except Exception as e:
+        except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             # In tests, teardown may run after the loop is closed; ignore scheduler shutdown errors
             logger.debug(f"SessionManager scheduler shutdown skipped: {e}")
 
         if self.redis_client:
             try:
                 await self.redis_client.close()
-            except Exception as e:
+            except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
                 logger.debug(f"Ignoring Redis client shutdown error: {e}")
             finally:
                 self.redis_client = None

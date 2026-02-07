@@ -7,24 +7,42 @@ This module includes adapters for webhook and notification operations:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 from urllib.parse import urlparse
 
-from loguru import logger
-
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
-from tldw_Server_API.app.core.Workflows.adapters._common import (
-    resolve_context_user_id,
-    resolve_artifacts_dir,
-)
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import NotifyConfig, WebhookConfig
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.Workflows.adapters._common import (
+    resolve_artifacts_dir,
+    resolve_context_user_id,
+)
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import NotifyConfig, WebhookConfig
+
+_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+)
 
 
 @registry.register(
@@ -35,7 +53,7 @@ from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allo
     tags=["integration", "notification"],
     config_model=NotifyConfig,
 )
-async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_notify_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Send a notification via webhook (Slack/email-compatible JSON).
 
     Config:
@@ -61,21 +79,19 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         return {"dispatched": False, "test_mode": True}
 
     try:
-        tenant_id = str((context.get("tenant_id") or "default")) if isinstance(context, dict) else "default"
+        tenant_id = str(context.get("tenant_id") or "default") if isinstance(context, dict) else "default"
         ok = False
         try:
             ok = is_url_allowed_for_tenant(url, tenant_id)
-        except Exception:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
             ok = is_url_allowed(url)
 
         if not ok:
             return {"dispatched": False, "error": "blocked_egress"}
 
         headers = {"content-type": "application/json"}
-        try:
+        with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
             headers.update({k: str(v) for k, v in extra_headers.items()})
-        except Exception:
-            pass
 
         body = {"text": message}
         if subject:
@@ -90,7 +106,7 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         prov = "slack" if "slack" in host else "webhook"
         return {"dispatched": ok, "status_code": resp.status_code, "provider": prov}
 
-    except Exception as e:
+    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS as e:
         return {"dispatched": False, "error": str(e)}
 
 
@@ -102,7 +118,7 @@ async def run_notify_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["integration", "webhook"],
     config_model=WebhookConfig,
 )
-async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Send an HTTP request (with safe egress) or dispatch a local webhook event.
 
     Config (HTTP mode when 'url' provided):
@@ -132,7 +148,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
         if isinstance(v, str):
             try:
                 return _tmpl(v, context)
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 return v
         if isinstance(v, list):
             return [_render_value(x) for x in v]
@@ -143,7 +159,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
     def _resolve_json_ref(expr: str) -> Any:
         """Resolve a limited JSON reference like 'inputs.qa_samples' or 'prev.response_json.items|pluck:id'."""
         path = expr
-        pluck_field: Optional[str] = None
+        pluck_field: str | None = None
         # Support '|pluck:field'
         if "|pluck:" in path:
             path, tail = path.split("|pluck:", 1)
@@ -156,7 +172,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             else:
                 try:
                     cur = getattr(cur, part)
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     cur = None
                     break
         # Optional pluck across list of dicts
@@ -166,7 +182,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 try:
                     if isinstance(item, dict) and pluck_field in item:
                         out.append(item[pluck_field])
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     continue
             cur = out
         return cur
@@ -200,7 +216,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             if "://" in entry:
                 try:
                     host = urlparse(entry).hostname or ""
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     host = ""
             else:
                 # Strip path if present
@@ -218,22 +234,22 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 out.append(host)
         return out
 
-    def _resolve_signing_secret(ref: str) -> Optional[str]:
+    def _resolve_signing_secret(ref: str) -> str | None:
         if not ref:
             return None
         try:
             secrets = context.get("secrets") if isinstance(context, dict) else None
             if isinstance(secrets, dict) and ref in secrets:
                 return str(secrets.get(ref))
-        except Exception:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             val = os.getenv(ref, "")
             return val if val else None
-        except Exception:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
             return None
 
-    def _policy_allows(url_val: str) -> tuple[bool, Optional[str]]:
+    def _policy_allows(url_val: str) -> tuple[bool, str | None]:
         policy_cfg = config.get("egress_policy") or config.get("egress") or {}
         if not isinstance(policy_cfg, dict) or not policy_cfg:
             return True, None
@@ -249,7 +265,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 block_private_override=block_private if isinstance(block_private, bool) else None,
             )
             return result.allowed, result.reason
-        except Exception as e:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS as e:
             return False, str(e)
 
     def _record_blocked(url_val: str) -> None:
@@ -257,10 +273,10 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             host = urlparse(url_val).hostname or ""
             from tldw_Server_API.app.core.Metrics import increment_counter as _inc
             _inc("workflows_webhook_deliveries_total", labels={"status": "blocked", "host": host})
-        except Exception:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
             pass
 
-    from tldw_Server_API.app.core.Evaluations.webhook_manager import webhook_manager, WebhookEvent
+    from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent, webhook_manager
 
     user_id = resolve_context_user_id(context)
     if not user_id:
@@ -281,7 +297,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             try:
                 from tldw_Server_API.app.core.Security.egress import is_webhook_url_allowed_for_tenant
                 return is_webhook_url_allowed_for_tenant(url_val, tenant_id)
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 return is_url_allowed(url_val)
 
         try:
@@ -293,23 +309,21 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             url_t = str(url_t).strip()
             if not url_t:
                 return {"dispatched": False, "error": "missing_url"}
-            headers_r: Dict[str, str] = {}
+            headers_r: dict[str, str] = {}
             if isinstance(headers_cfg, dict):
                 for hk, hv in headers_cfg.items():
                     try:
                         headers_r[str(hk)] = str(_render_value(hv))
-                    except Exception:
+                    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                         headers_r[str(hk)] = str(hv)
             # Drop empty headers (avoid sending empty Authorization/X-API-KEY)
-            try:
+            with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                 headers_r = {k: v for k, v in headers_r.items() if isinstance(v, str) and v.strip()}
-            except Exception:
-                pass
             # If no explicit auth headers provided, allow secrets from workflow run to supply them
             try:
                 secrets = context.get("secrets") if isinstance(context, dict) else None
                 if isinstance(secrets, dict):
-                    has_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                    has_auth = any(k.lower() == "authorization" for k in headers_r) or any(k.lower() == "x-api-key" for k in headers_r)
                     if not has_auth:
                         _jwt = secrets.get("jwt") or secrets.get("bearer")
                         _api = secrets.get("api_key") or secrets.get("x_api_key")
@@ -317,7 +331,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                             headers_r["Authorization"] = f"Bearer {_jwt}"
                         elif _api:
                             headers_r["X-API-KEY"] = str(_api)
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 pass
             # Ensure content-type unless provided
             if "content-type" not in {k.lower(): v for k, v in headers_r.items()}:
@@ -325,14 +339,14 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             # Per-step allow/deny policy
             try:
                 step_allowed, reason = _policy_allows(url_t)
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 step_allowed, reason = (False, "policy_error")
             if not _global_allows(url_t) or not step_allowed:
                 _record_blocked(url_t)
                 return {"dispatched": False, "error": "blocked_egress", "reason": reason}
             # Default auth fallbacks for scheduled runs (optional)
             try:
-                _had_auth = any(k.lower() == "authorization" for k in headers_r.keys()) or any(k.lower() == "x-api-key" for k in headers_r.keys())
+                _had_auth = any(k.lower() == "authorization" for k in headers_r) or any(k.lower() == "x-api-key" for k in headers_r)
                 used_fallback = False
                 if not _had_auth:
                     _bear = os.getenv("WORKFLOWS_DEFAULT_BEARER_TOKEN", "").strip()
@@ -353,10 +367,10 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                             if _resp.status_code // 100 != 2:
                                 return {"dispatched": False, "error": "default_auth_validation_failed", "status_code": _resp.status_code}
                         context["_wf_default_auth_checked"] = True
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     # Non-fatal; allow the request to proceed
                     pass
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 pass
             # Render and prepare body
             body_raw = config.get("body") if ("body" in config) else (config.get("data") if ("data" in config) else None)
@@ -366,12 +380,12 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             try:
                 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager as _get_tm
                 _get_tm().inject_context(headers_r)
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 pass
             secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
             body_json_str = None
             # Prepare request kwargs
-            req_kwargs: Dict[str, Any] = {}
+            req_kwargs: dict[str, Any] = {}
             if method == "GET":
                 if isinstance(body_r, dict):
                     req_kwargs["params"] = body_r
@@ -409,7 +423,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                 elif signing_cfg:
                     # Truthy non-dict => fall back to env secret if available
                     secret = os.getenv("WORKFLOWS_WEBHOOK_SECRET", "")
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 pass
             if secret:
                 sig = hmac.new(secret.encode("utf-8"), (body_json_str or "").encode("utf-8"), hashlib.sha256).hexdigest()
@@ -420,11 +434,11 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
             follow_redirects = bool(config.get("follow_redirects") or config.get("allow_redirects") or False)
             try:
                 max_redirects = int(config.get("max_redirects") or os.getenv("HTTP_MAX_REDIRECTS", "5"))
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 max_redirects = int(os.getenv("HTTP_MAX_REDIRECTS", "5"))
             try:
                 max_bytes = int(config.get("max_bytes")) if config.get("max_bytes") is not None else None
-            except Exception:
+            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                 max_bytes = None
             try:
                 client_ctx = _wf_create_client(timeout=timeout_val, trust_env=False)
@@ -449,10 +463,8 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                     if not follow_redirects or resp.status_code not in (301, 302, 303, 307, 308):
                         break
                     location = resp.headers.get("location")
-                    try:
+                    with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                         resp.close()
-                    except Exception:
-                        pass
                     if not location:
                         return {"dispatched": False, "error": "redirect_missing_location"}
                     redirects += 1
@@ -461,7 +473,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                     try:
                         from urllib.parse import urljoin
                         cur_url = urljoin(cur_url, location)
-                    except Exception:
+                    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                         cur_url = location
                     if resp.status_code in (301, 302, 303) and method_cur not in ("GET", "HEAD"):
                         method_cur = "GET"
@@ -476,37 +488,31 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                         if clen:
                             try:
                                 if int(clen) > max_bytes:
-                                    try:
+                                    with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                                         r.close()
-                                    except Exception:
-                                        pass
                                     raise ValueError("response_too_large")
                             except ValueError:
                                 raise
-                            except Exception:
+                            except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                                 pass
                     buf = bytearray()
                     if max_bytes is None:
                         try:
                             data = r.read()
                             return data if data is not None else b""
-                        except Exception:
+                        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                             return b""
                         finally:
-                            try:
+                            with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                                 r.close()
-                            except Exception:
-                                pass
                     try:
                         for chunk in r.iter_bytes():
                             buf.extend(chunk)
                             if max_bytes is not None and len(buf) > max_bytes:
                                 raise ValueError("response_too_large")
                     finally:
-                        try:
+                        with contextlib.suppress(_WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS):
                             r.close()
-                        except Exception:
-                            pass
                     return bytes(buf)
 
                 ok = 200 <= resp.status_code < 300
@@ -515,7 +521,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                     host = urlparse(cur_url).hostname or ""
                     from tldw_Server_API.app.core.Metrics import increment_counter as _inc
                     _inc("workflows_webhook_deliveries_total", labels={"status": ("delivered" if ok else "failed"), "host": host})
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Optional artifact of response metadata
                 try:
@@ -529,7 +535,7 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                         context["add_artifact"](
                             type="webhook_response",
                             uri=f"file://{fpath}",
-                            size_bytes=len((fpath.read_bytes() if fpath.exists() else b"")),
+                            size_bytes=len(fpath.read_bytes() if fpath.exists() else b""),
                             mime_type="application/json",
                             metadata={"url": url},
                         )
@@ -540,29 +546,29 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                                 body_mime = "application/json"
                                 try:
                                     body_text = resp.text
-                                except Exception:
+                                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                                     body_text = ""
                                 # Pretty print JSON when possible
                                 try:
                                     parsed = resp.json()
                                     body_text = json.dumps(parsed, indent=2)
-                                except Exception:
+                                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                                     # keep as text/plain when not JSON
                                     body_mime = "text/plain"
                                 body_path.write_text(body_text, encoding="utf-8")
                                 context["add_artifact"](
                                     type="webhook_response_body",
                                     uri=f"file://{body_path}",
-                                    size_bytes=len((body_path.read_bytes() if body_path.exists() else b"")),
+                                    size_bytes=len(body_path.read_bytes() if body_path.exists() else b""),
                                     mime_type=body_mime,
                                     metadata={"url": url},
                                 )
-                        except Exception:
+                        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                             pass
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     pass
                 # Build outputs
-                out: Dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
+                out: dict[str, Any] = {"dispatched": ok, "status_code": resp.status_code}
                 try:
                     body_bytes = _read_response_bytes(resp)
                 except ValueError:
@@ -571,28 +577,28 @@ async def run_webhook_adapter(config: Dict[str, Any], context: Dict[str, Any]) -
                     return out
                 try:
                     enc = resp.encoding or "utf-8"
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     enc = "utf-8"
                 try:
                     text = body_bytes.decode(enc, errors="replace")
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     text = ""
                 try:
                     out["response_json"] = json.loads(text) if text else None
-                except Exception:
+                except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
                     if text:
                         out["response_text"] = text
                 return out
-        except Exception as e:
+        except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS as e:
             return {"dispatched": False, "error": str(e)}
 
     # Default: use registered webhooks
     try:
         event = WebhookEvent(event_name)  # type: ignore[arg-type]
-    except Exception:
+    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS:
         event = WebhookEvent.EVALUATION_PROGRESS
     try:
         await webhook_manager.send_webhook(user_id=user_id, event=event, evaluation_id="workflow", data=payload)
         return {"dispatched": True}
-    except Exception as e:
+    except _WORKFLOWS_WEBHOOK_NONCRITICAL_EXCEPTIONS as e:
         return {"dispatched": False, "error": str(e)}

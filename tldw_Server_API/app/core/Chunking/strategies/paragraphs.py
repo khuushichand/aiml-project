@@ -4,11 +4,12 @@ Paragraph-based chunking strategy.
 Splits text into chunks based on paragraph boundaries.
 """
 
-from typing import List, Optional, Any, Dict
 import re
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 from ..exceptions import InvalidInputError, ProcessingError
 
 # Maximum text size for paragraph chunking (50MB) - prevents DoS with ReDoS patterns
@@ -34,7 +35,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int = 2,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text by paragraphs.
 
@@ -107,21 +108,21 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         except Exception as e:
             logger.error(f"Error during paragraph chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}") from e
 
     def chunk_with_metadata(self,
                            text: str,
                            max_size: int = 2,
                            overlap: int = 0,
-                           **options) -> List[ChunkResult]:
+                           **options) -> list[ChunkResult]:
         """
         Chunk text by paragraphs and return with metadata using accurate source offsets.
 
         This implementation preserves the original character spans from the input
         text when computing start/end offsets. Paragraph boundaries are two or more
-        newlines (optionally with whitespace). Leading/trailing whitespace attached
-        to a paragraph is trimmed for content, but the offsets refer to the exact
-        positions in the original text for the trimmed content.
+        newlines (optionally with whitespace). By default, chunk text is sliced from
+        the original source span to retain spacing; pass align_text_to_source=False
+        to return a normalized join of trimmed paragraph content instead.
         """
         if not text or not text.strip():
             return []  # Consistent with other strategies
@@ -148,7 +149,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
             # Build paragraph spans directly from the original text
             # Use simple linear-time pattern: two or more newlines (avoids ReDoS with \s*)
             sep = re.compile(r"\n{2,}")
-            spans: List[tuple[int, int]] = []
+            spans: list[tuple[int, int]] = []
             pos = 0
             n = len(text)
 
@@ -188,7 +189,9 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
             logger.debug(f"Detected {len(spans)} paragraph spans")
 
             # Window the paragraph spans according to max_size/overlap
-            results: List[ChunkResult] = []
+            results: list[ChunkResult] = []
+            align_text_to_source = bool(options.get("align_text_to_source", True))
+            text_len = len(text)
             step = max(1, max_size - overlap)
             chunk_index = 0
             for i in range(0, len(spans), step):
@@ -201,9 +204,14 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
                     end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
                 except (IndexError, ValueError) as e:
                     logger.debug(f"Grapheme expansion failed for paragraph chunk {chunk_index}: {e}")
-                # Build display text by joining trimmed paragraph content with double newlines
-                parts = [text[s:e] for (s, e) in window]
-                chunk_text = "\n\n".join(p.strip() for p in parts)
+                if align_text_to_source:
+                    start_char = max(0, min(int(start_char), text_len))
+                    end_char = max(start_char, min(int(end_char), text_len))
+                    chunk_text = text[start_char:end_char]
+                else:
+                    # Build display text by joining trimmed paragraph content with double newlines
+                    parts = [text[s:e] for (s, e) in window]
+                    chunk_text = "\n\n".join(p.strip() for p in parts)
                 metadata = ChunkMetadata(
                     index=chunk_index,
                     start_char=start_char,
@@ -225,9 +233,9 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         except Exception as e:
             logger.error(f"Error during paragraph chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}") from e
 
-    def validate_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    def validate_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """
         Validate and normalize options for paragraph chunking.
 
@@ -240,8 +248,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
         validated = super().validate_options(options)
 
         # Ensure max_size is reasonable for paragraphs
-        if 'max_size' in validated:
-            if validated['max_size'] > 100:
-                logger.warning(f"Very large max_size for paragraphs: {validated['max_size']}")
+        if 'max_size' in validated and validated['max_size'] > 100:
+            logger.warning(f"Very large max_size for paragraphs: {validated['max_size']}")
 
         return validated

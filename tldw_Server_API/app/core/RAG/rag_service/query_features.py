@@ -6,19 +6,19 @@ This module provides query understanding, intent detection, query rewriting,
 and other advanced query processing capabilities.
 """
 
+import contextlib
+import os
 import re
-import hashlib
+from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Any, Optional, Tuple, Set
-from collections import defaultdict
-import json
+from typing import Any, Optional, cast
 
-from loguru import logger
-import os
 import nltk
-from nltk.corpus import wordnet, stopwords
+from loguru import logger
+from nltk.corpus import stopwords, wordnet
 from nltk.tokenize import word_tokenize
+
 
 # --- NLTK downloads guarded by timeout ---
 def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
@@ -27,10 +27,10 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
     Returns True on success, False on timeout/failure. Uses a daemon thread so
     it never blocks process shutdown if the network hangs.
     """
-    import threading
     import queue
+    import threading
 
-    q: "queue.Queue[bool]" = queue.Queue(maxsize=1)
+    q: queue.Queue[bool] = queue.Queue(maxsize=1)
 
     def _runner():
         ok = False
@@ -39,10 +39,8 @@ def _download_with_timeout(resource: str, timeout_s: int = 60) -> bool:
         except Exception as e:  # pragma: no cover - defensive
             logger.warning(f"NLTK download error for '{resource}': {e}")
             ok = False
-        try:
+        with contextlib.suppress(Exception):
             q.put_nowait(ok)
-        except Exception:
-            pass
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
@@ -110,12 +108,12 @@ class QueryAnalysis:
     cleaned_query: str
     intent: QueryIntent
     complexity: QueryComplexity
-    key_terms: List[str]
-    entities: List[str]
-    temporal_refs: List[str]
+    key_terms: list[str]
+    entities: list[str]
+    temporal_refs: list[str]
     question_type: Optional[str] = None
     domain: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -145,16 +143,16 @@ class QueryAnalyzer:
         self.domain_keywords = self._load_domain_keywords()
 
     @staticmethod
-    def _safe_word_tokenize(text: str) -> List[str]:
+    def _safe_word_tokenize(text: str) -> list[str]:
         """Tokenize text, falling back if punkt is unavailable."""
         try:
-            return word_tokenize(text)
+            return cast(list[str], word_tokenize(text))
         except LookupError:
             import re
             # Simple fallback: split into words and punctuation
             return re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
 
-    def _compile_intent_patterns(self) -> Dict[QueryIntent, List[re.Pattern]]:
+    def _compile_intent_patterns(self) -> dict[QueryIntent, list[re.Pattern]]:
         """Compile regex patterns for intent detection."""
         patterns = {
             QueryIntent.FACTUAL: [
@@ -193,7 +191,7 @@ class QueryAnalyzer:
         }
         return patterns
 
-    def _load_domain_keywords(self) -> Dict[str, Set[str]]:
+    def _load_domain_keywords(self) -> dict[str, set[str]]:
         """Load domain-specific keywords."""
         return {
             "technology": {"software", "hardware", "code", "programming", "algorithm",
@@ -274,7 +272,7 @@ class QueryAnalyzer:
         query_lower = query.lower()
 
         # Check each intent pattern
-        intent_scores = defaultdict(int)
+        intent_scores: defaultdict[QueryIntent, int] = defaultdict(int)
 
         for intent, patterns in self.intent_patterns.items():
             for pattern in patterns:
@@ -307,7 +305,7 @@ class QueryAnalyzer:
         else:
             return QueryComplexity.COMPLEX
 
-    def _extract_key_terms(self, query: str) -> List[str]:
+    def _extract_key_terms(self, query: str) -> list[str]:
         """Extract key terms from query."""
         words = self._safe_word_tokenize(query.lower())
 
@@ -327,7 +325,7 @@ class QueryAnalyzer:
 
         return unique_terms
 
-    def _extract_entities(self, query: str) -> List[str]:
+    def _extract_entities(self, query: str) -> list[str]:
         """Extract named entities from query."""
         entities = []
 
@@ -344,7 +342,7 @@ class QueryAnalyzer:
 
         return entities
 
-    def _extract_temporal_references(self, query: str) -> List[str]:
+    def _extract_temporal_references(self, query: str) -> list[str]:
         """Extract temporal references from query."""
         temporal_refs = []
 
@@ -418,14 +416,18 @@ class QueryRewriter:
     def rewrite_query(
         self,
         query: str,
-        strategies: Optional[List[str]] = None
-    ) -> List[QueryRewrite]:
+        strategies: Optional[list[str]] = None,
+        failed_docs: Optional[list[Any]] = None,
+        failure_reason: Optional[str] = None,
+    ) -> list[QueryRewrite]:
         """
         Rewrite query using various strategies.
 
         Args:
             query: Original query
             strategies: List of strategies to use
+            failed_docs: Optional list of documents that failed grading (for improve_for_retrieval)
+            failure_reason: Optional reason for low relevance (for improve_for_retrieval)
 
         Returns:
             List of query rewrites
@@ -433,7 +435,7 @@ class QueryRewriter:
         if strategies is None:
             strategies = ["synonym", "decompose", "generalize", "specify"]
 
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         # Analyze original query
         analysis = self.analyzer.analyze_query(query)
@@ -449,6 +451,8 @@ class QueryRewriter:
                 rewrites.extend(self._specify_query(query, analysis))
             elif strategy == "clarify":
                 rewrites.extend(self._clarify_query(query, analysis))
+            elif strategy == "improve_for_retrieval":
+                rewrites.extend(self._improve_for_retrieval(query, analysis, failed_docs, failure_reason))
 
         return rewrites
 
@@ -456,9 +460,9 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Rewrite query using synonyms."""
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         for term in analysis.key_terms:
             synonyms = self._get_synonyms(term)
@@ -479,9 +483,9 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Decompose complex query into simpler parts."""
-        rewrites = []
+        rewrites: list[QueryRewrite] = []
 
         if analysis.complexity != QueryComplexity.COMPLEX:
             return rewrites
@@ -506,7 +510,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Generalize specific query."""
         rewrites = []
 
@@ -533,7 +537,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Add specificity to vague query."""
         rewrites = []
 
@@ -563,7 +567,7 @@ class QueryRewriter:
         self,
         query: str,
         analysis: QueryAnalysis
-    ) -> List[QueryRewrite]:
+    ) -> list[QueryRewrite]:
         """Clarify ambiguous query."""
         rewrites = []
 
@@ -587,7 +591,7 @@ class QueryRewriter:
 
         return rewrites
 
-    def _get_synonyms(self, word: str) -> List[str]:
+    def _get_synonyms(self, word: str) -> list[str]:
         """Get synonyms for a word using WordNet."""
         synonyms = set()
 
@@ -599,6 +603,243 @@ class QueryRewriter:
 
         return list(synonyms)
 
+    # ========== SELF-CORRECTING RAG: Query Rewriting Loop (Stage 2) ==========
+
+    def _improve_for_retrieval(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+        failed_docs: Optional[list[Any]] = None,
+        failure_reason: Optional[str] = None,
+    ) -> list[QueryRewrite]:
+        """
+        Rewrite query to improve retrieval when document grading shows low relevance.
+
+        This strategy analyzes the failure reason and documents to reformulate the query
+        for better results. Part of Self-Correcting RAG Stage 2.
+
+        Args:
+            query: Original query
+            analysis: QueryAnalysis from analyzer
+            failed_docs: Documents that failed grading (may contain partial useful info)
+            failure_reason: Reason for low relevance (e.g., "avg_relevance_0.2")
+
+        Returns:
+            List of query rewrites designed to improve retrieval
+        """
+        rewrites = []
+
+        # Strategy 1: Remove modifiers that may be too restrictive
+        simplified = self._remove_modifiers(query, analysis)
+        if simplified and simplified != query:
+            rewrites.append(QueryRewrite(
+                rewritten_query=simplified,
+                rewrite_type="improve_for_retrieval",
+                confidence=0.75,
+                explanation="Removed restrictive modifiers to broaden search"
+            ))
+
+        # Strategy 2: Add focus terms based on domain/intent
+        focused = self._add_focus_terms(query, analysis)
+        if focused and focused != query:
+            rewrites.append(QueryRewrite(
+                rewritten_query=focused,
+                rewrite_type="improve_for_retrieval",
+                confidence=0.7,
+                explanation="Added domain-specific focus terms"
+            ))
+
+        # Strategy 3: Extract entities from failed docs and use them
+        if failed_docs:
+            entity_based = self._extract_and_use_entities(query, analysis, failed_docs)
+            if entity_based and entity_based != query:
+                rewrites.append(QueryRewrite(
+                    rewritten_query=entity_based,
+                    rewrite_type="improve_for_retrieval",
+                    confidence=0.65,
+                    explanation="Incorporated relevant entities from partial results"
+                ))
+
+        # Strategy 4: Convert to a more specific question form
+        question_form = self._convert_to_specific_question(query, analysis)
+        if question_form and question_form != query:
+            rewrites.append(QueryRewrite(
+                rewritten_query=question_form,
+                rewrite_type="improve_for_retrieval",
+                confidence=0.6,
+                explanation="Converted to more specific question form"
+            ))
+
+        # Strategy 5: Expand with related concepts
+        expanded = self._expand_with_related_concepts(query, analysis)
+        if expanded and expanded != query:
+            rewrites.append(QueryRewrite(
+                rewritten_query=expanded,
+                rewrite_type="improve_for_retrieval",
+                confidence=0.55,
+                explanation="Expanded with related concepts"
+            ))
+
+        return rewrites
+
+    def _remove_modifiers(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> Optional[str]:
+        """Remove restrictive modifiers that may be too specific."""
+        # Common restrictive modifiers that can narrow search too much
+        restrictive_patterns = [
+            r'\b(exactly|precisely|specifically|only|just|merely)\b',
+            r'\b(latest|newest|most recent|current)\b',
+            r'\b(best|top|greatest|finest)\b',
+            r'\b(in \d{4}|during \d{4}|from \d{4})\b',  # Year specifications
+        ]
+
+        modified = query
+        for pattern in restrictive_patterns:
+            modified = re.sub(pattern, '', modified, flags=re.I)
+
+        # Clean up extra whitespace
+        modified = ' '.join(modified.split()).strip()
+
+        if len(modified) < 5:  # Don't return if too short
+            return None
+
+        return modified if modified != query else None
+
+    def _add_focus_terms(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> Optional[str]:
+        """Add domain-specific focus terms to improve retrieval."""
+        # Domain-specific focus terms to add
+        domain_focus = {
+            "technology": ["software", "development", "programming"],
+            "science": ["research", "study", "analysis"],
+            "business": ["company", "market", "industry"],
+            "medical": ["health", "treatment", "clinical"],
+            "legal": ["law", "regulation", "compliance"],
+        }
+
+        if not analysis.domain:
+            return None
+
+        focus_terms = domain_focus.get(analysis.domain, [])
+        if not focus_terms:
+            return None
+
+        # Add the first focus term that's not already in the query
+        query_lower = query.lower()
+        for term in focus_terms:
+            if term not in query_lower:
+                return f"{query} {term}"
+
+        return None
+
+    def _extract_and_use_entities(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+        failed_docs: list[Any],
+    ) -> Optional[str]:
+        """Extract potentially useful entities from failed docs and incorporate them."""
+        if not failed_docs:
+            return None
+
+        # Extract text from failed docs
+        all_text = []
+        for doc in failed_docs[:5]:  # Limit to top 5
+            content = getattr(doc, 'content', '')
+            if content:
+                all_text.append(content[:500])  # First 500 chars
+
+        if not all_text:
+            return None
+
+        combined = ' '.join(all_text)
+
+        # Find capitalized words (potential entities) not in original query
+        entity_pattern = re.compile(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b')
+        found_entities = entity_pattern.findall(combined)
+
+        # Filter out common words and those already in query
+        query_lower = query.lower()
+        common_words = {'the', 'this', 'that', 'these', 'those', 'there', 'here', 'where', 'when', 'what', 'which', 'who', 'how', 'why'}
+        useful_entities = [
+            e for e in found_entities
+            if e.lower() not in query_lower
+            and e.lower() not in common_words
+            and len(e) > 2
+        ]
+
+        if not useful_entities:
+            return None
+
+        # Take most frequent entity
+        from collections import Counter
+        entity_counts = Counter(useful_entities)
+        top_entity = entity_counts.most_common(1)[0][0]
+
+        return f"{query} {top_entity}"
+
+    def _convert_to_specific_question(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> Optional[str]:
+        """Convert query to a more specific question form for better retrieval."""
+        # Skip if already a question
+        if analysis.question_type or query.strip().endswith('?'):
+            return None
+
+        # Map intents to question forms
+        intent_to_question = {
+            QueryIntent.FACTUAL: f"What are the key facts about {query}?",
+            QueryIntent.DEFINITIONAL: f"What is the definition and meaning of {query}?",
+            QueryIntent.CAUSAL: f"What causes {query} and why does it happen?",
+            QueryIntent.PROCEDURAL: f"What are the steps to {query}?",
+            QueryIntent.ANALYTICAL: f"What is the analysis and evaluation of {query}?",
+            QueryIntent.COMPARATIVE: f"How does {query} compare to alternatives?",
+            QueryIntent.TEMPORAL: f"What is the timeline and history of {query}?",
+            QueryIntent.EXPLORATORY: f"What are the main aspects of {query}?",
+        }
+
+        return intent_to_question.get(analysis.intent)
+
+    def _expand_with_related_concepts(
+        self,
+        query: str,
+        analysis: QueryAnalysis,
+    ) -> Optional[str]:
+        """Expand query with semantically related concepts."""
+        # Get hypernyms (broader concepts) for key terms
+        expanded_terms = []
+        for term in analysis.key_terms[:3]:  # Limit to first 3 key terms
+            try:
+                synsets = wordnet.synsets(term)
+                for syn in synsets[:1]:  # First synset
+                    hypernyms = syn.hypernyms()
+                    for hyp in hypernyms[:1]:  # First hypernym
+                        lemma = hyp.lemmas()[0].name().replace('_', ' ')
+                        if lemma.lower() not in query.lower():
+                            expanded_terms.append(lemma)
+                            break
+            except LookupError as exc:
+                logger.debug(
+                    "NLTK WordNet unavailable; skipping related concept expansion for '{}': {}",
+                    term,
+                    exc,
+                )
+                continue
+
+        if not expanded_terms:
+            return None
+
+        # Add the first expanded term
+        return f"{query} ({expanded_terms[0]})"
+
 
 class QueryRouter:
     """Routes queries to appropriate retrieval strategies."""
@@ -608,7 +849,7 @@ class QueryRouter:
         self.analyzer = QueryAnalyzer()
         self.routing_rules = self._define_routing_rules()
 
-    def _define_routing_rules(self) -> Dict[QueryIntent, Dict[str, Any]]:
+    def _define_routing_rules(self) -> dict[QueryIntent, dict[str, Any]]:
         """Define routing rules based on query intent."""
         return {
             QueryIntent.FACTUAL: {
@@ -643,7 +884,7 @@ class QueryRouter:
             }
         }
 
-    def route_query(self, query: str) -> Dict[str, Any]:
+    def route_query(self, query: str) -> dict[str, Any]:
         """
         Route query to appropriate retrieval strategy.
 

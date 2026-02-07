@@ -19,6 +19,7 @@ import { useQuickChatStore } from "@/store/quick-chat"
 import { useLayoutUiStore } from "@/store/layout-ui"
 import { useRouteTransitionStore } from "@/store/route-transition"
 import { QuickChatHelperButton } from "@/components/Common/QuickChatHelper"
+import { NotesDockHost } from "@/components/Common/NotesDock"
 import { CurrentChatModelSettings } from "../Common/Settings/CurrentChatModelSettings"
 import { Sidebar } from "../Option/Sidebar"
 import { Header } from "./Header"
@@ -31,6 +32,7 @@ import { ChatSidebar } from "@/components/Common/ChatSidebar"
 import { EventOnlyHosts } from "@/components/Common/EventHosts"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { setSettingsReturnTo } from "@/utils/settings-return"
+import { DOCUMENT_WORKSPACE_PATH } from "@/routes/route-paths"
 
 // Lazy-load Timeline to reduce initial bundle size (~1.2MB cytoscape)
 const TimelineModal = lazy(() =>
@@ -107,6 +109,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   const { demoEnabled } = useDemoMode()
   const [showChatSidebar] = useChatSidebar()
   const location = useLocation()
+  const isDocumentWorkspace = location.pathname === DOCUMENT_WORKSPACE_PATH
   const { clearChat, useOCR, chatMode, setChatMode, webSearch, setWebSearch } =
     useMessageOption()
   const queryClient = useQueryClient()
@@ -254,7 +257,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
   return (
     <>
       <OptionLayoutEffects />
-      <div className="flex min-h-screen w-full">
+      <div
+        className={classNames(
+          "flex w-full",
+          isDocumentWorkspace ? "h-screen min-h-0" : "min-h-screen"
+        )}
+      >
       {/* Persistent ChatSidebar when feature flag enabled */}
       {showChatSidebar && !hideHeader && (
         <ChatSidebar
@@ -265,7 +273,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
       )}
       <main
         className={classNames(
-          "relative flex-1 flex flex-col",
+          "relative flex min-h-0 flex-1 flex-col",
           hideHeader ? "bg-bg " : ""
         )}
         data-demo-mode={demoEnabled ? "on" : "off"}>
@@ -275,7 +283,12 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
             {shortcutLoading && renderShortcutOverlay()}
           </div>
         ) : (
-          <div className="relative flex min-h-[135vh] flex-col pt-2 sm:pt-3">
+          <div
+            className={classNames(
+              "relative flex flex-col",
+              isDocumentWorkspace ? "min-h-0 flex-1" : "min-h-[135vh]"
+            )}
+          >
             <div className="relative z-20 w-full">
               <Header
                 onToggleSidebar={toggleSidebar}
@@ -418,6 +431,9 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
 
         {/* Quick Ingest Modal Host - listens for global open events */}
         <QuickIngestModalHost />
+
+        {/* Notes Dock Host - floating notes panel */}
+        <NotesDockHost />
 
         {/* Ensure event-driven modals are available even when the header is hidden */}
         {hideHeader && <EventOnlyHosts commandPaletteProps={commandPaletteProps} />}

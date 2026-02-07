@@ -8,10 +8,8 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Docs updated (API: runs/tallies/OPML examples/gating table; Product PRD; Ops runbook). 410 shim for legacy Subscriptions is live.
 
 ## Remaining To-Do (v1 sign-off)
-- Verify “Runs” role gating against the real user object in your auth setup; otherwise rely on env toggles (`NEXT_PUBLIC_RUNS_REQUIRE_ADMIN`).
-- Optional: widen YouTube normalization edge tests (keep policy of 400 for handles/vanity).
-- Optional: add include_tallies aggregation mode to global runs CSV if admins need it.
-- Optional: deterministic rate-limit header assertions under a non-test configuration for OPML import and filters endpoints.
+- No additional v1 sign-off blockers tracked in this plan.
+- Ongoing work remains under Stage 5 (scale/reliability).
 
 ## Stage 1: QA, Deprecations, and Docs Finalization
 **Goal**: Ship Phase B wrap-up with hardened inputs, finalized docs, and visible metrics.
@@ -89,7 +87,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Optional: TTS brief generated and attached when item count below threshold.
   - tldw_Server_API/tests/Watchlists/test_tts_brief_optional.py
 
-**Status**: Partially Completed (templates/output delivery paths exist; advanced authoring/versioning and optional TTS are future work)
+**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; optional small-run TTS brief auto-generation is covered by integration tests)
 
 ---
 
@@ -111,7 +109,10 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: In Progress (scheduler/dedup tooling are broader platform items)
+**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed)
+
+Stage 5 scale target matrix is tracked in:
+- `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)
 
 ---
 
@@ -120,6 +121,17 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Keep tests deterministic; mock external services (feeds, email, Chatbook, TTS). Mark performance tests with `@pytest.mark.perf`.
 - Update Docs/Published/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
 
+### Operational Limits (enforced via Pydantic Query constraints)
+
+| Endpoint | Parameter | Max | Rejection |
+|---|---|---|---|
+| `/sources`, `/jobs`, `/runs`, `/tags`, `/groups` | `size` | 200 | 422 |
+| `/jobs/{id}/preview` | `limit` | 200 | 422 |
+| `/jobs/{id}/preview` | `per_source` | 100 | 422 |
+| `/runs/export.csv` | `size` | 1000 | 422 |
+| `/runs/export.csv` (aggregate tallies) | `scope` | must be `global` | 400 |
+| `/sources/{id}/seen` (target_user_id) | auth | admin required | 403 |
+
 Checklist (quick)
 - [x] CSV export tests (global/by-job + tallies; headers/rows)
 - [x] OPML export tests (multi-group OR + tag AND; large set; tag case-insensitivity)
@@ -127,5 +139,12 @@ Checklist (quick)
 - [x] Docs polish (gating table, OPML examples, regex flags note, Admin Items/CSV)
 - [x] Preview endpoint tests (RSS + site; include-only on/off)
 - [x] Rate-limit headers strict test (non-test mode via monkeypatch)
-- [ ] Verify Runs role gating against real user object (or disable via env)
-- [ ] Optional: CSV include_tallies aggregation mode (API + UI)
+- [x] Verify Runs role gating against real user object (or disable via env)
+- [x] Optional: CSV include_tallies aggregation mode (API + UI)
+- [x] Stage 5: scheduler controls focused tests (`test_scheduler_controls.py`)
+- [x] Stage 5: dedup/seen inspect-reset tools + tests (`test_dedup_seen_tools.py`)
+- [x] Stage 5: performance sanity test scaffold (`test_perf_scenarios.py`)
+- [x] Stage 5: high-cardinality source/job performance coverage (`test_perf_scenarios.py`)
+- [x] Stage 5: runs/export/details API load validation (`test_watchlists_scale_load_api.py`)
+- [x] Stage 5: operational limits boundary tests (`test_operational_limits.py`)
+- [x] Stage 5: admin UI dedup/seen drawer (`SourceSeenDrawer.tsx` + component tests)

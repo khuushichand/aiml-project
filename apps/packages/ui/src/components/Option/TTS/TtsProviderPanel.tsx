@@ -33,6 +33,8 @@ type Props = {
   activeVoices: TldwTtsVoiceInfo[]
   providersInfo?: TldwTtsProvidersInfo | null
   withCard?: boolean
+  currentPreset?: string
+  onSelectPreset?: (preset: string) => void
 }
 
 const { Paragraph, Text } = Typography
@@ -46,16 +48,17 @@ export const TtsProviderPanel: React.FC<Props> = ({
   activeProviderCaps,
   activeVoices,
   providersInfo,
-  withCard = true
+  withCard = true,
+  currentPreset,
+  onSelectPreset
 }) => {
   const { t } = useTranslation("playground")
 
   const handleFocusProviderSelect = () => {
     const el = document.getElementById("tts-provider-select")
-    if (el) {
-      ;(el as HTMLElement).focus()
-      ;(el as HTMLElement).click()
-    }
+    if (!(el instanceof HTMLElement)) return
+    el.focus()
+    el.click()
   }
 
   const content = (
@@ -209,6 +212,28 @@ export const TtsProviderPanel: React.FC<Props> = ({
               "Adjust your TTS provider, model, and voice. These settings are reused when you play audio from chat or media."
             )}
           </Paragraph>
+          {onSelectPreset && (
+            <div className="flex flex-wrap items-center gap-2 pb-2">
+              <Text className="text-xs text-text-subtle">
+                {t("playground:tts.preset", "Preset")}:
+              </Text>
+              <Space size="small">
+                {["fast", "balanced", "quality"].map((preset) => (
+                  <Button
+                    key={preset}
+                    size="small"
+                    type={currentPreset === preset ? "primary" : "default"}
+                    onClick={() => onSelectPreset(preset)}
+                  >
+                    {t(
+                      `playground:tts.preset_${preset}`,
+                      preset[0].toUpperCase() + preset.slice(1)
+                    )}
+                  </Button>
+                ))}
+              </Space>
+            </div>
+          )}
           {provider === "browser" && (
             <Text type="secondary" className="text-xs block">
               {t(

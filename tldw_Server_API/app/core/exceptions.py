@@ -1,7 +1,14 @@
-from fastapi import FastAPI, Request, status
+from typing import Any, Optional
+
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from loguru import logger
-from typing import Any, Optional
+
+DEFAULT_VALIDATION_STATUS = getattr(
+    status,
+    "HTTP_422_UNPROCESSABLE_CONTENT",
+    status.HTTP_422_UNPROCESSABLE_ENTITY,
+)
 
 
 class VideoProcessingError(Exception):
@@ -30,6 +37,22 @@ class TokenizerUnavailable(Exception):
 
 class BadRequestError(ValueError):
     """Raised when a caller provides invalid arguments for an operation."""
+
+
+class ValidationError(BadRequestError):
+    """Raised when validation of input parameters fails."""
+
+
+class APIValidationError(HTTPException):
+    """Raised when API input validation fails and should return HTTP 422."""
+
+    def __init__(self, detail: Any, *, status_code: int | None = None) -> None:
+        resolved_status = status_code if status_code is not None else DEFAULT_VALIDATION_STATUS
+        super().__init__(status_code=resolved_status, detail=detail)
+
+
+class SyncCallInEventLoopError(BadRequestError):
+    """Raised when a sync chat call is made inside a running event loop."""
 
 
 class StreamingProtocolError(Exception):
@@ -89,6 +112,10 @@ class UnsafeUserPathError(StoragePathValidationError):
 
 class AdminDataOpsError(ValueError):
     """Base exception for admin data ops validation errors."""
+
+
+class ToolCatalogConflictError(AdminDataOpsError):
+    """Raised when a tool catalog already exists."""
 
 
 class UnknownBackupDatasetError(AdminDataOpsError):

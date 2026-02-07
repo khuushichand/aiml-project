@@ -4,70 +4,74 @@ API endpoints for character chat session management.
 Provides CRUD operations for chat sessions and character-specific completions.
 """
 
+import asyncio
+import contextlib
+import hashlib
 import json
+import os
+import random
+import re
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Literal
+from typing import Any, Literal, Optional
+
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     HTTPException,
-    Query,
     Path,
-    status,
-    Body,
+    Query,
     Response,
-
+    status,
 )
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from collections import defaultdict, deque
-import time
-import os
-import asyncio
-import random
 
 # Database and authentication dependencies
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    ConflictError,
-    InputError
-)
 
 # Schemas
 from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import (
-    ChatSessionCreate,
-    ChatSessionResponse,
-    ChatSessionUpdate,
-    ChatSessionListResponse,
-    MessageResponse,
-
+    AuthorNoteInfoResponse,
     CharacterChatCompletionPrepRequest,
     CharacterChatCompletionPrepResponse,
     CharacterChatCompletionV2Request,
     CharacterChatCompletionV2Response,
     CharacterChatStreamPersistRequest,
     CharacterChatStreamPersistResponse,
+    ChatSessionCreate,
+    ChatSessionListResponse,
+    ChatSessionResponse,
+    ChatSessionUpdate,
+    ChatSettingsResponse,
+    ChatSettingsUpdate,
+    DiagnosticTurnEntry,
+    GreetingItem,
+    GreetingListResponse,
+    GreetingSelectRequest,
+    GreetingSelectResponse,
+    LorebookDiagnosticExportResponse,
+    MessageResponse,
+    PresetCreate,
+    PresetDetail,
+    PresetListResponse,
+    PresetTokenInfo,
+    PresetUpdate,
 )
+from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
+    record_byok_missing_credentials,
+    resolve_byok_credentials,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 # Character chat helpers
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
-    start_new_chat_session,
-    post_message_to_conversation,
-    retrieve_conversation_messages_for_ui,
-    load_chat_and_character,
     map_sender_to_role,
+    post_message_to_conversation,
     replace_placeholders,
-)
-
-
-# Chat helpers and utilities
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    get_or_create_conversation,
-    load_conversation_history
 )
 
 # Rate limiting
@@ -75,30 +79,77 @@ from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import (
     get_character_rate_limiter,
 )
 
-# For chat completions
-from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
-from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
-    record_byok_missing_credentials,
-    resolve_byok_credentials,
-)
-from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
-
-# Completion schemas centralized in schemas/chat_session_schemas.py
-from tldw_Server_API.app.core.Streaming.streams import SSEStream
-from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
-from tldw_Server_API.app.core.Utils.common import parse_boolean
-
 # Import shared constants
 from tldw_Server_API.app.core.Character_Chat.constants import (
-    MAX_STREAMING_CHUNKS,
     MAX_STREAMING_BYTES,
-    MAX_TOOL_CALLS_SIZE,
+    MAX_STREAMING_CHUNKS,
     MAX_TOOL_CALLS_COUNT,
+    MAX_TOOL_CALLS_SIZE,
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
 )
+from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
+    resolve_character_generation_settings,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    DEFAULT_PROMPT_PRESET,
+    build_character_system_prompt,
+    build_custom_system_prompt,
+    resolve_character_prompt_preset,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
+    sanitize_sender_name,
+)
+
+# Chat helpers and utilities
+# For chat completions
+from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
+from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
+from tldw_Server_API.app.core.LLM_Calls.sse import ensure_sse_line, normalize_provider_line, sse_done
+
+# Completion schemas centralized in schemas/chat_session_schemas.py
+from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.Utils.common import parse_boolean
+
+_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    json.JSONDecodeError,
+    HTTPException,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
 THROTTLE_WINDOW_SIZE = 100
+MAX_CHAT_SETTINGS_BYTES = 200_000
+MAX_AUTHOR_NOTE_CHARS = 20_000
+DEFAULT_AUTO_SUMMARY_THRESHOLD_MESSAGES = 40
+DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES = 12
+MAX_AUTO_SUMMARY_LINES = 24
+MAX_AUTO_SUMMARY_LINE_CHARS = 220
+MAX_AUTO_SUMMARY_CONTENT_CHARS = 8_000
 
 def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> str:
     if value is None:
@@ -108,7 +159,7 @@ def _safe_replace_placeholders(value: Any, char_name: str, user_name: str) -> st
         return ""
     try:
         return replace_placeholders(text, char_name, user_name)
-    except Exception as exc:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Placeholder replacement failed: {}", exc)
         return text
 
@@ -155,7 +206,7 @@ def _validate_and_truncate_tool_calls(tool_calls: Any) -> Optional[list]:
 
 
 def _verify_chat_ownership(
-    conversation: Optional[Dict[str, Any]],
+    conversation: Optional[dict[str, Any]],
     user_id: Any,
     chat_id: str
 ) -> None:
@@ -198,8 +249,8 @@ class _BoundedThrottleCache:
     """
 
     def __init__(self):
-        self._data: Dict[str, deque] = {}
-        self._last_access: Dict[str, float] = {}
+        self._data: dict[str, deque] = {}
+        self._last_access: dict[str, float] = {}
         self._lock: Optional[asyncio.Lock] = None
         self._lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -219,6 +270,29 @@ class _BoundedThrottleCache:
                 self._data[key] = deque(maxlen=THROTTLE_WINDOW_SIZE)
             self._last_access[key] = now
             return self._data[key]
+
+    async def check_and_record(self, key: str, max_hits: int, window_seconds: float) -> bool:
+        """Atomically enforce windowed limit and record a hit if allowed."""
+        current_loop = asyncio.get_running_loop()
+        if self._lock is None or self._lock_loop is not current_loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = current_loop
+        async with self._lock:
+            now = time.time()
+            if len(self._data) > THROTTLE_CACHE_MAX_KEYS:
+                self._cleanup(now)
+            window = self._data.get(key)
+            if window is None:
+                window = deque(maxlen=THROTTLE_WINDOW_SIZE)
+                self._data[key] = window
+            while window and (now - window[0]) > window_seconds:
+                window.popleft()
+            if len(window) >= max_hits:
+                self._last_access[key] = now
+                return False
+            window.append(now)
+            self._last_access[key] = now
+            return True
 
     def _cleanup(self, now: float) -> None:
         """Remove entries not accessed recently."""
@@ -249,7 +323,11 @@ def reset_complete_windows() -> None:
 # Helper Functions
 # ========================================================================
 
-def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessionResponse:
+def _convert_db_conversation_to_response(
+    conv_data: dict[str, Any],
+    *,
+    settings: Optional[dict[str, Any]] = None,
+) -> ChatSessionResponse:
     """Convert database conversation to response model."""
     return ChatSessionResponse(
         id=conv_data.get('id', ''),
@@ -264,10 +342,11 @@ def _convert_db_conversation_to_response(conv_data: Dict[str, Any]) -> ChatSessi
         created_at=conv_data.get('created_at', datetime.now(timezone.utc)),
         last_modified=conv_data.get('last_modified', datetime.now(timezone.utc)),
         message_count=conv_data.get('message_count', 0),
-        version=conv_data.get('version', 1)
+        version=conv_data.get('version', 1),
+        settings=settings,
     )
 
-def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse:
+def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse:
     """Convert database message to response model."""
     return MessageResponse(
         id=msg_data.get('id', ''),
@@ -281,6 +360,1524 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
         version=msg_data.get('version', 1)
     )
 
+def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
+    """Validate settings payload size, shape, and known enum fields."""
+    try:
+        encoded = json.dumps(settings).encode("utf-8")
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid settings payload: {exc}"
+        ) from exc
+
+    if len(encoded) > MAX_CHAT_SETTINGS_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Settings payload exceeds {MAX_CHAT_SETTINGS_BYTES} bytes"
+        )
+
+    author_note = settings.get("authorNote")
+    if isinstance(author_note, str) and len(author_note) > MAX_AUTHOR_NOTE_CHARS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"authorNote exceeds {MAX_AUTHOR_NOTE_CHARS} characters"
+        )
+
+    known_enum_fields = {
+        "greetingScope": {"chat", "character"},
+        "presetScope": {"chat", "character"},
+        "memoryScope": {"shared", "character", "both"},
+    }
+    for key, allowed_values in known_enum_fields.items():
+        value = settings.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str) or value.strip().lower() not in allowed_values:
+            allowed_display = ", ".join(sorted(allowed_values))
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key}. Allowed values: {allowed_display}"
+            )
+
+    chat_preset_override = settings.get("chatPresetOverrideId")
+    if chat_preset_override is not None and not isinstance(chat_preset_override, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid chatPresetOverrideId. Expected string or null",
+        )
+
+    schema_version = settings.get("schemaVersion")
+    if schema_version is not None and (not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid schemaVersion. Expected integer >= 1"
+        )
+
+    updated_at = settings.get("updatedAt")
+    if updated_at is not None and _parse_iso_timestamp(updated_at) is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Invalid updatedAt. Expected ISO timestamp string"
+        )
+
+    memory_by_id = settings.get("characterMemoryById")
+    if memory_by_id is not None:
+        if not isinstance(memory_by_id, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid characterMemoryById. Expected object map"
+            )
+        for character_id, entry in memory_by_id.items():
+            if isinstance(entry, dict):
+                note = entry.get("note")
+                if note is not None and not isinstance(note, str):
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid characterMemoryById.{character_id}.note. Expected string"
+                    )
+                if isinstance(note, str) and len(note) > MAX_AUTHOR_NOTE_CHARS:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"characterMemoryById.{character_id}.note exceeds {MAX_AUTHOR_NOTE_CHARS} characters"
+                    )
+                entry_updated_at = entry.get("updatedAt")
+                if entry_updated_at is not None and _parse_iso_timestamp(entry_updated_at) is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid characterMemoryById.{character_id}.updatedAt. Expected ISO timestamp string"
+                    )
+                continue
+            if isinstance(entry, str):
+                if len(entry) > MAX_AUTHOR_NOTE_CHARS:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"characterMemoryById.{character_id} exceeds {MAX_AUTHOR_NOTE_CHARS} characters"
+                    )
+                continue
+            if entry is None:
+                continue
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid characterMemoryById.{character_id}. Expected object, string, or null"
+            )
+
+    def _validate_generation_override_object(value: Any, key_name: str) -> None:
+        if value is None:
+            return
+        if not isinstance(value, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}. Expected object",
+            )
+
+        enabled = value.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}.enabled. Expected boolean",
+            )
+
+        numeric_fields: tuple[tuple[str, float, float], ...] = (
+            ("temperature", 0.0, 2.0),
+            ("top_p", 0.0, 1.0),
+            ("repetition_penalty", 0.0, 3.0),
+        )
+        for numeric_key, min_value, max_value in numeric_fields:
+            numeric_value = value.get(numeric_key)
+            if numeric_value is None:
+                continue
+            if isinstance(numeric_value, bool) or not isinstance(numeric_value, (int, float)):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Invalid {key_name}.{numeric_key}. "
+                        f"Expected number between {min_value} and {max_value}"
+                    ),
+                )
+            if numeric_value < min_value or numeric_value > max_value:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Invalid {key_name}.{numeric_key}. "
+                        f"Expected number between {min_value} and {max_value}"
+                    ),
+                )
+
+        stop = value.get("stop")
+        if stop is not None and (not isinstance(stop, list) or any(not isinstance(item, str) for item in stop)):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}.stop. Expected array of strings",
+            )
+
+        override_updated_at = value.get("updatedAt")
+        if override_updated_at is not None and _parse_iso_timestamp(override_updated_at) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid {key_name}.updatedAt. Expected ISO timestamp string",
+            )
+
+    _validate_generation_override_object(settings.get("chatGenerationOverride"), "chatGenerationOverride")
+    # Backward-compat: accept prior key spelling while clients migrate.
+    _validate_generation_override_object(settings.get("generationOverrides"), "generationOverrides")
+
+    summary_settings = settings.get("summary")
+    if summary_settings is not None:
+        if not isinstance(summary_settings, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid summary. Expected object"
+            )
+        source_range = summary_settings.get("sourceRange")
+        if source_range is not None and not isinstance(source_range, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid summary.sourceRange. Expected object"
+            )
+        summary_updated_at = summary_settings.get("updatedAt")
+        if summary_updated_at is not None and _parse_iso_timestamp(summary_updated_at) is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Invalid summary.updatedAt. Expected ISO timestamp string"
+            )
+
+
+def _parse_iso_timestamp(value: Any) -> Optional[float]:
+    """Parse ISO timestamp and return epoch seconds, or None when invalid."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _normalize_memory_entry(entry: Any) -> Optional[dict[str, Any]]:
+    """Normalize a characterMemoryById entry while preserving extra fields."""
+    if entry is None:
+        return None
+    if isinstance(entry, dict):
+        normalized = dict(entry)
+        note = normalized.get("note")
+        if note is None:
+            normalized["note"] = ""
+        elif not isinstance(note, str):
+            normalized["note"] = str(note)
+        return normalized
+    if isinstance(entry, str):
+        return {"note": entry}
+    return None
+
+
+def _merge_character_memory_by_id(
+    server_map_raw: Any,
+    incoming_map_raw: Any,
+    *,
+    server_updated_at_epoch: float,
+    incoming_updated_at_epoch: float,
+) -> Optional[dict[str, Any]]:
+    """Merge memory map by entry updatedAt with server-wins tie-breaks."""
+    if not isinstance(server_map_raw, dict) and not isinstance(incoming_map_raw, dict):
+        return None
+
+    server_map = server_map_raw if isinstance(server_map_raw, dict) else {}
+    incoming_map = incoming_map_raw if isinstance(incoming_map_raw, dict) else {}
+
+    merged: dict[str, Any] = {}
+    keys = set(server_map.keys()) | set(incoming_map.keys())
+    for key in keys:
+        server_entry = _normalize_memory_entry(server_map.get(key))
+        incoming_entry = _normalize_memory_entry(incoming_map.get(key))
+
+        if server_entry is None and incoming_entry is None:
+            continue
+        if server_entry is None:
+            merged[str(key)] = incoming_entry
+            continue
+        if incoming_entry is None:
+            merged[str(key)] = server_entry
+            continue
+
+        server_entry_updated_at = _parse_iso_timestamp(server_entry.get("updatedAt")) or server_updated_at_epoch
+        incoming_entry_updated_at = _parse_iso_timestamp(incoming_entry.get("updatedAt")) or incoming_updated_at_epoch
+        if incoming_entry_updated_at > server_entry_updated_at:
+            merged[str(key)] = incoming_entry
+        else:
+            merged[str(key)] = server_entry
+
+    return merged
+
+
+def _merge_conversation_settings(
+    server_settings_raw: Any,
+    incoming_settings_raw: Any,
+) -> dict[str, Any]:
+    """Merge settings with timestamp-aware conflict rules and per-entry memory reconciliation.
+
+    Rules:
+    - If incoming and server both provide valid ``updatedAt`` values, apply LWW with
+      server-wins ties.
+    - If incoming omits ``updatedAt``, treat it as an intentional patch update so
+      incoming fields apply without client-managed timestamps.
+    """
+    server_settings = server_settings_raw if isinstance(server_settings_raw, dict) else {}
+    incoming_settings = incoming_settings_raw if isinstance(incoming_settings_raw, dict) else {}
+
+    server_updated_at_epoch = _parse_iso_timestamp(server_settings.get("updatedAt"))
+    incoming_updated_at_epoch = _parse_iso_timestamp(incoming_settings.get("updatedAt"))
+    server_has_updated_at = isinstance(server_settings.get("updatedAt"), str) and server_updated_at_epoch is not None
+    incoming_has_updated_at = isinstance(incoming_settings.get("updatedAt"), str) and incoming_updated_at_epoch is not None
+
+    if incoming_has_updated_at and server_has_updated_at:
+        incoming_wins = incoming_updated_at_epoch > server_updated_at_epoch
+    elif incoming_has_updated_at:
+        incoming_wins = True
+    else:
+        # Untimestamped writes are treated as direct patch updates.
+        incoming_wins = True
+
+    if incoming_wins:
+        merged = {**server_settings, **incoming_settings}
+    else:
+        # Server-backed ties resolve to server settings.
+        merged = {**incoming_settings, **server_settings}
+
+    server_memory_fallback_epoch = server_updated_at_epoch if server_updated_at_epoch is not None else 0.0
+    if incoming_updated_at_epoch is not None:
+        incoming_memory_fallback_epoch = incoming_updated_at_epoch
+    else:
+        incoming_memory_fallback_epoch = server_memory_fallback_epoch + 1.0
+
+    merged_memory = _merge_character_memory_by_id(
+        server_settings.get("characterMemoryById"),
+        incoming_settings.get("characterMemoryById"),
+        server_updated_at_epoch=server_memory_fallback_epoch,
+        incoming_updated_at_epoch=incoming_memory_fallback_epoch,
+    )
+    if merged_memory is not None:
+        merged["characterMemoryById"] = merged_memory
+
+    schema_version = merged.get("schemaVersion")
+    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
+        merged["schemaVersion"] = 2
+
+    if incoming_wins and incoming_has_updated_at:
+        merged["updatedAt"] = incoming_settings["updatedAt"]
+    elif not incoming_has_updated_at:
+        merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    elif server_has_updated_at:
+        merged["updatedAt"] = server_settings["updatedAt"]
+    else:
+        merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
+
+    return merged
+
+
+def _normalize_note_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _extract_character_default_author_note(character: dict[str, Any]) -> str:
+    if not isinstance(character, dict):
+        return ""
+
+    # Support direct fields and extension-based storage.
+    for key in ("author_note", "authorNote", "memory_note", "memoryNote"):
+        direct = _normalize_note_text(character.get(key))
+        if direct:
+            return direct
+
+    extensions = character.get("extensions")
+    if isinstance(extensions, str):
+        try:
+            extensions = json.loads(extensions)
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            extensions = {}
+    if not isinstance(extensions, dict):
+        return ""
+
+    for key in (
+        "author_note",
+        "authorNote",
+        "default_author_note",
+        "defaultAuthorNote",
+        "memory_note",
+        "memoryNote",
+    ):
+        ext_value = _normalize_note_text(extensions.get(key))
+        if ext_value:
+            return ext_value
+    return ""
+
+
+def _extract_character_memory_note(settings: dict[str, Any], character_id: Any) -> str:
+    memory_by_id = settings.get("characterMemoryById")
+    if not isinstance(memory_by_id, dict):
+        return ""
+
+    # Accept both raw and stringified keys for robustness across clients.
+    lookup_keys = [character_id]
+    if character_id is not None:
+        lookup_keys.append(str(character_id))
+
+    for key in lookup_keys:
+        if key not in memory_by_id:
+            continue
+        entry = memory_by_id.get(key)
+        if isinstance(entry, dict):
+            note = _normalize_note_text(entry.get("note"))
+            if note:
+                return note
+        else:
+            note = _normalize_note_text(entry)
+            if note:
+                return note
+    return ""
+
+
+def _normalize_greeting_scope(settings: dict[str, Any]) -> str:
+    scope_raw = settings.get("greetingScope")
+    if isinstance(scope_raw, str) and scope_raw.strip().lower() == "character":
+        return "character"
+    return "chat"
+
+
+def _normalize_preset_scope(settings: dict[str, Any]) -> str:
+    scope_raw = settings.get("presetScope")
+    if isinstance(scope_raw, str) and scope_raw.strip().lower() == "chat":
+        return "chat"
+    return "character"
+
+
+def _normalize_memory_scope(settings: dict[str, Any]) -> str:
+    scope_raw = settings.get("memoryScope")
+    scope = str(scope_raw).strip().lower() if isinstance(scope_raw, str) else ""
+    if scope in {"shared", "character", "both"}:
+        return scope
+    return "shared"
+
+
+def _normalize_turn_taking_mode(settings: dict[str, Any]) -> str:
+    mode_raw = settings.get("turnTakingMode")
+    mode = str(mode_raw).strip().lower() if isinstance(mode_raw, str) else ""
+    if mode in {"round_robin", "round-robin", "round robin"}:
+        return "round_robin"
+    return "single"
+
+
+def _normalize_character_id(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        normalized = int(str(value).strip())
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if normalized <= 0:
+        return None
+    return normalized
+
+
+def _normalize_participant_character_ids(
+    settings: dict[str, Any],
+    primary_character_id: Any,
+) -> list[int]:
+    raw_ids = settings.get("participantCharacterIds")
+    if raw_ids is None:
+        raw_ids = settings.get("participant_character_ids")
+
+    parsed_ids: list[Any]
+    if isinstance(raw_ids, list):
+        parsed_ids = raw_ids
+    elif isinstance(raw_ids, str):
+        text = raw_ids.strip()
+        parsed_ids = []
+        if text:
+            try:
+                loaded = json.loads(text)
+                parsed_ids = loaded if isinstance(loaded, list) else []
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                parsed_ids = [part.strip() for part in text.split(",")]
+    else:
+        parsed_ids = []
+
+    ordered_ids: list[int] = []
+    seen_ids: set[int] = set()
+
+    primary_id = _normalize_character_id(primary_character_id)
+    if primary_id is not None:
+        ordered_ids.append(primary_id)
+        seen_ids.add(primary_id)
+
+    for value in parsed_ids:
+        normalized = _normalize_character_id(value)
+        if normalized is None or normalized in seen_ids:
+            continue
+        ordered_ids.append(normalized)
+        seen_ids.add(normalized)
+
+    return ordered_ids
+
+
+def _extract_settings(settings_row: Any) -> dict[str, Any]:
+    if isinstance(settings_row, dict):
+        settings = settings_row.get("settings")
+        if isinstance(settings, dict):
+            return settings
+    return {}
+
+
+def _resolve_effective_prompt_preset(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+    *,
+    request_preset: Any = None,
+) -> str:
+    """Resolve prompt formatting preset with scope-aware precedence.
+
+    Precedence:
+    1) request override (single-turn)
+    2) chat override when presetScope=chat
+    3) character preset when presetScope=character
+    4) global default
+    """
+
+    def _coerce_preset_id(value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return None
+        preset = value.strip()
+        if not preset:
+            return None
+        return preset
+
+    request_override = _coerce_preset_id(request_preset)
+    if request_override:
+        return request_override
+
+    scope = _normalize_preset_scope(settings)
+    chat_override = (
+        _coerce_preset_id(settings.get("chatPresetOverrideId"))
+        or _coerce_preset_id(settings.get("promptPreset"))
+        or _coerce_preset_id(settings.get("prompt_preset"))
+    )
+
+    if scope == "chat":
+        return chat_override or DEFAULT_PROMPT_PRESET
+
+    character_preset = _coerce_preset_id(resolve_character_prompt_preset(character))
+    return character_preset or DEFAULT_PROMPT_PRESET
+
+
+def _build_system_prompt_for_preset(
+    db: CharactersRAGDB,
+    character: dict[str, Any],
+    char_name: str,
+    user_name: str,
+    preset_id: Optional[str],
+) -> str:
+    preset = str(preset_id or "").strip()
+    if not preset:
+        preset = DEFAULT_PROMPT_PRESET
+
+    if preset in {"default", "st_default"}:
+        return build_character_system_prompt(character, char_name, user_name, preset=preset)
+
+    try:
+        custom_preset = db.get_prompt_preset(preset)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Non-fatal: failed to fetch custom preset '{}': {}", preset, exc)
+        custom_preset = None
+
+    if isinstance(custom_preset, dict):
+        raw_order = custom_preset.get("section_order")
+        raw_templates = custom_preset.get("section_templates")
+        section_order = [item for item in raw_order if isinstance(item, str)] if isinstance(raw_order, list) else []
+        section_templates = (
+            {key: value for key, value in raw_templates.items() if isinstance(key, str) and isinstance(value, str)}
+            if isinstance(raw_templates, dict)
+            else {}
+        )
+        return build_custom_system_prompt(
+            character=character,
+            char_name=char_name,
+            user_name=user_name,
+            section_order=section_order,
+            section_templates=section_templates,
+        )
+
+    return build_character_system_prompt(character, char_name, user_name, preset=DEFAULT_PROMPT_PRESET)
+
+
+def _resolve_effective_generation_settings(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve generation parameters: chat override > character > None."""
+    base = resolve_character_generation_settings(character)
+    overrides = settings.get("chatGenerationOverride")
+    if not isinstance(overrides, dict):
+        # Backward-compat for earlier key spelling.
+        overrides = settings.get("generationOverrides")
+    if not isinstance(overrides, dict):
+        return base
+    if overrides.get("enabled") is False:
+        return base
+    for key in ("temperature", "top_p", "repetition_penalty", "stop"):
+        if key in overrides and overrides[key] is not None:
+            base[key] = overrides[key]
+    return base
+
+
+def _normalize_sender_aliases(names: list[str]) -> set[str]:
+    aliases: set[str] = set()
+    for name in names:
+        if not isinstance(name, str):
+            continue
+        raw = name.strip().lower()
+        if raw:
+            aliases.add(raw)
+        try:
+            sanitized = sanitize_sender_name(name).strip().lower()
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            sanitized = ""
+        if sanitized:
+            aliases.add(sanitized)
+    return aliases
+
+
+def _map_sender_to_role_with_participants(
+    sender: Any,
+    primary_character_name: Optional[str],
+    participant_aliases: set[str],
+) -> str:
+    role = map_sender_to_role(
+        sender if isinstance(sender, str) else None,
+        primary_character_name,
+        default_role="user",
+    )
+    if role != "user":
+        return role
+
+    if not isinstance(sender, str):
+        return "user"
+    sender_raw = sender.strip().lower()
+    if sender_raw in participant_aliases:
+        return "assistant"
+    try:
+        sender_sanitized = sanitize_sender_name(sender).strip().lower()
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        sender_sanitized = ""
+    if sender_sanitized and sender_sanitized in participant_aliases:
+        return "assistant"
+    return "user"
+
+
+def _resolve_chat_turn_context(
+    db: CharactersRAGDB,
+    conversation: dict[str, Any],
+    settings_row: Any,
+    history_messages: list[dict[str, Any]],
+    directed_character_id: Any = None,
+) -> dict[str, Any]:
+    settings = _extract_settings(settings_row)
+    primary_character_id = conversation.get("character_id")
+    participant_ids = _normalize_participant_character_ids(settings, primary_character_id)
+    participants: list[dict[str, Any]] = []
+    for participant_id in participant_ids:
+        card = db.get_character_card_by_id(participant_id)
+        if not isinstance(card, dict):
+            continue
+        name = str(card.get("name") or f"Character {participant_id}").strip()
+        if not name:
+            name = f"Character {participant_id}"
+        participants.append(
+            {"id": participant_id, "character": card, "name": name}
+        )
+
+    if not participants:
+        fallback_card = db.get_character_card_by_id(primary_character_id) or {}
+        fallback_id = _normalize_character_id(
+            fallback_card.get("id") or primary_character_id
+        ) or 0
+        fallback_name = str(fallback_card.get("name") or "Assistant").strip() or "Assistant"
+        participants = [
+            {"id": fallback_id, "character": fallback_card, "name": fallback_name}
+        ]
+
+    turn_taking_mode = _normalize_turn_taking_mode(settings)
+    if len(participants) <= 1:
+        turn_taking_mode = "single"
+
+    participant_aliases = _normalize_sender_aliases(
+        [participant.get("name", "") for participant in participants]
+    )
+    participant_alias_to_index: dict[str, int] = {}
+    for idx, participant in enumerate(participants):
+        aliases = _normalize_sender_aliases([participant.get("name", "")])
+        for alias in aliases:
+            participant_alias_to_index.setdefault(alias, idx)
+    primary_name = str(participants[0].get("name") or "Assistant")
+    active_participant = participants[0]
+    directed_id = _normalize_character_id(directed_character_id)
+    directed_applied = False
+    if directed_id is not None:
+        directed_participant = next(
+            (participant for participant in participants if participant.get("id") == directed_id),
+            None,
+        )
+        if directed_participant is not None:
+            active_participant = directed_participant
+            directed_applied = True
+
+    if turn_taking_mode == "round_robin" and not directed_applied:
+        last_assistant_index: Optional[int] = None
+        for message in reversed(history_messages):
+            role = _map_sender_to_role_with_participants(
+                message.get("sender"),
+                primary_name,
+                participant_aliases,
+            )
+            if role != "assistant":
+                continue
+            sender = message.get("sender")
+            if isinstance(sender, str):
+                sender_raw = sender.strip().lower()
+                if sender_raw == "assistant":
+                    last_assistant_index = 0
+                else:
+                    sender_sanitized = ""
+                    try:
+                        sender_sanitized = sanitize_sender_name(sender).strip().lower()
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                        sender_sanitized = ""
+                    last_assistant_index = participant_alias_to_index.get(sender_raw)
+                    if last_assistant_index is None and sender_sanitized:
+                        last_assistant_index = participant_alias_to_index.get(sender_sanitized)
+            if last_assistant_index is None:
+                # Legacy messages may only store "assistant"; default to primary.
+                last_assistant_index = 0
+            break
+        if last_assistant_index is not None:
+            active_participant = participants[(last_assistant_index + 1) % len(participants)]
+
+    return {
+        "settings": settings,
+        "participants": participants,
+        "participant_aliases": participant_aliases,
+        "primary_character_name": primary_name,
+        "active_character_id": active_participant.get("id"),
+        "active_character_name": str(active_participant.get("name") or "Assistant"),
+        "active_character": active_participant.get("character") or {},
+        "turn_taking_mode": turn_taking_mode,
+        "directed_character_applied": directed_applied,
+        "directed_character_id": directed_id if directed_applied else None,
+    }
+
+
+def _normalize_greeting_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return [trimmed] if trimmed else []
+    if isinstance(value, list):
+        normalized: list[str] = []
+        for entry in value:
+            if not isinstance(entry, str):
+                continue
+            trimmed = entry.strip()
+            if trimmed:
+                normalized.append(trimmed)
+        return normalized
+    return []
+
+
+def _collect_character_greeting_texts(character: dict[str, Any]) -> list[str]:
+    greeting_fields = (
+        "greeting",
+        "first_message",
+        "firstMessage",
+        "greet",
+        "alternate_greetings",
+        "alternateGreetings",
+    )
+    greetings: list[str] = []
+    seen: set[str] = set()
+    for field_name in greeting_fields:
+        values = _normalize_greeting_values(character.get(field_name))
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            greetings.append(value)
+    return greetings
+
+
+def _compute_greetings_checksum(character: dict[str, Any]) -> str:
+    """Compute a stable checksum over all greeting texts for staleness detection."""
+    greetings = _collect_character_greeting_texts(character)
+    joined = "\n---\n".join(greetings)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def _check_greeting_staleness(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+) -> Optional[str]:
+    """Return a staleness warning if character greetings changed since chat creation.
+
+    Returns ``None`` when no staleness is detected or when no checksum was
+    persisted (pre-existing chats).
+    """
+    stored = settings.get("greetingsChecksum")
+    if not isinstance(stored, str) or not stored:
+        return None
+    current = _compute_greetings_checksum(character)
+    if current != stored:
+        return (
+            "Character greetings have changed since this chat was created. "
+            "The stored greeting selection may be stale."
+        )
+    return None
+
+
+def _parse_greeting_selection_index(selection_id: Any) -> Optional[int]:
+    if not isinstance(selection_id, str):
+        return None
+    parts = selection_id.strip().split(":")
+    if len(parts) < 3 or parts[0] != "greeting":
+        return None
+    try:
+        index = int(parts[1])
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return None
+    if index < 0:
+        return None
+    return index
+
+
+def _resolve_character_scoped_greeting(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+    char_name: str,
+    user_name: str,
+) -> str:
+    greetings = _collect_character_greeting_texts(character)
+    if not greetings:
+        return ""
+
+    selected_index = _parse_greeting_selection_index(settings.get("greetingSelectionId"))
+    use_character_default = bool(settings.get("useCharacterDefault"))
+
+    selected_greeting = ""
+    if selected_index is not None and selected_index < len(greetings):
+        selected_greeting = greetings[selected_index]
+    elif use_character_default:
+        selected_greeting = greetings[0]
+    else:
+        # Deterministic fallback to avoid per-request prompt drift.
+        selected_greeting = greetings[0]
+
+    return _safe_replace_placeholders(selected_greeting, char_name, user_name).strip()
+
+
+def _message_sender_matches_character(
+    sender: Any,
+    active_character_name: str,
+    primary_character_name: str,
+) -> bool:
+    if not isinstance(sender, str):
+        return False
+
+    active_aliases = _normalize_sender_aliases([active_character_name])
+    sender_raw = sender.strip().lower()
+
+    if sender_raw == "assistant":
+        # Legacy assistant sender maps to the primary character.
+        primary_aliases = _normalize_sender_aliases([primary_character_name])
+        return bool(active_aliases.intersection(primary_aliases))
+
+    if sender_raw in active_aliases:
+        return True
+
+    try:
+        sender_sanitized = sanitize_sender_name(sender).strip().lower()
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        sender_sanitized = ""
+    return bool(sender_sanitized and sender_sanitized in active_aliases)
+
+
+def _has_prior_assistant_reply(
+    history_messages: list[dict[str, Any]],
+    primary_character_name: str,
+    participant_aliases: set[str],
+) -> bool:
+    for message in history_messages:
+        role = _map_sender_to_role_with_participants(
+            message.get("sender"),
+            primary_character_name,
+            participant_aliases,
+        )
+        if role == "assistant":
+            return True
+    return False
+
+
+def _has_prior_assistant_reply_for_character(
+    history_messages: list[dict[str, Any]],
+    active_character_name: str,
+    primary_character_name: str,
+    participant_aliases: set[str],
+) -> bool:
+    for message in history_messages:
+        role = _map_sender_to_role_with_participants(
+            message.get("sender"),
+            primary_character_name,
+            participant_aliases,
+        )
+        if role != "assistant":
+            continue
+        if _message_sender_matches_character(
+            message.get("sender"),
+            active_character_name,
+            primary_character_name,
+        ):
+            return True
+    return False
+
+
+def _should_inject_character_scoped_greeting(
+    settings: dict[str, Any],
+    turn_context: dict[str, Any],
+    history_messages: list[dict[str, Any]],
+) -> bool:
+    """Decide whether a greeting should be injected for the active turn.
+
+    Scope behavior:
+    - chat: inject once for the conversation (first assistant turn)
+    - character: inject on each speaking character's first assistant turn
+    """
+    if settings.get("greetingEnabled") is False:
+        return False
+
+    greeting_scope = _normalize_greeting_scope(settings)
+    primary_character_name = str(turn_context.get("primary_character_name") or "")
+    active_character_name = str(turn_context.get("active_character_name") or "")
+    participant_aliases = turn_context.get("participant_aliases") or set()
+    participants = turn_context.get("participants") or []
+
+    # Chat scope always behaves as chat-first regardless of participant count.
+    if greeting_scope == "chat":
+        return not _has_prior_assistant_reply(
+            history_messages=history_messages,
+            primary_character_name=primary_character_name,
+            participant_aliases=participant_aliases,
+        )
+
+    if len(participants) <= 1:
+        # Edge-case rule: one participant should behave like chat-first.
+        return not _has_prior_assistant_reply(
+            history_messages=history_messages,
+            primary_character_name=primary_character_name,
+            participant_aliases=participant_aliases,
+        )
+
+    return not _has_prior_assistant_reply_for_character(
+        history_messages=history_messages,
+        active_character_name=active_character_name,
+        primary_character_name=primary_character_name,
+        participant_aliases=participant_aliases,
+    )
+
+
+def _inject_character_scoped_greeting_from_settings(
+    messages: list[dict[str, Any]],
+    settings_row: Any,
+    turn_context: dict[str, Any],
+    history_messages: list[dict[str, Any]],
+    user_name: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(settings_row, dict):
+        return messages
+
+    settings = _extract_settings(settings_row)
+    if not settings:
+        return messages
+
+    if not _should_inject_character_scoped_greeting(
+        settings=settings,
+        turn_context=turn_context,
+        history_messages=history_messages,
+    ):
+        return messages
+
+    character = turn_context.get("active_character") or {}
+    char_name = str(turn_context.get("active_character_name") or "Assistant")
+    greeting_text = _resolve_character_scoped_greeting(
+        settings=settings,
+        character=character,
+        char_name=char_name,
+        user_name=user_name,
+    )
+    if not greeting_text:
+        return messages
+
+    insert_idx = len(messages)
+    for idx in range(len(messages) - 1, -1, -1):
+        role = str(messages[idx].get("role", "")).strip().lower()
+        if role == "user":
+            insert_idx = idx
+            break
+
+    if insert_idx == len(messages):
+        insert_idx = 0
+        while insert_idx < len(messages):
+            role = str(messages[insert_idx].get("role", "")).strip().lower()
+            if role != "system":
+                break
+            insert_idx += 1
+
+    if insert_idx > 0:
+        prev_message = messages[insert_idx - 1]
+        prev_role = str(prev_message.get("role", "")).strip().lower()
+        prev_content = str(prev_message.get("content", "")).strip()
+        if prev_role == "assistant" and prev_content == greeting_text:
+            return messages
+
+    greeting_message = {
+        "role": "assistant",
+        "content": greeting_text,
+    }
+    return [*messages[:insert_idx], greeting_message, *messages[insert_idx:]]
+
+
+def _resolve_author_note_text(
+    settings: dict[str, Any],
+    character: dict[str, Any],
+    *,
+    for_prompt: bool = True,
+) -> str:
+    # Optional toggles reserved for Stage D2 behavior; defaults keep note enabled.
+    if settings.get("authorNoteEnabled") is False:
+        return ""
+    # GM-only and exclude-from-prompt flags suppress injection into LLM context
+    # but the note text should still be resolvable for UI display (for_prompt=False).
+    if for_prompt:
+        if settings.get("authorNoteGmOnly") is True:
+            return ""
+        if settings.get("authorNoteExcludeFromPrompt") is True:
+            return ""
+
+    shared_note = _normalize_note_text(settings.get("authorNote"))
+    character_note = _extract_character_memory_note(settings, character.get("id"))
+    if not character_note:
+        character_note = _extract_character_default_author_note(character)
+
+    scope = _normalize_memory_scope(settings)
+
+    if scope == "character":
+        note = character_note
+    elif scope == "both":
+        note = "\n\n".join(part for part in (shared_note, character_note) if part)
+    else:
+        # Shared scope: keep chat note precedence, fallback to character default.
+        note = shared_note or character_note
+
+    return note.strip()
+
+
+def _resolve_author_note_position(settings: dict[str, Any]) -> Any:
+    for key in (
+        "authorNotePosition",
+        "authorNotePlacement",
+        "authorNoteInjectionPosition",
+    ):
+        if key in settings:
+            return settings.get(key)
+    return "before_system"
+
+
+def _insert_author_note_at_depth(
+    messages: list[dict[str, Any]],
+    author_note_message: dict[str, Any],
+    depth: int,
+) -> list[dict[str, Any]]:
+    if depth <= 0:
+        return [author_note_message, *messages]
+
+    non_system_count = 0
+    for idx, message in enumerate(messages):
+        role = str(message.get("role", "")).strip().lower()
+        if role == "system":
+            continue
+        if non_system_count >= depth:
+            return [*messages[:idx], author_note_message, *messages[idx:]]
+        non_system_count += 1
+    return [*messages, author_note_message]
+
+
+def _insert_author_note_message(
+    messages: list[dict[str, Any]],
+    author_note_message: dict[str, Any],
+    position: Any,
+) -> list[dict[str, Any]]:
+    if isinstance(position, int):
+        return _insert_author_note_at_depth(messages, author_note_message, position)
+
+    if isinstance(position, dict):
+        mode = str(position.get("mode", "")).strip().lower()
+        if mode in {"depth", "at_depth"}:
+            depth = position.get("depth")
+            if isinstance(depth, int):
+                return _insert_author_note_at_depth(messages, author_note_message, depth)
+        if mode in {"before_system", "before-system", "before"}:
+            return [author_note_message, *messages]
+
+    if isinstance(position, str):
+        normalized = position.strip().lower()
+        if normalized in {"before_system", "before-system", "before system", "before"}:
+            return [author_note_message, *messages]
+        if normalized.startswith("depth"):
+            suffix = normalized.replace("depth", "", 1).strip()
+            if suffix.startswith(":"):
+                suffix = suffix[1:].strip()
+            if suffix.isdigit():
+                return _insert_author_note_at_depth(messages, author_note_message, int(suffix))
+
+    return [author_note_message, *messages]
+
+
+def _inject_author_note_from_settings(
+    messages: list[dict[str, Any]],
+    settings_row: Any,
+    character: dict[str, Any],
+    char_name: str,
+    user_name: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(settings_row, dict):
+        return messages
+    settings = settings_row.get("settings")
+    if not isinstance(settings, dict):
+        return messages
+
+    note_text = _resolve_author_note_text(settings, character)
+    if not note_text:
+        return messages
+
+    resolved_note = _safe_replace_placeholders(note_text, char_name, user_name).strip()
+    if not resolved_note:
+        return messages
+
+    author_note_message = {
+        "role": "system",
+        "content": f"Author's note:\n{resolved_note}",
+    }
+    position = _resolve_author_note_position(settings)
+    return _insert_author_note_message(messages, author_note_message, position)
+
+
+def _coerce_truthy_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_positive_int(
+    value: Any,
+    default: int,
+    *,
+    min_value: int = 1,
+    max_value: int = 10_000,
+) -> int:
+    try:
+        parsed = int(value)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+        return default
+    if parsed < min_value:
+        return min_value
+    if parsed > max_value:
+        return max_value
+    return parsed
+
+
+def _resolve_auto_summary_config(settings: dict[str, Any]) -> tuple[bool, int, int]:
+    summary_block = settings.get("summary")
+    summary_block = summary_block if isinstance(summary_block, dict) else {}
+
+    enabled = _coerce_truthy_bool(
+        settings.get(
+            "autoSummaryEnabled",
+            summary_block.get("enabled", False),
+        ),
+        default=False,
+    )
+
+    threshold_raw = settings.get("autoSummaryThresholdMessages")
+    if threshold_raw is None:
+        threshold_raw = settings.get("autoSummaryMessageThreshold")
+    if threshold_raw is None:
+        threshold_raw = summary_block.get("thresholdMessages")
+    if threshold_raw is None:
+        threshold_raw = summary_block.get("messageThreshold")
+    threshold = _coerce_positive_int(
+        threshold_raw if threshold_raw is not None else DEFAULT_AUTO_SUMMARY_THRESHOLD_MESSAGES,
+        DEFAULT_AUTO_SUMMARY_THRESHOLD_MESSAGES,
+        min_value=2,
+        max_value=5_000,
+    )
+
+    window_raw = settings.get("autoSummaryWindowMessages")
+    if window_raw is None:
+        window_raw = settings.get("autoSummaryRecentWindow")
+    if window_raw is None:
+        window_raw = summary_block.get("windowMessages")
+    if window_raw is None:
+        window_raw = summary_block.get("recentWindowMessages")
+    window = _coerce_positive_int(
+        window_raw if window_raw is not None else DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES,
+        DEFAULT_AUTO_SUMMARY_WINDOW_MESSAGES,
+        min_value=1,
+        max_value=2_000,
+    )
+
+    if window >= threshold:
+        window = max(1, threshold - 1)
+
+    return enabled, threshold, window
+
+
+def _collect_pinned_message_ids(
+    db: CharactersRAGDB,
+    settings: dict[str, Any],
+    prompt_messages: list[dict[str, Any]],
+) -> set[str]:
+    pinned_ids: set[str] = set()
+
+    raw_pinned_ids = settings.get("pinnedMessageIds")
+    if isinstance(raw_pinned_ids, list):
+        for entry in raw_pinned_ids:
+            if entry is None:
+                continue
+            text = str(entry).strip()
+            if text:
+                pinned_ids.add(text)
+
+    for message in prompt_messages:
+        message_id_raw = message.get("id")
+        if message_id_raw is None:
+            continue
+        message_id = str(message_id_raw).strip()
+        if not message_id:
+            continue
+        try:
+            metadata = db.get_message_metadata(message_id) or {}
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            continue
+        extra = metadata.get("extra")
+        if not isinstance(extra, dict):
+            continue
+        if _coerce_truthy_bool(extra.get("pinned"), default=False):
+            pinned_ids.add(message_id)
+    return pinned_ids
+
+
+def _build_deterministic_conversation_summary(
+    messages_to_summarize: list[dict[str, Any]],
+    primary_character_name: str,
+    participant_aliases: set[str],
+    char_name: str,
+    user_name: str,
+) -> str:
+    lines: list[str] = []
+    for message in messages_to_summarize:
+        role = _map_sender_to_role_with_participants(
+            message.get("sender"),
+            primary_character_name,
+            participant_aliases,
+        )
+        content = _safe_replace_placeholders(
+            message.get("content"),
+            char_name,
+            user_name,
+        )
+        content = " ".join(content.split()).strip()
+        if not content:
+            continue
+        if len(content) > MAX_AUTO_SUMMARY_LINE_CHARS:
+            content = f"{content[: MAX_AUTO_SUMMARY_LINE_CHARS - 3].rstrip()}..."
+        lines.append(f"- {role}: {content}")
+        if len(lines) >= MAX_AUTO_SUMMARY_LINES:
+            break
+
+    if not lines:
+        return ""
+
+    summary_content = "\n".join(lines)
+    if len(summary_content) > MAX_AUTO_SUMMARY_CONTENT_CHARS:
+        summary_content = summary_content[:MAX_AUTO_SUMMARY_CONTENT_CHARS].rstrip()
+    return summary_content
+
+
+def _summary_matches_existing(
+    existing_summary: Any,
+    content: str,
+    source_from_id: str,
+    source_to_id: str,
+    threshold: int,
+    window: int,
+    compressed_count: int,
+) -> bool:
+    def _safe_int(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(str(value).strip())
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+
+    if not isinstance(existing_summary, dict):
+        return False
+    if existing_summary.get("content") != content:
+        return False
+    source_range = existing_summary.get("sourceRange")
+    if not isinstance(source_range, dict):
+        return False
+    if str(source_range.get("fromMessageId") or "") != source_from_id:
+        return False
+    if str(source_range.get("toMessageId") or "") != source_to_id:
+        return False
+    if _safe_int(existing_summary.get("thresholdMessages")) != threshold:
+        return False
+    if _safe_int(existing_summary.get("windowMessages")) != window:
+        return False
+    return _safe_int(existing_summary.get("compressedCount")) == compressed_count
+
+
+def _persist_auto_summary_to_settings(
+    db: CharactersRAGDB,
+    chat_id: str,
+    settings: dict[str, Any],
+    content: str,
+    source_from_id: str,
+    source_to_id: str,
+    threshold: int,
+    window: int,
+    compressed_count: int,
+) -> None:
+    existing_summary = settings.get("summary")
+    if _summary_matches_existing(
+        existing_summary,
+        content=content,
+        source_from_id=source_from_id,
+        source_to_id=source_to_id,
+        threshold=threshold,
+        window=window,
+        compressed_count=compressed_count,
+    ):
+        return
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    merged_settings = dict(settings)
+    merged_settings["summary"] = {
+        "enabled": True,
+        "content": content,
+        "sourceRange": {
+            "fromMessageId": source_from_id,
+            "toMessageId": source_to_id,
+        },
+        "thresholdMessages": threshold,
+        "windowMessages": window,
+        "compressedCount": compressed_count,
+        "updatedAt": now_iso,
+    }
+    merged_settings["schemaVersion"] = int(merged_settings.get("schemaVersion") or 2)
+    merged_settings["updatedAt"] = now_iso
+
+    try:
+        _validate_chat_settings_payload(merged_settings)
+        db.upsert_conversation_settings(chat_id, merged_settings)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(
+            "Non-fatal: failed to persist auto-summary settings for chat {}: {}",
+            chat_id,
+            exc,
+        )
+
+
+def _apply_auto_summary_to_prompt_messages(
+    db: CharactersRAGDB,
+    chat_id: str,
+    settings_row: Any,
+    prompt_messages: list[dict[str, Any]],
+    *,
+    offset: int,
+    primary_character_name: str,
+    participant_aliases: set[str],
+    char_name: str,
+    user_name: str,
+) -> tuple[list[dict[str, Any]], str]:
+    if offset != 0 or not prompt_messages:
+        return prompt_messages, ""
+    settings = _extract_settings(settings_row)
+    if not settings:
+        return prompt_messages, ""
+
+    enabled, threshold, window = _resolve_auto_summary_config(settings)
+    if not enabled:
+        return prompt_messages, ""
+    if len(prompt_messages) <= threshold:
+        return prompt_messages, ""
+    if len(prompt_messages) <= window:
+        return prompt_messages, ""
+
+    older_messages = prompt_messages[:-window]
+    if not older_messages:
+        return prompt_messages, ""
+
+    pinned_ids = _collect_pinned_message_ids(
+        db=db,
+        settings=settings,
+        prompt_messages=prompt_messages,
+    )
+
+    compressible: list[dict[str, Any]] = []
+    compressible_ids: set[str] = set()
+    compressible_object_ids: set[int] = set()
+    for message in older_messages:
+        message_id_raw = message.get("id")
+        message_id = str(message_id_raw).strip() if message_id_raw is not None else ""
+        if message_id and message_id in pinned_ids:
+            continue
+        compressible.append(message)
+        if message_id:
+            compressible_ids.add(message_id)
+        else:
+            compressible_object_ids.add(id(message))
+
+    if not compressible:
+        return prompt_messages, ""
+
+    summary_content = _build_deterministic_conversation_summary(
+        messages_to_summarize=compressible,
+        primary_character_name=primary_character_name,
+        participant_aliases=participant_aliases,
+        char_name=char_name,
+        user_name=user_name,
+    )
+    if not summary_content:
+        return prompt_messages, ""
+
+    summarized_messages: list[dict[str, Any]] = []
+    for message in prompt_messages:
+        message_id_raw = message.get("id")
+        message_id = str(message_id_raw).strip() if message_id_raw is not None else ""
+        if message_id and message_id in compressible_ids:
+            continue
+        if not message_id and id(message) in compressible_object_ids:
+            continue
+        summarized_messages.append(message)
+
+    first_id_raw = compressible[0].get("id")
+    last_id_raw = compressible[-1].get("id")
+    source_from_id = str(first_id_raw).strip() if first_id_raw is not None else ""
+    source_to_id = str(last_id_raw).strip() if last_id_raw is not None else ""
+    if source_from_id and source_to_id:
+        _persist_auto_summary_to_settings(
+            db=db,
+            chat_id=chat_id,
+            settings=settings,
+            content=summary_content,
+            source_from_id=source_from_id,
+            source_to_id=source_to_id,
+            threshold=threshold,
+            window=window,
+            compressed_count=len(compressible),
+        )
+
+    return summarized_messages, summary_content
+
+
+def _resolve_message_steering_flags(
+    continue_as_user: Any,
+    impersonate_user: Any,
+    force_narrate: Any,
+) -> tuple[bool, bool, bool, bool]:
+    continue_flag = bool(continue_as_user)
+    impersonate_flag = bool(impersonate_user)
+    narrate_flag = bool(force_narrate)
+    had_conflict = continue_flag and impersonate_flag
+    if had_conflict:
+        # PRD precedence: impersonate wins when both are selected.
+        continue_flag = False
+        impersonate_flag = True
+    return continue_flag, impersonate_flag, narrate_flag, had_conflict
+
+
+def _build_message_steering_instruction(
+    continue_as_user: bool,
+    impersonate_user: bool,
+    force_narrate: bool,
+) -> str:
+    instructions: list[str] = []
+    if impersonate_user:
+        instructions.append(
+            "Write this reply as if it is authored by the user, in first person, while preserving the user's intent."
+        )
+    elif continue_as_user:
+        instructions.append(
+            "Continue the user's current thought in the same voice and perspective."
+        )
+    if force_narrate:
+        instructions.append("Use narrative prose style for this reply.")
+    if not instructions:
+        return ""
+    return f"Steering instruction (single response): {' '.join(instructions)}"
+
+
+def _inject_message_steering_instruction(
+    messages: list[dict[str, Any]],
+    continue_as_user: Any,
+    impersonate_user: Any,
+    force_narrate: Any,
+) -> tuple[list[dict[str, Any]], bool]:
+    continue_flag, impersonate_flag, narrate_flag, had_conflict = (
+        _resolve_message_steering_flags(
+            continue_as_user=continue_as_user,
+            impersonate_user=impersonate_user,
+            force_narrate=force_narrate,
+        )
+    )
+    instruction = _build_message_steering_instruction(
+        continue_as_user=continue_flag,
+        impersonate_user=impersonate_flag,
+        force_narrate=narrate_flag,
+    )
+    if not instruction:
+        return messages, had_conflict
+
+    steering_message = {"role": "system", "content": instruction}
+
+    # Keep steering scoped to the upcoming turn by inserting before the latest user message.
+    for idx in range(len(messages) - 1, -1, -1):
+        role = str(messages[idx].get("role", "")).strip().lower()
+        if role == "user":
+            return [*messages[:idx], steering_message, *messages[idx:]], had_conflict
+
+    return [*messages, steering_message], had_conflict
+
 """Role mapping provided by Character_Chat utility: map_sender_to_role"""
 
 # ========================================================================
@@ -291,6 +1888,7 @@ def _convert_db_message_to_response(msg_data: Dict[str, Any]) -> MessageResponse
              summary="Create a new chat session", tags=["Chat Sessions"])
 async def create_chat_session(
     session_data: ChatSessionCreate,
+    response: Response,
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
     seed_first_message: bool = Query(False, description="If true, seed the chat with an initial assistant greeting"),
@@ -330,7 +1928,7 @@ async def create_chat_session(
         except HTTPException:
             # Propagate enforcement failures
             raise
-        except Exception as e:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
             # Fail closed: quota enforcement must work to prevent resource exhaustion
             logger.error("Chat limit enforcement failed, denying request: {}", e)
             raise HTTPException(
@@ -356,6 +1954,7 @@ async def create_chat_session(
             if parent_conversation:
                 validated_parent_id = parent_conversation.get("id") or session_data.parent_conversation_id
                 parent_root_id = parent_conversation.get("root_id") or parent_conversation.get("id")
+            # Cross-character forks are intentionally supported; do not enforce a character_id match.
 
         # Generate chat ID and title
         chat_id = str(uuid.uuid4())
@@ -395,6 +1994,7 @@ async def create_chat_session(
             )
 
         # Optionally seed the chat with a greeting (first_message or alternate)
+        seed_status: Optional[str] = None
         if seed_first_message:
             try:
                 raw_name = character.get('name') or 'Assistant'
@@ -420,12 +2020,30 @@ async def create_chat_session(
                         is_user_message=False,
                     )
                     # Update in-memory message count (best-effort)
-                    try:
+                    with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                         created_conv['message_count'] = (created_conv.get('message_count') or 0) + 1
-                    except Exception:
-                        pass
-            except Exception as _seed_err:
-                logger.debug(f"Non-fatal: failed to seed first message for chat {created_id}: {_seed_err}")
+                    seed_status = "ok"
+                else:
+                    seed_status = "no_greeting"
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as _seed_err:
+                seed_status = "failed"
+                logger.warning(f"Failed to seed first message for chat {created_id}: {_seed_err}")
+
+        # Persist a greetings checksum so staleness can be detected later.
+        try:
+            checksum = _compute_greetings_checksum(character)
+            db.upsert_conversation_settings(
+                created_id,
+                {"greetingsChecksum": checksum},
+            )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass  # best-effort; staleness detection degrades gracefully
+
+        if response is not None and seed_status is not None:
+            try:
+                response.headers["X-Chat-Seed-Status"] = seed_status
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Failed to set X-Chat-Seed-Status header: {}", exc)
 
         # Log creation
         logger.info(f"Created chat session {created_id} for character {session_data.character_id} by user {current_user.id}")
@@ -434,18 +2052,245 @@ async def create_chat_session(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error creating chat session: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating chat session"
+        ) from e
+
+
+# ========================================================================
+# Preset Editor Endpoints (PRD 2 Stage B2)
+# NOTE: These must be registered BEFORE /{chat_id} to avoid path capture.
+# ========================================================================
+
+# Template tokens available in custom presets
+_PRESET_TEMPLATE_TOKENS = [
+    PresetTokenInfo(token="{{char}}", description="Character name"),
+    PresetTokenInfo(token="{{user}}", description="User/player name"),
+    PresetTokenInfo(token="{{description}}", description="Character description field"),
+    PresetTokenInfo(token="{{personality}}", description="Character personality field"),
+    PresetTokenInfo(token="{{scenario}}", description="Character scenario field"),
+    PresetTokenInfo(token="{{system_prompt}}", description="Character system prompt field"),
+    PresetTokenInfo(token="{{message_example}}", description="Character example messages"),
+    PresetTokenInfo(token="{{post_history}}", description="Post-history instructions"),
+]
+
+# Built-in preset metadata (non-deletable)
+_BUILTIN_PRESETS = [
+    PresetDetail(
+        preset_id="default",
+        name="Default",
+        builtin=True,
+        section_order=["identity", "description", "personality", "scenario", "system_prompt"],
+        section_templates={
+            "identity": "You are {{char}}.",
+            "description": "{{description}}",
+            "personality": "{{personality}}",
+            "scenario": "{{scenario}}",
+            "system_prompt": "{{system_prompt}}",
+        },
+    ),
+    PresetDetail(
+        preset_id="st_default",
+        name="SillyTavern Default",
+        builtin=True,
+        section_order=["identity", "system_prompt", "description", "personality", "scenario", "message_example", "post_history"],
+        section_templates={
+            "identity": "You are {{char}}.",
+            "system_prompt": "{{system_prompt}}",
+            "description": "Description:\n{{description}}",
+            "personality": "Personality:\n{{personality}}",
+            "scenario": "Scenario:\n{{scenario}}",
+            "message_example": "Example dialogue:\n{{message_example}}",
+            "post_history": "Post-history instructions:\n{{post_history}}",
+        },
+    ),
+]
+
+
+@router.get(
+    "/presets/tokens",
+    summary="List available template tokens for custom presets",
+    tags=["Presets"],
+)
+async def list_preset_tokens(
+    current_user: User = Depends(get_request_user),
+):
+    """Return the list of template tokens that can be used in custom preset templates."""
+    return {"tokens": _PRESET_TEMPLATE_TOKENS}
+
+
+@router.get(
+    "/presets",
+    response_model=PresetListResponse,
+    summary="List prompt presets",
+    tags=["Presets"],
+)
+async def list_presets(
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return built-in and user-defined prompt presets."""
+    all_presets: list[PresetDetail] = list(_BUILTIN_PRESETS)
+
+    # Load user-defined presets from DB
+    try:
+        rows = db.list_prompt_presets()
+        for row in rows:
+            all_presets.append(PresetDetail(
+                preset_id=row["preset_id"],
+                name=row["name"],
+                builtin=False,
+                section_order=row.get("section_order", []),
+                section_templates=row.get("section_templates", {}),
+                created_at=row.get("created_at"),
+                updated_at=row.get("updated_at"),
+            ))
+    except Exception as exc:
+        logger.debug("Could not load user presets (table may not exist yet): {}", exc)
+
+    return PresetListResponse(presets=all_presets)
+
+
+@router.post(
+    "/presets",
+    response_model=PresetDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a custom prompt preset",
+    tags=["Presets"],
+)
+async def create_preset(
+    body: PresetCreate = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Create a new user-defined prompt preset."""
+    created = db.upsert_prompt_preset(
+        preset_id=body.preset_id,
+        name=body.name,
+        section_order=body.section_order,
+        section_templates=body.section_templates,
+    )
+    if not created:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create prompt preset",
+        )
+    return PresetDetail(
+        preset_id=body.preset_id,
+        name=body.name,
+        builtin=False,
+        section_order=body.section_order,
+        section_templates=body.section_templates,
+    )
+
+
+@router.put(
+    "/presets/{preset_id}",
+    response_model=PresetDetail,
+    summary="Update a custom prompt preset",
+    tags=["Presets"],
+)
+async def update_preset(
+    preset_id: str = Path(..., description="Preset identifier"),
+    body: PresetUpdate = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Update an existing user-defined prompt preset. Cannot modify built-in presets."""
+    if preset_id in ("default", "st_default"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot modify built-in presets",
         )
 
+    existing = db.get_prompt_preset(preset_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found",
+        )
+
+    name = body.name if body.name is not None else existing["name"]
+    section_order = body.section_order if body.section_order is not None else existing.get("section_order", [])
+    section_templates = body.section_templates if body.section_templates is not None else existing.get("section_templates", {})
+
+    updated_ok = db.upsert_prompt_preset(
+        preset_id=preset_id,
+        name=name,
+        section_order=section_order,
+        section_templates=section_templates,
+    )
+    if not updated_ok:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update preset '{preset_id}'",
+        )
+    updated = db.get_prompt_preset(preset_id)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load updated preset '{preset_id}'",
+        )
+    return PresetDetail(
+        preset_id=preset_id,
+        name=updated["name"],
+        builtin=False,
+        section_order=updated.get("section_order", []),
+        section_templates=updated.get("section_templates", {}),
+        created_at=updated.get("created_at"),
+        updated_at=updated.get("updated_at"),
+    )
+
+
+@router.delete(
+    "/presets/{preset_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a custom prompt preset",
+    tags=["Presets"],
+)
+async def delete_preset(
+    preset_id: str = Path(..., description="Preset identifier"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Delete a user-defined preset. Cannot delete built-in presets."""
+    if preset_id in ("default", "st_default"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Cannot delete built-in presets",
+        )
+
+    existing = db.get_prompt_preset(preset_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Preset '{preset_id}' not found",
+        )
+
+    deleted = db.delete_prompt_preset(preset_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete preset '{preset_id}'",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ========================================================================
+# Chat Session Detail Endpoints
+# ========================================================================
 
 @router.get("/{chat_id}", response_model=ChatSessionResponse,
             summary="Get chat session details", tags=["Chat Sessions"])
 async def get_chat_session(
     chat_id: str = Path(..., description="Chat session ID"),
+    include_settings: bool = Query(
+        False,
+        description="Include per-chat settings payload in the response.",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -470,20 +2315,28 @@ async def get_chat_session(
         # Get message count efficiently
         try:
             conversation['message_count'] = db.count_messages_for_conversation(chat_id)
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             messages = db.get_messages_for_conversation(chat_id, limit=1000)
             conversation['message_count'] = len(messages) if messages else 0
 
-        return _convert_db_conversation_to_response(conversation)
+        settings_payload: Optional[dict[str, Any]] = None
+        if include_settings:
+            settings_row = db.get_conversation_settings(chat_id)
+            settings_payload = (settings_row or {}).get("settings") or {}
+
+        return _convert_db_conversation_to_response(
+            conversation,
+            settings=settings_payload,
+        )
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while retrieving chat session"
-        )
+        ) from e
 
 
 @router.get("/{chat_id}/context", summary="Get chat context for completions", tags=["Chat Sessions"])
@@ -500,20 +2353,29 @@ async def get_chat_context(
 
         _verify_chat_ownership(conversation, current_user.id, chat_id)
 
-        character = db.get_character_card_by_id(conversation['character_id']) or {}
-        char_name = character.get('name', 'Unknown')
+        settings_row = db.get_conversation_settings(chat_id)
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get('deleted')]
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+        )
+        character = turn_context.get("active_character") or {}
+        char_name = turn_context.get("active_character_name") or "Unknown"
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = turn_context.get("primary_character_name")
         user_name = conversation.get('user_name', 'User')
 
-        messages = db.get_messages_for_conversation(chat_id, limit=1000) or []
+        messages = history_messages
         # Map DB messages to chat-completions messages with normalized roles
         formatted = []
         for m in messages:
-            if m.get('deleted'):
-                continue
-            role = map_sender_to_role(
+            role = _map_sender_to_role_with_participants(
                 m.get('sender'),
-                character.get('name'),
-                default_role="user",
+                primary_character_name,
+                participant_aliases,
             )
             content = _safe_replace_placeholders(m.get('content'), char_name, user_name)
             formatted.append({"role": role, "content": content})
@@ -527,9 +2389,9 @@ async def get_chat_context(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat context for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context") from e
 
 
 @router.post(
@@ -544,7 +2406,7 @@ async def get_chat_context(
 )
 async def complete_chat_legacy(
     chat_id: str = Path(..., description="Chat session ID"),
-    body: Optional[Dict[str, Any]] = Body(
+    body: Optional[dict[str, Any]] = Body(
         default=None,
         description=(
             "DEPRECATED: Request body is ignored. This parameter will be removed and non-empty bodies will be rejected (422) in a future release."
@@ -571,10 +2433,11 @@ async def complete_chat_legacy(
         # Deprecation headers for clients; also used if we reject a non-empty body
         # Sunset date is configurable via DEPRECATION_SUNSET_DAYS env var (default 90 days)
         try:
-            from datetime import datetime, timedelta, timezone as _tz
+            from datetime import datetime, timedelta
+            from datetime import timezone as _tz
             sunset_days = int(os.getenv("DEPRECATION_SUNSET_DAYS", "90"))
             sunset = (datetime.now(_tz.utc) + timedelta(days=sunset_days)).strftime("%a, %d %b %Y %H:%M:%S GMT")
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             sunset = "Tue, 31 Dec 2025 00:00:00 GMT"
         dep_headers = {
             "Deprecation": "true",
@@ -585,7 +2448,7 @@ async def complete_chat_legacy(
             if response is not None:
                 for k, v in dep_headers.items():
                     response.headers[k] = v
-        except Exception as exc:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 "Non-fatal: failed to set deprecation headers for chat {}: {}",
                 chat_id,
@@ -603,24 +2466,22 @@ async def complete_chat_legacy(
 
         # Test-mode throttle: 5 requests per second per (user, chat)
         key = f"{current_user.id}:{chat_id}"
-        now = time.time()
-        window = await _complete_windows.get(key)
-        # Evict entries older than 1 second
-        while window and (now - window[0]) > 1.0:
-            window.popleft()
-        # Enforce limit
-        if len(window) >= 5:
+        allowed = await _complete_windows.check_and_record(
+            key,
+            max_hits=5,
+            window_seconds=1.0,
+        )
+        if not allowed:
             raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Rate limit exceeded for chat completion")
-        window.append(now)
 
         # Return a minimal success payload
         return {"status": "ok", "chat_id": chat_id}
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in legacy complete for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during completion") from e
 
 
 @router.post("/{chat_id}/completions", response_model=CharacterChatCompletionPrepResponse,
@@ -648,39 +2509,82 @@ async def prepare_chat_completion(
         await rate_limiter.check_chat_completion_rate(current_user.id)
 
         # Build messages
-        character = db.get_character_card_by_id(conversation['character_id']) or {}
-        character_name = character.get('name')
         user_name = conversation.get('user_name', 'User')
-        char_label = character_name or "Assistant"
         include_ctx = bool(body.include_character_context)
         # Fields are validated by Pydantic; avoid redundant int() casting
         limit = body.limit
         offset = body.offset
+        settings_row = db.get_conversation_settings(chat_id)
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         # Filter deleted
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get('deleted')]
 
-        formatted: List[Dict[str, Any]] = []
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.directed_character_id,
+        )
+        if (
+            body.directed_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="directed_character_id must reference a selected participant in this chat",
+            )
+        character = turn_context.get("active_character") or {}
+        character_name = turn_context.get("active_character_name")
+        char_label = character_name or "Assistant"
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = turn_context.get("primary_character_name")
+        summary_content = ""
+        paginated, summary_content = _apply_auto_summary_to_prompt_messages(
+            db=db,
+            chat_id=chat_id,
+            settings_row=settings_row,
+            prompt_messages=paginated,
+            offset=offset,
+            primary_character_name=primary_character_name or "",
+            participant_aliases=participant_aliases,
+            char_name=char_label,
+            user_name=user_name,
+        )
+
+        prep_settings = _extract_settings(settings_row)
+        effective_preset = _resolve_effective_prompt_preset(
+            prep_settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
+        formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            parts = [
-                f"You are {char_label}.",
-                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
-            ]
-            sys_text = '\n'.join([p for p in parts if p])
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_label,
+                user_name=user_name,
+                preset_id=effective_preset,
+            )
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
+        if summary_content:
+            formatted.append(
+                {"role": "system", "content": f"Conversation summary:\n{summary_content}"}
+            )
 
         for msg in paginated:
             formatted.append({
-                "role": map_sender_to_role(
+                "role": _map_sender_to_role_with_participants(
                     msg.get('sender'),
-                    character.get('name'),
-                    default_role="user",
+                    primary_character_name,
+                    participant_aliases,
                 ),
                 "content": _safe_replace_placeholders(msg.get('content'), char_label, user_name)
             })
@@ -688,9 +2592,35 @@ async def prepare_chat_completion(
         if body.append_user_message:
             formatted.append({"role": "user", "content": body.append_user_message})
 
+        formatted = _inject_character_scoped_greeting_from_settings(
+            formatted,
+            settings_row=settings_row,
+            turn_context=turn_context,
+            history_messages=history_messages,
+            user_name=user_name,
+        )
+        formatted = _inject_author_note_from_settings(
+            formatted,
+            settings_row=settings_row,
+            character=character,
+            char_name=char_label,
+            user_name=user_name,
+        )
+        formatted, steering_conflict = _inject_message_steering_instruction(
+            formatted,
+            continue_as_user=body.continue_as_user,
+            impersonate_user=body.impersonate_user,
+            force_narrate=body.force_narrate,
+        )
+        if steering_conflict:
+            logger.debug(
+                "Steering conflict resolved for chat {} in /completions prep: impersonate_user overrides continue_as_user",
+                chat_id,
+            )
+
         return CharacterChatCompletionPrepResponse(
             chat_id=chat_id,
-            character_id=conversation['character_id'],
+            character_id=turn_context.get("active_character_id") or conversation['character_id'],
             character_name=character_name,
             messages=formatted,
             total=len(messages)
@@ -698,9 +2628,371 @@ async def prepare_chat_completion(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error preparing completion for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion") from e
+
+
+# ── Token budget constants for supplemental prompt sections ──────────
+_TOKEN_BUDGET_TOTAL = 1200
+_TOKEN_BUDGET_GREETING = 120
+_TOKEN_BUDGET_AUTHOR_NOTE = 240
+_TOKEN_BUDGET_PRESET = 180
+_TOKEN_BUDGET_STEERING = 120
+_TOKEN_BUDGET_LOREBOOK = 420
+_TOKEN_BUDGET_WORLD_BOOK = 240
+
+# Priority order for truncation (highest priority first)
+_TRUNCATION_PRIORITY = [
+    "preset",
+    "author_note",
+    "message_steering",
+    "lorebook",
+    "world_book",
+    "greeting",
+]
+
+_PREVIEW_CONFLICT_EXAMPLES = [
+    "Preset sets temperature=0.7; later section sets temperature=0.2 -> effective temperature=0.2.",
+    'Preset directive "Speak tersely"; later directive "Be verbose" -> later directive replaces earlier.',
+    "Appendable source blocks concatenate only when both sides are appendable.",
+]
+
+_CONTRADICTORY_DIRECTIVE_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("speak tersely", "be verbose", "Conflicting directives detected (terse vs verbose)."),
+    ("concise", "detailed", "Conflicting directives detected (concise vs detailed)."),
+    ("formal", "casual", "Conflicting directives detected (formal vs casual)."),
+)
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token for English text."""
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
+def _truncate_to_budget(text: str, token_budget: int) -> str:
+    """Truncate text to fit within a token budget (approximate)."""
+    if not text:
+        return text
+    estimated = _estimate_tokens(text)
+    if estimated <= token_budget:
+        return text
+    # Rough truncation: 4 chars per token
+    max_chars = token_budget * 4
+    return text[:max_chars] + "..."
+
+
+def _extract_scalar_conflicts(texts: list[str]) -> list[dict[str, str]]:
+    by_key: dict[str, set[str]] = {}
+    pattern = re.compile(
+        r"\b(temperature|top_p|top[\s-]?p|repetition_penalty|repetition[\s-]?penalty)\b\s*[:=]\s*(-?\d+(?:\.\d+)?)",
+        re.IGNORECASE,
+    )
+    for text in texts:
+        for match in pattern.finditer(text or ""):
+            raw_key = (match.group(1) or "").lower()
+            key = "top_p" if "top" in raw_key else raw_key.replace(" ", "_").replace("-", "_")
+            value = match.group(2) or ""
+            by_key.setdefault(key, set()).add(value)
+
+    conflicts: list[dict[str, str]] = []
+    for key, values in by_key.items():
+        if len(values) <= 1:
+            continue
+        joined_values = ", ".join(sorted(values))
+        conflicts.append(
+            {
+                "type": "scalar_conflict",
+                "message": f"Overlapping values detected for {key}: {joined_values}",
+            }
+        )
+    return conflicts
+
+
+def _extract_directive_conflicts(text: str) -> list[dict[str, str]]:
+    lower = (text or "").lower()
+    conflicts: list[dict[str, str]] = []
+    for left, right, message in _CONTRADICTORY_DIRECTIVE_PAIRS:
+        if left in lower and right in lower:
+            conflicts.append({"type": "directive_conflict", "message": message})
+    return conflicts
+
+
+@router.post(
+    "/{chat_id}/prompt-preview",
+    summary="Preview assembled prompt with token budget breakdown",
+    tags=["Chat Sessions"],
+)
+async def prompt_assembly_preview(
+    chat_id: str = Path(..., description="Chat session ID"),
+    body: CharacterChatCompletionPrepRequest = None,
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Preview the full assembled prompt for a chat, including per-section token counts
+    and budget enforcement.
+
+    Returns the prompt sections (system prompt, greeting, author note, lorebook entries)
+    with token estimates, budget caps, and truncation warnings.
+    """
+    try:
+        body = body or CharacterChatCompletionPrepRequest()
+
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        user_name = conversation.get("user_name", "User")
+        include_ctx = bool(body.include_character_context)
+        settings_row = db.get_conversation_settings(chat_id)
+        settings = _extract_settings(settings_row) if isinstance(settings_row, dict) else {}
+
+        messages = db.get_messages_for_conversation(chat_id, limit=body.limit, offset=body.offset) or []
+        messages = [m for m in messages if not m.get("deleted")]
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get("deleted")]
+
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.directed_character_id,
+        )
+        if (
+            body.directed_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="directed_character_id must reference a selected participant in this chat",
+            )
+        character = turn_context.get("active_character") or {}
+        char_name = str(turn_context.get("active_character_name") or "Assistant")
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = str(turn_context.get("primary_character_name") or "")
+
+        paginated = messages
+        summary_content = ""
+        paginated, summary_content = _apply_auto_summary_to_prompt_messages(
+            db=db,
+            chat_id=chat_id,
+            settings_row=settings_row,
+            prompt_messages=paginated,
+            offset=body.offset,
+            primary_character_name=primary_character_name,
+            participant_aliases=participant_aliases,
+            char_name=char_name,
+            user_name=user_name,
+        )
+
+        preview_preset = _resolve_effective_prompt_preset(
+            settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
+        # Assemble prompt in the same order as completion-v2.
+        formatted: list[dict[str, Any]] = []
+        sys_text = ""
+        if include_ctx and character and body.offset == 0:
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_name,
+                user_name=user_name,
+                preset_id=preview_preset,
+            )
+            if sys_text.strip():
+                formatted.append({"role": "system", "content": sys_text.strip()})
+        if summary_content:
+            formatted.append({"role": "system", "content": f"Conversation summary:\n{summary_content}"})
+
+        for msg in paginated:
+            formatted.append({
+                "role": _map_sender_to_role_with_participants(
+                    msg.get("sender"),
+                    primary_character_name,
+                    participant_aliases,
+                ),
+                "content": _safe_replace_placeholders(msg.get("content"), char_name, user_name),
+            })
+
+        if body.append_user_message:
+            formatted.append({"role": "user", "content": body.append_user_message})
+
+        greeting_text = ""
+        if _should_inject_character_scoped_greeting(
+            settings=settings,
+            turn_context=turn_context,
+            history_messages=history_messages,
+        ):
+            greeting_text = _resolve_character_scoped_greeting(
+                settings=settings,
+                character=character,
+                char_name=char_name,
+                user_name=user_name,
+            )
+        formatted = _inject_character_scoped_greeting_from_settings(
+            formatted,
+            settings_row=settings_row,
+            turn_context=turn_context,
+            history_messages=history_messages,
+            user_name=user_name,
+        )
+
+        note_text = _resolve_author_note_text(settings, character)
+        if note_text:
+            note_text = _safe_replace_placeholders(note_text, char_name, user_name).strip()
+        author_note_text = f"Author's note:\n{note_text}" if note_text else ""
+        formatted = _inject_author_note_from_settings(
+            formatted,
+            settings_row=settings_row,
+            character=character,
+            char_name=char_name,
+            user_name=user_name,
+        )
+
+        continue_flag, impersonate_flag, narrate_flag, steering_conflict = (
+            _resolve_message_steering_flags(
+                continue_as_user=body.continue_as_user,
+                impersonate_user=body.impersonate_user,
+                force_narrate=body.force_narrate,
+            )
+        )
+        steering_text = _build_message_steering_instruction(
+            continue_as_user=continue_flag,
+            impersonate_user=impersonate_flag,
+            force_narrate=narrate_flag,
+        )
+        formatted, _ = _inject_message_steering_instruction(
+            formatted,
+            continue_as_user=body.continue_as_user,
+            impersonate_user=body.impersonate_user,
+            force_narrate=body.force_narrate,
+        )
+
+        lorebook_text = ""
+        lorebook_diagnostics: list[dict[str, Any]] = []
+        try:
+            from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+
+            wb_manager = WorldBookService(db)
+            recent_text = " ".join(
+                str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
+            )[-2000:]
+            if recent_text.strip():
+                world_book_character_id = (
+                    turn_context.get("active_character_id")
+                    or conversation.get("character_id")
+                )
+                wb_result = wb_manager.process_context(
+                    text=recent_text,
+                    character_id=world_book_character_id,
+                    include_diagnostics=True,
+                )
+                if isinstance(wb_result, dict):
+                    wb_context = wb_result.get("processed_context", "")
+                    lorebook_diagnostics = wb_result.get("diagnostics") or []
+                    if wb_context and wb_context.strip():
+                        lorebook_text = f"World info:\n{wb_context.strip()}"
+                        insert_pos = 0
+                        for idx, msg in enumerate(formatted):
+                            role = str(msg.get("role", "")).strip().lower()
+                            if role == "system":
+                                insert_pos = idx + 1
+                            else:
+                                break
+                        formatted.insert(
+                            insert_pos,
+                            {"role": "system", "content": lorebook_text},
+                        )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass
+
+        sections_raw: list[tuple[str, str, int]] = [
+            ("preset", sys_text, _TOKEN_BUDGET_PRESET),
+            ("author_note", author_note_text, _TOKEN_BUDGET_AUTHOR_NOTE),
+            ("message_steering", steering_text, _TOKEN_BUDGET_STEERING),
+            ("greeting", greeting_text, _TOKEN_BUDGET_GREETING),
+            ("lorebook", lorebook_text, _TOKEN_BUDGET_LOREBOOK),
+        ]
+        sections: list[dict[str, Any]] = []
+        total_supplemental_tokens = 0
+        total_supplemental_effective_tokens = 0
+        for name, content, budget in sections_raw:
+            text = str(content or "").strip()
+            estimated_tokens = _estimate_tokens(text)
+            truncated_text = _truncate_to_budget(text, budget) if text else ""
+            effective_tokens = _estimate_tokens(truncated_text)
+            total_supplemental_tokens += estimated_tokens
+            total_supplemental_effective_tokens += effective_tokens
+            section_payload: dict[str, Any] = {
+                "name": name,
+                "content": truncated_text,
+                "tokens_estimated": estimated_tokens,
+                "tokens_effective": effective_tokens,
+                "budget": budget,
+                "truncated": bool(text) and truncated_text != text,
+            }
+            if name == "lorebook" and lorebook_diagnostics:
+                section_payload["diagnostics"] = lorebook_diagnostics
+            sections.append(section_payload)
+
+        message_tokens = sum(_estimate_tokens(str(m.get("content", ""))) for m in messages)
+        warnings: list[str] = []
+        budget_status = "ok"
+        if total_supplemental_effective_tokens > _TOKEN_BUDGET_TOTAL:
+            budget_status = "error"
+            warnings.append(
+                f"Total supplemental tokens ({total_supplemental_effective_tokens}) exceed budget ({_TOKEN_BUDGET_TOTAL}). "
+                f"Sections may be truncated in priority order: {', '.join(_TRUNCATION_PRIORITY)}."
+            )
+        elif total_supplemental_effective_tokens > int(_TOKEN_BUDGET_TOTAL * 0.9):
+            budget_status = "caution"
+            warnings.append(
+                f"Total supplemental tokens ({total_supplemental_effective_tokens}) are at "
+                f"{total_supplemental_effective_tokens * 100 // _TOKEN_BUDGET_TOTAL}% of budget ({_TOKEN_BUDGET_TOTAL})."
+            )
+
+        staleness = _check_greeting_staleness(settings, character)
+        if staleness:
+            warnings.append(staleness)
+        if steering_conflict:
+            warnings.append(
+                "Steering conflict resolved: impersonate_user overrides continue_as_user."
+            )
+
+        conflict_source_sections = [str(content or "") for _, content, _ in sections_raw if str(content or "").strip()]
+        conflict_text = "\n".join(conflict_source_sections)
+        conflicts = _extract_scalar_conflicts(conflict_source_sections)
+        conflicts.extend(_extract_directive_conflicts(conflict_text))
+
+        return {
+            "chat_id": chat_id,
+            "character_id": turn_context.get("active_character_id") or conversation.get("character_id"),
+            "character_name": char_name,
+            "sections": sections,
+            "total_supplemental_tokens": total_supplemental_tokens,
+            "total_supplemental_effective_tokens": total_supplemental_effective_tokens,
+            "supplemental_budget": _TOKEN_BUDGET_TOTAL,
+            "budget_status": budget_status,
+            "message_tokens_estimated": message_tokens,
+            "message_count": len(messages),
+            "warnings": warnings or None,
+            "conflicts": conflicts or None,
+            "examples": _PREVIEW_CONFLICT_EXAMPLES,
+        }
+
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
+        logger.error(f"Error generating prompt preview for {chat_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while generating prompt preview",
+        ) from e
 
 
 @router.post(
@@ -745,46 +3037,111 @@ async def character_chat_completion(
         rate_limiter = get_character_rate_limiter()
 
         # Gather character and context
-        character = db.get_character_card_by_id(conversation['character_id']) or {}
         user_name = conversation.get('user_name', 'User')
-        char_label = character.get('name', 'Assistant')
         include_ctx = bool(body.include_character_context)
         limit = body.limit
         offset = body.offset
         stream_requested = bool(body.stream)
         save_to_db = body.save_to_db
+        settings_row = db.get_conversation_settings(chat_id)
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get('deleted')]
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.directed_character_id,
+        )
+        if (
+            body.directed_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="directed_character_id must reference a selected participant in this chat",
+            )
+        character = turn_context.get("active_character") or {}
+        active_character_id = turn_context.get("active_character_id")
+        active_character_name = turn_context.get("active_character_name")
+        char_label = active_character_name or "Assistant"
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = turn_context.get("primary_character_name")
+        completion_settings = _extract_settings(settings_row)
+        character_generation_settings = _resolve_effective_generation_settings(completion_settings, character)
+        resolved_temperature = (
+            body.temperature
+            if body.temperature is not None
+            else character_generation_settings.get("temperature")
+        )
+        resolved_top_p = (
+            body.top_p
+            if body.top_p is not None
+            else character_generation_settings.get("top_p")
+        )
+        resolved_repetition_penalty = (
+            body.repetition_penalty
+            if body.repetition_penalty is not None
+            else character_generation_settings.get("repetition_penalty")
+        )
+        resolved_stop = (
+            body.stop
+            if body.stop is not None
+            else character_generation_settings.get("stop")
+        )
         if save_to_db is None:
             # Default from Chat API settings when not specified explicitly.
             try:
                 from tldw_Server_API.app.api.v1.endpoints.chat import DEFAULT_SAVE_TO_DB as CHAT_DEFAULT_SAVE
                 save_to_db = CHAT_DEFAULT_SAVE
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 save_to_db = False
         will_persist = bool(save_to_db) and not stream_requested
 
         messages = db.get_messages_for_conversation(chat_id, limit=limit, offset=offset) or []
         messages = [m for m in messages if not m.get('deleted')]
         paginated = messages
+        summary_content = ""
+        paginated, summary_content = _apply_auto_summary_to_prompt_messages(
+            db=db,
+            chat_id=chat_id,
+            settings_row=settings_row,
+            prompt_messages=paginated,
+            offset=offset,
+            primary_character_name=primary_character_name or "",
+            participant_aliases=participant_aliases,
+            char_name=char_label,
+            user_name=user_name,
+        )
 
-        formatted: List[Dict[str, Any]] = []
+        completion_preset = _resolve_effective_prompt_preset(
+            completion_settings,
+            character,
+            request_preset=body.prompt_preset,
+        )
+
+        formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            parts = [
-                f"You are {char_label}.",
-                _safe_replace_placeholders(character.get('description', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('personality', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('scenario', ''), char_label, user_name),
-                _safe_replace_placeholders(character.get('system_prompt', ''), char_label, user_name),
-            ]
-            sys_text = '\n'.join([p for p in parts if p])
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_label,
+                user_name=user_name,
+                preset_id=completion_preset,
+            )
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
+        if summary_content:
+            formatted.append(
+                {"role": "system", "content": f"Conversation summary:\n{summary_content}"}
+            )
 
         for msg in paginated:
             formatted.append({
-                "role": map_sender_to_role(
+                "role": _map_sender_to_role_with_participants(
                     msg.get('sender'),
-                    character.get('name'),
-                    default_role="user",
+                    primary_character_name,
+                    participant_aliases,
                 ),
                 "content": _safe_replace_placeholders(msg.get('content'), char_label, user_name)
             })
@@ -793,6 +3150,68 @@ async def character_chat_completion(
         appended_user_id: Optional[str] = None
         if body.append_user_message:
             formatted.append({"role": "user", "content": body.append_user_message})
+
+        formatted = _inject_character_scoped_greeting_from_settings(
+            formatted,
+            settings_row=settings_row,
+            turn_context=turn_context,
+            history_messages=history_messages,
+            user_name=user_name,
+        )
+        formatted = _inject_author_note_from_settings(
+            formatted,
+            settings_row=settings_row,
+            character=character,
+            char_name=char_label,
+            user_name=user_name,
+        )
+        formatted, steering_conflict = _inject_message_steering_instruction(
+            formatted,
+            continue_as_user=body.continue_as_user,
+            impersonate_user=body.impersonate_user,
+            force_narrate=body.force_narrate,
+        )
+        if steering_conflict:
+            logger.debug(
+                "Steering conflict resolved for chat {} in /complete-v2: impersonate_user overrides continue_as_user",
+                chat_id,
+            )
+
+        # Inject world book context and capture diagnostics for this turn.
+        turn_lorebook_diagnostics: Optional[list[dict[str, Any]]] = None
+        try:
+            from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
+            wb_manager = WorldBookService(db)
+            recent_text = " ".join(
+                str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
+            )[-2000:]
+            if recent_text.strip():
+                world_book_character_id = (
+                    active_character_id
+                    or conversation.get("character_id")
+                )
+                wb_result = wb_manager.process_context(
+                    text=recent_text,
+                    character_id=world_book_character_id,
+                    include_diagnostics=True,
+                )
+                if isinstance(wb_result, dict):
+                    wb_context = wb_result.get("processed_context", "")
+                    turn_lorebook_diagnostics = wb_result.get("diagnostics") or None
+                    if wb_context and wb_context.strip():
+                        # Insert world book context as a system message after existing system messages.
+                        insert_pos = 0
+                        for idx, msg in enumerate(formatted):
+                            if str(msg.get("role", "")).strip().lower() == "system":
+                                insert_pos = idx + 1
+                            else:
+                                break
+                        formatted.insert(insert_pos, {
+                            "role": "system",
+                            "content": f"World info:\n{wb_context.strip()}",
+                        })
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            pass  # world book injection is best-effort
 
         # Determine provider/model with safe defaults for test/offline
         provider = (body.provider or os.getenv("CHAR_CHAT_PROVIDER") or "local-llm").strip()
@@ -810,7 +3229,7 @@ async def character_chat_completion(
                 await rate_limiter.check_soft_message_limit(chat_id, current_count)
         except HTTPException:
             raise
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             logger.debug("Non-fatal: message cap pre-check skipped")
 
         # Resolve BYOK credentials (fall back to env/config)
@@ -818,17 +3237,15 @@ async def character_chat_completion(
             try:
                 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import get_api_keys
                 return get_api_keys().get(name)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return None
 
         user_id_int: Optional[int] = None
         if hasattr(current_user, "id_int"):
             user_id_int = current_user.id_int
         elif hasattr(current_user, "id"):
-            try:
+            with contextlib.suppress(TypeError, ValueError):
                 user_id_int = int(current_user.id)
-            except (TypeError, ValueError):
-                pass
 
         byok_resolution = await resolve_byok_credentials(
             provider,
@@ -863,7 +3280,10 @@ async def character_chat_completion(
                     api_endpoint=provider,
                     messages_payload=formatted,
                     api_key=api_key,
-                    temp=body.temperature,
+                    temp=resolved_temperature,
+                    top_p=resolved_top_p,
+                    repetition_penalty=resolved_repetition_penalty,
+                    stop=resolved_stop,
                     model=model,
                     max_tokens=body.max_tokens,
                     tools=body.tools,
@@ -876,13 +3296,13 @@ async def character_chat_completion(
                 try:
                     if asyncio.iscoroutine(llm_resp):
                         llm_resp = await llm_resp  # type: ignore
-                except Exception as e:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Failed to await async LLM response: {e}")
                     raise HTTPException(
                         status_code=status.HTTP_502_BAD_GATEWAY,
                         detail="LLM provider error"
                     ) from e
-            except Exception as e:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Chat provider call failed: {e}")
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Chat provider error") from e
             await byok_resolution.touch_last_used()
@@ -912,7 +3332,7 @@ async def character_chat_completion(
                     return ensure_sse_line(text.strip())
                 normalized = normalize_provider_line(text)
                 return normalized
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return None
 
         # Extract assistant content from LLM response
@@ -927,14 +3347,14 @@ async def character_chat_completion(
                 # OpenAI-style
                 try:
                     return resp.get("choices", [{}])[0].get("message", {}).get("content", "") or resp.get("text", "")
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     return resp.get("text", "")
             try:
                 return str(resp)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 return ""
 
-        def _chunk_text(text: str, size: int = 2000) -> List[str]:
+        def _chunk_text(text: str, size: int = 2000) -> list[str]:
             if not text:
                 return []
             return [text[i : i + size] for i in range(0, len(text), size)]
@@ -980,7 +3400,7 @@ async def character_chat_completion(
                     }
                     yield f"data: {json.dumps(tail)}\n\n"
                     yield "data: [DONE]\n\n"
-                except Exception as e:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                     yield "data: [DONE]\n\n"
 
@@ -1015,7 +3435,7 @@ async def character_chat_completion(
                         tool_calls = llm_resp.get("choices", [{}])[0].get("message", {}).get("tool_calls")
                         if isinstance(tool_calls, list):
                             assistant_tool_calls = tool_calls
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     pass
 
         # If streaming requested and we have a generator, stream SSE (real providers)
@@ -1033,12 +3453,10 @@ async def character_chat_completion(
                     stream = SSEStream(
                         labels={"component": "chat", "endpoint": "character_chat_stream"}
                     )
-                    try:
+                    with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                         logger.debug(
                             f"Unified SSE enabled: interval={stream.heartbeat_interval_s} mode={stream.heartbeat_mode}"
                         )
-                    except Exception:
-                        pass
 
                     chunk_count = 0
                     total_bytes = 0
@@ -1087,7 +3505,7 @@ async def character_chat_completion(
                                         return
                             # Ensure DONE if provider didn't send one
                             await stream.done()
-                        except Exception as e:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             await stream.error("internal_error", f"{e}")
 
                     async def _generator():
@@ -1101,26 +3519,22 @@ async def character_chat_completion(
                         else:
                             # Ensure producer completes if stream ended without explicit DONE
                             if not producer.done():
-                                try:
+                                with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                                     await producer
-                                except Exception:
-                                    pass
                             # If DONE wasn’t enqueued for any reason, append one now
                             try:
                                 if not getattr(stream, "_done_enqueued", False):
                                     yield sse_done()
-                            except Exception:
+                            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                 pass
                         finally:
                             # Always tear down the background producer to avoid leaks
                             if not producer.done():
-                                try:
+                                with contextlib.suppress(_CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS):
                                     producer.cancel()
-                                except Exception:
-                                    pass
                                 try:
                                     await producer
-                                except (asyncio.CancelledError, Exception):
+                                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                                     # Swallow any errors from producer teardown
                                     pass
 
@@ -1159,7 +3573,7 @@ async def character_chat_completion(
                                 if normalized == "data: [done]":
                                     done_sent = True
                                 yield ensure_sse_line(line)
-                        except Exception as e:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                             if isinstance(e, AttributeError) and "object has no attribute 'close'" in str(e):
                                 logger.debug("Ignoring streaming session close error: %s", e)
                             else:
@@ -1199,7 +3613,7 @@ async def character_chat_completion(
                                 if normalized == "data: [done]":
                                     done_sent = True
                                 yield ensure_sse_line(line)
-                        except Exception as e:
+                        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                             logger.exception("Exception occurred in streaming SSE generator.")
                             yield f"data: {json.dumps({'error': 'An internal error has occurred.'})}\n\n"
                         finally:
@@ -1207,7 +3621,7 @@ async def character_chat_completion(
                                 yield "data: [DONE]\n\n"
                     # Note: streaming mode does not persist assistant content
                     return StreamingResponse(_sse_gen(), media_type="text/event-stream")
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fall through to non-streaming response
                 pass
             if isinstance(llm_resp, (dict, str, bytes, bytearray)):
@@ -1224,7 +3638,7 @@ async def character_chat_completion(
                 appended_user_id = post_message_to_conversation(
                     db=db,
                     conversation_id=chat_id,
-                    character_name=character.get('name', 'Assistant'),
+                    character_name=char_label,
                     message_content=body.append_user_message,
                     is_user_message=True,
                     sender_override="user",
@@ -1240,7 +3654,7 @@ async def character_chat_completion(
             assistant_msg_id = post_message_to_conversation(
                 db=db,
                 conversation_id=chat_id,
-                character_name=character.get('name', 'Assistant'),
+                character_name=char_label,
                 message_content=assistant_content_for_storage,
                 is_user_message=False,
                 parent_message_id=appended_user_id,
@@ -1250,25 +3664,40 @@ async def character_chat_completion(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to persist assistant message"
                 )
-            # Persist tool_calls into schema-level metadata for richer retrieval
-            if assistant_tool_calls:
-                validated_tool_calls = _validate_and_truncate_tool_calls(assistant_tool_calls)
-                if validated_tool_calls:
-                    try:
-                        db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls)
-                    except Exception as exc:
-                        logger.debug(f"Non-fatal: failed to persist tool_calls metadata: {exc}")
+            metadata_extra: dict[str, Any] = {
+                "speaker_character_id": active_character_id,
+                "speaker_character_name": char_label,
+                "turn_taking_mode": turn_context.get("turn_taking_mode", "single"),
+            }
+            if turn_lorebook_diagnostics:
+                metadata_extra["lorebook_diagnostics"] = turn_lorebook_diagnostics
+            validated_tool_calls = (
+                _validate_and_truncate_tool_calls(assistant_tool_calls)
+                if assistant_tool_calls
+                else None
+            )
+            try:
+                db.add_message_metadata(
+                    assistant_msg_id,
+                    tool_calls=validated_tool_calls,
+                    extra=metadata_extra,
+                )
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"Non-fatal: failed to persist assistant metadata: {exc}")
             saved = True
 
         return CharacterChatCompletionV2Response(
             chat_id=chat_id,
-            character_id=conversation['character_id'],
+            character_id=active_character_id or conversation['character_id'],
             provider=provider,
             model=model,
             saved=saved,
             user_message_id=appended_user_id,
             assistant_message_id=assistant_msg_id,
             assistant_content=assistant_text,
+            speaker_character_id=active_character_id,
+            speaker_character_name=char_label,
+            lorebook_diagnostics=turn_lorebook_diagnostics,
         )
 
     except HTTPException:
@@ -1286,9 +3715,9 @@ async def character_chat_completion(
     except CharactersRAGDBError as e:
         logger.error(f"DB error in character chat completion for {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in character chat completion for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion") from e
 
 
 @router.get("/", response_model=ChatSessionListResponse,
@@ -1297,6 +3726,10 @@ async def list_chat_sessions(
     character_id: Optional[int] = Query(None, description="Filter by character ID"),
     limit: int = Query(50, ge=1, le=200, description="Number of items to return"),
     offset: int = Query(0, ge=0, description="Number of items to skip"),
+    include_settings: bool = Query(
+        False,
+        description="Include per-chat settings payload for each returned chat.",
+    ),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user)
 ):
@@ -1320,7 +3753,7 @@ async def list_chat_sessions(
             conversations = db.get_conversations_for_user_and_character(user_id_str, character_id, limit=limit, offset=offset)
             try:
                 total_count = db.count_conversations_for_user_by_character(user_id_str, character_id)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 # Fallback: filter by client_id in-memory if efficient count isn't available
                 total_count = len([c for c in conversations if c.get('client_id') == user_id_str])
         else:
@@ -1328,7 +3761,7 @@ async def list_chat_sessions(
             conversations = db.get_conversations_for_user(user_id_str, limit=limit, offset=offset)
             try:
                 total_count = db.count_conversations_for_user(user_id_str)
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 total_count = len(conversations)
 
         # Filter by client_id for security (redundant in happy path, kept defensively)
@@ -1343,23 +3776,36 @@ async def list_chat_sessions(
         for conv in user_conversations:
             try:
                 conv['message_count'] = db.count_messages_for_conversation(conv['id'])
-            except Exception:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                 messages = db.get_messages_for_conversation(conv['id'], limit=1000)
                 conv['message_count'] = len(messages) if messages else 0
 
+        chats: list[ChatSessionResponse] = []
+        for conv in user_conversations:
+            settings_payload: Optional[dict[str, Any]] = None
+            if include_settings:
+                settings_row = db.get_conversation_settings(conv['id'])
+                settings_payload = (settings_row or {}).get("settings") or {}
+            chats.append(
+                _convert_db_conversation_to_response(
+                    conv,
+                    settings=settings_payload,
+                )
+            )
+
         return ChatSessionListResponse(
-            chats=[_convert_db_conversation_to_response(conv) for conv in user_conversations],
+            chats=chats,
             total=total_count,
             limit=limit,
             offset=offset
         )
 
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing chat sessions: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing chat sessions"
-        )
+        ) from e
 
 
 @router.put("/{chat_id}", response_model=ChatSessionResponse,
@@ -1421,18 +3867,126 @@ async def update_chat_session(
     except ConflictError as e:
         # Optimistic locking or state conflicts
         logger.warning(f"Conflict updating chat session {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error updating chat session {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error updating chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating chat session"
+        ) from e
+
+
+@router.get(
+    "/{chat_id}/settings",
+    response_model=ChatSettingsResponse,
+    summary="Get chat settings",
+    tags=["Chat Sessions"],
+)
+async def get_chat_settings(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        settings_row = db.get_conversation_settings(chat_id)
+        if not settings_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chat settings not found")
+
+        settings = settings_row.get("settings") or {}
+
+        # Normalize stored enum values so the client always gets valid scopes.
+        _SCOPE_DEFAULTS = {
+            "greetingScope": ("chat", {"chat", "character"}),
+            "presetScope": ("character", {"chat", "character"}),
+            "memoryScope": ("shared", {"shared", "character", "both"}),
+        }
+        for scope_key, (default_val, allowed) in _SCOPE_DEFAULTS.items():
+            raw = settings.get(scope_key)
+            if raw is not None:
+                normalized = raw.strip().lower() if isinstance(raw, str) else None
+                if normalized not in allowed:
+                    settings[scope_key] = default_val
+
+        # Normalize characterMemoryById string entries to dicts on read.
+        mem_by_id = settings.get("characterMemoryById")
+        if isinstance(mem_by_id, dict):
+            for cid, entry in mem_by_id.items():
+                if isinstance(entry, str):
+                    mem_by_id[cid] = {"note": entry}
+
+        # Check for greeting staleness if a character is associated.
+        warnings: list[str] = []
+        char_id = conversation.get("character_id") if conversation else None
+        if char_id is not None:
+            try:
+                character = db.get_character_card_by_id(char_id)
+                if character:
+                    staleness_warning = _check_greeting_staleness(settings, character)
+                    if staleness_warning:
+                        warnings.append(staleness_warning)
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+                pass  # best-effort
+
+        return ChatSettingsResponse(
+            conversation_id=chat_id,
+            settings=settings,
+            last_modified=settings_row.get("last_modified") or datetime.now(timezone.utc),
+            warnings=warnings or None,
         )
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Error fetching chat settings for {chat_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch chat settings") from exc
+
+
+@router.put(
+    "/{chat_id}/settings",
+    response_model=ChatSettingsResponse,
+    summary="Update chat settings",
+    tags=["Chat Sessions"],
+)
+async def update_chat_settings(
+    payload: ChatSettingsUpdate,
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    try:
+        conversation = db.get_conversation_by_id(chat_id)
+        _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        incoming_settings = payload.settings or {}
+        _validate_chat_settings_payload(incoming_settings)
+
+        existing_row = db.get_conversation_settings(chat_id)
+        existing_settings = (existing_row or {}).get("settings") or {}
+        merged_settings = _merge_conversation_settings(existing_settings, incoming_settings)
+        _validate_chat_settings_payload(merged_settings)
+
+        if not db.upsert_conversation_settings(chat_id, merged_settings):
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings")
+
+        settings_row = db.get_conversation_settings(chat_id)
+
+        return ChatSettingsResponse(
+            conversation_id=chat_id,
+            settings=(settings_row or {}).get("settings") or merged_settings,
+            last_modified=(settings_row or {}).get("last_modified") or datetime.now(timezone.utc),
+        )
+    except HTTPException:
+        raise
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.error(f"Error updating chat settings for {chat_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings") from exc
 
 
 @router.delete(
@@ -1505,7 +4059,7 @@ async def delete_chat_session(
                 try:
                     db.soft_delete_message(msg_id, msg.get("version", 1))
                     batch_deleted += 1
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     logger.warning("Failed to soft-delete message {} during conversation delete.", msg_id)
                     failed_message_ids.add(msg_id)  # Track failed deletions
 
@@ -1533,18 +4087,18 @@ async def delete_chat_session(
 
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting chat session {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting chat session {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting chat session"
-        )
+        ) from e
 
 
 # ========================================================================
@@ -1600,6 +4154,18 @@ async def export_chat_history(
         conversation = db.get_conversation_by_id(chat_id)
         _verify_chat_ownership(conversation, current_user.id, chat_id)
 
+        settings_row = db.get_conversation_settings(chat_id)
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get("deleted")]
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+        )
+        participant_aliases = turn_context.get("participant_aliases") or set()
+        primary_character_name = turn_context.get("primary_character_name")
+
         # Get character info if requested
         character = None
         if include_character:
@@ -1608,7 +4174,7 @@ async def export_chat_history(
         # Get total message count for pagination info
         try:
             total_messages = db.count_messages_for_conversation(chat_id)
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             # Fallback if count method not available
             total_messages = None
 
@@ -1680,7 +4246,7 @@ async def export_chat_history(
                 "created_at": str(conversation.get('created_at', '')),
                 "messages": []
             }
-            message_metadata_extra: Dict[str, Any] = {}
+            message_metadata_extra: dict[str, Any] = {}
             # Build messages with optional tool_calls per message
             for msg in messages:
                 if msg.get('deleted'):
@@ -1694,18 +4260,20 @@ async def export_chat_history(
                 }
                 try:
                     md = db.get_message_metadata(msg.get('id'))
-                except Exception:
+                except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                     md = None
-                role_for_tool_calls = map_sender_to_role(
+                role_for_tool_calls = _map_sender_to_role_with_participants(
                     msg.get('sender'),
-                    character.get('name') if character else None,
+                    primary_character_name,
+                    participant_aliases,
                 )
                 if md and md.get('tool_calls') is not None:
                     item["tool_calls"] = md.get('tool_calls')
                 elif role_for_tool_calls == 'assistant':
                     # Fallback: parse inline suffix [tool_calls]: <json>
                     try:
-                        import re as _re, json as _json
+                        import json as _json
+                        import re as _re
                         m = _re.search(r"\[tool_calls\]\s*:\s*(\{.*|\[.*)$", (msg.get('content') or ''), _re.DOTALL)
                         if m:
                             parsed = _json.loads(m.group(1).strip())
@@ -1715,7 +4283,7 @@ async def export_chat_history(
                                 tc_list = parsed
                             if isinstance(tc_list, list):
                                 item["tool_calls"] = tc_list
-                    except Exception:
+                    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
                         pass
                 export_data["messages"].append(item)
                 if include_metadata and md and md.get('extra') is not None and msg.get('id'):
@@ -1744,12 +4312,12 @@ async def export_chat_history(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error exporting chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while exporting chat history"
-        )
+        ) from e
 
 
 # ========================================================================
@@ -1768,15 +4336,110 @@ async def export_chat_history(
 )
 async def persist_streamed_assistant_message(
     chat_id: str = Path(..., description="Chat session ID"),
-    body: CharacterChatStreamPersistRequest = None,
+    body: CharacterChatStreamPersistRequest = Body(...),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        body = body or CharacterChatStreamPersistRequest(assistant_content="")
-
         conversation = db.get_conversation_by_id(chat_id)
         _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        settings_row = db.get_conversation_settings(chat_id)
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get("deleted")]
+
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.speaker_character_id,
+        )
+        if (
+            body.speaker_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="speaker_character_id must reference a selected participant in this chat",
+            )
+
+        participants = turn_context.get("participants") or []
+        participants_by_alias: dict[str, dict[str, Any]] = {}
+        for participant in participants:
+            aliases = _normalize_sender_aliases([participant.get("name", "")])
+            for alias in aliases:
+                participants_by_alias.setdefault(alias, participant)
+
+        resolved_participant: Optional[dict[str, Any]] = None
+        requested_speaker_name = (
+            body.speaker_character_name.strip()
+            if isinstance(body.speaker_character_name, str)
+            else ""
+        )
+
+        if body.speaker_character_id is not None:
+            requested_id = _normalize_character_id(body.speaker_character_id)
+            resolved_participant = next(
+                (
+                    participant
+                    for participant in participants
+                    if _normalize_character_id(participant.get("id")) == requested_id
+                ),
+                None,
+            )
+
+        if requested_speaker_name:
+            requested_aliases = _normalize_sender_aliases([requested_speaker_name])
+            matched_by_name = next(
+                (
+                    participants_by_alias.get(alias)
+                    for alias in requested_aliases
+                    if alias in participants_by_alias
+                ),
+                None,
+            )
+            if matched_by_name is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="speaker_character_name must reference a selected participant in this chat",
+                )
+            if (
+                resolved_participant is not None
+                and _normalize_character_id(matched_by_name.get("id"))
+                != _normalize_character_id(resolved_participant.get("id"))
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="speaker_character_id and speaker_character_name must reference the same participant",
+                )
+            resolved_participant = matched_by_name
+
+        if resolved_participant is None:
+            active_character_id = _normalize_character_id(turn_context.get("active_character_id"))
+            resolved_participant = next(
+                (
+                    participant
+                    for participant in participants
+                    if _normalize_character_id(participant.get("id")) == active_character_id
+                ),
+                None,
+            )
+        if resolved_participant is None and participants:
+            resolved_participant = participants[0]
+
+        resolved_speaker_id = (
+            _normalize_character_id(resolved_participant.get("id"))
+            if isinstance(resolved_participant, dict)
+            else _normalize_character_id(turn_context.get("active_character_id"))
+        )
+        resolved_speaker_name = (
+            str((resolved_participant or {}).get("name") or turn_context.get("active_character_name") or "").strip()
+        )
+        if not resolved_speaker_name:
+            char_card = db.get_character_card_by_id(conversation.get("character_id")) or {}
+            resolved_speaker_name = str(char_card.get("name") or "Assistant").strip() or "Assistant"
+        resolved_turn_mode = str(turn_context.get("turn_taking_mode") or "single").strip() or "single"
 
         # Enforce message cap (+1 assistant)
         try:
@@ -1785,7 +4448,7 @@ async def persist_streamed_assistant_message(
             await limiter.check_message_limit(chat_id, current_count + 1)
         except HTTPException:
             raise
-        except Exception:
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
             logger.debug("Non-fatal: message cap check skipped in persist endpoint")
 
         # Validate optional parent message belongs to this conversation
@@ -1803,12 +4466,10 @@ async def persist_streamed_assistant_message(
                 )
 
         # Persist assistant response via Character_Chat guardrails
-        char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
-        raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
         assistant_msg_id = post_message_to_conversation(
             db=db,
             conversation_id=chat_id,
-            character_name=raw_name,
+            character_name=resolved_speaker_name,
             message_content=body.assistant_content,
             is_user_message=False,
             parent_message_id=body.user_message_id,
@@ -1821,13 +4482,20 @@ async def persist_streamed_assistant_message(
             )
         # Persist metadata: tool_calls and usage
         try:
-            extra = None
+            metadata_extra: dict[str, Any] = {
+                "speaker_character_id": resolved_speaker_id,
+                "speaker_character_name": resolved_speaker_name,
+                "turn_taking_mode": resolved_turn_mode,
+            }
             if getattr(body, 'usage', None) is not None:
-                extra = {"usage": body.usage}
+                metadata_extra["usage"] = body.usage
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))
-            if validated_tool_calls is not None or extra is not None:
-                db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls, extra=extra)
-        except Exception as exc:
+            db.add_message_metadata(
+                assistant_msg_id,
+                tool_calls=validated_tool_calls,
+                extra=metadata_extra,
+            )
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 f"Non-fatal: failed to persist metadata for message {assistant_msg_id}: {exc}"
             )
@@ -1842,7 +4510,7 @@ async def persist_streamed_assistant_message(
                         {"rating": body.chat_rating},
                         conv_for_update.get('version', 1),
                     )
-            except Exception as e:
+            except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(
                     "Failed to update chat rating for chat_id={} rating={} error={}",
                     chat_id,
@@ -1867,9 +4535,268 @@ async def persist_streamed_assistant_message(
     except CharactersRAGDBError as e:
         logger.error(f"DB error persisting streamed assistant message for {chat_id}: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
-    except Exception as e:
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message") from e
+
+
+# ========================================================================
+# Greeting List Picker Endpoints (PRD 1 Stage A2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/greetings",
+    response_model=GreetingListResponse,
+    summary="List character greetings for this chat",
+    tags=["Chat Sessions"],
+)
+async def list_greetings(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return all available greetings from the character card, current selection, and staleness info."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    greetings_texts = _collect_character_greeting_texts(character)
+    greetings = [
+        GreetingItem(
+            index=i,
+            text=t,
+            preview=t[:120],
+        )
+        for i, t in enumerate(greetings_texts)
+    ]
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+    current_selection = _parse_greeting_selection_index(settings.get("greetingSelectionId"))
+    staleness = _check_greeting_staleness(settings, character)
+
+    return GreetingListResponse(
+        chat_id=chat_id,
+        character_id=str(character_id) if character_id is not None else None,
+        character_name=character.get("name"),
+        greetings=greetings,
+        current_selection=current_selection,
+        staleness_warning=staleness,
+    )
+
+
+@router.put(
+    "/{chat_id}/greetings/select",
+    response_model=GreetingSelectResponse,
+    summary="Select a greeting for this chat",
+    tags=["Chat Sessions"],
+)
+async def select_greeting(
+    chat_id: str = Path(..., description="Chat session ID"),
+    body: GreetingSelectRequest = Body(...),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Select a specific greeting by index and update the chat settings."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    greetings_texts = _collect_character_greeting_texts(character)
+    if body.index < 0 or body.index >= len(greetings_texts):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Greeting index {body.index} out of range (0..{len(greetings_texts) - 1})",
+        )
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+    checksum = _compute_greetings_checksum(character)
+    settings["greetingSelectionId"] = f"greeting:{body.index}:selected"
+    settings["greetingsChecksum"] = checksum
+    if not db.upsert_conversation_settings(chat_id, settings):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist greeting selection",
+        )
+
+    return GreetingSelectResponse(
+        chat_id=chat_id,
+        selected_index=body.index,
+        greeting_preview=greetings_texts[body.index][:120],
+        checksum_updated=True,
+    )
+
+
+# ========================================================================
+# Author Note Info Endpoint (PRD 4 Stage D2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/author-note/info",
+    response_model=AuthorNoteInfoResponse,
+    summary="Get author note token info",
+    tags=["Chat Sessions"],
+)
+async def get_author_note_info(
+    chat_id: str = Path(..., description="Chat session ID"),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Return author note text, token estimates, budget, and toggle states."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    character = db.get_character_card_by_id(character_id) if character_id else {}
+    if not character:
+        character = {}
+
+    settings_row = db.get_conversation_settings(chat_id)
+    settings = (settings_row or {}).get("settings") or {}
+
+    text_display = _resolve_author_note_text(settings, character, for_prompt=False)
+    text_prompt = _resolve_author_note_text(settings, character, for_prompt=True)
+
+    tokens_display = _estimate_tokens(text_display)
+    tokens_prompt = _estimate_tokens(text_prompt)
+
+    enabled = settings.get("authorNoteEnabled") is not False
+    gm_only = settings.get("authorNoteGmOnly") is True
+    exclude_from_prompt = settings.get("authorNoteExcludeFromPrompt") is True
+    scope = _normalize_memory_scope(settings)
+
+    # Determine source
+    shared_note = settings.get("authorNote")
+    has_settings_note = isinstance(shared_note, str) and shared_note.strip()
+    if has_settings_note:
+        source = "settings"
+    elif text_display:
+        source = "character_default"
+    else:
+        source = "none"
+
+    truncated = tokens_display > _TOKEN_BUDGET_AUTHOR_NOTE
+
+    warnings: list[str] = []
+    if truncated:
+        warnings.append(
+            f"Author note exceeds budget ({tokens_display} tokens > {_TOKEN_BUDGET_AUTHOR_NOTE} budget)"
+        )
+    if gm_only:
+        warnings.append("Note is GM-only: visible in UI but excluded from LLM prompt")
+
+    return AuthorNoteInfoResponse(
+        chat_id=chat_id,
+        text=text_display,
+        text_for_prompt=text_prompt,
+        tokens_estimated=tokens_display,
+        tokens_for_prompt=tokens_prompt,
+        budget=_TOKEN_BUDGET_AUTHOR_NOTE,
+        truncated=truncated,
+        enabled=enabled,
+        gm_only=gm_only,
+        exclude_from_prompt=exclude_from_prompt,
+        scope=scope,
+        source=source,
+        warnings=warnings,
+    )
+
+
+# ========================================================================
+# Lorebook Diagnostic Export Endpoint (PRD 6 Stage F2)
+# ========================================================================
+
+@router.get(
+    "/{chat_id}/diagnostics/lorebook",
+    response_model=LorebookDiagnosticExportResponse,
+    summary="Export lorebook diagnostics across turns",
+    tags=["Chat Sessions"],
+)
+async def export_lorebook_diagnostics(
+    chat_id: str = Path(..., description="Chat session ID"),
+    page: int = Query(1, ge=1, description="Page number"),
+    size: int = Query(50, ge=1, le=200, description="Page size"),
+    order: Literal["asc", "desc"] = Query(
+        "asc",
+        description="Sort order for turns by assistant turn number",
+    ),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+    current_user: User = Depends(get_request_user),
+):
+    """Iterate assistant messages and collect lorebook_diagnostics from message metadata."""
+    conversation = db.get_conversation_by_id(chat_id)
+    _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+    character_id = conversation.get("character_id")
+    settings_row = db.get_conversation_settings(chat_id)
+
+    # Fetch all messages ordered by timestamp
+    messages = db.get_messages_for_conversation(chat_id, limit=10000, order_by_timestamp="ASC")
+    history_messages = [msg for msg in messages if not msg.get("deleted")]
+    turn_context = _resolve_chat_turn_context(
+        db=db,
+        conversation=conversation,
+        settings_row=settings_row,
+        history_messages=history_messages,
+    )
+    participant_aliases = turn_context.get("participant_aliases") or set()
+    primary_character_name = str(turn_context.get("primary_character_name") or "")
+
+    # Filter assistant messages that have lorebook diagnostics
+    turns_with_diags: list[DiagnosticTurnEntry] = []
+    turn_counter = 0
+    for msg in messages:
+        role = _map_sender_to_role_with_participants(
+            msg.get("sender"),
+            primary_character_name,
+            participant_aliases,
+        )
+        if role != "assistant":
+            continue
+        turn_counter += 1
+
+        meta = db.get_message_metadata(msg["id"])
+        if not meta:
+            continue
+        extra = meta.get("extra")
+        if not isinstance(extra, dict):
+            continue
+        diags = extra.get("lorebook_diagnostics")
+        if not diags or not isinstance(diags, list):
+            continue
+
+        content = msg.get("content") or ""
+        turns_with_diags.append(DiagnosticTurnEntry(
+            message_id=msg["id"],
+            timestamp=msg.get("timestamp"),
+            turn_number=turn_counter,
+            message_preview=content[:120],
+            diagnostics=diags,
+        ))
+
+    # Pagination (allow newest-first retrieval without changing default behavior).
+    ordered_turns = turns_with_diags if order == "asc" else list(reversed(turns_with_diags))
+    total = len(turns_with_diags)
+    start = (page - 1) * size
+    page_items = ordered_turns[start:start + size]
+
+    return LorebookDiagnosticExportResponse(
+        chat_id=chat_id,
+        character_id=str(character_id) if character_id is not None else None,
+        total_turns_with_diagnostics=total,
+        turns=page_items,
+        page=page,
+        size=size,
+    )
 
 
 #

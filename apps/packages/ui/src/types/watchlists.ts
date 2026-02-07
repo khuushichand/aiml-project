@@ -99,6 +99,38 @@ export interface JobScope {
 }
 
 export interface JobOutputPrefs {
+  retention?: {
+    default_seconds?: number
+    temporary_seconds?: number
+  }
+  template?: {
+    default_name?: string
+    default_format?: "md" | "html"
+    default_version?: number
+  }
+  deliveries?: {
+    email?: {
+      enabled?: boolean
+      recipients?: string[]
+      body_format?: "auto" | "text" | "html"
+      attach_file?: boolean
+      subject?: string
+      sender?: string
+      reply_to?: string
+    }
+    chatbook?: {
+      enabled?: boolean
+      title?: string
+      description?: string
+      conversation_id?: number
+      provider?: string
+      model?: string
+      metadata?: Record<string, unknown>
+    }
+  }
+  ingest?: {
+    persist_to_media_db?: boolean
+  }
   retention_days?: number
   template_name?: string
   delivery_config?: {
@@ -256,6 +288,7 @@ export interface WatchlistOutputCreate {
   format?: OutputFormat
   metadata?: Record<string, unknown>
   template_name?: string
+  template_version?: number
   retention_seconds?: number
   temporary?: boolean
   deliveries?: {
@@ -288,6 +321,9 @@ export interface WatchlistTemplate {
   content?: string
   format: "md" | "html"
   updated_at?: string | null
+  version?: number
+  history_count?: number
+  available_versions?: number[]
 }
 
 export interface WatchlistTemplateCreate {
@@ -296,6 +332,14 @@ export interface WatchlistTemplateCreate {
   content: string
   format?: "md" | "html"
   overwrite?: boolean
+}
+
+export interface WatchlistTemplateVersionSummary {
+  version: number
+  format: "md" | "html"
+  description?: string | null
+  updated_at: string
+  is_current: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,8 +428,10 @@ export interface PreviewItem {
   summary?: string | null
   published_at?: string | null
   decision: "ingest" | "filtered"
-  matched_action: "include" | "exclude" | "flag"
+  matched_action?: "include" | "exclude" | "flag" | null
   matched_filter_key?: string | null
+  matched_filter_id?: number | null
+  matched_filter_type?: FilterType | null
   flagged?: boolean
 }
 
@@ -394,6 +440,27 @@ export interface JobPreviewResult {
   total: number
   ingestable: number
   filtered: number
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dedup / Seen Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SourceSeenStats {
+  source_id: number
+  user_id: number
+  seen_count: number
+  latest_seen_at: string | null
+  defer_until: string | null
+  consec_not_modified: number | null
+  recent_keys: string[]
+}
+
+export interface SourceSeenResetResponse {
+  source_id: number
+  user_id: number
+  cleared: number
+  cleared_backoff: boolean
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

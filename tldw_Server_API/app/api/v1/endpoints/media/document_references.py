@@ -4,39 +4,72 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+import time
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import rbac_rate_limit
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.document_references import (
     DocumentReferencesResponse,
     ReferenceEntry,
 )
-from tldw_Server_API.app.api.v1.utils.cache import cache_response, get_cached_response
+from tldw_Server_API.app.api.v1.utils.cache import (
+    cache_response,
+    get_cache_client,
+    get_cached_response,
+)
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, get_latest_transcription
-
 
 router = APIRouter(tags=["Document Workspace"])
 
 
 # Maximum number of references to enrich (to avoid long response times)
-MAX_ENRICHMENT_REFS = 20
-# Delay between Semantic Scholar API calls (to avoid rate limiting)
-SEMANTIC_SCHOLAR_DELAY = 0.2  # 200ms = max 5 requests/sec
+MAX_ENRICHMENT_REFS = 5
+# Delay between external API calls (to avoid rate limiting)
+SEMANTIC_SCHOLAR_DELAY = 0.35
+CROSSREF_DELAY = 0.1
+ARXIV_DELAY = 0.1
+# Cache TTL for external enrichment lookups (seconds)
+EXTERNAL_ENRICHMENT_CACHE_TTL = 3600
+EXTERNAL_ENRICHMENT_COOLDOWN = 300
+REFERENCE_ENRICH_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    asyncio.TimeoutError,
+)
 
 # Reference section detection patterns
+REFERENCES_PARSER_VERSION = "4"
 REFERENCE_SECTION_PATTERNS = [
+    # Common headings (optional numbering/roman numerals, optional colon)
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\s*:?\s*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\s*:?\s*$",
+    # Markdown-style headings
     r"(?im)^#+\s*references?\s*$",
-    r"(?im)^references?\s*$",
-    r"(?im)^bibliography\s*$",
-    r"(?im)^works\s+cited\s*$",
-    r"(?im)^literature\s+cited\s*$",
-    r"(?im)^cited\s+references?\s*$",
+    r"(?im)^#+\s*bibliography\s*$",
+]
+
+# Looser fallback headings (allow trailing text like "References and Notes")
+REFERENCE_SECTION_FALLBACK_PATTERNS = [
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*references?\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*bibliography\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*works\s+cited\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*literature\s+cited\b.*$",
+    r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*cited\s+references?\b.*$",
 ]
 
 # DOI/arXiv extraction patterns
@@ -60,13 +93,18 @@ def _build_references_cache_key(
     enrich: bool,
     user_id: str,
     db_scope: str,
+    reference_index: int | None = None,
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
-    return f"cache:/api/v1/media/{media_id}/references:{scope_str}:{enrich_flag}"
+    index_flag = f":idx:{reference_index}" if reference_index is not None else ""
+    return (
+        f"cache:/api/v1/media/{media_id}/references:"
+        f"{scope_str}:{enrich_flag}{index_flag}:v{REFERENCES_PARSER_VERSION}"
+    )
 
 
-def _parse_year_from_date(date_str: Optional[str]) -> Optional[int]:
+def _parse_year_from_date(date_str: str | None) -> int | None:
     if not date_str:
         return None
     match = re.search(r"\b(19\d{2}|20[0-3]\d)\b", date_str)
@@ -78,25 +116,111 @@ def _parse_year_from_date(date_str: Optional[str]) -> Optional[int]:
     return None
 
 
-def _find_reference_section(content: str) -> Optional[str]:
-    """Find and extract the references section from document content."""
-    for pattern in REFERENCE_SECTION_PATTERNS:
-        match = re.search(pattern, content)
-        if match:
-            # Extract everything after the references heading
-            start = match.end()
-            # Try to find the next section heading to limit scope
-            next_section = re.search(r"(?im)^#+\s*\w", content[start:])
-            if next_section:
-                end = start + next_section.start()
-                return content[start:end].strip()
-            return content[start:].strip()
+def _is_rate_limited(err: str | None) -> bool:
+    if not err:
+        return False
+    lowered = err.lower()
+    return any(
+        token in lowered
+        for token in ("429", "too many requests", "rate limit", "throttl")
+    )
+
+
+def _make_external_cache_key(provider: str, lookup: str) -> str:
+    normalized = re.sub(r"\s+", " ", lookup).strip().lower()
+    digest = hashlib.md5(normalized.encode("utf-8")).hexdigest()
+    return f"cache:/references/enrich:{provider}:{digest}"
+
+
+def _get_cached_external(key: str) -> tuple[dict[str, Any] | None, str | None] | None:
+    cached = get_cached_response(key)
+    if cached is None:
+        return None
+    _etag, payload = cached
+    if isinstance(payload, dict):
+        return payload.get("data"), payload.get("err")
     return None
 
 
-def _split_references(refs_text: str) -> List[str]:
+def _set_cached_external(key: str, data: dict[str, Any] | None, err: str | None) -> None:
+    cache = get_cache_client()
+    if cache is None:
+        return
+    payload = {"data": data, "err": err}
+    serialized = json.dumps(payload, default=str, separators=(",", ":"))
+    cache.setex(key, EXTERNAL_ENRICHMENT_CACHE_TTL, f"external|{serialized}")
+
+
+def _get_provider_cooldown_key(provider: str) -> str:
+    return f"cache:/references/enrich:cooldown:{provider}"
+
+
+def _is_provider_cooldown(provider: str) -> bool:
+    cache = get_cache_client()
+    if cache is None:
+        return False
+    key = _get_provider_cooldown_key(provider)
+    try:
+        value = cache.get(key)
+        if not value:
+            return False
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        until_ts = float(value)
+        return time.time() < until_ts
+    except REFERENCE_ENRICH_EXCEPTIONS:
+        return False
+
+
+def _set_provider_cooldown(provider: str) -> None:
+    cache = get_cache_client()
+    if cache is None:
+        return
+    key = _get_provider_cooldown_key(provider)
+    try:
+        until_ts = time.time() + EXTERNAL_ENRICHMENT_COOLDOWN
+        cache.setex(key, EXTERNAL_ENRICHMENT_COOLDOWN, str(until_ts))
+    except REFERENCE_ENRICH_EXCEPTIONS:
+        return
+
+
+def _find_reference_section(content: str) -> str | None:
+    """Find and extract the references section from document content."""
+    matches: list[re.Match[str]] = []
+    for pattern in REFERENCE_SECTION_PATTERNS:
+        matches.extend(re.finditer(pattern, content))
+    if not matches:
+        for pattern in REFERENCE_SECTION_FALLBACK_PATTERNS:
+            matches.extend(re.finditer(pattern, content))
+    if not matches:
+        # Fallback: look for the last occurrence of the word "References"
+        fallback_matches = list(re.finditer(r"(?i)\breferences\b", content))
+        if not fallback_matches:
+            return None
+        match = fallback_matches[-1]
+        start = match.end()
+        return content[start:].strip()
+
+    # Use the last match to avoid earlier "References" mentions (e.g., TOC).
+    match = max(matches, key=lambda m: m.start())
+
+    # Extract everything after the references heading
+    start = match.end()
+    # Try to find the next section heading to limit scope
+    next_section = re.search(r"(?im)^\s*(?:\d+|[IVXLC]+)?(?:\.\d+)?\s*[A-Z][\w\s\-]{2,}$", content[start:])
+    if next_section:
+        end = start + next_section.start()
+        return content[start:end].strip()
+    return content[start:].strip()
+
+
+def _split_references(refs_text: str) -> list[str]:
     """Split references section into individual references."""
-    references: List[str] = []
+    references: list[str] = []
+    # Fix common PDF hyphenation across line breaks
+    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
+    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n")
+    refs_text = refs_text.strip()
 
     # Try numbered list format: [1], 1., 1), etc.
     numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
@@ -105,41 +229,101 @@ def _split_references(refs_text: str) -> List[str]:
         references = [p.strip() for p in parts if p.strip() and len(p.strip()) > 20]
     else:
         # Try double newline as separator
-        parts = refs_text.split("\n\n")
+        parts = re.split(r"\n\s*\n", refs_text)
         references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
 
-    # If still no good split, try single newlines but only if lines are long
-    if len(references) < 2:
-        lines = refs_text.split("\n")
+    def _looks_like_new_reference(line: str) -> bool:
+        if re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", line):
+            return True
+        # Author list starting pattern: "Surname, A." or "First Last, ..."
+        if re.search(
+            r"^[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z]",
+            line,
+        ):
+            return True
+        # "Surname et al." pattern
+        return bool(re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line))
+
+    def _looks_like_reference(text: str) -> bool:
+        if not text or len(text) < 30:
+            return False
+        if re.search(DOI_PATTERN, text, re.IGNORECASE):
+            return True
+        if re.search(ARXIV_PATTERN, text, re.IGNORECASE):
+            return True
+        if re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE):
+            return True
+        return bool(re.search(YEAR_PATTERN, text))
+
+    # If still no good split, try single newlines with heuristics
+    if len(references) < 5:
+        lines = [ln.strip() for ln in refs_text.split("\n")]
         potential_refs = []
         current_ref = ""
         for line in lines:
-            line = line.strip()
             if not line:
                 if current_ref and len(current_ref) > 30:
-                    potential_refs.append(current_ref)
+                    potential_refs.append(current_ref.strip())
                 current_ref = ""
             else:
                 # Check if this looks like a new reference (starts with author pattern)
-                if current_ref and (
-                    re.match(r"^[A-Z][a-z]+,?\s+[A-Z]", line) or
-                    re.match(r"^\[\d+\]", line) or
-                    re.match(r"^\d+[\.\)]", line)
-                ):
+                if current_ref and _looks_like_new_reference(line):
                     if len(current_ref) > 30:
-                        potential_refs.append(current_ref)
+                        potential_refs.append(current_ref.strip())
                     current_ref = line
                 else:
                     current_ref = (current_ref + " " + line).strip() if current_ref else line
         if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref)
+            potential_refs.append(current_ref.strip())
         if len(potential_refs) > len(references):
             references = potential_refs
+
+    # Additional pass: split on author-start lines when refs are still few
+    if len(references) < 5:
+        lines = [ln.strip() for ln in refs_text.split("\n") if ln.strip()]
+        potential_refs = []
+        current_ref = ""
+        for line in lines:
+            is_author_line = _looks_like_new_reference(line)
+            has_year = re.search(YEAR_PATTERN, current_ref) is not None
+            if current_ref and is_author_line and has_year:
+                potential_refs.append(current_ref.strip())
+                current_ref = line
+            else:
+                current_ref = (current_ref + " " + line).strip() if current_ref else line
+        if current_ref and len(current_ref) > 30:
+            potential_refs.append(current_ref.strip())
+        if len(potential_refs) > len(references):
+            references = potential_refs
+
+    # Final fallback: split on author-start patterns in fully normalized text
+    if len(references) < 5:
+        normalized = re.sub(r"\s+", " ", refs_text).strip()
+        author_start = re.compile(
+            r"(?:^|(?<=\.\s))([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z])"
+        )
+        starts = [m.start(1) for m in author_start.finditer(normalized)]
+        if starts:
+            if starts[0] != 0:
+                starts = [0] + starts
+            segments: list[str] = []
+            for idx, start in enumerate(starts):
+                end = starts[idx + 1] if idx + 1 < len(starts) else len(normalized)
+                segment = normalized[start:end].strip(" ;,.")
+                if len(segment) > 30:
+                    segments.append(segment)
+            if len(segments) > len(references):
+                references = segments
+
+    # Filter out lines that do not look like references, but keep a minimum set
+    filtered = [ref for ref in references if _looks_like_reference(ref)]
+    if len(filtered) >= 3:
+        references = filtered
 
     return references[:100]  # Limit to 100 references
 
 
-def _extract_doi(text: str) -> Optional[str]:
+def _extract_doi(text: str) -> str | None:
     """Extract DOI from reference text."""
     match = re.search(DOI_PATTERN, text, re.IGNORECASE)
     if match:
@@ -152,7 +336,7 @@ def _extract_doi(text: str) -> Optional[str]:
     return None
 
 
-def _extract_arxiv_id(text: str) -> Optional[str]:
+def _extract_arxiv_id(text: str) -> str | None:
     """Extract arXiv ID from reference text."""
     # New format: YYMM.NNNNN
     match = re.search(ARXIV_PATTERN, text, re.IGNORECASE)
@@ -165,7 +349,7 @@ def _extract_arxiv_id(text: str) -> Optional[str]:
     return None
 
 
-def _extract_url(text: str) -> Optional[str]:
+def _extract_url(text: str) -> str | None:
     """Extract URL from reference text."""
     # First try to find DOI URL
     doi = _extract_doi(text)
@@ -182,7 +366,7 @@ def _extract_url(text: str) -> Optional[str]:
     return None
 
 
-def _extract_year(text: str) -> Optional[int]:
+def _extract_year(text: str) -> int | None:
     """Extract publication year from reference text."""
     years = re.findall(YEAR_PATTERN, text)
     if years:
@@ -246,7 +430,7 @@ def _parse_reference_basic(raw_text: str) -> ReferenceEntry:
     )
 
 
-async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_semantic_scholar(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with Semantic Scholar data.
 
     Limits enrichment to MAX_ENRICHMENT_REFS to avoid long response times.
@@ -254,8 +438,8 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
     """
     try:
         from tldw_Server_API.app.core.Third_Party.Semantic_Scholar import (
-            search_papers_semantic_scholar,
             get_paper_details_semantic_scholar,
+            search_papers_semantic_scholar,
         )
     except ImportError:
         logger.warning("Semantic Scholar module not available for enrichment")
@@ -268,9 +452,13 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
     enriched = []
     enrichment_performed = False
     api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
 
         # Add delay between API calls (skip first)
         if api_call_count > 0:
@@ -279,17 +467,29 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
         # Try to look up by DOI first
         if ref.doi:
             try:
-                api_call_count += 1
-                paper_data, err = await asyncio.to_thread(
-                    get_paper_details_semantic_scholar,
-                    f"DOI:{ref.doi}",
-                )
+                cache_key = _make_external_cache_key("semantic_scholar", f"doi:{ref.doi}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    paper_data, err = cached
+                else:
+                    api_call_count += 1
+                    paper_data, err = await asyncio.to_thread(
+                        get_paper_details_semantic_scholar,
+                        f"DOI:{ref.doi}",
+                    )
+                    _set_cached_external(cache_key, paper_data, err)
                 if paper_data and not err:
                     enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper_data)
                     enrichment_performed = True
                     enriched.append(enriched_ref)
                     continue
-            except Exception as e:
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("DOI lookup failed for {}: {}", ref.doi, e)
 
         # Try to look up by arXiv ID
@@ -297,17 +497,29 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
             if api_call_count > 0:
                 await asyncio.sleep(SEMANTIC_SCHOLAR_DELAY)
             try:
-                api_call_count += 1
-                paper_data, err = await asyncio.to_thread(
-                    get_paper_details_semantic_scholar,
-                    f"ARXIV:{ref.arxiv_id}",
-                )
+                cache_key = _make_external_cache_key("semantic_scholar", f"arxiv:{ref.arxiv_id}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    paper_data, err = cached
+                else:
+                    api_call_count += 1
+                    paper_data, err = await asyncio.to_thread(
+                        get_paper_details_semantic_scholar,
+                        f"ARXIV:{ref.arxiv_id}",
+                    )
+                    _set_cached_external(cache_key, paper_data, err)
                 if paper_data and not err:
                     enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper_data)
                     enrichment_performed = True
                     enriched.append(enriched_ref)
                     continue
-            except Exception as e:
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
 
         # Try title search as fallback
@@ -315,12 +527,18 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
             if api_call_count > 0:
                 await asyncio.sleep(SEMANTIC_SCHOLAR_DELAY)
             try:
-                api_call_count += 1
-                search_result, err = await asyncio.to_thread(
-                    search_papers_semantic_scholar,
-                    ref.title,
-                    limit=1,
-                )
+                cache_key = _make_external_cache_key("semantic_scholar_search", ref.title)
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    search_result, err = cached
+                else:
+                    api_call_count += 1
+                    search_result, err = await asyncio.to_thread(
+                        search_papers_semantic_scholar,
+                        ref.title,
+                        limit=1,
+                    )
+                    _set_cached_external(cache_key, search_result, err)
                 if search_result and not err:
                     papers = search_result.get("data", [])
                     if papers:
@@ -332,7 +550,13 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
                         if ref_title[:30] in paper_title or paper_title[:30] in ref_title:
                             enriched_ref = _apply_semantic_scholar_data(enriched_ref, paper)
                             enrichment_performed = True
-            except Exception as e:
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("semantic_scholar")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("Title search failed for {}: {}", ref.title, e)
 
         enriched.append(enriched_ref)
@@ -343,7 +567,7 @@ async def _enrich_with_semantic_scholar(references: List[ReferenceEntry]) -> Tup
     return enriched, enrichment_performed
 
 
-def _apply_semantic_scholar_data(ref: ReferenceEntry, paper: Dict[str, Any]) -> ReferenceEntry:
+def _apply_semantic_scholar_data(ref: ReferenceEntry, paper: dict[str, Any]) -> ReferenceEntry:
     """Apply Semantic Scholar data to a reference entry."""
     # Update basic fields if not already set
     if not ref.title and paper.get("title"):
@@ -398,7 +622,7 @@ def _needs_external_enrichment(ref: ReferenceEntry) -> bool:
     )
 
 
-def _apply_crossref_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEntry:
+def _apply_crossref_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply Crossref data to a reference entry."""
     if not ref.title and item.get("title"):
         ref.title = item["title"]
@@ -417,7 +641,7 @@ def _apply_crossref_data(ref: ReferenceEntry, item: Dict[str, Any]) -> Reference
     return ref
 
 
-def _apply_arxiv_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEntry:
+def _apply_arxiv_data(ref: ReferenceEntry, item: dict[str, Any]) -> ReferenceEntry:
     """Apply arXiv data to a reference entry."""
     if not ref.title and item.get("title"):
         ref.title = item["title"]
@@ -434,7 +658,7 @@ def _apply_arxiv_data(ref: ReferenceEntry, item: Dict[str, Any]) -> ReferenceEnt
     return ref
 
 
-async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_crossref(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with Crossref metadata (DOI lookups)."""
     try:
         from tldw_Server_API.app.core.Third_Party.Crossref import get_crossref_by_doi
@@ -445,18 +669,38 @@ async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[
     refs_to_enrich = references[:MAX_ENRICHMENT_REFS]
     unenriched_remainder = references[MAX_ENRICHMENT_REFS:]
 
-    enriched: List[ReferenceEntry] = []
+    enriched: list[ReferenceEntry] = []
     enrichment_performed = False
+    api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
         if ref.doi and _needs_external_enrichment(enriched_ref):
             try:
-                item, err = await asyncio.to_thread(get_crossref_by_doi, ref.doi)
+                if api_call_count > 0:
+                    await asyncio.sleep(CROSSREF_DELAY)
+                cache_key = _make_external_cache_key("crossref", f"doi:{ref.doi}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    item, err = cached
+                else:
+                    api_call_count += 1
+                    item, err = await asyncio.to_thread(get_crossref_by_doi, ref.doi)
+                    _set_cached_external(cache_key, item, err)
                 if item and not err:
                     enriched_ref = _apply_crossref_data(enriched_ref, item)
                     enrichment_performed = True
-            except Exception as e:
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("crossref")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("Crossref lookup failed for {}: {}", ref.doi, e)
         enriched.append(enriched_ref)
 
@@ -464,7 +708,7 @@ async def _enrich_with_crossref(references: List[ReferenceEntry]) -> Tuple[List[
     return enriched, enrichment_performed
 
 
-async def _enrich_with_arxiv(references: List[ReferenceEntry]) -> Tuple[List[ReferenceEntry], bool]:
+async def _enrich_with_arxiv(references: list[ReferenceEntry]) -> tuple[list[ReferenceEntry], bool]:
     """Enrich references with arXiv metadata (ID lookups)."""
     try:
         from tldw_Server_API.app.core.Third_Party.Arxiv import get_arxiv_by_id
@@ -475,18 +719,38 @@ async def _enrich_with_arxiv(references: List[ReferenceEntry]) -> Tuple[List[Ref
     refs_to_enrich = references[:MAX_ENRICHMENT_REFS]
     unenriched_remainder = references[MAX_ENRICHMENT_REFS:]
 
-    enriched: List[ReferenceEntry] = []
+    enriched: list[ReferenceEntry] = []
     enrichment_performed = False
+    api_call_count = 0
+    rate_limited = False
 
-    for ref in refs_to_enrich:
+    for idx, ref in enumerate(refs_to_enrich):
         enriched_ref = ref.model_copy()
+        if rate_limited:
+            enriched.append(enriched_ref)
+            continue
         if ref.arxiv_id and _needs_external_enrichment(enriched_ref):
             try:
-                item, err = await asyncio.to_thread(get_arxiv_by_id, ref.arxiv_id)
+                if api_call_count > 0:
+                    await asyncio.sleep(ARXIV_DELAY)
+                cache_key = _make_external_cache_key("arxiv", f"id:{ref.arxiv_id}")
+                cached = _get_cached_external(cache_key)
+                if cached is not None:
+                    item, err = cached
+                else:
+                    api_call_count += 1
+                    item, err = await asyncio.to_thread(get_arxiv_by_id, ref.arxiv_id)
+                    _set_cached_external(cache_key, item, err)
                 if item and not err:
                     enriched_ref = _apply_arxiv_data(enriched_ref, item)
                     enrichment_performed = True
-            except Exception as e:
+                if _is_rate_limited(err):
+                    rate_limited = True
+                    _set_provider_cooldown("arxiv")
+                    enriched.append(enriched_ref)
+                    enriched.extend(refs_to_enrich[idx + 1 :])
+                    break
+            except REFERENCE_ENRICH_EXCEPTIONS as e:
                 logger.debug("arXiv lookup failed for {}: {}", ref.arxiv_id, e)
         enriched.append(enriched_ref)
 
@@ -512,8 +776,12 @@ async def _enrich_with_arxiv(references: List[ReferenceEntry]) -> Tuple[List[Ref
 async def get_document_references(
     media_id: int = Path(..., description="The ID of the media item"),
     enrich: bool = Query(
-        True,
+        False,
         description="Enrich references with external API data (citation counts, PDFs)",
+    ),
+    reference_index: int | None = Query(
+        None,
+        description="When provided, only enrich the reference at this index (0-based).",
     ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
@@ -538,7 +806,7 @@ async def get_document_references(
 
     ## Enrichment
 
-    When `enrich=true` (default), the endpoint attempts to look up each
+    When `enrich=true`, the endpoint attempts to look up each
     reference using:
     - Semantic Scholar (DOI/arXiv ID lookup, title search fallback)
     - Crossref (DOI metadata)
@@ -551,7 +819,7 @@ async def get_document_references(
     - Missing metadata (title, authors, year)
 
     Enrichment is best-effort and gracefully degrades if external APIs fail.
-    Enrichment is limited to the first 20 references to avoid long response times.
+    Enrichment is limited to the first 5 references to avoid long response times.
     """
     user_id = str(getattr(current_user, "id", "anonymous"))
     db_scope = _get_db_scope(db)
@@ -560,6 +828,7 @@ async def get_document_references(
         enrich=enrich,
         user_id=user_id,
         db_scope=db_scope,
+        reference_index=reference_index,
     )
     cached = get_cached_response(cache_key)
     if cached is not None:
@@ -600,9 +869,10 @@ async def get_document_references(
     if not content.strip():
         content = get_latest_transcription(db, media_id) or ""
 
-    # Normalize escaped newlines if content appears to be serialized
+    # Normalize escaped and platform-specific newlines
     if "\\n" in content and "\n" not in content:
         content = content.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
 
     content = content.strip()
     if not content:
@@ -647,33 +917,56 @@ async def get_document_references(
     logger.debug("Parsed {} references from media_id={}", len(references), media_id)
 
     # 6. Enrich with external APIs if requested
-    enrichment_sources: Set[str] = set()
+    enrichment_sources: set[str] = set()
     if enrich and references:
         try:
-            references, enriched = await _enrich_with_semantic_scholar(references)
-            if enriched:
-                enrichment_sources.add("semantic_scholar")
-                logger.debug(
-                    "Enriched references with Semantic Scholar for media_id={}",
-                    media_id,
-                )
-
-            references, enriched = await _enrich_with_crossref(references)
-            if enriched:
-                enrichment_sources.add("crossref")
-                logger.debug(
-                    "Enriched references with Crossref for media_id={}",
-                    media_id,
-                )
-
-            references, enriched = await _enrich_with_arxiv(references)
-            if enriched:
-                enrichment_sources.add("arxiv")
-                logger.debug(
-                    "Enriched references with arXiv for media_id={}",
-                    media_id,
-                )
-        except Exception as e:
+            if reference_index is not None:
+                if reference_index < 0 or reference_index >= len(references):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="reference_index out of range",
+                    )
+                target_ref = references[reference_index]
+                enriched_refs = [target_ref]
+                if not _is_provider_cooldown("semantic_scholar"):
+                    enriched_refs, enriched = await _enrich_with_semantic_scholar(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("semantic_scholar")
+                if not _is_provider_cooldown("crossref"):
+                    enriched_refs, enriched = await _enrich_with_crossref(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("crossref")
+                if not _is_provider_cooldown("arxiv"):
+                    enriched_refs, enriched = await _enrich_with_arxiv(enriched_refs)
+                    if enriched:
+                        enrichment_sources.add("arxiv")
+                references[reference_index] = enriched_refs[0]
+            else:
+                if not _is_provider_cooldown("semantic_scholar"):
+                    references, enriched = await _enrich_with_semantic_scholar(references)
+                    if enriched:
+                        enrichment_sources.add("semantic_scholar")
+                        logger.debug(
+                            "Enriched references with Semantic Scholar for media_id={}",
+                            media_id,
+                        )
+                if not _is_provider_cooldown("crossref"):
+                    references, enriched = await _enrich_with_crossref(references)
+                    if enriched:
+                        enrichment_sources.add("crossref")
+                        logger.debug(
+                            "Enriched references with Crossref for media_id={}",
+                            media_id,
+                        )
+                if not _is_provider_cooldown("arxiv"):
+                    references, enriched = await _enrich_with_arxiv(references)
+                    if enriched:
+                        enrichment_sources.add("arxiv")
+                        logger.debug(
+                            "Enriched references with arXiv for media_id={}",
+                            media_id,
+                        )
+        except REFERENCE_ENRICH_EXCEPTIONS as e:
             logger.warning(
                 "Failed to enrich references for media_id={}: {}",
                 media_id,

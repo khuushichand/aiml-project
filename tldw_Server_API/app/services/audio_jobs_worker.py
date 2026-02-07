@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from functools import partial
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Usage.audio_quota import can_start_job, finish_job, increment_jobs_started, get_limits_for_user
-
+from tldw_Server_API.app.core.Usage.audio_quota import (
+    can_start_job,
+    finish_job,
+    get_limits_for_user,
+    increment_jobs_started,
+)
 
 DOMAIN = "audio"
 
 
-async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[str, Any], Optional[str]]:
+async def _handle_audio_transcribe_stage(payload: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """
     Handle the `audio_transcribe` stage for a single job payload.
 
@@ -69,11 +74,11 @@ async def _handle_audio_transcribe_stage(payload: Dict[str, Any]) -> tuple[Dict[
     # existing consumers that rely only on 'text' and 'segments'.
     updated_payload["normalized_stt"] = artifact
 
-    next_type: Optional[str] = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
+    next_type: str | None = "audio_chunk" if payload.get("perform_chunking") else "audio_store"
     return updated_payload, next_type
 
 
-async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_audio_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     """MVP in-process worker handling audio pipeline stages.
 
     Stages (job_type):
@@ -85,7 +90,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
       - audio_store: finalize/store results (placeholder)
     """
     jm = JobManager()
-    worker_id = f"audio-worker"
+    worker_id = "audio-worker"
     poll_sleep = float(os.getenv("JOBS_POLL_INTERVAL_SECONDS", "1.0") or "1.0")
 
     logger.info("Starting Audio Jobs worker (MVP)")
@@ -95,7 +100,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             return
         # Per-iteration state used in the outer finally block. These must be
         # initialized before any `continue` to avoid leaking previous values.
-        owner: Optional[str] = None
+        owner: str | None = None
         acquired_slot = False
         try:
             lease_seconds = int(os.getenv("JOBS_LEASE_SECONDS", "120") or "120")
@@ -128,7 +133,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     for cand in owners:
                         try:
                             limits = await get_limits_for_user(int(cand))
-                        except Exception as e:
+                        except (OSError, RuntimeError, TypeError, ValueError) as e:
                             logger.warning(
                                 f"Failed to get limits for owner candidate {cand}; assuming unlimited concurrent_jobs: {e}"
                             )
@@ -160,22 +165,20 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                                     (DOMAIN, str(cand)),
                                 ).fetchone()
                                 cur_count = int(rowp[0]) if rowp else 0
-                        except Exception as e:
+                        except (OSError, RuntimeError, TypeError, ValueError) as e:
                             logger.warning(
                                 f"Failed to count processing jobs for owner candidate {cand}; assuming 0: {e}"
                             )
                             cur_count = 0
                         finally:
-                            try:
+                            with contextlib.suppress(OSError, RuntimeError):
                                 conn2.close()
-                            except Exception:
-                                pass
                         if cur_count < max_jobs:
                             owner_candidate = cand
                             break
                     if owner_candidate is not None:
                         job = jm.acquire_next_job(domain=DOMAIN, queue="default", lease_seconds=lease_seconds, worker_id=worker_id, owner_user_id=str(owner_candidate))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Owner-aware acquisition failed; falling back to default acquisition: {e}")
                 job = None
             if not job:
@@ -191,7 +194,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             # Cross-process fairness: enforce concurrent processing cap across all workers
             try:
                 limits_owner = await get_limits_for_user(int(owner))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(
                     f"Failed to get limits for owner {owner}; assuming unlimited concurrent_jobs: {e}"
                 )
@@ -225,7 +228,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                             ).fetchone()
                             count = int(row[0]) if row else 0
                     conn.close()
-                except Exception as e:
+                except (OSError, RuntimeError, TypeError, ValueError) as e:
                     logger.warning(
                         f"Failed to count processing jobs for owner {owner}; assuming 0: {e}"
                     )
@@ -261,16 +264,16 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                 continue
             try:
                 await increment_jobs_started(int(owner))
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(
                     f"Failed to increment jobs started for owner {owner}: {e}"
                 )
             else:
                 acquired_slot = True
 
-            payload: Dict[str, Any] = job.get("payload") or {}
+            payload: dict[str, Any] = job.get("payload") or {}
             jtype = str(job.get("job_type") or "").lower()
-            next_type: Optional[str] = None
+            next_type: str | None = None
             updated_payload = dict(payload)
             ok = True
             msg_err = ""
@@ -281,7 +284,9 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     temp_dir = payload.get("temp_dir") or os.getenv("AUDIO_JOBS_TEMP", "/tmp")
                     if not url:
                         raise ValueError("missing url in payload")
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import download_audio_file
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files import (
+                        download_audio_file,
+                    )
                     local_path = await asyncio.to_thread(download_audio_file, url, temp_dir, False, None)
                     updated_payload["local_path"] = local_path
                     next_type = "audio_convert"
@@ -289,7 +294,9 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                     path = payload.get("local_path")
                     if not path:
                         raise ValueError("missing local_path in payload")
-                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import convert_to_wav
+                    from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
+                        convert_to_wav,
+                    )
                     out_path = await asyncio.to_thread(convert_to_wav, path, 0, False)
                     updated_payload["wav_path"] = out_path
                     next_type = "audio_transcribe"
@@ -326,7 +333,7 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
                 else:
                     ok = False
                     msg_err = f"Unknown job_type: {jtype}"
-            except Exception as e:
+            except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
                 ok = False
                 msg_err = str(e)
 
@@ -347,18 +354,16 @@ async def run_audio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> N
             else:
                 jm.fail_job(int(job["id"]), error=msg_err, retryable=True, worker_id=worker_id, lease_id=str(job.get("lease_id")), completion_token=str(job.get("lease_id")))
 
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Audio worker loop error: {e}")
         finally:
             try:
                 if acquired_slot and owner is not None:
                     await finish_job(int(owner))  # type: ignore[arg-type]
-            except Exception as e:
+            except (OSError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to release job slot: {e}")
 
 
 if __name__ == "__main__":
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run_audio_jobs_worker())
-    except KeyboardInterrupt:
-        pass

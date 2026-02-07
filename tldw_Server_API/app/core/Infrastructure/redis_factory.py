@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fnmatch
+import hashlib
 import inspect
 import os
-import time
 import threading
-import hashlib
-import fnmatch
-from typing import Any, Dict, List, Optional, Tuple
+import time
+from typing import Any
 
 from loguru import logger
 
@@ -16,26 +17,40 @@ from tldw_Server_API.app.core.config import settings
 try:  # pragma: no cover - import guard
     import redis  # type: ignore
     import redis.asyncio as aioredis  # type: ignore
-except Exception as exc:  # pragma: no cover
+except ImportError as exc:  # pragma: no cover
     redis = None  # type: ignore
     aioredis = None  # type: ignore
     _import_error = exc
 else:
     _import_error = None
 
-_ASYNC_STUB_CACHE: Dict[str, "InMemoryAsyncRedis"] = {}
+if redis is not None:
+    _REDIS_CLIENT_EXCEPTIONS: tuple[type[Exception], ...] = (redis.RedisError,)  # type: ignore[attr-defined]
+else:
+    _REDIS_CLIENT_EXCEPTIONS = ()
+
+_REDIS_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+) + _REDIS_CLIENT_EXCEPTIONS
+
+_ASYNC_STUB_CACHE: dict[str, InMemoryAsyncRedis] = {}
 
 try:  # pragma: no cover - optional metrics dependency
     from tldw_Server_API.app.core.Metrics.metrics_manager import (
         get_metrics_registry as _get_metrics_registry,
     )
-except Exception:  # pragma: no cover - metrics optional during early startup
+except ImportError:  # pragma: no cover - metrics optional during early startup
     _get_metrics_registry = None  # type: ignore[assignment]
 
 DEFAULT_REDIS_URL = "redis://127.0.0.1:6379"
 
 
-def _settings_lookup(*keys: str) -> Optional[str]:
+def _settings_lookup(*keys: str) -> str | None:
     """Look up configuration values with environment variables overriding file settings.
 
     Order of precedence:
@@ -48,7 +63,7 @@ def _settings_lookup(*keys: str) -> Optional[str]:
             value = settings.get(key)  # type: ignore[attr-defined]
             if isinstance(value, str) and value.strip():
                 return value.strip()
-        except Exception:
+        except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
             pass
         # Prefer explicit environment overrides when present
         env = os.getenv(key)
@@ -57,7 +72,7 @@ def _settings_lookup(*keys: str) -> Optional[str]:
     return None
 
 
-def _resolve_url(preferred: Optional[str] = None) -> str:
+def _resolve_url(preferred: str | None = None) -> str:
     if preferred and str(preferred).strip():
         return str(preferred).strip()
     url = _settings_lookup("EMBEDDINGS_REDIS_URL", "REDIS_URL")
@@ -69,7 +84,7 @@ def _metrics_registry():
         return None
     try:
         return _get_metrics_registry()
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         return None
 
 
@@ -79,7 +94,7 @@ def _record_connection_metrics(
     context: str,
     outcome: str,
     start_time: float,
-    error: Optional[BaseException] = None,
+    error: BaseException | None = None,
 ):
     registry = _metrics_registry()
     if registry is None:
@@ -104,7 +119,7 @@ def _record_connection_metrics(
                 1,
                 {"mode": mode, "context": context, "error": reason},
             )
-    except Exception as metric_exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as metric_exc:
         logger.debug(
             "Failed to record Redis infrastructure metrics: {err}",
             err=metric_exc,
@@ -113,11 +128,11 @@ def _record_connection_metrics(
 
 async def create_async_redis_client(
     *,
-    preferred_url: Optional[str] = None,
+    preferred_url: str | None = None,
     decode_responses: bool = True,
     fallback_to_fake: bool = True,
     context: str = "default",
-    redis_kwargs: Optional[dict] = None,
+    redis_kwargs: dict | None = None,
 ):
     """
     Instantiate an asyncio Redis client. Falls back to an in-memory stub when allowed.
@@ -164,12 +179,10 @@ async def create_async_redis_client(
         result = ping()
         if inspect.isawaitable(result):
             await result
-    except Exception as exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
-            try:
+            with contextlib.suppress(_REDIS_NONCRITICAL_EXCEPTIONS):
                 await client.close()
-            except Exception:
-                pass
         if not fallback_to_fake:
             _record_connection_metrics(
                 mode="async",
@@ -190,7 +203,7 @@ async def create_async_redis_client(
         if fake_client is None:
             fake_client = InMemoryAsyncRedis(decode_responses=decode_option)
             _ASYNC_STUB_CACHE[cache_key] = fake_client
-        setattr(fake_client, "_tldw_is_stub", True)
+        fake_client._tldw_is_stub = True
         await fake_client.ping()
         _record_connection_metrics(
             mode="async",
@@ -212,11 +225,11 @@ async def create_async_redis_client(
 
 def create_sync_redis_client(
     *,
-    preferred_url: Optional[str] = None,
+    preferred_url: str | None = None,
     decode_responses: bool = True,
     fallback_to_fake: bool = True,
     context: str = "default",
-    redis_kwargs: Optional[dict] = None,
+    redis_kwargs: dict | None = None,
 ):
     """
     Instantiate a synchronous Redis client with optional in-memory fallback.
@@ -238,12 +251,10 @@ def create_sync_redis_client(
     try:
         client = redis.from_url(url, **options)
         client.ping()
-    except Exception as exc:
+    except _REDIS_NONCRITICAL_EXCEPTIONS as exc:
         if client is not None:
-            try:
+            with contextlib.suppress(_REDIS_NONCRITICAL_EXCEPTIONS):
                 client.close()
-            except Exception:
-                pass
         if not fallback_to_fake:
             _record_connection_metrics(
                 mode="sync",
@@ -262,7 +273,7 @@ def create_sync_redis_client(
         fake_client = InMemorySyncRedis(
             decode_responses=options.get("decode_responses", True)
         )
-        setattr(fake_client, "_tldw_is_stub", True)
+        fake_client._tldw_is_stub = True
         fake_client.ping()
         _record_connection_metrics(
             mode="sync",
@@ -287,16 +298,16 @@ class _InMemoryRedisCore:
 
     def __init__(self, decode_responses: bool = True):
         self.decode_responses = decode_responses
-        self._strings: Dict[str, str] = {}
-        self._sets: Dict[str, set] = {}
-        self._sorted_sets: Dict[str, Dict[str, float]] = {}
-        self._hashes: Dict[str, Dict[str, str]] = {}
-        self._streams: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}
-        self._stream_counters: Dict[str, int] = {}
-        self._groups: Dict[str, set] = {}
-        self._group_last_ids: Dict[Tuple[str, str], str] = {}
-        self._expiry: Dict[str, float] = {}
-        self._scripts: Dict[str, str] = {}
+        self._strings: dict[str, str] = {}
+        self._sets: dict[str, set] = {}
+        self._sorted_sets: dict[str, dict[str, float]] = {}
+        self._hashes: dict[str, dict[str, str]] = {}
+        self._streams: dict[str, list[tuple[str, dict[str, str]]]] = {}
+        self._stream_counters: dict[str, int] = {}
+        self._groups: dict[str, set] = {}
+        self._group_last_ids: dict[tuple[str, str], str] = {}
+        self._expiry: dict[str, float] = {}
+        self._scripts: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Basic utilities
@@ -325,7 +336,7 @@ class _InMemoryRedisCore:
         if expires_at is not None and expires_at <= self._now():
             self._delete_internal(key)
 
-    def _stream_id_tuple(self, entry_id: str) -> Tuple[int, int]:
+    def _stream_id_tuple(self, entry_id: str) -> tuple[int, int]:
         if entry_id in ("-", None):
             return (0, 0)
         if entry_id == "+":
@@ -336,13 +347,13 @@ class _InMemoryRedisCore:
         parts = text.split("-", 1)
         try:
             ts = int(parts[0])
-        except Exception:
+        except (TypeError, ValueError):
             ts = 0
         seq = 0
         if len(parts) > 1:
             try:
                 seq = int(parts[1])
-            except Exception:
+            except (TypeError, ValueError):
                 seq = 0
         return (ts, seq)
 
@@ -355,7 +366,7 @@ class _InMemoryRedisCore:
     def xlen(self, name: str) -> int:
         return len(self._streams.get(name, []))
 
-    def xadd(self, name: str, fields: Dict[str, Any]) -> str:
+    def xadd(self, name: str, fields: dict[str, Any]) -> str:
         stream = self._streams.setdefault(name, [])
         counter = self._stream_counters.get(name, 0) + 1
         self._stream_counters[name] = counter
@@ -368,9 +379,9 @@ class _InMemoryRedisCore:
         name: str,
         min: str = "-",  # noqa: A002 - match redis signature
         max: str = "+",
-        count: Optional[int] = None,
+        count: int | None = None,
         **kwargs: Any,
-    ) -> List[Tuple[str, Dict[str, str]]]:
+    ) -> list[tuple[str, dict[str, str]]]:
         minimum = kwargs.get("minimum", min)
         maximum = kwargs.get("maximum", max)
         stream = list(self._streams.get(name, []))
@@ -379,9 +390,7 @@ class _InMemoryRedisCore:
                 ts = entry_id.split("-", 1)[0]
                 if minimum not in ("-", None) and ts < str(minimum):
                     return False
-                if maximum not in ("+", None) and ts > str(maximum):
-                    return False
-                return True
+                return not (maximum not in ("+", None) and ts > str(maximum))
             stream = [item for item in stream if _within(item[0])]
         if count is not None and count >= 0:
             stream = stream[:count]
@@ -392,9 +401,9 @@ class _InMemoryRedisCore:
         name: str,
         max: str = "+",
         min: str = "-",
-        count: Optional[int] = None,
+        count: int | None = None,
         **kwargs: Any,
-    ) -> List[Tuple[str, Dict[str, str]]]:
+    ) -> list[tuple[str, dict[str, str]]]:
         maximum = kwargs.get("maximum", max)
         minimum = kwargs.get("minimum", min)
         stream = list(self._streams.get(name, []))
@@ -404,9 +413,7 @@ class _InMemoryRedisCore:
                 ts = entry_id.split("-", 1)[0]
                 if maximum not in ("+", None) and ts > str(maximum):
                     return False
-                if minimum not in ("-", None) and ts < str(minimum):
-                    return False
-                return True
+                return not (minimum not in ("-", None) and ts < str(minimum))
             stream = [item for item in stream if _within(item[0])]
         if count is not None and count >= 0:
             stream = stream[:count]
@@ -431,19 +438,19 @@ class _InMemoryRedisCore:
         self,
         groupname: str,
         consumername: str,
-        streams: Dict[str, str],
-        count: Optional[int] = None,
-        block: Optional[int] = None,
+        streams: dict[str, str],
+        count: int | None = None,
+        block: int | None = None,
         noack: bool = False,
-    ) -> List[Tuple[str, List[Tuple[str, Dict[str, str]]]]]:
+    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
         _ = (consumername, block, noack)
-        results: List[Tuple[str, List[Tuple[str, Dict[str, str]]]]] = []
+        results: list[tuple[str, list[tuple[str, dict[str, str]]]]] = []
         for stream_name, start_id in streams.items():
             if groupname not in self._groups.get(stream_name, set()):
                 raise RuntimeError("NOGROUP")
             last_id = self._group_last_ids.get((stream_name, groupname), "0-0")
             compare_id = last_id if start_id == ">" else (start_id or "0-0")
-            entries: List[Tuple[str, Dict[str, str]]] = []
+            entries: list[tuple[str, dict[str, str]]] = []
             for entry_id, data in self._streams.get(stream_name, []):
                 if self._stream_id_gt(entry_id, compare_id):
                     entries.append((entry_id, dict(data)))
@@ -476,7 +483,7 @@ class _InMemoryRedisCore:
     def smembers(self, key: str) -> set:
         return set(self._sets.get(key, set()))
 
-    def zadd(self, key: str, mapping: Dict[str, float]) -> None:
+    def zadd(self, key: str, mapping: dict[str, float]) -> None:
         zset = self._sorted_sets.setdefault(key, {})
         for member, score in mapping.items():
             zset[str(member)] = float(score)
@@ -513,7 +520,7 @@ class _InMemoryRedisCore:
     def zcard(self, key: str) -> int:
         return len(self._sorted_sets.get(key, {}))
 
-    def zrange(self, key: str, start: int, stop: int) -> List[str]:
+    def zrange(self, key: str, start: int, stop: int) -> list[str]:
         """Return members in score order (ascending) from start to stop inclusive.
 
         This is a minimal emulation adequate for tests that need to list ZSET members.
@@ -537,7 +544,7 @@ class _InMemoryRedisCore:
             return []
         return members[start: stop + 1]
 
-    def zscore(self, key: str, member: str) -> Optional[float]:
+    def zscore(self, key: str, member: str) -> float | None:
         z = self._sorted_sets.get(key, {})
         if not z:
             return None
@@ -554,7 +561,7 @@ class _InMemoryRedisCore:
     # ------------------------------------------------------------------
     # Hash operations
     # ------------------------------------------------------------------
-    def hset(self, key: str, mapping: Dict[str, Any]) -> int:
+    def hset(self, key: str, mapping: dict[str, Any]) -> int:
         target = self._hashes.setdefault(key, {})
         created = 0
         for field, value in mapping.items():
@@ -564,10 +571,10 @@ class _InMemoryRedisCore:
             target[field] = str(value)
         return created
 
-    def hget(self, key: str, field: str) -> Optional[str]:
+    def hget(self, key: str, field: str) -> str | None:
         return self._hashes.get(key, {}).get(str(field))
 
-    def hgetall(self, key: str) -> Dict[str, str]:
+    def hgetall(self, key: str) -> dict[str, str]:
         return dict(self._hashes.get(key, {}))
 
     def hincrby(self, key: str, field: str, amount: int = 1) -> int:
@@ -580,7 +587,7 @@ class _InMemoryRedisCore:
     # ------------------------------------------------------------------
     # String operations
     # ------------------------------------------------------------------
-    def set(self, key: str, value: Any, ex: Optional[int] = None) -> None:
+    def set(self, key: str, value: Any, ex: int | None = None) -> None:
         self._strings[key] = str(value)
         if ex is not None:
             self._expiry[key] = self._now() + int(ex)
@@ -588,7 +595,7 @@ class _InMemoryRedisCore:
     def setex(self, key: str, seconds: int, value: Any) -> None:
         self.set(key, value, ex=int(seconds))
 
-    def get(self, key: str) -> Optional[str]:
+    def get(self, key: str) -> str | None:
         self._check_expiry(key)
         return self._strings.get(key)
 
@@ -632,7 +639,7 @@ class _InMemoryRedisCore:
     # ------------------------------------------------------------------
     # Misc helpers
     # ------------------------------------------------------------------
-    def scan(self, cursor: int, match: Optional[str], count: Optional[int]) -> Tuple[int, List[str]]:
+    def scan(self, cursor: int, match: str | None, count: int | None) -> tuple[int, list[str]]:
         keys = set(self._strings.keys()) | set(self._sets.keys()) | set(self._sorted_sets.keys()) | set(self._hashes.keys()) | set(self._streams.keys())
         if match:
             pattern = match
@@ -642,7 +649,7 @@ class _InMemoryRedisCore:
             result = result[:count]
         return 0, result
 
-    def keys(self, pattern: str) -> List[str]:
+    def keys(self, pattern: str) -> list[str]:
         _, result = self.scan(0, match=pattern, count=None)
         return result
 
@@ -650,7 +657,7 @@ class _InMemoryRedisCore:
         keys = set(self._strings.keys()) | set(self._sets.keys()) | set(self._sorted_sets.keys()) | set(self._hashes.keys()) | set(self._streams.keys())
         return len(keys)
 
-    def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+    def info(self, section: str | None = None) -> dict[str, Any]:
         if section not in (None, "memory"):
             return {}
         used = self.dbsize()
@@ -665,13 +672,13 @@ class _InMemoryRedisCore:
         self._scripts[sha] = script
         return sha
 
-    def evalsha(self, sha: str, num_keys: int, *args) -> List[Any]:
+    def evalsha(self, sha: str, num_keys: int, *args) -> list[Any]:
         script = self._scripts.get(sha)
         if script is None:
             raise RuntimeError("NOSCRIPT")
         return self.eval(script, num_keys, *args)
 
-    def eval(self, script: str, num_keys: int, *args) -> List[Any]:
+    def eval(self, script: str, num_keys: int, *args) -> list[Any]:
         # Heuristic: handle the rate limiter script used by DistributedRateLimiter
         if "ZRANGE" in script and "ZREMRANGEBYSCORE" in script:
             if num_keys < 1 or len(args) < 3:
@@ -683,7 +690,7 @@ class _InMemoryRedisCore:
             return self._eval_rate_limiter(redis_key, limit, window, current_time)
         raise RuntimeError("Unsupported script")
 
-    def _eval_rate_limiter(self, redis_key: str, limit: int, window: int, current_time: float) -> List[Any]:
+    def _eval_rate_limiter(self, redis_key: str, limit: int, window: int, current_time: float) -> list[Any]:
         zset = self._sorted_sets.setdefault(redis_key, {})
         cutoff = current_time - window
         for member in list(zset.keys()):
@@ -715,7 +722,7 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.xlen(name)
 
-    async def xadd(self, name: str, fields: Dict[str, Any]):
+    async def xadd(self, name: str, fields: dict[str, Any]):
         async with self._lock:
             return self._core.xadd(name, fields)
 
@@ -739,9 +746,9 @@ class InMemoryAsyncRedis:
         self,
         groupname: str,
         consumername: str,
-        streams: Dict[str, str],
-        count: Optional[int] = None,
-        block: Optional[int] = None,
+        streams: dict[str, str],
+        count: int | None = None,
+        block: int | None = None,
         noack: bool = False,
     ):
         async with self._lock:
@@ -766,7 +773,7 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.smembers(key)
 
-    async def zadd(self, key: str, mapping: Dict[str, float]) -> None:
+    async def zadd(self, key: str, mapping: dict[str, float]) -> None:
         async with self._lock:
             self._core.zadd(key, mapping)
 
@@ -782,11 +789,11 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.zcard(key)
 
-    async def zrange(self, key: str, start: int, stop: int) -> List[str]:
+    async def zrange(self, key: str, start: int, stop: int) -> list[str]:
         async with self._lock:
             return self._core.zrange(key, start, stop)
 
-    async def zscore(self, key: str, member: str) -> Optional[float]:
+    async def zscore(self, key: str, member: str) -> float | None:
         async with self._lock:
             return self._core.zscore(key, member)
 
@@ -794,15 +801,15 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.zincrby(key, amount, member)
 
-    async def hset(self, key: str, mapping: Dict[str, Any]) -> int:
+    async def hset(self, key: str, mapping: dict[str, Any]) -> int:
         async with self._lock:
             return self._core.hset(key, mapping)
 
-    async def hgetall(self, key: str) -> Dict[str, str]:
+    async def hgetall(self, key: str) -> dict[str, str]:
         async with self._lock:
             return self._core.hgetall(key)
 
-    async def hget(self, key: str, field: str) -> Optional[str]:
+    async def hget(self, key: str, field: str) -> str | None:
         async with self._lock:
             return self._core.hget(key, field)
 
@@ -810,7 +817,7 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.hincrby(key, field, amount)
 
-    async def set(self, key: str, value: Any, ex: Optional[int] = None) -> None:
+    async def set(self, key: str, value: Any, ex: int | None = None) -> None:
         async with self._lock:
             self._core.set(key, value, ex=ex)
 
@@ -818,7 +825,7 @@ class InMemoryAsyncRedis:
         async with self._lock:
             self._core.setex(key, seconds, value)
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         async with self._lock:
             return self._core.get(key)
 
@@ -842,11 +849,11 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.incrby(key, amount)
 
-    async def scan(self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None):
+    async def scan(self, cursor: int = 0, match: str | None = None, count: int | None = None):
         async with self._lock:
             return self._core.scan(cursor, match, count)
 
-    async def keys(self, pattern: str) -> List[str]:
+    async def keys(self, pattern: str) -> list[str]:
         async with self._lock:
             return self._core.keys(pattern)
 
@@ -854,7 +861,7 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.dbsize()
 
-    async def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+    async def info(self, section: str | None = None) -> dict[str, Any]:
         async with self._lock:
             return self._core.info(section)
 
@@ -862,11 +869,11 @@ class InMemoryAsyncRedis:
         async with self._lock:
             return self._core.script_load(script)
 
-    async def evalsha(self, sha: str, num_keys: int, *args) -> List[Any]:
+    async def evalsha(self, sha: str, num_keys: int, *args) -> list[Any]:
         async with self._lock:
             return self._core.evalsha(sha, num_keys, *args)
 
-    async def eval(self, script: str, num_keys: int, *args) -> List[Any]:
+    async def eval(self, script: str, num_keys: int, *args) -> list[Any]:
         async with self._lock:
             return self._core.eval(script, num_keys, *args)
 
@@ -877,7 +884,7 @@ class InMemoryAsyncRedis:
 class InMemoryAsyncPipeline:
     def __init__(self, redis_client: InMemoryAsyncRedis):
         self._redis = redis_client
-        self._ops: List[Tuple[str, Tuple[Any, ...]]] = []
+        self._ops: list[tuple[str, tuple[Any, ...]]] = []
 
     def incr(self, key: str, amount: int = 1):
         self._ops.append(("incrby", (key, amount)))
@@ -923,7 +930,7 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.xlen(name)
 
-    def xadd(self, name: str, fields: Dict[str, Any]):
+    def xadd(self, name: str, fields: dict[str, Any]):
         with self._lock:
             return self._core.xadd(name, fields)
 
@@ -947,9 +954,9 @@ class InMemorySyncRedis:
         self,
         groupname: str,
         consumername: str,
-        streams: Dict[str, str],
-        count: Optional[int] = None,
-        block: Optional[int] = None,
+        streams: dict[str, str],
+        count: int | None = None,
+        block: int | None = None,
         noack: bool = False,
     ):
         with self._lock:
@@ -974,7 +981,7 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.smembers(key)
 
-    def zadd(self, key: str, mapping: Dict[str, float]) -> None:
+    def zadd(self, key: str, mapping: dict[str, float]) -> None:
         with self._lock:
             self._core.zadd(key, mapping)
 
@@ -986,15 +993,15 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.zincrby(key, amount, member)
 
-    def hset(self, key: str, mapping: Dict[str, Any]) -> int:
+    def hset(self, key: str, mapping: dict[str, Any]) -> int:
         with self._lock:
             return self._core.hset(key, mapping)
 
-    def hget(self, key: str, field: str) -> Optional[str]:
+    def hget(self, key: str, field: str) -> str | None:
         with self._lock:
             return self._core.hget(key, field)
 
-    def hgetall(self, key: str) -> Dict[str, str]:
+    def hgetall(self, key: str) -> dict[str, str]:
         with self._lock:
             return self._core.hgetall(key)
 
@@ -1010,11 +1017,11 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.ttl(key)
 
-    def scan(self, cursor: int = 0, match: Optional[str] = None, count: Optional[int] = None):
+    def scan(self, cursor: int = 0, match: str | None = None, count: int | None = None):
         with self._lock:
             return self._core.scan(cursor, match, count)
 
-    def keys(self, pattern: str) -> List[str]:
+    def keys(self, pattern: str) -> list[str]:
         with self._lock:
             return self._core.keys(pattern)
 
@@ -1022,7 +1029,7 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.dbsize()
 
-    def info(self, section: Optional[str] = None) -> Dict[str, Any]:
+    def info(self, section: str | None = None) -> dict[str, Any]:
         with self._lock:
             return self._core.info(section)
 
@@ -1030,11 +1037,11 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.script_load(script)
 
-    def evalsha(self, sha: str, num_keys: int, *args) -> List[Any]:
+    def evalsha(self, sha: str, num_keys: int, *args) -> list[Any]:
         with self._lock:
             return self._core.evalsha(sha, num_keys, *args)
 
-    def eval(self, script: str, num_keys: int, *args) -> List[Any]:
+    def eval(self, script: str, num_keys: int, *args) -> list[Any]:
         with self._lock:
             return self._core.eval(script, num_keys, *args)
 
@@ -1063,11 +1070,11 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.zcard(key)
 
-    def zrange(self, key: str, start: int, stop: int) -> List[str]:
+    def zrange(self, key: str, start: int, stop: int) -> list[str]:
         with self._lock:
             return self._core.zrange(key, start, stop)
 
-    def zscore(self, key: str, member: str) -> Optional[float]:
+    def zscore(self, key: str, member: str) -> float | None:
         with self._lock:
             return self._core.zscore(key, member)
 
@@ -1079,7 +1086,7 @@ class InMemorySyncRedis:
         with self._lock:
             return self._core.zrem(key, member)
 
-    def set(self, key: str, value: Any, ex: Optional[int] = None):
+    def set(self, key: str, value: Any, ex: int | None = None):
         with self._lock:
             self._core.set(key, value, ex=ex)
 
@@ -1091,7 +1098,7 @@ class InMemorySyncRedis:
 class InMemorySyncPipeline:
     def __init__(self, redis_client: InMemorySyncRedis):
         self._redis = redis_client
-        self._ops: List[Tuple[str, Tuple[Any, ...]]] = []
+        self._ops: list[tuple[str, tuple[Any, ...]]] = []
 
     def incr(self, key: str, amount: int = 1):
         self._ops.append(("incrby", (key, amount)))
@@ -1127,7 +1134,7 @@ async def ensure_async_client_closed(client) -> None:
         result = close()
         if inspect.isawaitable(result):
             await result
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         pass
 
 
@@ -1141,5 +1148,5 @@ def ensure_sync_client_closed(client) -> None:
         close = getattr(client, "close", None)
         if close:
             close()
-    except Exception:
+    except _REDIS_NONCRITICAL_EXCEPTIONS:
         pass

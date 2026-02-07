@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from loguru import logger
@@ -9,11 +8,11 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_current_user
 from tldw_Server_API.app.api.v1.schemas.user_keys import (
     ProviderKeyTestRequest,
-    UserProviderKeyUpsertRequest,
     SharedProviderKeyResponse,
     SharedProviderKeysResponse,
     SharedProviderKeyStatusItem,
     SharedProviderKeyTestResponse,
+    UserProviderKeyUpsertRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.byok_helpers import (
     is_byok_enabled,
@@ -28,17 +27,16 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_members, list_te
 from tldw_Server_API.app.core.AuthNZ.repos.org_provider_secrets_repo import (
     AuthnzOrgProviderSecretsRepo,
 )
-from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     build_secret_payload,
     decrypt_byok_payload,
-    encrypt_byok_payload,
     dumps_envelope,
+    encrypt_byok_payload,
     key_hint_for_api_key,
     loads_envelope,
     normalize_provider_name,
 )
-
+from tldw_Server_API.app.core.Chat.Chat_Deps import ChatAPIError
 
 router = APIRouter(prefix="", tags=["org-team-keys"])
 
@@ -50,7 +48,7 @@ async def _get_shared_byok_repo() -> AuthnzOrgProviderSecretsRepo:
     return repo
 
 
-def _is_manager(role: Optional[str]) -> bool:
+def _is_manager(role: str | None) -> bool:
     if not role:
         return False
     return str(role).lower() in {"owner", "admin", "lead"}
@@ -248,7 +246,7 @@ async def test_org_shared_key(
     try:
         stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
     except Exception:
-        raise HTTPException(status_code=404, detail="Key not found")
+        raise HTTPException(status_code=404, detail="Key not found") from None
 
     api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:
@@ -464,7 +462,7 @@ async def test_team_shared_key(
     try:
         stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
     except Exception:
-        raise HTTPException(status_code=404, detail="Key not found")
+        raise HTTPException(status_code=404, detail="Key not found") from None
 
     api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:

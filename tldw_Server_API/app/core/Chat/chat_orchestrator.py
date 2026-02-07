@@ -7,42 +7,91 @@ interactions with various LLM providers.
 """
 #
 # Imports
-from loguru import logger as logging
+import asyncio
 import atexit
 import os
 import threading
 import time
-import asyncio
+from collections.abc import Awaitable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Dict, List, Optional, TypeVar, Union, Callable
+from typing import Any, Callable, Optional, TypeVar, Union
+
 #
 # 3rd-party Libraries
 from loguru import logger
+from loguru import logger as logging
+
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import ResponseFormat
+from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatAuthenticationError,
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
-    ChatRateLimitError
-)
-from tldw_Server_API.app.core.Chat.chat_service import (
-    perform_chat_api_call,
-    perform_chat_api_call_async,
+    ChatRateLimitError,
 )
 from tldw_Server_API.app.core.Chat.chat_dictionary import (
     ChatDictionary,
     parse_user_dict_markdown_file,
     process_user_input,
 )
-from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.Chat import command_router
+from tldw_Server_API.app.core.Chat.chat_service import (
+    perform_chat_api_call,
+    perform_chat_api_call_async,
+)
 from tldw_Server_API.app.core.config import load_and_log_configs
-from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.exceptions import (
+    NetworkError,
+    RetryExhaustedError,
+    SyncCallInEventLoopError,
+)
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+
+_CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS = (
+    AttributeError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+_CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+)
+
+try:
+    from requests.exceptions import RequestException as _REQUESTS_REQUEST_EXCEPTION
+except ImportError:
+    _REQUESTS_REQUEST_EXCEPTION = None
+
+try:
+    from httpx import HTTPError as _HTTPX_HTTP_ERROR
+    from httpx import RequestError as _HTTPX_REQUEST_ERROR
+except ImportError:
+    _HTTPX_HTTP_ERROR = None
+    _HTTPX_REQUEST_ERROR = None
+
+_CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS = (
+    *_CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS,
+    *((_REQUESTS_REQUEST_EXCEPTION,) if _REQUESTS_REQUEST_EXCEPTION else ()),
+    *((_HTTPX_REQUEST_ERROR,) if _HTTPX_REQUEST_ERROR else ()),
+    *((_HTTPX_HTTP_ERROR,) if _HTTPX_HTTP_ERROR else ()),
+)
+
 #
 ####################################################################################################
 #
@@ -190,7 +239,7 @@ def _get_http_error_text(exc: Exception) -> str:
             if isinstance(text, (bytes, bytearray)):
                 try:
                     text = text.decode("utf-8", errors="replace")
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     text = None
         if text is not None:
             return str(text)
@@ -236,7 +285,7 @@ def approximate_token_count(history):
                 total_text += bot_msg + ' '
         total_tokens = len(total_text.split())
         return total_tokens
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
         logging.error(f"Error calculating token count: {str(e)}")
         return 0
 
@@ -248,7 +297,7 @@ def approximate_token_count(history):
 
 def chat_api_call(
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]], # CHANGED from input_data, prompt
+    messages_payload: list[dict[str, Any]], # CHANGED from input_data, prompt
     api_key: Optional[str] = None,
     temp: Optional[float] = None,
     system_message: Optional[str] = None, # Still passed separately, some providers might use it, others expect it in messages_payload
@@ -260,22 +309,22 @@ def chat_api_call(
     topp: Optional[float] = None, # Often maps to top_p
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
     max_tokens: Optional[int] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,  # Expects {'type': 'text' | 'json_object'}
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,  # Renamed from 'user' to avoid conflict with 'user' role in messages
     # Provider-specific extensions (e.g., Bedrock guardrails)
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[dict[str, str]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
     # Optional preloaded config to reduce repeated IO in hot paths
-    app_config: Optional[Dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     # Testing hooks
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
@@ -386,7 +435,7 @@ def chat_api_call(
                 _key_val[:4],
                 _key_val[-4:]
             )
-    except Exception as key_log_err:
+    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as key_log_err:
         logging.debug(f"Could not log masked API key: {key_log_err}")
 
     try:
@@ -403,7 +452,7 @@ def chat_api_call(
         if isinstance(response, str):
              logging.debug(f"Debug - Chat API Call - Response (first 500 chars): {response[:500]}...")
         elif hasattr(response, '__iter__') and not isinstance(response, (str, bytes, dict)):
-             logging.debug(f"Debug - Chat API Call - Response: Streaming Generator")
+             logging.debug("Debug - Chat API Call - Response: Streaming Generator")
         else:
              logging.debug(f"Debug - Chat API Call - Response Type: {type(response)}")
         return response
@@ -427,57 +476,57 @@ def chat_api_call(
         status_code = getattr(e_chat_direct, 'status_code', 500)
         logging.error(
             f"Handler for {endpoint_lower} directly raised: {type(e_chat_direct).__name__} - {escaped_message}",
-            exc_info=True if status_code >= 500 else False)
-        raise e_chat_direct  # Re-raise the specific error
+            exc_info=status_code >= 500)
+        raise  # Re-raise the specific error
     except (ValueError, TypeError, KeyError) as e:
         logging.error(f"Value/Type/Key error during chat API call setup for {endpoint_lower}: {e}", exc_info=True)
         error_type = "Configuration/Parameter Error"
         if "Unsupported API endpoint" in str(e):
-            raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}")
+            raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}") from e
         else:
-            raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}")
+            raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}") from e
     except (KeyboardInterrupt, SystemExit):
         # Don't catch system-level signals - let them propagate
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         status_code = _get_http_status_from_exception(e)
         if status_code is not None:
             error_text = _get_http_error_text(e)
             log_message_base = f"{endpoint_lower} API call failed with status {status_code}"
             try:
                 logging.error("%s. Details: %s", log_message_base, error_text[:500], exc_info=False)
-            except Exception as log_e:
+            except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as log_e:
                 logging.error(f"Error during logging HTTP error details: {log_e}")
             sanitized_error = _sanitize_error_for_client(error_text)
             if status_code == 401:
                 raise ChatAuthenticationError(provider=endpoint_lower,
-                                              message="Authentication failed. Please check your API key.")
+                                              message="Authentication failed. Please check your API key.") from e
             if status_code == 429:
                 raise ChatRateLimitError(provider=endpoint_lower,
-                                         message="Rate limit exceeded. Please try again later.")
+                                         message="Rate limit exceeded. Please try again later.") from e
             if 400 <= status_code < 500:
                 raise ChatBadRequestError(provider=endpoint_lower,
-                                          message=f"Invalid request (Status {status_code}). {sanitized_error}")
+                                          message=f"Invalid request (Status {status_code}). {sanitized_error}") from e
             if 500 <= status_code < 600:
                 raise ChatProviderError(provider=endpoint_lower,
                                         message=f"Provider error (Status {status_code}). Please try again.",
-                                        status_code=status_code)
+                                        status_code=status_code) from e
             raise ChatAPIError(provider=endpoint_lower,
                                message=f"Unexpected error (Status {status_code}). {sanitized_error}",
-                               status_code=status_code)
+                               status_code=status_code) from e
         if _is_network_exception(e):
             logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
-            raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
+            raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504) from e
         logging.exception(
             f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
         raise ChatAPIError(provider=endpoint_lower,
                            message=f"An unexpected internal error occurred in chat_api_call for {endpoint_lower}: {str(e)}",
-                           status_code=500)
+                           status_code=500) from e
 
 
 async def chat_api_call_async(
     api_endpoint: str,
-    messages_payload: List[Dict[str, Any]],
+    messages_payload: list[dict[str, Any]],
     api_key: Optional[str] = None,
     temp: Optional[float] = None,
     system_message: Optional[str] = None,
@@ -489,20 +538,20 @@ async def chat_api_call_async(
     topp: Optional[float] = None,
     logprobs: Optional[bool] = None,
     top_logprobs: Optional[int] = None,
-    logit_bias: Optional[Dict[str, float]] = None,
+    logit_bias: Optional[dict[str, float]] = None,
     presence_penalty: Optional[float] = None,
     frequency_penalty: Optional[float] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Union[str, dict[str, Any]]] = None,
     max_tokens: Optional[int] = None,
     seed: Optional[int] = None,
-    stop: Optional[Union[str, List[str]]] = None,
-    response_format: Optional[Dict[str, str]] = None,
+    stop: Optional[Union[str, list[str]]] = None,
+    response_format: Optional[dict[str, str]] = None,
     n: Optional[int] = None,
     user_identifier: Optional[str] = None,
-    extra_headers: Optional[Dict[str, str]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    app_config: Optional[Dict[str, Any]] = None,
+    extra_headers: Optional[dict[str, str]] = None,
+    extra_body: Optional[dict[str, Any]] = None,
+    app_config: Optional[dict[str, Any]] = None,
     http_client_factory: Optional[Callable[[int], Any]] = None,
     http_fetcher: Optional[Callable[..., Any]] = None,
 ):
@@ -552,7 +601,7 @@ async def chat_api_call_async(
         return await perform_chat_api_call_async(**call_kwargs)
     except Exception as e:
         if _is_network_exception(e):
-            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504) from e
         if isinstance(
             e,
             (
@@ -566,7 +615,7 @@ async def chat_api_call_async(
         ):
             raise
         # Surface as provider error for unexpected conditions
-        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
+        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}") from e
 
 
 # Default timeout for synchronous coroutine execution (5 minutes)
@@ -588,6 +637,12 @@ _SYNC_CORO_TIMEOUT_SECONDS = _get_sync_coro_timeout()
 def _async_only_enabled() -> bool:
     """Return True when CHAT_COMMANDS_ASYNC_ONLY is enabled."""
     value = os.getenv("CHAT_COMMANDS_ASYNC_ONLY", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sync_in_event_loop_strict() -> bool:
+    """Return True when CHAT_SYNC_IN_EVENT_LOOP_STRICT is enabled."""
+    value = os.getenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -632,9 +687,9 @@ def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECO
 
 def _run_achat_sync(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -646,24 +701,24 @@ def _run_achat_sync(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None,
+    chatdict_entries: Optional[list[Any]] = None,
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """Run the async achat() orchestrator from synchronous code.
 
@@ -732,9 +787,9 @@ def _run_achat_sync(
 #     _handle_llm_call_and_response(loop, llm_call_func, request_data, chat_db, final_conversation_id, character_card)
 def _chat_sync_impl(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -746,24 +801,24 @@ def _chat_sync_impl(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None, # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None, # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None
 ) -> Union[str, Any]:  # Any for streaming generator
     """
     Internal synchronous implementation of the chat orchestration logic.
@@ -785,7 +840,6 @@ def _chat_sync_impl(
 
         # Parse slash-commands before dictionary processing
         injected_command_system_text: Optional[str] = None
-        original_message = message
         # Initialize command variables for safe access later (instead of using unsafe locals() checks)
         cmd_name: Optional[str] = None
         cmd_args: Optional[str] = None
@@ -799,7 +853,7 @@ def _chat_sync_impl(
                 try:
                     if llm_user_identifier is not None:
                         auth_user_int = int(llm_user_identifier)  # best-effort parse for RBAC
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
                 cmd_res = _run_coro_sync(
@@ -832,7 +886,7 @@ def _chat_sync_impl(
             )
 
         # --- Construct messages payload for the LLM API (OpenAI format) ---
-        llm_messages_payload: List[Dict[str, Any]] = []
+        llm_messages_payload: list[dict[str, Any]] = []
 
         # PHILOSOPHY:
         # `chat()` prepares the `llm_messages_payload` (user/assistant turns with multimodal content)
@@ -863,7 +917,8 @@ def _chat_sync_impl(
                         image_url_data = part.get("image_url", {}).get("url", "") # data URI
                         if image_history_mode == "send_all":
                             processed_hist_content_parts.append(part)
-                            if role == "user": last_user_image_url_from_history = image_url_data
+                            if role == "user":
+                                last_user_image_url_from_history = image_url_data
                         elif image_history_mode == "send_last_user_image" and role == "user":
                             last_user_image_url_from_history = image_url_data # Track, add later
                         elif image_history_mode == "tag_past":
@@ -871,7 +926,7 @@ def _chat_sync_impl(
                             if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
                                 try:
                                     mime_type_part = image_url_data.split(';base64,')[0].split('/')[-1]
-                                except Exception as e:
+                                except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
                                     logging.debug(f"Failed to extract MIME type from data URI: {e}")
                                     mime_type_part = "image"
                             processed_hist_content_parts.append({"type": "text", "text": f"<image: prior_history.{mime_type_part}>"})
@@ -909,7 +964,7 @@ def _chat_sync_impl(
                 rag_text_prefix += "\n\n---\n\n"
 
         # 4. Construct Current User Message (text + optional new image)
-        current_user_content_parts: List[Dict[str, Any]] = []
+        current_user_content_parts: list[dict[str, Any]] = []
 
         # Combine RAG, custom_prompt (if it's for current turn's text), and processed_text_message
         # Deciding where `custom_prompt` goes: if it's a direct instruction for *this* turn,
@@ -956,16 +1011,20 @@ def _chat_sync_impl(
 
         # Temperature and other LLM params
         temperature_float = 0.7
-        try: temperature_float = float(temperature) if temperature is not None else 0.7
-        except ValueError: logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
+        try:
+            temperature_float = float(temperature) if temperature is not None else 0.7
+        except ValueError:
+            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
 
-        logging.debug(f"Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
+        logging.debug("Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
         for i, msg_p in enumerate(llm_messages_payload):
             content_log = []
             if isinstance(msg_p.get("content"), list):
-                for part_idx, part_c in enumerate(msg_p["content"]):
-                    if part_c.get("type") == "text": content_log.append(f"text: '{part_c['text'][:30]}...'")
-                    elif part_c.get("type") == "image_url": content_log.append(f"image: '{part_c['image_url']['url'][:40]}...'")
+                for _part_idx, part_c in enumerate(msg_p["content"]):
+                    if part_c.get("type") == "text":
+                        content_log.append(f"text: '{part_c['text'][:30]}...'")
+                    elif part_c.get("type") == "image_url":
+                        content_log.append(f"image: '{part_c['image_url']['url'][:40]}...'")
             logging.debug(f"  Msg {i}: Role: {msg_p['role']}, Content: [{', '.join(content_log)}]")
 
         logging.debug(f"Debug - Chat Function - Temperature: {temperature}")
@@ -973,7 +1032,7 @@ def _chat_sync_impl(
         try:
             if api_key and os.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}:
                 logging.debug("Debug - Chat Function - API Key (masked): %s...%s", api_key[:4], api_key[-4:])
-        except Exception as key_log_err:
+        except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as key_log_err:
             logging.debug(f"Could not log masked API key: {key_log_err}")
         logging.debug(f"Debug - Chat Function - Prompt: {custom_prompt}")
 
@@ -1031,7 +1090,7 @@ def _chat_sync_impl(
                             )
                         else:
                             logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
-                    except Exception as e_post_gen:
+                    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e_post_gen:
                         logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
                 else:
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
@@ -1040,7 +1099,7 @@ def _chat_sync_impl(
     except ChatAPIError:
         # Re-raise ChatAPIError subclasses as-is for proper upstream handling
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in multimodal chat function: {str(e)}", exc_info=True)
         # Raise a proper exception instead of returning an error string
@@ -1054,9 +1113,9 @@ def _chat_sync_impl(
 
 def chat(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -1068,24 +1127,24 @@ def chat(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None,  # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None,  # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """
     Public synchronous chat entrypoint.
@@ -1189,6 +1248,16 @@ def chat(
             llm_tool_choice=llm_tool_choice,
         )
 
+    if _sync_in_event_loop_strict():
+        raise SyncCallInEventLoopError(
+            "chat() called from a running event loop. "
+            "Use await achat(...) or disable CHAT_SYNC_IN_EVENT_LOOP_STRICT."
+        )
+
+    logging.warning(
+        "chat() called from a running event loop; returning a Future. "
+        "Prefer await achat(...) in async contexts."
+    )
     executor = _get_sync_executor()
     return loop.run_in_executor(
         executor,
@@ -1232,9 +1301,9 @@ def chat(
 
 async def achat(
     message: str,
-    history: List[Dict[str, Any]],
-    media_content: Optional[Dict[str, str]],
-    selected_parts: List[str],
+    history: list[dict[str, Any]],
+    media_content: Optional[dict[str, str]],
+    selected_parts: list[str],
     api_endpoint: str,
     api_key: Optional[str],
     custom_prompt: Optional[str],
@@ -1246,24 +1315,24 @@ async def achat(
     model: Optional[str] = None,
     topp: Optional[float] = None,
     topk: Optional[int] = None,
-    chatdict_entries: Optional[List[Any]] = None, # Should be List[ChatDictionary]
+    chatdict_entries: Optional[list[Any]] = None, # Should be List[ChatDictionary]
     max_tokens: int = 500,
     strategy: str = "sorted_evenly",
-    current_image_input: Optional[Dict[str, str]] = None,
+    current_image_input: Optional[dict[str, str]] = None,
     image_history_mode: str = "tag_past",
     llm_max_tokens: Optional[int] = None,
     llm_seed: Optional[int] = None,
-    llm_stop: Optional[Union[str, List[str]]] = None,
+    llm_stop: Optional[Union[str, list[str]]] = None,
     llm_response_format: Optional[ResponseFormat] = None,
     llm_n: Optional[int] = None,
     llm_user_identifier: Optional[str] = None,
     llm_logprobs: Optional[bool] = None,
     llm_top_logprobs: Optional[int] = None,
-    llm_logit_bias: Optional[Dict[str, float]] = None,
+    llm_logit_bias: Optional[dict[str, float]] = None,
     llm_presence_penalty: Optional[float] = None,
     llm_frequency_penalty: Optional[float] = None,
-    llm_tools: Optional[List[Dict[str, Any]]] = None,
-    llm_tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
+    llm_tools: Optional[list[dict[str, Any]]] = None,
+    llm_tool_choice: Optional[Union[str, dict[str, Any]]] = None,
 ) -> Union[str, Any]:
     """Async variant of chat() that uses async slash-command dispatch and async provider calls.
 
@@ -1281,7 +1350,6 @@ async def achat(
             selected_parts = [selected_parts] if selected_parts else []
 
         injected_command_system_text: Optional[str] = None
-        original_message = message
         # Initialize command variables for safe access later (instead of using unsafe locals() checks)
         cmd_name: Optional[str] = None
         cmd_args: Optional[str] = None
@@ -1294,7 +1362,7 @@ async def achat(
                 try:
                     if llm_user_identifier is not None:
                         auth_user_int = int(llm_user_identifier)
-                except Exception:
+                except _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS:
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
                 cmd_res = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
@@ -1319,14 +1387,14 @@ async def achat(
                 message, chatdict_entries, max_tokens=max_tokens, strategy=strategy
             )
 
-        llm_messages_payload: List[Dict[str, Any]] = []
+        llm_messages_payload: list[dict[str, Any]] = []
 
         # 2. Process History (now expecting list of OpenAI message dicts)
         last_user_image_url_from_history: Optional[str] = None
         for hist_msg_obj in history:
             role = hist_msg_obj.get("role")
             original_content = hist_msg_obj.get("content")
-            processed_hist_content_parts: List[Dict[str, Any]] = []
+            processed_hist_content_parts: list[dict[str, Any]] = []
 
             if isinstance(original_content, str):
                 processed_hist_content_parts.append({"type": "text", "text": original_content})
@@ -1348,7 +1416,7 @@ async def achat(
                             if image_url_data.startswith("data:image/") and ";base64," in image_url_data:
                                 try:
                                     mime_type_part = image_url_data.split(";base64,")[0].split("/")[-1]
-                                except Exception as e:
+                                except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e:
                                     logging.debug(f"Failed to extract MIME type from data URI: {e}")
                                     mime_type_part = "image"
                             processed_hist_content_parts.append(
@@ -1398,10 +1466,10 @@ async def achat(
                 ).strip()
                 if rag_text_prefix:
                     rag_text_prefix += "\n\n---\n\n"
-            except Exception:
+            except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS:
                 rag_text_prefix = ""
 
-        current_user_content_parts: List[Dict[str, Any]] = []
+        current_user_content_parts: list[dict[str, Any]] = []
         final_text_for_current_message = processed_text_message
         if custom_prompt:
             final_text_for_current_message = f"{custom_prompt}\n\n{final_text_for_current_message}"
@@ -1494,7 +1562,7 @@ async def achat(
                             )
                         else:
                             logging.debug("Post-gen dictionary parsed but resulted in no ChatDictionary objects.")
-                    except Exception as e_post_gen:
+                    except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as e_post_gen:
                         logging.error(f"Error during post-generation replacement: {e_post_gen}", exc_info=True)
                 else:
                     logging.warning("Post-gen replacement enabled but dict file not found/configured.")
@@ -1503,7 +1571,7 @@ async def achat(
     except ChatAPIError:
         # Re-raise ChatAPIError subclasses as-is for proper upstream handling
         raise
-    except Exception as e:
+    except _CHAT_ORCHESTRATOR_PROVIDER_EXCEPTIONS as e:
         log_counter("chat_error_multimodal", labels={"api_endpoint": api_endpoint, "error": str(e)})
         logging.error(f"Error in async multimodal chat function: {str(e)}", exc_info=True)
         # Raise a proper exception instead of returning an error string

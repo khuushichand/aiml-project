@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional, List
-
-from loguru import logger
-
-from .models import RuntimeType, RunSpec, SessionSpec, TrustLevel
-from tldw_Server_API.app.core.config import settings as app_settings
-import json
 import hashlib
+import json
+from dataclasses import dataclass, field
 
+from tldw_Server_API.app.core.config import settings as app_settings
+
+from .models import RunSpec, RuntimeType, SessionSpec, TrustLevel
+
+_POLICY_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 # Trust-level presets define resource limits and security constraints
 # based on the trust level of the code being executed.
@@ -50,7 +55,7 @@ class SandboxPolicyConfig:
     network_default: str = "deny_all"  # deny_all | allowlist (allowlist controlled elsewhere)
     # Opt-in egress allowlist enforcement (runtime dependent; Docker only for now)
     egress_enforcement: bool = False
-    egress_allowlist: List[str] = field(default_factory=list)
+    egress_allowlist: list[str] = field(default_factory=list)
     artifact_ttl_hours: int = 24
     max_upload_mb: int = 64
     max_log_bytes: int = 10 * 1024 * 1024
@@ -58,37 +63,37 @@ class SandboxPolicyConfig:
     max_cpu: float = 4.0
     max_mem_mb: int = 8192
     workspace_cap_mb: int = 256
-    supported_spec_versions: List[str] = field(default_factory=lambda: ["1.0"])
+    supported_spec_versions: list[str] = field(default_factory=lambda: ["1.0"])
 
     @classmethod
-    def from_settings(cls) -> "SandboxPolicyConfig":
+    def from_settings(cls) -> SandboxPolicyConfig:
         try:
             rt_raw = str(getattr(app_settings, "SANDBOX_DEFAULT_RUNTIME", "docker")).strip().lower()
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             rt_raw = "docker"
         runtime = RuntimeType.firecracker if rt_raw == "firecracker" else RuntimeType.docker
         try:
             network_default = str(getattr(app_settings, "SANDBOX_NETWORK_DEFAULT", "deny_all")).strip().lower()
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             network_default = "deny_all"
         def _get_int(key: str, dv: int) -> int:
             try:
                 return int(getattr(app_settings, key))  # type: ignore[arg-type]
-            except Exception:
+            except _POLICY_NONCRITICAL_EXCEPTIONS:
                 return dv
         def _get_float(key: str, dv: float) -> float:
             try:
                 return float(getattr(app_settings, key))  # type: ignore[arg-type]
-            except Exception:
+            except _POLICY_NONCRITICAL_EXCEPTIONS:
                 return dv
-        def _get_list(key: str, dv: List[str]) -> List[str]:
+        def _get_list(key: str, dv: list[str]) -> list[str]:
             try:
                 v = getattr(app_settings, key)
                 if isinstance(v, list):
                     return [str(x) for x in v]
                 s = str(v)
                 return [t.strip() for t in s.split(',') if t.strip()]
-            except Exception:
+            except _POLICY_NONCRITICAL_EXCEPTIONS:
                 return dv
         def _get_bool(key: str, dv: bool) -> bool:
             try:
@@ -97,7 +102,7 @@ class SandboxPolicyConfig:
                     return v
                 s = str(v).strip().lower()
                 return s in {"1", "true", "yes", "on", "y"}
-            except Exception:
+            except _POLICY_NONCRITICAL_EXCEPTIONS:
                 return dv
         return cls(
             default_runtime=runtime,
@@ -123,7 +128,7 @@ class SandboxPolicy:
     and available.
     """
 
-    def __init__(self, cfg: Optional[SandboxPolicyConfig] = None) -> None:
+    def __init__(self, cfg: SandboxPolicyConfig | None = None) -> None:
         self.cfg = cfg or SandboxPolicyConfig.from_settings()
 
     class RuntimeUnavailable(Exception):
@@ -133,7 +138,7 @@ class SandboxPolicy:
 
     def select_runtime(
         self,
-        requested: Optional[RuntimeType],
+        requested: RuntimeType | None,
         firecracker_available: bool,
         lima_available: bool = False,
     ) -> RuntimeType:
@@ -181,19 +186,19 @@ class SandboxPolicy:
                 spec.cpu_limit = effective_max_cpu
             elif spec.cpu_limit > effective_max_cpu:
                 spec.cpu_limit = float(effective_max_cpu)
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if spec.memory_mb is None:
                 spec.memory_mb = effective_max_mem
             elif spec.memory_mb > effective_max_mem:
                 spec.memory_mb = int(effective_max_mem)
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if spec.timeout_sec > profile_max_timeout:
                 spec.timeout_sec = profile_max_timeout
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
 
         return spec
@@ -229,19 +234,19 @@ class SandboxPolicy:
                 spec.cpu = effective_max_cpu
             elif spec.cpu > effective_max_cpu:
                 spec.cpu = float(effective_max_cpu)
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if spec.memory_mb is None:
                 spec.memory_mb = effective_max_mem
             elif spec.memory_mb > effective_max_mem:
                 spec.memory_mb = int(effective_max_mem)
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
         try:
             if spec.timeout_sec > profile_max_timeout:
                 spec.timeout_sec = profile_max_timeout
-        except Exception:
+        except _POLICY_NONCRITICAL_EXCEPTIONS:
             pass
 
         return spec
@@ -256,19 +261,19 @@ def _canonical_policy_dict(cfg: SandboxPolicyConfig) -> dict:
     try:
         # Runner security toggles (booleans for determinism)
         docker_seccomp_enabled = bool(getattr(app_settings, "SANDBOX_DOCKER_SECCOMP", None))
-    except Exception:
+    except _POLICY_NONCRITICAL_EXCEPTIONS:
         docker_seccomp_enabled = False
     try:
         docker_apparmor_enabled = bool(getattr(app_settings, "SANDBOX_DOCKER_APPARMOR_PROFILE", None))
-    except Exception:
+    except _POLICY_NONCRITICAL_EXCEPTIONS:
         docker_apparmor_enabled = False
     try:
         ul_nofile = int(getattr(app_settings, "SANDBOX_ULIMIT_NOFILE", 1024))
-    except Exception:
+    except _POLICY_NONCRITICAL_EXCEPTIONS:
         ul_nofile = 1024
     try:
         ul_nproc = int(getattr(app_settings, "SANDBOX_ULIMIT_NPROC", 512))
-    except Exception:
+    except _POLICY_NONCRITICAL_EXCEPTIONS:
         ul_nproc = 512
 
     # Normalize supported spec versions list

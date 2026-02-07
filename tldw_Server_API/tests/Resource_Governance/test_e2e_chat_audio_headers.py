@@ -1,5 +1,4 @@
 import contextlib
-import json
 from pathlib import Path
 
 import pytest
@@ -391,7 +390,7 @@ async def test_e2e_audio_websocket_streams_limit(monkeypatch, tmp_path):
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
     # Allow streaming quotas at the module level to avoid DB/Redis dependencies
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     async def _noop(*args, **kwargs):
         return None
@@ -466,7 +465,7 @@ async def test_e2e_audio_transcriptions_headers_and_mocked_stt(monkeypatch, tmp_
     monkeypatch.setenv("RG_POLICY_PATH", str(p))
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio import Audio_Files as audio_files
 

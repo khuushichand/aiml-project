@@ -2,25 +2,30 @@
 # Description: Token blacklist service for JWT revocation and invalidation
 #
 # Imports
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List
-from collections import deque
-import json
 import asyncio
+import contextlib
+import json
+from collections import deque
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from loguru import logger
+
 #
 # 3rd-party imports
 from redis import asyncio as redis_async
 from redis.exceptions import RedisError
-from loguru import logger
-#
-# Local imports
-from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool, reset_db_pool
-from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError, InvalidTokenError
+from tldw_Server_API.app.core.AuthNZ.exceptions import DatabaseError
+from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
 from tldw_Server_API.app.core.AuthNZ.repos.token_blacklist_repo import (
     AuthnzTokenBlacklistRepo,
 )
-from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRepo
+
+#
+# Local imports
+from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 
 #######################################################################################################################
 #
@@ -48,7 +53,7 @@ class TokenBlacklist:
         self._initialized = False
 
         # In-memory LRU cache of recently seen blacklisted JTIs mapped to expiry
-        self._local_cache: Dict[str, datetime] = {}
+        self._local_cache: dict[str, datetime] = {}
         self._local_order: deque[str] = deque()
         self._cache_size_limit = 1000
         self._ensured_session_columns = False
@@ -57,10 +62,8 @@ class TokenBlacklist:
         """Remove a JTI from the local cache if present."""
         if jti in self._local_cache:
             self._local_cache.pop(jti, None)
-            try:
+            with contextlib.suppress(ValueError):
                 self._local_order.remove(jti)
-            except ValueError:
-                pass
 
     @staticmethod
     def _normalize_expiry(expires_at: Optional[Any]) -> Optional[datetime]:
@@ -103,10 +106,8 @@ class TokenBlacklist:
         # Refresh ordering
         if jti in self._local_cache:
             self._local_cache[jti] = expiry
-            try:
+            with contextlib.suppress(ValueError):
                 self._local_order.remove(jti)
-            except ValueError:
-                pass
             self._local_order.append(jti)
         else:
             self._local_cache[jti] = expiry
@@ -157,7 +158,7 @@ class TokenBlacklist:
                 )
                 await self.redis_client.ping()
                 logger.debug("Redis connected for token blacklist")
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Redis unavailable for token blacklist: {e}")
                 self.redis_client = None
 
@@ -256,7 +257,7 @@ class TokenBlacklist:
             if altered:
                 await conn.commit()
             self._ensured_session_columns = True
-        except Exception as exc:
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
             logger.debug(f"TokenBlacklist: unable to harmonize session columns: {exc}")
 
     async def revoke_token(
@@ -322,7 +323,7 @@ class TokenBlacklist:
                     else:
                         logger.debug(f"Token {jti} added to Redis blacklist")
 
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Failed to add token to Redis blacklist: {e}")
 
         # Add to database for persistence
@@ -353,7 +354,7 @@ class TokenBlacklist:
                 )
             return True
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to blacklist token: {e}")
             return False
 
@@ -393,7 +394,7 @@ class TokenBlacklist:
                     # Add to local cache for next time if expiry known
                     self._cache_add(jti, expiry)
                     return True
-            except (RedisError, Exception) as e:
+            except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
                 logger.warning(f"Redis error checking blacklist: {e}")
 
         # Check database
@@ -409,7 +410,7 @@ class TokenBlacklist:
 
             self._cache_remove(jti)
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Database error checking blacklist: {e}")
             # Fail closed - treat as blacklisted on error
             return True
@@ -478,28 +479,26 @@ class TokenBlacklist:
                 access_exp = _to_datetime(session.get("expires_at"))
                 refresh_exp = _to_datetime(session.get("refresh_expires_at"))
 
-                if access_jti and access_exp:
-                    if await self.revoke_token(
-                        jti=access_jti,
-                        expires_at=access_exp,
-                        user_id=user_id,
-                        token_type="access",
-                        reason=reason,
-                        revoked_by=revoked_by,
-                        ip_address=ip_address,
-                    ):
-                        tokens_revoked += 1
-                if refresh_jti and refresh_exp:
-                    if await self.revoke_token(
-                        jti=refresh_jti,
-                        expires_at=refresh_exp,
-                        user_id=user_id,
-                        token_type="refresh",
-                        reason=reason,
-                        revoked_by=revoked_by,
-                        ip_address=ip_address,
-                    ):
-                        tokens_revoked += 1
+                if access_jti and access_exp and await self.revoke_token(
+                    jti=access_jti,
+                    expires_at=access_exp,
+                    user_id=user_id,
+                    token_type="access",
+                    reason=reason,
+                    revoked_by=revoked_by,
+                    ip_address=ip_address,
+                ):
+                    tokens_revoked += 1
+                if refresh_jti and refresh_exp and await self.revoke_token(
+                    jti=refresh_jti,
+                    expires_at=refresh_exp,
+                    user_id=user_id,
+                    token_type="refresh",
+                    reason=reason,
+                    revoked_by=revoked_by,
+                    ip_address=ip_address,
+                ):
+                    tokens_revoked += 1
 
             if self.settings.PII_REDACT_LOGS:
                 logger.info(
@@ -514,13 +513,13 @@ class TokenBlacklist:
             # - multi_user: number of tokens revoked to preserve existing unit-test expectations
             try:
                 mode = getattr(self.settings, "AUTH_MODE", "single_user")
-            except Exception:
+            except (AttributeError, TypeError):
                 mode = "single_user"
             if mode == "single_user":
                 return sessions_count
             return tokens_revoked
 
-        except Exception as e:
+        except (DatabaseError, OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to revoke user tokens: {e}")
             return 0
 
@@ -550,11 +549,11 @@ class TokenBlacklist:
 
             return count
 
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to cleanup expired tokens: {e}")
             return 0
 
-    async def get_blacklist_stats(self, user_id: Optional[int] = None) -> Dict[str, Any]:
+    async def get_blacklist_stats(self, user_id: Optional[int] = None) -> dict[str, Any]:
         """
         Get statistics about blacklisted tokens
 
@@ -572,7 +571,7 @@ class TokenBlacklist:
             repo = AuthnzTokenBlacklistRepo(db_pool)
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             return await repo.get_blacklist_stats(now=now, user_id=user_id)
-        except Exception as e:
+        except (DatabaseError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to get blacklist stats: {e}")
 
         return {
@@ -630,7 +629,7 @@ async def reset_token_blacklist():
         try:
             if _token_blacklist.redis_client:
                 await _token_blacklist.redis_client.close()
-        except Exception as e:
+        except (OSError, RedisError, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"TokenBlacklist reset ignored Redis shutdown error: {e}")
         finally:
             _token_blacklist = None

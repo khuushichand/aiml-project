@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from loguru import logger
+from typing import Any
 
 from tldw_Server_API.app.core.config import get_config_section
-
 
 DEFAULT_BACKEND = "stable_diffusion_cpp"
 DEFAULT_MAX_WIDTH = 1024
@@ -29,34 +26,34 @@ DEFAULT_SWARMUI_TIMEOUT_SECONDS = 120
 
 @dataclass(frozen=True)
 class ImageGenerationConfig:
-    default_backend: Optional[str]
-    enabled_backends: List[str]
+    default_backend: str | None
+    enabled_backends: list[str]
     max_width: int
     max_height: int
     max_pixels: int
     max_steps: int
     max_prompt_length: int
-    inline_max_bytes: Optional[int]
-    sd_cpp_diffusion_model_path: Optional[str]
-    sd_cpp_llm_path: Optional[str]
-    sd_cpp_binary_path: Optional[str]
-    sd_cpp_model_path: Optional[str]
-    sd_cpp_vae_path: Optional[str]
-    sd_cpp_lora_paths: List[str]
-    sd_cpp_allowed_extra_params: List[str]
+    inline_max_bytes: int | None
+    sd_cpp_diffusion_model_path: str | None
+    sd_cpp_llm_path: str | None
+    sd_cpp_binary_path: str | None
+    sd_cpp_model_path: str | None
+    sd_cpp_vae_path: str | None
+    sd_cpp_lora_paths: list[str]
+    sd_cpp_allowed_extra_params: list[str]
     sd_cpp_default_steps: int
     sd_cpp_default_cfg_scale: float
     sd_cpp_default_sampler: str
     sd_cpp_device: str
     sd_cpp_timeout_seconds: int
-    swarmui_base_url: Optional[str]
-    swarmui_default_model: Optional[str]
-    swarmui_swarm_token: Optional[str]
-    swarmui_allowed_extra_params: List[str]
+    swarmui_base_url: str | None
+    swarmui_default_model: str | None
+    swarmui_swarm_token: str | None
+    swarmui_allowed_extra_params: list[str]
     swarmui_timeout_seconds: int
 
 
-_config_cache: Optional[ImageGenerationConfig] = None
+_config_cache: ImageGenerationConfig | None = None
 
 
 def _coerce_int(value: Any, default: int) -> int:
@@ -73,7 +70,7 @@ def _coerce_float(value: Any, default: float) -> float:
         return default
 
 
-def _parse_list(value: Any) -> List[str]:
+def _parse_list(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, list):
@@ -90,7 +87,7 @@ def _parse_list(value: Any) -> List[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _get_config_value(section: Dict[str, str], key: str) -> Optional[str]:
+def _get_config_value(section: dict[str, str], key: str) -> str | None:
     raw = section.get(key)
     if raw is None:
         return None

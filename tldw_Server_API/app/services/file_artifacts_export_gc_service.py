@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
@@ -19,15 +19,24 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import StoragePathValidationError
 
-
 MIN_INTERVAL_SECONDS = 60
+_FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _enumerate_user_ids() -> list[int]:
     """Return sorted user IDs discovered from user DB storage paths."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"files_export_gc: failed to resolve user db base dir: {exc}")
         return []
     uids: list[int] = []
@@ -40,7 +49,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception as exc:
+        except _FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"files_export_gc: failed to derive single user id: {exc}")
             uids = []
     return sorted(set(uids))
@@ -84,12 +93,12 @@ async def _purge_expired_exports_for_user(user_id: int, now_iso: str) -> tuple[i
                 cleared += 1
             except KeyError:
                 logger.debug(f"files_export_gc: file artifact not found for {file_id}")
-            except Exception as exc:
+            except _FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS as exc:
                 logger.warning(f"files_export_gc: failed to clear export state for {file_id}: {exc}")
         return cleared, files_deleted
 
 
-async def start_file_artifacts_export_gc_scheduler() -> Optional[asyncio.Task]:
+async def start_file_artifacts_export_gc_scheduler() -> asyncio.Task | None:
     """Start the file export GC scheduler task or return None if disabled."""
     enabled = os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
@@ -114,7 +123,7 @@ async def start_file_artifacts_export_gc_scheduler() -> Optional[asyncio.Task]:
                     total_files += files_deleted
                 if total_cleared or total_files:
                     logger.info(f"Files export GC: cleared={total_cleared} files_deleted={total_files}")
-            except Exception as exc:
+            except _FILES_EXPORT_GC_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"files_export_gc: run failed: {exc}")
             await asyncio.sleep(interval)
 

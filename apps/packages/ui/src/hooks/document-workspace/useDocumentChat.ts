@@ -76,7 +76,7 @@ async function persistDocumentSession(
         historyId = existingHistory.id
       } else {
         // Create new history entry
-        const title = session.messages[0]?.content?.slice(0, 50) || "Document Chat"
+        const title = session.messages[0]?.message?.slice(0, 50) || "Document Chat"
         const newHistory = await saveHistory(
           title,
           true, // is_rag
@@ -99,7 +99,7 @@ async function persistDocumentSession(
         history_id: historyId,
         name: msg.name || "user",
         role: msg.role,
-        content: msg.content,
+        content: msg.message,
         images: msg.images || [],
         source: msg.sources,
         documents: msg.documents
@@ -139,19 +139,25 @@ async function loadDocumentSession(
     const storeMessages: StoreMessage[] = messages.map((msg) => ({
       id: msg.id,
       role: msg.role as "user" | "assistant" | "system",
-      content: msg.content,
+      message: msg.content,
       name: msg.name,
       images: msg.images || [],
-      sources: msg.source,
+      sources: msg.sources || [],
       documents: msg.documents,
       isBot: msg.role === "assistant",
       modelName: msg.modelName,
       modelImage: msg.modelImage
     }))
+    const chatHistory = storeMessages.map((msg) => ({
+      role: msg.role || "user",
+      content: msg.message,
+      image: msg.images?.[0],
+      messageType: msg.messageType
+    }))
 
     return {
       messages: storeMessages,
-      history: storeMessages,
+      history: chatHistory,
       historyId: historyInfo.id,
       isFirstMessage: storeMessages.length === 0,
       serverChatId: historyInfo.server_chat_id ?? null,

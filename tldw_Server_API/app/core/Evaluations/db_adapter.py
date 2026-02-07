@@ -5,15 +5,14 @@ Provides an abstraction layer to support multiple database backends
 (SQLite, PostgreSQL, etc.) without changing application code.
 """
 
+import sqlite3
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
-import sqlite3
-import json
-from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
+
 from loguru import logger
 
 
@@ -32,7 +31,7 @@ class DatabaseConfig:
     pool_size: int = 10
     max_overflow: int = 20
     echo: bool = False
-    options: Dict[str, Any] = None
+    options: dict[str, Any] = None
 
     def __post_init__(self):
         if self.options is None:
@@ -43,27 +42,27 @@ class DatabaseAdapter(ABC):
     """Abstract base class for database adapters."""
 
     @abstractmethod
-    def execute(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def execute(self, query: str, params: Optional[tuple] = None) -> Any:
         """Execute a query and return results."""
         pass
 
     @abstractmethod
-    def execute_many(self, query: str, params_list: List[Tuple]) -> Any:
+    def execute_many(self, query: str, params_list: list[tuple]) -> Any:
         """Execute a query with multiple parameter sets."""
         pass
 
     @abstractmethod
-    def fetch_one(self, query: str, params: Optional[Tuple] = None) -> Optional[Dict]:
+    def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[dict]:
         """Fetch a single row as a dictionary."""
         pass
 
     @abstractmethod
-    def fetch_all(self, query: str, params: Optional[Tuple] = None) -> List[Dict]:
+    def fetch_all(self, query: str, params: Optional[tuple] = None) -> list[dict]:
         """Fetch all rows as a list of dictionaries."""
         pass
 
     @abstractmethod
-    def fetch_value(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def fetch_value(self, query: str, params: Optional[tuple] = None) -> Any:
         """Fetch a single value from the first row."""
         pass
 
@@ -79,12 +78,12 @@ class DatabaseAdapter(ABC):
         pass
 
     @abstractmethod
-    def insert(self, query: str, params: Optional[Tuple] = None) -> int:
+    def insert(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an insert query and return the last inserted row id."""
         pass
 
     @abstractmethod
-    def update(self, query: str, params: Optional[Tuple] = None) -> int:
+    def update(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an update query and return number of affected rows."""
         pass
 
@@ -133,7 +132,7 @@ class SQLiteAdapter(DatabaseAdapter):
 
         self.conn.commit()
 
-    def execute(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def execute(self, query: str, params: Optional[tuple] = None) -> Any:
         """Execute a query and return cursor."""
         cursor = self.conn.cursor()
         if params:
@@ -142,12 +141,12 @@ class SQLiteAdapter(DatabaseAdapter):
             cursor.execute(query)
         return cursor
 
-    def execute_many(self, query: str, params_list: List[Tuple]) -> Any:
+    def execute_many(self, query: str, params_list: list[tuple]) -> Any:
         """Execute a query with multiple parameter sets."""
         cursor = self.conn.cursor()
         return cursor.executemany(query, params_list)
 
-    def fetch_one(self, query: str, params: Optional[Tuple] = None) -> Optional[Dict]:
+    def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[dict]:
         """Fetch a single row as a dictionary."""
         cursor = self.execute(query, params)
         row = cursor.fetchone()
@@ -155,12 +154,12 @@ class SQLiteAdapter(DatabaseAdapter):
             return dict(row)
         return None
 
-    def fetch_all(self, query: str, params: Optional[Tuple] = None) -> List[Dict]:
+    def fetch_all(self, query: str, params: Optional[tuple] = None) -> list[dict]:
         """Fetch all rows as a list of dictionaries."""
         cursor = self.execute(query, params)
         return [dict(row) for row in cursor.fetchall()]
 
-    def fetch_value(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def fetch_value(self, query: str, params: Optional[tuple] = None) -> Any:
         """Fetch a single value from the first row."""
         cursor = self.execute(query, params)
         row = cursor.fetchone()
@@ -174,9 +173,9 @@ class SQLiteAdapter(DatabaseAdapter):
         try:
             yield self
             self.conn.commit()
-        except Exception as e:
+        except Exception:
             self.conn.rollback()
-            raise e
+            raise
 
     def init_schema(self, schema_sql: str):
         """Initialize database schema."""
@@ -188,7 +187,7 @@ class SQLiteAdapter(DatabaseAdapter):
                 self.execute(statement)
         self.conn.commit()
 
-    def insert(self, query: str, params: Optional[Tuple] = None) -> int:
+    def insert(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an insert query and return the last inserted row id."""
         cursor = self.conn.cursor()
         if params:
@@ -197,7 +196,7 @@ class SQLiteAdapter(DatabaseAdapter):
             cursor.execute(query)
         return cursor.lastrowid
 
-    def update(self, query: str, params: Optional[Tuple] = None) -> int:
+    def update(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an update query and return number of affected rows."""
         cursor = self.conn.cursor()
         if params:
@@ -221,24 +220,24 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # TODO: Implement PostgreSQL connection using psycopg2 or asyncpg
         raise NotImplementedError("PostgreSQL adapter not yet implemented")
 
-    def execute(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def execute(self, query: str, params: Optional[tuple] = None) -> Any:
         """Execute a query and return results."""
         # Convert SQLite-style placeholders (?) to PostgreSQL style ($1, $2, etc.)
         raise NotImplementedError()
 
-    def execute_many(self, query: str, params_list: List[Tuple]) -> Any:
+    def execute_many(self, query: str, params_list: list[tuple]) -> Any:
         """Execute a query with multiple parameter sets."""
         raise NotImplementedError()
 
-    def fetch_one(self, query: str, params: Optional[Tuple] = None) -> Optional[Dict]:
+    def fetch_one(self, query: str, params: Optional[tuple] = None) -> Optional[dict]:
         """Fetch a single row as a dictionary."""
         raise NotImplementedError()
 
-    def fetch_all(self, query: str, params: Optional[Tuple] = None) -> List[Dict]:
+    def fetch_all(self, query: str, params: Optional[tuple] = None) -> list[dict]:
         """Fetch all rows as a list of dictionaries."""
         raise NotImplementedError()
 
-    def fetch_value(self, query: str, params: Optional[Tuple] = None) -> Any:
+    def fetch_value(self, query: str, params: Optional[tuple] = None) -> Any:
         """Fetch a single value from the first row."""
         raise NotImplementedError()
 
@@ -251,11 +250,11 @@ class PostgreSQLAdapter(DatabaseAdapter):
         """Initialize database schema."""
         raise NotImplementedError()
 
-    def insert(self, query: str, params: Optional[Tuple] = None) -> int:
+    def insert(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an insert query and return the last inserted row id."""
         raise NotImplementedError()
 
-    def update(self, query: str, params: Optional[Tuple] = None) -> int:
+    def update(self, query: str, params: Optional[tuple] = None) -> int:
         """Execute an update query and return number of affected rows."""
         raise NotImplementedError()
 

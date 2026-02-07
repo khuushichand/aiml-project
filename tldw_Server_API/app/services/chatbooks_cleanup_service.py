@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
@@ -10,12 +10,23 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_service import ChatbookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 
+_CHATBOOKS_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
 
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"chatbooks_cleanup: failed to resolve user db base dir: {exc}")
         return []
 
@@ -30,7 +41,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
@@ -42,7 +53,7 @@ def _build_chacha_db_for_user(user_id: int) -> CharactersRAGDB:
     return CharactersRAGDB(db_path=str(db_path), client_id=str(user_id))
 
 
-async def run_chatbooks_cleanup_loop(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_chatbooks_cleanup_loop(stop_event: asyncio.Event | None = None) -> None:
     """Run scheduled cleanup of expired chatbook exports."""
     interval_sec = int(os.getenv("CHATBOOKS_CLEANUP_INTERVAL_SEC", "0") or "0")
     if interval_sec <= 0:
@@ -63,6 +74,6 @@ async def run_chatbooks_cleanup_loop(stop_event: Optional[asyncio.Event] = None)
                 deleted_total += svc.cleanup_expired_exports()
             if deleted_total:
                 logger.info(f"Chatbooks cleanup removed {deleted_total} expired export files")
-        except Exception as exc:
+        except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"Chatbooks cleanup loop error: {exc}")
         await asyncio.sleep(interval_sec)

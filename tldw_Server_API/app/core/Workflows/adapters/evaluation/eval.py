@@ -6,27 +6,24 @@ text readability, and context window sizes.
 
 from __future__ import annotations
 
-import json
-import math
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Workflows.adapters._common import (
-    extract_openai_content,
     resolve_context_user_id,
 )
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.evaluation._config import (
+    ContextWindowCheckConfig,
+    EvalReadabilityConfig,
     EvaluationsConfig,
     QuizEvaluateConfig,
-    EvalReadabilityConfig,
-    ContextWindowCheckConfig,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 
 
 @registry.register(
@@ -37,7 +34,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
     tags=["evaluation", "testing"],
     config_model=EvaluationsConfig,
 )
-async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_evaluations_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Run LLM evaluations (geval, rag, response_quality) within a workflow step.
 
     Config:
@@ -139,10 +136,7 @@ async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any
                     response = ""
 
             source_text = config.get("context") or config.get("source_text")
-            if source_text is not None:
-                source_text = _render(source_text)
-            else:
-                source_text = ""
+            source_text = _render(source_text) if source_text is not None else ""
 
             if not response:
                 return {"error": "missing_response_for_geval"}
@@ -174,20 +168,14 @@ async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any
 
         if action == "rag":
             question = config.get("question") or config.get("query")
-            if question is not None:
-                question = _render(question)
-            else:
-                question = ""
+            question = _render(question) if question is not None else ""
 
             response = config.get("response")
             if response is not None:
                 response = _render(response)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    response = last.get("text") or last.get("content") or ""
-                else:
-                    response = ""
+                response = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             retrieved_contexts = config.get("retrieved_contexts") or config.get("contexts")
             if retrieved_contexts is None:
@@ -235,20 +223,14 @@ async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any
 
         if action == "response_quality":
             prompt = config.get("prompt") or config.get("question")
-            if prompt is not None:
-                prompt = _render(prompt)
-            else:
-                prompt = ""
+            prompt = _render(prompt) if prompt is not None else ""
 
             response = config.get("response")
             if response is not None:
                 response = _render(response)
             else:
                 last = context.get("last") or {}
-                if isinstance(last, dict):
-                    response = last.get("text") or last.get("content") or ""
-                else:
-                    response = ""
+                response = last.get("text") or last.get("content") or "" if isinstance(last, dict) else ""
 
             if not response:
                 return {"error": "missing_response_for_quality_eval"}
@@ -311,7 +293,7 @@ async def run_evaluations_adapter(config: Dict[str, Any], context: Dict[str, Any
     tags=["evaluation", "education"],
     config_model=QuizEvaluateConfig,
 )
-async def run_quiz_evaluate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_quiz_evaluate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Evaluate quiz answers and provide feedback."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -368,7 +350,7 @@ async def run_quiz_evaluate_adapter(config: Dict[str, Any], context: Dict[str, A
     tags=["evaluation", "readability"],
     config_model=EvalReadabilityConfig,
 )
-async def run_eval_readability_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_eval_readability_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Calculate readability scores for text."""
     if callable(context.get("is_cancelled")) and context["is_cancelled"]():
         return {"__status__": "cancelled"}
@@ -404,7 +386,7 @@ async def run_eval_readability_adapter(config: Dict[str, Any], context: Dict[str
         return max(1, count)
 
     syllable_count = sum(count_syllables(w) for w in words)
-    scores: Dict[str, float] = {}
+    scores: dict[str, float] = {}
 
     if word_count > 0:
         scores["flesch_reading_ease"] = 206.835 - 1.015 * (word_count / sentence_count) - 84.6 * (syllable_count / word_count)
@@ -427,7 +409,7 @@ async def run_eval_readability_adapter(config: Dict[str, Any], context: Dict[str
     tags=["evaluation", "utility"],
     config_model=ContextWindowCheckConfig,
 )
-async def run_context_window_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_context_window_check_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Check if content fits in model context window.
 
     Config:

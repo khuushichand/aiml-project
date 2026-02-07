@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from html import escape
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any
 
 from loguru import logger
 
@@ -21,10 +23,20 @@ from tldw_Server_API.app.services.outputs_service import (
     render_output_template,
 )
 
-
 READING_DIGEST_DOMAIN = "reading"
 READING_DIGEST_JOB_TYPE = "reading_digest"
 LOGGER = logger.bind(module="reading_digest_jobs")
+_READING_DIGEST_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -55,7 +67,7 @@ def reading_digest_queue() -> str:
     return queue or "reading-digest"
 
 
-def _parse_payload(payload: Any) -> Dict[str, Any]:
+def _parse_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     if isinstance(payload, str):
@@ -68,7 +80,7 @@ def _parse_payload(payload: Any) -> Dict[str, Any]:
     return {}
 
 
-def _resolve_user_id(job: Dict[str, Any], payload: Dict[str, Any]) -> int:
+def _resolve_user_id(job: dict[str, Any], payload: dict[str, Any]) -> int:
     owner = job.get("owner_user_id") or payload.get("user_id")
     if owner is None or str(owner).strip() == "":
         return int(DatabasePaths.get_single_user_id())
@@ -83,7 +95,7 @@ def _safe_int(value: Any, default: int) -> int:
         return default
 
 
-def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
     try:
@@ -96,13 +108,13 @@ def _parse_iso_datetime(raw: Optional[str]) -> Optional[datetime]:
     return parsed
 
 
-def _normalize_filters(filters: Any) -> Dict[str, Any]:
+def _normalize_filters(filters: Any) -> dict[str, Any]:
     if isinstance(filters, dict):
         return filters
     return {}
 
 
-def _normalize_tag_list(tags: Any) -> List[str]:
+def _normalize_tag_list(tags: Any) -> list[str]:
     if isinstance(tags, str):
         tags = [tags]
     if not isinstance(tags, list):
@@ -110,7 +122,7 @@ def _normalize_tag_list(tags: Any) -> List[str]:
     return [str(tag).strip() for tag in tags if str(tag).strip()]
 
 
-def _normalize_suggestions_config(filters: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _normalize_suggestions_config(filters: dict[str, Any]) -> dict[str, Any] | None:
     raw = filters.get("suggestions")
     if not isinstance(raw, dict):
         return None
@@ -138,10 +150,7 @@ def _normalize_suggestions_config(filters: Dict[str, Any]) -> Optional[Dict[str,
     statuses = raw.get("status")
     if isinstance(statuses, str):
         statuses = [statuses]
-    if isinstance(statuses, list):
-        statuses = [s for s in statuses if s in _SUGGESTION_ALLOWED_STATUSES]
-    else:
-        statuses = []
+    statuses = [s for s in statuses if s in _SUGGESTION_ALLOWED_STATUSES] if isinstance(statuses, list) else []
     if not statuses:
         statuses = ["saved", "reading"]
 
@@ -176,7 +185,7 @@ def _normalize_suggestions_config(filters: Dict[str, Any]) -> Optional[Dict[str,
     }
 
 
-def _recency_score(when: Optional[str], now: datetime) -> float:
+def _recency_score(when: str | None, now: datetime) -> float:
     parsed = _parse_iso_datetime(when)
     if parsed is None:
         return 0.0
@@ -188,11 +197,11 @@ def _recency_score(when: Optional[str], now: datetime) -> float:
 
 def _score_suggestion_candidate(
     row: Any,
-    digest_tags: Set[str],
+    digest_tags: set[str],
     now: datetime,
-) -> Tuple[float, List[str]]:
+) -> tuple[float, list[str]]:
     score = 0.0
-    reasons: List[str] = []
+    reasons: list[str] = []
 
     recency = _recency_score(getattr(row, "updated_at", None) or getattr(row, "created_at", None), now)
     if recency:
@@ -232,9 +241,9 @@ def _select_suggestion_candidates(
     *,
     service: ReadingService,
     digest_rows: Iterable[Any],
-    digest_tags: List[str],
-    suggestions_config: Dict[str, Any],
-) -> Tuple[List[Any], Dict[str, Any]]:
+    digest_tags: list[str],
+    suggestions_config: dict[str, Any],
+) -> tuple[list[Any], dict[str, Any]]:
     digest_item_ids = {getattr(row, "id", None) for row in digest_rows if getattr(row, "id", None) is not None}
     normalized_digest_tags = {tag.strip().lower() for tag in digest_tags if isinstance(tag, str) and tag.strip()}
     exclude_tags = {tag.strip().lower() for tag in suggestions_config.get("exclude_tags", [])}
@@ -255,7 +264,7 @@ def _select_suggestion_candidates(
         sort="updated_desc",
     )
 
-    filtered: List[Any] = []
+    filtered: list[Any] = []
     for row in rows:
         row_id = getattr(row, "id", None)
         if row_id is not None and row_id in digest_item_ids:
@@ -272,12 +281,12 @@ def _select_suggestion_candidates(
                 continue
         filtered.append(row)
 
-    scored: List[Tuple[float, Any, List[str]]] = []
+    scored: list[tuple[float, Any, list[str]]] = []
     for row in filtered:
         score, reasons = _score_suggestion_candidate(row, normalized_digest_tags, now)
         scored.append((score, row, reasons))
 
-    def _sort_key(entry: Tuple[float, Any, List[str]]) -> Tuple[float, float, int]:
+    def _sort_key(entry: tuple[float, Any, list[str]]) -> tuple[float, float, int]:
         score, row, _reasons = entry
         updated = _parse_iso_datetime(getattr(row, "updated_at", None) or getattr(row, "created_at", None))
         timestamp = updated.timestamp() if updated else 0.0
@@ -294,7 +303,7 @@ def _select_suggestion_candidates(
     return selected_rows, meta
 
 
-def _resolve_retention_until(retention_days: Optional[int]) -> Optional[str]:
+def _resolve_retention_until(retention_days: int | None) -> str | None:
     days = retention_days
     if days is None:
         days = max(0, int(READING_DIGEST_RETENTION_DAYS))
@@ -305,17 +314,14 @@ def _resolve_retention_until(retention_days: Optional[int]) -> Optional[str]:
 
 def _render_default_markdown(
     title: str,
-    items: list[Dict[str, Any]],
-    suggestions: Optional[list[Dict[str, Any]]] = None,
+    items: list[dict[str, Any]],
+    suggestions: list[dict[str, Any]] | None = None,
 ) -> str:
     lines = [f"# {title}", ""]
     for idx, itm in enumerate(items, 1):
         entry_title = itm.get("title") or f"Item {idx}"
         url = itm.get("url")
-        if url:
-            line = f"{idx}. [{entry_title}]({url})"
-        else:
-            line = f"{idx}. {entry_title}"
+        line = f"{idx}. [{entry_title}]({url})" if url else f"{idx}. {entry_title}"
         summary = itm.get("summary") or ""
         if summary:
             line += f" - {summary}"
@@ -325,10 +331,7 @@ def _render_default_markdown(
         for idx, itm in enumerate(suggestions, 1):
             entry_title = itm.get("title") or f"Suggestion {idx}"
             url = itm.get("url")
-            if url:
-                line = f"{idx}. [{entry_title}]({url})"
-            else:
-                line = f"{idx}. {entry_title}"
+            line = f"{idx}. [{entry_title}]({url})" if url else f"{idx}. {entry_title}"
             summary = itm.get("summary") or ""
             if summary:
                 line += f" - {summary}"
@@ -338,18 +341,15 @@ def _render_default_markdown(
 
 def _render_default_html(
     title: str,
-    items: list[Dict[str, Any]],
-    suggestions: Optional[list[Dict[str, Any]]] = None,
+    items: list[dict[str, Any]],
+    suggestions: list[dict[str, Any]] | None = None,
 ) -> str:
     body_parts = [f"<h1>{escape(title)}</h1>", "<ol>"]
     for idx, itm in enumerate(items, 1):
         entry_title = escape(itm.get("title") or f"Item {idx}")
         summary = escape(itm.get("summary") or "")
         url = itm.get("url")
-        if url:
-            entry = f'<li><a href="{escape(url)}">{entry_title}</a>'
-        else:
-            entry = f"<li>{entry_title}"
+        entry = f'<li><a href="{escape(url)}">{entry_title}</a>' if url else f"<li>{entry_title}"
         if summary:
             entry += f" - {summary}"
         entry += "</li>"
@@ -361,10 +361,7 @@ def _render_default_html(
             entry_title = escape(itm.get("title") or f"Suggestion {idx}")
             summary = escape(itm.get("summary") or "")
             url = itm.get("url")
-            if url:
-                entry = f'<li><a href="{escape(url)}">{entry_title}</a>'
-            else:
-                entry = f"<li>{entry_title}"
+            entry = f'<li><a href="{escape(url)}">{entry_title}</a>' if url else f"<li>{entry_title}"
             if summary:
                 entry += f" - {summary}"
             entry += "</li>"
@@ -373,7 +370,7 @@ def _render_default_html(
     return "\n".join(body_parts)
 
 
-def _build_reading_items_context(rows: list[Any]) -> list[Dict[str, Any]]:
+def _build_reading_items_context(rows: list[Any]) -> list[dict[str, Any]]:
     items = build_items_context_from_content_items(rows)
     for idx, row in enumerate(rows):
         try:
@@ -382,13 +379,13 @@ def _build_reading_items_context(rows: list[Any]) -> list[Dict[str, Any]]:
             items[idx]["notes"] = getattr(row, "notes", None) or ""
             items[idx]["read_at"] = getattr(row, "read_at", None)
             items[idx]["updated_at"] = getattr(row, "updated_at", None)
-        except Exception as exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
             row_id = None
             try:
                 row_id = getattr(row, "id", None) or getattr(row, "pk", None)
                 if row_id is None and isinstance(row, dict):
                     row_id = row.get("id") or row.get("pk")
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 row_id = None
             logger.debug(
                 "reading_digest: failed to enrich item context idx={} row_id={}: {}",
@@ -401,7 +398,7 @@ def _build_reading_items_context(rows: list[Any]) -> list[Dict[str, Any]]:
     return items
 
 
-async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_reading_digest_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = _parse_payload(job.get("payload"))
     user_id = _resolve_user_id(job, payload)
     schedule_id = payload.get("schedule_id")
@@ -424,7 +421,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             last_run_at=datetime.now(timezone.utc).isoformat(),
             last_status="running",
         )
-    except Exception as exc:
+    except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "reading_digest: failed to mark schedule as running (schedule_id={}, user_id={}): {}",
             schedule.id,
@@ -438,7 +435,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(schedule.filters_json, str):
             try:
                 filters = json.loads(schedule.filters_json) if schedule.filters_json else {}
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 filters = {}
 
         status = filters.get("status")
@@ -480,8 +477,8 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             filters["tags"] = tags
 
         items_context = _build_reading_items_context(rows)
-        suggestions_context: list[Dict[str, Any]] = []
-        suggestions_meta: Optional[Dict[str, Any]] = None
+        suggestions_context: list[dict[str, Any]] = []
+        suggestions_meta: dict[str, Any] | None = None
         suggestions_config = _normalize_suggestions_config(filters)
         if suggestions_config:
             suggestions_rows, suggestions_meta = _select_suggestion_candidates(
@@ -500,12 +497,12 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
         if schedule.template_id is not None:
             try:
                 output_template = collections_db.get_output_template(int(schedule.template_id))
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
         if output_template is None and schedule.template_name:
             try:
                 output_template = collections_db.get_output_template_by_name(str(schedule.template_name))
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
 
         output_format = (schedule.format or "").lower() or (getattr(output_template, "format", "") or "md")
@@ -520,10 +517,10 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
             fallback_type = "newsletter_html" if output_format == "html" else "newsletter_markdown"
             try:
                 output_template = collections_db.get_default_output_template_by_type(fallback_type)
-            except Exception:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
                 output_template = None
 
-        context: Dict[str, Any] = {
+        context: dict[str, Any] = {
             "title": title,
             "generated_at": generated_at,
             "items": items_context,
@@ -630,7 +627,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
                     path,
                     cleanup_exc,
                 )
-            except Exception as cleanup_exc:
+            except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                 logger.debug(
                     "reading_digest: cleanup unlink failed after db insert failure "
                     "(schedule_id={}, job_id={}, path={}): {}",
@@ -644,7 +641,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="succeeded")
-        except Exception:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS:
             logger.exception(
                 "reading_digest: failed to call set_reading_digest_history for schedule {}",
                 schedule.id,
@@ -658,7 +655,7 @@ async def handle_reading_digest_job(job: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         try:
             collections_db.set_reading_digest_history(schedule.id, last_status="error")
-        except Exception as inner_exc:
+        except _READING_DIGEST_NONCRITICAL_EXCEPTIONS as inner_exc:
             logger.debug(
                 "reading_digest: failed to mark schedule error (schedule_id={}, user_id={}): {}",
                 schedule.id,

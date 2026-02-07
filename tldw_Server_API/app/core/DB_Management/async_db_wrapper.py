@@ -5,12 +5,12 @@
 import asyncio
 import functools
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Optional, TypeVar
+
 from loguru import logger
 
-from tldw_Server_API.app.core.Utils.executor_registry import register_executor
-
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
+from tldw_Server_API.app.core.Utils.executor_registry import register_executor
 
 #######################################################################################################################
 #
@@ -46,7 +46,7 @@ class AsyncDatabaseWrapper:
         self.db = db
         self._executor = DB_THREAD_POOL
 
-    async def add_conversation(self, conversation_data: Dict[str, Any]) -> Optional[str]:
+    async def add_conversation(self, conversation_data: dict[str, Any]) -> Optional[str]:
         """
         Async version of add_conversation.
 
@@ -62,7 +62,7 @@ class AsyncDatabaseWrapper:
             functools.partial(self.db.add_conversation, conversation_data),
         )
 
-    async def get_conversation_by_id(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    async def get_conversation_by_id(self, conversation_id: str) -> Optional[dict[str, Any]]:
         """
         Async version of get_conversation_by_id.
 
@@ -78,7 +78,7 @@ class AsyncDatabaseWrapper:
             functools.partial(self.db.get_conversation_by_id, conversation_id),
         )
 
-    async def add_message(self, message_data: Dict[str, Any]) -> Optional[str]:
+    async def add_message(self, message_data: dict[str, Any]) -> Optional[str]:
         """
         Async version of add_message.
 
@@ -100,7 +100,7 @@ class AsyncDatabaseWrapper:
         limit: Optional[int] = None,
         offset: int = 0,
         page_size: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Async version of get_messages_for_conversation with pagination support.
 
@@ -126,7 +126,7 @@ class AsyncDatabaseWrapper:
             )
 
         # Otherwise, stream pages from the database until exhaustion.
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         current_offset = offset
         loop = asyncio.get_running_loop()
         while True:
@@ -147,7 +147,7 @@ class AsyncDatabaseWrapper:
             await asyncio.sleep(0.005)
         return results
 
-    async def get_character_card_by_id(self, character_id: Any) -> Optional[Dict[str, Any]]:
+    async def get_character_card_by_id(self, character_id: Any) -> Optional[dict[str, Any]]:
         """
         Async version of get_character_card_by_id.
 
@@ -163,7 +163,7 @@ class AsyncDatabaseWrapper:
             functools.partial(self.db.get_character_card_by_id, character_id),
         )
 
-    async def get_character_card_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    async def get_character_card_by_name(self, name: str) -> Optional[dict[str, Any]]:
         """
         Async version of get_character_card_by_name.
 
@@ -179,7 +179,7 @@ class AsyncDatabaseWrapper:
             functools.partial(self.db.get_character_card_by_name, name),
         )
 
-    async def batch_add_messages(self, messages: List[Dict[str, Any]]) -> List[Optional[str]]:
+    async def batch_add_messages(self, messages: list[dict[str, Any]]) -> list[Optional[str]]:
         """
         Add multiple messages in a single batch operation.
 
@@ -247,7 +247,7 @@ async def paginated_history_retrieval(
     conversation_id: str,
     page_size: int = 50,
     max_messages: Optional[int] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Retrieve conversation history in pages to manage memory.
 

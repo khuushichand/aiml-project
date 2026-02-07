@@ -12,20 +12,29 @@ Enable via env:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-from typing import Optional
 
 from loguru import logger
 
-from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+
+_KANBAN_PURGE_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _enumerate_user_ids() -> list[int]:
     """Get list of user IDs from user database directories."""
     try:
         base = DatabasePaths.get_user_db_base_dir()
-    except Exception as exc:
+    except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"kanban_purge: failed to resolve user db base dir: {exc}")
         return []
 
@@ -40,7 +49,7 @@ def _enumerate_user_ids() -> list[int]:
     if not uids:
         try:
             uids = [DatabasePaths.get_single_user_id()]
-        except Exception:
+        except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS:
             uids = []
 
     return sorted(set(uids))
@@ -53,13 +62,11 @@ def _purge_for_user(user_id: int, grace_days: int) -> dict:
     try:
         return db.purge_deleted_items(days_old=grace_days)
     finally:
-        try:
+        with contextlib.suppress(_KANBAN_PURGE_NONCRITICAL_EXCEPTIONS):
             db.close()
-        except Exception:
-            pass
 
 
-async def start_kanban_purge_scheduler() -> Optional[asyncio.Task]:
+async def start_kanban_purge_scheduler() -> asyncio.Task | None:
     enabled = os.getenv("KANBAN_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return None
@@ -86,7 +93,7 @@ async def start_kanban_purge_scheduler() -> Optional[asyncio.Task]:
                         "Kanban purge removed boards={boards} lists={lists} cards={cards}",
                         **totals,
                     )
-            except Exception as exc:
+            except _KANBAN_PURGE_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"kanban_purge: purge run failed: {exc}")
             await asyncio.sleep(interval)
 

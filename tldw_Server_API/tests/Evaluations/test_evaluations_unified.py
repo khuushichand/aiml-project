@@ -11,15 +11,12 @@ Tests include:
 """
 
 import pytest
-import asyncio
-import json
 import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from fastapi import status
 from httpx import AsyncClient
-import time
 
 # Import centralized test configuration
 import sys
@@ -32,14 +29,6 @@ test_config.reset_settings()
 
 # Import the FastAPI app
 from tldw_Server_API.app.main import app
-from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
-    CreateEvaluationRequest, CreateRunRequest, CreateDatasetRequest,
-    EvaluationSpec, EvaluationResponse, RunResponse,
-    GEvalRequest, GEvalResponse,
-    RAGEvaluationRequest, RAGEvaluationResponse,
-    ResponseQualityRequest, ResponseQualityResponse,
-    WebhookRegistrationRequest, WebhookEventType
-)
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     UnifiedEvaluationService, get_unified_evaluation_service
 )
@@ -357,7 +346,7 @@ class TestTldwSpecificEndpoints:
     ):
 
         """Missing provider credentials should return 503 with error code."""
-        from tldw_Server_API.app.api.v1.endpoints import evaluations_unified as eval_ep
+        from tldw_Server_API.app.api.v1.endpoints.evaluations import evaluations_unified as eval_ep
         from tldw_Server_API.app.core.AuthNZ.byok_runtime import ResolvedByokCredentials
 
         async def _missing(provider, *args, **kwargs):
@@ -467,6 +456,8 @@ class TestTldwSpecificEndpoints:
             assert "metrics" in data
             assert "overall_score" in data
             assert "retrieval_quality" in data
+            assert data["metrics"]["relevance"]["score"] == pytest.approx(0.9)
+            assert data["metrics"]["faithfulness"]["score"] == pytest.approx(0.85)
 
     async def test_response_quality_endpoint(self, client, auth_headers):
         """Test response quality evaluation endpoint"""

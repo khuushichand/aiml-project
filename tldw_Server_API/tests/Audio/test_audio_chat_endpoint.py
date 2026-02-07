@@ -7,7 +7,7 @@ import soundfile as sf
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tldw_Server_API.app.api.v1.endpoints.audio import router as audio_router
+from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
 
 # Non-sensitive test API key used only in tests.
 TEST_API_KEY = "test-api-key-1234567890"

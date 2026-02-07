@@ -48,19 +48,6 @@ class _StubEmailService:
         return True
 
 
-class _StubRateLimiter:
-    def __init__(self, *, allow_ip: bool = True, allow_email: bool = True) -> None:
-        self.allow_ip = allow_ip
-        self.allow_email = allow_email
-
-    async def check_rate_limit(self, identifier: str, endpoint: str, limit: int, window_minutes: int):
-        if identifier.startswith("ip:"):
-            return self.allow_ip, {}
-        if identifier.startswith("email:"):
-            return self.allow_email, {}
-        return True, {}
-
-
 async def _fetch_user_and_memberships(db_name: str, email: str):
     conn = await asyncpg.connect(
         host=TEST_DB_HOST,
@@ -130,17 +117,16 @@ async def test_magic_link_request_respects_rate_limit(isolated_test_environment,
         lambda: SimpleNamespace(validate_email=lambda _e: (True, None)),
     )
 
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
-    from tldw_Server_API.app.main import app
+    # First RG check (ip scope) should pass, second (email scope) should deny.
+    calls = {"count": 0}
+    async def _rg_stub(*args, **kwargs):
+        calls["count"] += 1
+        return (calls["count"] == 1), 1
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _rg_stub)
 
-    stub_limiter = _StubRateLimiter(allow_ip=True, allow_email=False)
-    app.dependency_overrides[get_rate_limiter_dep] = lambda: stub_limiter
-    try:
-        resp = client.post("/api/v1/auth/magic-link/request", json={"email": email})
-        assert resp.status_code == 200
-        assert len(stub_email.sent) == 0
-    finally:
-        app.dependency_overrides.pop(get_rate_limiter_dep, None)
+    resp = client.post("/api/v1/auth/magic-link/request", json={"email": email})
+    assert resp.status_code == 200
+    assert len(stub_email.sent) == 0
 
 
 @pytest.mark.asyncio

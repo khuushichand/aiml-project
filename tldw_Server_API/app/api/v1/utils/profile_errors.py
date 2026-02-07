@@ -4,14 +4,13 @@ Helpers for mapping profile update skip reasons to structured error responses.
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 from fastapi import status
 
 from tldw_Server_API.app.api.v1.schemas.user_profile_schemas import (
     UserProfileErrorDetail,
 )
-
 
 _FORBIDDEN_MESSAGES = {
     "forbidden",
@@ -32,8 +31,8 @@ _NOT_FOUND_MESSAGES = {
 
 
 def classify_profile_update_skips(
-    skipped: Iterable[Dict[str, str]],
-) -> Optional[Tuple[int, str, str, List[UserProfileErrorDetail]]]:
+    skipped: Iterable[dict[str, str]],
+) -> tuple[int, str, str, list[UserProfileErrorDetail]] | None:
     """Map per-key skip reasons into a single structured error response."""
     skipped_list = list(skipped)
     if not skipped_list:

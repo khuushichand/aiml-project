@@ -4,7 +4,7 @@ Personalization dependencies: per-user DB access and event logger.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from fastapi import Depends, Request
 from loguru import logger
@@ -42,10 +42,10 @@ class UsageEventLogger:
     def log_event(
         self,
         event_type: str,
-        resource_id: Optional[str] = None,
-        tags: Optional[list[str]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+        resource_id: str | None = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
         try:
             evt = UsageEvent(user_id=self.user_id, type=event_type, resource_id=resource_id, tags=tags, metadata=metadata)
             return self.db.insert_usage_event(evt)

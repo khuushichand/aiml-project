@@ -537,9 +537,15 @@ Prepare messages for use with the main Chat API while enforcing a per-minute com
   "include_character_context": true,
   "limit": 100,
   "offset": 0,
-  "append_user_message": "Tell me more about your background."
+  "append_user_message": "Tell me more about your background.",
+  "prompt_preset": "st_default"
 }
 ```
+
+Selected request fields:
+- `prompt_preset` (optional string): Single-turn override for prompt preset selection.
+- `directed_character_id` (optional int): Direct next reply to a selected participant in multi-character chats.
+- `continue_as_user` / `impersonate_user` / `force_narrate` (optional bools): Single-response steering controls.
 
 **Response:** `200 OK`
 ```json
@@ -571,6 +577,7 @@ Call the LLM directly and optionally persist both the appended user message and 
 {
   "include_character_context": true,
   "append_user_message": "Tell me more about your background.",
+  "prompt_preset": "st_default",
   "save_to_db": true,
   "provider": "local-llm",
   "model": "local-test",
@@ -583,6 +590,7 @@ Notes:
 - `provider` and `model` are optional; when omitted, defaults prefer `local-llm` for offline/dev usage.
 - When `save_to_db` is omitted, server default is used (see Chat API `DEFAULT_SAVE_TO_DB`).
 - Set `"stream": true` in the request body to stream the result via `text/event-stream` (SSE). In offline/dev mode without a running provider, streaming is disabled and a non-streaming response is returned.
+- `prompt_preset` applies only for this request and takes precedence over chat/character preset scope defaults.
 
 #### Streaming Behavior
 
@@ -606,6 +614,69 @@ When `stream=true` and the provider supports streaming, the server emits Server-
   "assistant_content": "Here is more about my background..."
 }
 ```
+
+### Prompt Assembly Preview
+
+Preview the assembled supplemental prompt sections (preset, author note, steering, greeting, lorebook), including token estimates, section budgets, truncation flags, and conflict warnings.
+
+**Endpoint:** `POST /api/v1/chats/{chat_id}/prompt-preview`
+
+**Request Body (selected):**
+```json
+{
+  "include_character_context": true,
+  "prompt_preset": "st_default",
+  "directed_character_id": 2,
+  "continue_as_user": false,
+  "impersonate_user": false,
+  "force_narrate": false
+}
+```
+
+**Response (selected):**
+```json
+{
+  "chat_id": "...",
+  "sections": [
+    {
+      "name": "preset",
+      "content": "You are ...",
+      "tokens_estimated": 140,
+      "tokens_effective": 140,
+      "budget": 180,
+      "truncated": false
+    }
+  ],
+  "total_supplemental_tokens": 220,
+  "total_supplemental_effective_tokens": 220,
+  "supplemental_budget": 1200,
+  "budget_status": "ok",
+  "warnings": [],
+  "conflicts": []
+}
+```
+
+### Chat Settings Metadata (Selected Keys)
+
+`GET/PUT /api/v1/chats/{chat_id}/settings` stores merged per-chat settings. Selected fields:
+
+- `presetScope`: `"chat"` or `"character"`.
+- `chatPresetOverrideId`: chat-level preset ID used when `presetScope="chat"`.
+- `chatGenerationOverride`: canonical chat generation override object.
+- `generationOverrides`: legacy alias accepted for backward compatibility.
+
+`chatGenerationOverride` / `generationOverrides` object:
+- `enabled` (optional bool)
+- `temperature` (`0.0-2.0`)
+- `top_p` (`0.0-1.0`)
+- `repetition_penalty` (`0.0-3.0`)
+- `stop` (array of strings)
+- `updatedAt` (ISO timestamp)
+
+Compatibility and precedence:
+- Server evaluates `chatGenerationOverride` first.
+- If canonical override is absent, server reads `generationOverrides` as fallback.
+- If both are present, canonical `chatGenerationOverride` wins.
 
 ---
 

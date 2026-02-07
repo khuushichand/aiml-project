@@ -9,16 +9,43 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 
 import click
 from loguru import logger
 
-from tldw_Server_API.cli.utils.output import (
-    print_error, print_success, print_info, print_evaluation_results,
-    print_json, print_table, print_progress_bar, format_timestamp
-)
 from tldw_Server_API.app.core.Chat.chat_orchestrator import chat_api_call
+from tldw_Server_API.cli.utils.output import (
+    format_timestamp,
+    print_error,
+    print_evaluation_results,
+    print_info,
+    print_json,
+    print_progress_bar,
+    print_success,
+    print_table,
+)
+
+_EVAL_CLI_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    AssertionError,
+    AttributeError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    json.JSONDecodeError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    click.ClickException,
+)
 
 
 @click.group()
@@ -78,7 +105,7 @@ def geval(ctx, text, summary, provider, model, api_key, save, output_format):
 
         print_success("G-Eval assessment completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("G-Eval assessment failed")
         print_error(f"G-Eval assessment failed: {e}")
         sys.exit(1)
@@ -137,7 +164,7 @@ def rag_eval(ctx, query, context, response, provider, model, api_key, save, outp
 
         print_success("RAG evaluation completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("RAG evaluation failed")
         print_error(f"RAG evaluation failed: {e}")
         sys.exit(1)
@@ -194,7 +221,7 @@ def quality_eval(ctx, text, response, provider, model, api_key, criteria, save, 
 
         print_success("Quality evaluation completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Quality evaluation failed")
         print_error(f"Quality evaluation failed: {e}")
         sys.exit(1)
@@ -255,7 +282,7 @@ def batch_eval(ctx, input_file, output, provider, model, api_key, parallel, outp
 
         print_success(f"Batch evaluation completed: {len(results)} evaluations processed")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Batch evaluation failed")
         print_error(f"Batch evaluation failed: {e}")
         sys.exit(1)
@@ -310,7 +337,7 @@ def custom_eval(ctx, metric_name, text, prompt, provider, model, api_key, save, 
 
         print_success(f"Custom evaluation '{metric_name}' completed successfully")
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception("Custom evaluation failed")
         print_error(f"Custom evaluation failed: {e}")
         sys.exit(1)
@@ -343,8 +370,8 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
             try:
                 import json as _json
                 mapping_dict = _json.loads(mapping)
-            except Exception as e:
-                raise click.ClickException(f"Invalid mapping JSON: {e}")
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+                raise click.ClickException(f"Invalid mapping JSON: {e}") from e
 
         allowed = [str(l).strip() for l in labels]
         allowed_up = [l.upper() for l in allowed]
@@ -392,7 +419,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
                 obj = _json.loads(raw)
                 if isinstance(obj, dict):
                     parsed = obj.get('label')
-            except Exception:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS:
                 parsed = None
         if parsed is None:
             up = str(raw).strip().upper()
@@ -438,7 +465,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
 
         print_success('Label-choice evaluation completed')
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('Label-choice evaluation failed')
         print_error(f"Label-choice evaluation failed: {e}")
         sys.exit(1)
@@ -471,8 +498,8 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
             try:
                 import json as _json
                 mapping_dict = _json.loads(mapping)
-            except Exception as e:
-                raise click.ClickException(f"Invalid mapping JSON: {e}")
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+                raise click.ClickException(f"Invalid mapping JSON: {e}") from e
 
         allowed = [str(l).strip() for l in labels] if labels else ["SUPPORTED", "REFUTED", "NEI"]
         allowed_up = [l.upper() for l in allowed]
@@ -519,7 +546,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
                 obj = _json.loads(raw)
                 if isinstance(obj, dict):
                     parsed = obj.get('label')
-            except Exception:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS:
                 parsed = None
         if parsed is None:
             up = str(raw).strip().upper()
@@ -578,7 +605,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
 
         print_success('NLI fact-check evaluation completed')
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('NLI fact-check evaluation failed')
         print_error(f"NLI fact-check evaluation failed: {e}")
         sys.exit(1)
@@ -593,14 +620,14 @@ def _load_text_content(input_str: str) -> str:
 
         try:
             return file_path.read_text(encoding='utf-8')
-        except Exception as e:
-            raise click.ClickException(f"Failed to read file {file_path}: {e}")
+        except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+            raise click.ClickException(f"Failed to read file {file_path}: {e}") from e
     else:
         return input_str
 
 
 def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
-                         api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                         api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run G-Eval assessment."""
     try:
         from tldw_Server_API.app.core.Evaluations.ms_g_eval import run_geval
@@ -627,13 +654,13 @@ def _run_geval_assessment(text: str, summary: str, provider: str, model: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"G-Eval execution failed: {e}")
         raise
 
 
 def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
-                       model: str, api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                       model: str, api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run RAG evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
@@ -661,14 +688,14 @@ def _run_rag_evaluation(query: str, context: str, response: str, provider: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"RAG evaluation execution failed: {e}")
         raise
 
 
 def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
-                           api_key: str, criteria: Optional[List[str]], save: bool,
-                           config: Dict[str, Any]) -> Dict[str, Any]:
+                           api_key: str, criteria: Optional[list[str]], save: bool,
+                           config: dict[str, Any]) -> dict[str, Any]:
     """Run response quality evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
@@ -696,13 +723,13 @@ def _run_quality_evaluation(text: str, response: str, provider: str, model: str,
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Quality evaluation execution failed: {e}")
         raise
 
 
 def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: str,
-                          model: str, api_key: str, save: bool, config: Dict[str, Any]) -> Dict[str, Any]:
+                          model: str, api_key: str, save: bool, config: dict[str, Any]) -> dict[str, Any]:
     """Run custom metric evaluation."""
     try:
         from tldw_Server_API.app.core.Evaluations.evaluation_manager import EvaluationManager
@@ -733,12 +760,12 @@ def _run_custom_evaluation(metric_name: str, text: str, prompt: str, provider: s
             'details': result
         }
 
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Custom evaluation execution failed: {e}")
         raise
 
 
-def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
+def _load_batch_input(input_file: Path) -> list[dict[str, Any]]:
     """Load batch input from file."""
     try:
         content = input_file.read_text(encoding='utf-8')
@@ -760,17 +787,17 @@ def _load_batch_input(input_file: Path) -> List[Dict[str, Any]]:
                 try:
                     batch_data.append(json.loads(line))
                 except json.JSONDecodeError as e:
-                    raise click.ClickException(f"Invalid JSON on line {line_num}: {e}")
+                    raise click.ClickException(f"Invalid JSON on line {line_num}: {e}") from e
 
         return batch_data
 
-    except Exception as e:
-        raise click.ClickException(f"Failed to load batch input file: {e}")
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+        raise click.ClickException(f"Failed to load batch input file: {e}") from e
 
 
-def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: str,
+def _run_batch_evaluation(batch_data: list[dict[str, Any]], default_provider: str,
                          default_model: str, default_api_key: str, parallel: int,
-                         config: Dict[str, Any], show_progress: bool) -> List[Dict[str, Any]]:
+                         config: dict[str, Any], show_progress: bool) -> list[dict[str, Any]]:
     """Run batch evaluation with progress tracking."""
     results = []
 
@@ -782,7 +809,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
                 try:
                     result = _run_single_evaluation(eval_spec, default_provider, default_model, default_api_key, config)
                     results.append(result)
-                except Exception as e:
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                     logger.error(f"Evaluation {i+1} failed: {e}")
                     results.append({
                         'evaluation_index': i + 1,
@@ -797,7 +824,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
             try:
                 result = _run_single_evaluation(eval_spec, default_provider, default_model, default_api_key, config)
                 results.append(result)
-            except Exception as e:
+            except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Evaluation {i+1} failed: {e}")
                 results.append({
                     'evaluation_index': i + 1,
@@ -809,7 +836,7 @@ def _run_batch_evaluation(batch_data: List[Dict[str, Any]], default_provider: st
     return results
 
 
-def _load_items_file(path: Path) -> List[Dict[str, Any]]:
+def _load_items_file(path: Path) -> list[dict[str, Any]]:
     """Load items for OCR evaluation from JSON or JSONL file."""
     try:
         content = path.read_text(encoding='utf-8')
@@ -823,12 +850,12 @@ def _load_items_file(path: Path) -> List[Dict[str, Any]]:
                     continue
                 items.append(json.loads(line))
             return items
-    except Exception as e:
-        raise click.ClickException(f"Failed to load items file {path}: {e}")
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+        raise click.ClickException(f"Failed to load items file {path}: {e}") from e
 
 
-def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
-                          default_model: str, default_api_key: str, config: Dict[str, Any]) -> Dict[str, Any]:
+def _run_single_evaluation(eval_spec: dict[str, Any], default_provider: str,
+                          default_model: str, default_api_key: str, config: dict[str, Any]) -> dict[str, Any]:
     """Run a single evaluation from specification."""
     eval_type = eval_spec.get('type')
     provider = eval_spec.get('provider', default_provider)
@@ -860,7 +887,7 @@ def _run_single_evaluation(eval_spec: Dict[str, Any], default_provider: str,
         raise ValueError(f"Unknown evaluation type: {eval_type}")
 
 
-def _save_batch_results(results: List[Dict[str, Any]], output_file: Path):
+def _save_batch_results(results: list[dict[str, Any]], output_file: Path):
     """Save batch results to file."""
     try:
         output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -868,11 +895,11 @@ def _save_batch_results(results: List[Dict[str, Any]], output_file: Path):
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str)
 
-    except Exception as e:
-        raise click.ClickException(f"Failed to save results to {output_file}: {e}")
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+        raise click.ClickException(f"Failed to save results to {output_file}: {e}") from e
 
 
-def _display_batch_summary(results: List[Dict[str, Any]]):
+def _display_batch_summary(results: list[dict[str, Any]]):
     """Display batch evaluation summary."""
     successful = sum(1 for r in results if r.get('status') != 'failed')
     failed = len(results) - successful
@@ -890,7 +917,7 @@ def _display_batch_summary(results: List[Dict[str, Any]]):
         print_info(f"Check logs for details on {failed} failed evaluation(s)")
 
 
-def _get_api_key_from_config(config: Dict[str, Any], provider: str) -> Optional[str]:
+def _get_api_key_from_config(config: dict[str, Any], provider: str) -> Optional[str]:
     """Extract API key for provider from config."""
     # This is a simplified version - in reality, you'd access the config properly
     # Based on how the main config system works
@@ -905,7 +932,7 @@ def _get_api_key_from_config(config: Dict[str, Any], provider: str) -> Optional[
     key_name = provider_key_map.get(provider.lower())
     if key_name:
         # Try to get from config
-        for section, values in config.items():
+        for _section, values in config.items():
             if isinstance(values, dict) and key_name in values:
                 return values[key_name]
 
@@ -944,7 +971,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
     try:
         cli_context.load_config()
 
-        items: List[Dict[str, Any]] = []
+        items: list[dict[str, Any]] = []
         if items_file:
             items = _load_items_file(items_file)
         elif pdfs:
@@ -954,16 +981,16 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
                     gts = json.loads(Path(ground_truths_file).read_text(encoding='utf-8'))
                     if not isinstance(gts, list):
                         raise click.ClickException('ground-truths-file must be a JSON array of strings')
-                except Exception as e:
-                    raise click.ClickException(f'Failed to read ground-truths-file: {e}')
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+                    raise click.ClickException(f'Failed to read ground-truths-file: {e}') from e
             gt_pages_all = None
             if ground_truths_pages_file:
                 try:
                     gt_pages_all = json.loads(Path(ground_truths_pages_file).read_text(encoding='utf-8'))
                     if not isinstance(gt_pages_all, list):
                         gt_pages_all = None
-                except Exception as e:
-                    raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}')
+                except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
+                    raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}') from e
 
             for idx, p in enumerate(pdfs):
                 b = Path(p).read_bytes()
@@ -976,11 +1003,16 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
             raise click.ClickException('Provide either --items-file or --pdf inputs')
 
         thresholds = {}
-        if max_cer is not None: thresholds['max_cer'] = max_cer
-        if max_wer is not None: thresholds['max_wer'] = max_wer
-        if min_coverage is not None: thresholds['min_coverage'] = min_coverage
-        if min_page_coverage is not None: thresholds['min_page_coverage'] = min_page_coverage
-        if not thresholds: thresholds = None
+        if max_cer is not None:
+            thresholds['max_cer'] = max_cer
+        if max_wer is not None:
+            thresholds['max_wer'] = max_wer
+        if min_coverage is not None:
+            thresholds['min_coverage'] = min_coverage
+        if min_page_coverage is not None:
+            thresholds['min_page_coverage'] = min_page_coverage
+        if not thresholds:
+            thresholds = None
 
         ocr_options = {
             'enable_ocr': True,
@@ -1021,7 +1053,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
     except click.ClickException as e:
         print_error(str(e))
         sys.exit(2)
-    except Exception as e:
+    except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
         logger.exception('OCR evaluation failed')
         print_error(f'OCR evaluation failed: {e}')
         sys.exit(1)

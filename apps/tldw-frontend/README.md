@@ -15,6 +15,7 @@ Key variables:
 - `NEXT_PUBLIC_API_VERSION`: API version (default: `v1`)
 - `NEXT_PUBLIC_X_API_KEY`: Optional. Single-user mode API key (sent as `X-API-KEY`).
 - `NEXT_PUBLIC_API_BEARER`: Optional. Bearer token for chat module when server sets `API_BEARER`.
+- `NEXT_PUBLIC_RUNS_CSV_SERVER_THRESHOLD`: Optional. Runs row-count threshold for preferring server-side CSV export (default: `2000`).
 
 2) Run the development server (use port 8080 to match server CORS defaults):
 

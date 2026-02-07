@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import List, Optional, Literal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class Item(BaseModel):
     id: int
-    content_item_id: Optional[int] = None
-    media_id: Optional[int] = None
+    content_item_id: int | None = None
+    media_id: int | None = None
     title: str
-    url: Optional[str] = None
-    domain: Optional[str] = None
-    summary: Optional[str] = None
-    published_at: Optional[str] = None
-    tags: List[str] = []
-    type: Optional[str] = None
+    url: str | None = None
+    domain: str | None = None
+    summary: str | None = None
+    published_at: str | None = None
+    tags: list[str] = []
+    type: str | None = None
 
 
 class ItemsListResponse(BaseModel):
-    items: List[Item]
+    items: list[Item]
     total: int
     page: int
     size: int
@@ -37,22 +36,22 @@ BulkAction = Literal[
 
 
 class ItemsBulkRequest(BaseModel):
-    item_ids: List[int]
+    item_ids: list[int]
     action: BulkAction
-    status: Optional[str] = None
-    favorite: Optional[bool] = None
-    tags: Optional[List[str]] = None
+    status: str | None = None
+    favorite: bool | None = None
+    tags: list[str] | None = None
     hard: bool = False
 
 
 class ItemsBulkResult(BaseModel):
     item_id: int
     success: bool
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ItemsBulkResponse(BaseModel):
     total: int
     succeeded: int
     failed: int
-    results: List[ItemsBulkResult]
+    results: list[ItemsBulkResult]

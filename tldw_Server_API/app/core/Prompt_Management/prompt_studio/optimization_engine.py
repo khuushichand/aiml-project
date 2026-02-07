@@ -3,20 +3,21 @@
 
 import json
 import random
-import asyncio
-from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from enum import Enum
+from typing import Any, Optional
+
 import numpy as np
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 from tldw_Server_API.app.core.Logging.log_context import log_context
 
-from .prompt_executor import PromptExecutor
-from .test_runner import TestRunner
 from .evaluation_metrics import EvaluationMetrics
 from .mcts_optimizer import MCTSOptimizer
+from .prompt_executor import PromptExecutor
+from .test_runner import TestRunner
 from .types_common import MetricType
-from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
 
 ########################################################################################################################
 # Metric Types
@@ -60,12 +61,12 @@ class MIPROOptimizer:
         # Optional context populated by callers (e.g., JobProcessor)
         self.optimization_id: Optional[int] = None
         # Model config for internal LLM calls (set during optimize())
-        self._internal_model_config: Dict[str, Any] = {}
+        self._internal_model_config: dict[str, Any] = {}
 
-    async def optimize(self, initial_prompt_id: int, test_case_ids: List[int],
-                       model_config: Dict[str, Any], max_iterations: int = 20,
+    async def optimize(self, initial_prompt_id: int, test_case_ids: list[int],
+                       model_config: dict[str, Any], max_iterations: int = 20,
                        target_metric: MetricType = MetricType.ACCURACY,
-                       min_improvement: float = 0.01) -> Dict[str, Any]:
+                       min_improvement: float = 0.01) -> dict[str, Any]:
         """
         Optimize a prompt using MIPRO strategy.
 
@@ -168,7 +169,7 @@ class MIPROOptimizer:
 
     async def _generate_instruction_candidates(self, prompt_id: int,
                                               current_score: float,
-                                              iteration: int) -> List[str]:
+                                              iteration: int) -> list[str]:
         """
         Generate instruction candidates for MIPRO.
 
@@ -312,8 +313,8 @@ Follow these examples for consistency."""
 2. Be precise and consistent
 3. Validate your output before responding"""
 
-    async def _evaluate_prompt(self, prompt_id: int, test_case_ids: List[int],
-                              model_config: Dict[str, Any],
+    async def _evaluate_prompt(self, prompt_id: int, test_case_ids: list[int],
+                              model_config: dict[str, Any],
                               target_metric: MetricType) -> float:
         """Evaluate a prompt and return target metric score."""
         scores = []
@@ -363,7 +364,7 @@ Follow these examples for consistency."""
 
         return new_prompt_id
 
-    async def _check_convergence(self, history: List[Dict[str, Any]]) -> bool:
+    async def _check_convergence(self, history: list[dict[str, Any]]) -> bool:
         """Check if optimization has converged."""
         if len(history) < 5:
             return False
@@ -374,7 +375,7 @@ Follow these examples for consistency."""
 
         return std_dev < 0.001
 
-    def _get_prompt(self, prompt_id: int) -> Dict[str, Any]:
+    def _get_prompt(self, prompt_id: int) -> dict[str, Any]:
         """Get prompt from database."""
         with self.db.transaction() as conn:
             cursor = conn.cursor()
@@ -402,10 +403,10 @@ class BootstrapOptimizer:
         self.executor = PromptExecutor(db)
         self.optimization_id: Optional[int] = None
 
-    async def optimize(self, prompt_id: int, test_case_ids: List[int],
-                       model_config: Dict[str, Any],
+    async def optimize(self, prompt_id: int, test_case_ids: list[int],
+                       model_config: dict[str, Any],
                        num_examples: int = 3,
-                       selection_strategy: str = "diverse") -> Dict[str, Any]:
+                       selection_strategy: str = "diverse") -> dict[str, Any]:
         """
         Optimize prompt by bootstrapping few-shot examples.
 
@@ -469,9 +470,9 @@ class BootstrapOptimizer:
             "strategy": "Bootstrap"
         }
 
-    def _select_examples(self, test_runs: List[Dict[str, Any]],
+    def _select_examples(self, test_runs: list[dict[str, Any]],
                         num_examples: int,
-                        strategy: str) -> List[Dict[str, Any]]:
+                        strategy: str) -> list[dict[str, Any]]:
         """Select examples based on strategy."""
         # Filter successful runs with good scores
         good_runs = [
@@ -519,8 +520,8 @@ class BootstrapOptimizer:
             random.shuffle(good_runs)
             return good_runs[:num_examples]
 
-    def _calculate_diversity(self, candidate: Dict[str, Any],
-                           selected: List[Dict[str, Any]]) -> float:
+    def _calculate_diversity(self, candidate: dict[str, Any],
+                           selected: list[dict[str, Any]]) -> float:
         """Calculate diversity score for candidate."""
         # Simple diversity based on input/output differences
         diversity_scores = []
@@ -543,7 +544,7 @@ class BootstrapOptimizer:
         return min(diversity_scores) if diversity_scores else float('inf')
 
     async def _create_prompt_with_examples(self, base_prompt_id: int,
-                                          examples: List[Dict[str, Any]]) -> int:
+                                          examples: list[dict[str, Any]]) -> int:
         """Create new prompt with few-shot examples."""
         with self.db.transaction() as conn:
             cursor = conn.cursor()
@@ -625,7 +626,7 @@ class OptimizationEngine:
                 return default
         return default
 
-    async def optimize(self, optimization_id: int) -> Dict[str, Any]:
+    async def optimize(self, optimization_id: int) -> dict[str, Any]:
         """
         Run optimization based on configuration.
 
@@ -647,7 +648,7 @@ class OptimizationEngine:
         )
         # Support both legacy "strategy" and new "optimizer_type" fields
         strategy = (
-            (config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro")
+            config.get("strategy") or optimization.get("optimizer_type") or config.get("optimizer_type") or "mipro"
         )
         strategy = str(strategy).lower()
 
@@ -709,7 +710,7 @@ class OptimizationEngine:
             self._update_optimization_status(optimization_id, "failed", str(e))
             raise
 
-    def _get_optimization(self, optimization_id: int) -> Optional[Dict[str, Any]]:
+    def _get_optimization(self, optimization_id: int) -> Optional[dict[str, Any]]:
         """Get optimization from database."""
         return self.db.get_optimization(optimization_id)
 
@@ -726,10 +727,10 @@ class OptimizationEngine:
             mark_completed=mark_completed,
         )
 
-    def _update_optimization_results(self, optimization_id: int, results: Dict[str, Any]):
+    def _update_optimization_results(self, optimization_id: int, results: dict[str, Any]):
         """Update optimization with results."""
         # Merge additional final metrics if provided by strategy (e.g., trace, tokens, branching)
-        final_metrics: Dict[str, Any] = {"score": results.get("final_score", 0)}
+        final_metrics: dict[str, Any] = {"score": results.get("final_score", 0)}
         if isinstance(results.get("final_metrics"), dict):
             try:
                 # Do not overwrite score if present in extra metrics without intent

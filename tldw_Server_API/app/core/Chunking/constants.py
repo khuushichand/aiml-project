@@ -5,12 +5,12 @@ Shared constants and helpers for chunking frontmatter handling.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any
 
 FRONTMATTER_SENTINEL_KEY = "__tldw_frontmatter__"
 
 
-def ensure_frontmatter_metadata(metadata: Dict[str, Any] | None) -> Dict[str, Any]:
+def ensure_frontmatter_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Return a metadata dict with the sentinel flag applied.
 
     Args:
@@ -24,7 +24,7 @@ def ensure_frontmatter_metadata(metadata: Dict[str, Any] | None) -> Dict[str, An
     return meta
 
 
-def prepend_frontmatter(text: str, metadata: Dict[str, Any] | None) -> str:
+def prepend_frontmatter(text: str, metadata: dict[str, Any] | None) -> str:
     """Prepend JSON frontmatter (with sentinel) to text if metadata is provided.
 
     Existing frontmatter containing the sentinel is respected to avoid duplication.

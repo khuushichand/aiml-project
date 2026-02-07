@@ -8,30 +8,31 @@ This module includes adapters for application-specific integrations:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
-from tldw_Server_API.app.core.Workflows.adapters._registry import registry
-from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
-from tldw_Server_API.app.core.Workflows.adapters.integration._config import (
-    KanbanConfig,
-    ChatbooksConfig,
-    CharacterChatConfig,
-)
-from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
+    ConflictError,
+    InputError,
     KanbanDB,
     KanbanDBError,
-    InputError,
-    ConflictError,
     NotFoundError,
 )
-from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
+from tldw_Server_API.app.core.Workflows.adapters._registry import registry
+from tldw_Server_API.app.core.Workflows.adapters.integration._config import (
+    CharacterChatConfig,
+    ChatbooksConfig,
+    KanbanConfig,
+)
 
 
 @registry.register(
@@ -42,7 +43,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
     tags=["integration", "kanban"],
     config_model=KanbanConfig,
 )
-async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Read/write Kanban boards, lists, and cards for workflow steps.
 
     Config:
@@ -63,7 +64,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -81,7 +82,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             return value.strip().lower() in {"1", "true", "yes", "on"}
         return bool(value)
 
-    def _coerce_optional_bool(value: Any) -> Optional[bool]:
+    def _coerce_optional_bool(value: Any) -> bool | None:
         if value is None:
             return None
         if isinstance(value, bool):
@@ -94,7 +95,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
                 return False
         return bool(value)
 
-    def _coerce_int(value: Any, field: str, allow_none: bool = False) -> Optional[int]:
+    def _coerce_int(value: Any, field: str, allow_none: bool = False) -> int | None:
         if value is None or value == "":
             if allow_none:
                 return None
@@ -106,25 +107,22 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
         except (TypeError, ValueError) as exc:
             raise AdapterError(f"invalid_{field}") from exc
 
-    def _coerce_int_list(value: Any) -> List[int]:
+    def _coerce_int_list(value: Any) -> list[int]:
         if value is None:
             return []
         raw_value = _render(value) if isinstance(value, str) else value
-        items: List[Any] = []
+        items: list[Any] = []
         if isinstance(raw_value, list):
             items = raw_value
         elif isinstance(raw_value, str):
             try:
                 parsed = json.loads(raw_value)
-            except Exception:
+            except json.JSONDecodeError:
                 parsed = None
-            if isinstance(parsed, list):
-                items = parsed
-            else:
-                items = [s.strip() for s in raw_value.split(",") if s.strip()]
+            items = parsed if isinstance(parsed, list) else [s.strip() for s in raw_value.split(",") if s.strip()]
         else:
             items = [raw_value]
-        out: List[int] = []
+        out: list[int] = []
         for item in items:
             try:
                 out.append(int(item))
@@ -139,7 +137,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             parsed = default
         return max(1, parsed)
 
-    def _coerce_date_str(value: Any) -> Optional[str]:
+    def _coerce_date_str(value: Any) -> str | None:
         if value is None:
             return None
         if isinstance(value, str):
@@ -147,13 +145,13 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             return cleaned or None
         try:
             rendered = str(value)
-        except Exception:
+        except (TypeError, ValueError):
             return None
         return rendered.strip() or None
 
     try:
         user_id_int: Any = int(user_id) if str(user_id).isdigit() else user_id
-    except Exception:
+    except (OverflowError, TypeError, ValueError):
         user_id_int = user_id
 
     db_path = DatabasePaths.get_kanban_db_path(user_id_int)
@@ -497,10 +495,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
             offset = _coerce_int(_render(_f("offset")), "offset", allow_none=True)
             if offset is None:
                 page = _coerce_int(_render(_f("page")), "page", allow_none=True)
-                if page is not None and page > 0:
-                    offset = (page - 1) * limit
-                else:
-                    offset = 0
+                offset = (page - 1) * limit if page is not None and page > 0 else 0
             cards, total = db.get_board_cards_filtered(
                 board_id=board_id,
                 label_ids=label_ids or None,
@@ -525,10 +520,8 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     except (InputError, ConflictError, NotFoundError, KanbanDBError) as exc:
         return {"error": "kanban_error", "error_type": exc.__class__.__name__, "detail": str(exc)}
     finally:
-        try:
+        with contextlib.suppress(AttributeError, RuntimeError, TypeError, ValueError):
             db.close()
-        except Exception:
-            pass
 
 
 @registry.register(
@@ -539,7 +532,7 @@ async def run_kanban_adapter(config: Dict[str, Any], context: Dict[str, Any]) ->
     tags=["integration", "chatbooks"],
     config_model=ChatbooksConfig,
 )
-async def run_chatbooks_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_chatbooks_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Export and import chatbooks within a workflow step.
 
     Config:
@@ -560,7 +553,7 @@ async def run_chatbooks_adapter(config: Dict[str, Any], context: Dict[str, Any])
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -600,7 +593,7 @@ async def run_chatbooks_adapter(config: Dict[str, Any], context: Dict[str, Any])
         try:
             user_id_int = int(user_id)
             notes_db_path = DatabasePaths.get_chachanotes_db_path(user_id_int)
-        except Exception:
+        except (OverflowError, TypeError, ValueError):
             user_id_int = None
             notes_db_path = Path("Databases") / "user_databases" / user_id / "ChaChaNotes.db"
 
@@ -670,7 +663,7 @@ async def run_chatbooks_adapter(config: Dict[str, Any], context: Dict[str, Any])
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"Chatbooks adapter error: {e}")
         return {"error": f"chatbooks_error:{e}"}
 
@@ -683,7 +676,7 @@ async def run_chatbooks_adapter(config: Dict[str, Any], context: Dict[str, Any])
     tags=["integration", "chat"],
     config_model=CharacterChatConfig,
 )
-async def run_character_chat_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_character_chat_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Chat with AI characters using character cards within a workflow step.
 
     Config:
@@ -705,7 +698,7 @@ async def run_character_chat_adapter(config: Dict[str, Any], context: Dict[str, 
     if not user_id:
         try:
             user_id = str(DatabasePaths.get_single_user_id())
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return {"error": "missing_user_id"}
     user_id = str(user_id)
 
@@ -747,18 +740,18 @@ async def run_character_chat_adapter(config: Dict[str, Any], context: Dict[str, 
         return {"error": f"unknown_action:{action}", "simulated": True}
 
     try:
-        from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
         from tldw_Server_API.app.core.Character_Chat.modules.character_chat import (
-            start_new_chat_session,
             load_chat_and_character,
             post_message_to_conversation,
+            start_new_chat_session,
         )
+        from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
         # Initialize user's character DB
         try:
             user_id_int = int(user_id)
             db_path = DatabasePaths.get_chachanotes_db_path(user_id_int)
-        except Exception:
+        except (OverflowError, TypeError, ValueError):
             db_path = Path("Databases") / "user_databases" / user_id / "ChaChaNotes.db"
 
         db = CharactersRAGDB(db_path=db_path, client_id="workflow_engine")
@@ -863,6 +856,6 @@ async def run_character_chat_adapter(config: Dict[str, Any], context: Dict[str, 
 
         return {"error": f"unknown_action:{action}"}
 
-    except Exception as e:
+    except (AttributeError, ImportError, ModuleNotFoundError, OSError, RuntimeError, TypeError, ValueError) as e:
         logger.exception(f"Character chat adapter error: {e}")
         return {"error": f"character_chat_error:{e}"}

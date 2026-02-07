@@ -8,14 +8,13 @@ protecting against ReDoS (Regular Expression Denial of Service) attacks.
 
 import re
 import time as _time_module
-from typing import Tuple
 
 import regex  # Third-party regex engine with timeout support
 from loguru import logger
 
 from tldw_Server_API.app.core.Character_Chat.constants import (
-    MAX_REGEX_LENGTH,
     MAX_REGEX_COMPILE_TIME_MS,
+    MAX_REGEX_LENGTH,
 )
 
 # Maximum allowed time (in milliseconds) for the validation test match
@@ -114,7 +113,7 @@ def get_group_nesting_depth(pattern: str) -> int:
 # Main Validation Functions
 # =============================================================================
 
-def is_dangerous_regex(pattern: str) -> Tuple[bool, str]:
+def is_dangerous_regex(pattern: str) -> tuple[bool, str]:
     """Check if a regex pattern contains potentially dangerous constructs.
 
     Args:
@@ -145,7 +144,7 @@ def is_dangerous_regex(pattern: str) -> Tuple[bool, str]:
     return False, ""
 
 
-def validate_regex_safety(pattern: str) -> Tuple[bool, str]:
+def validate_regex_safety(pattern: str) -> tuple[bool, str]:
     """Validate a regex pattern for potential ReDoS vulnerabilities.
 
     This is the main validation function that checks all safety criteria.
@@ -244,7 +243,7 @@ def _safe_compile_regex_impl(
         # Explicit timeout: pattern is too slow / vulnerable to ReDoS
         raise re.error(
             f"Regex pattern too slow: exceeded {MAX_REGEX_VALIDATE_TIME_MS}ms validation timeout"
-        )
+        ) from None
     except (TypeError, AttributeError, ValueError) as e:
         logger.warning(f"Regex test failed for pattern '{pattern[:50]}...': {e}")
         raise re.error(REGEX_SAFETY_TEST_FAILED_MSG.format(error=e)) from e

@@ -9,21 +9,21 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Union
 from uuid import UUID
 
 from cachetools import LRUCache
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 
-from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
-from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
     check_rate_limit,
     get_auth_principal,
     rbac_rate_limit,
     require_permissions,
 )
+from tldw_Server_API.app.api.v1.API_Deps.Collections_DB_Deps import get_collections_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import (
     DataTableColumn,
     DataTableContentUpdateRequest,
@@ -37,9 +37,9 @@ from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import (
     DataTableJobStatus,
     DataTableRegenerateRequest,
     DataTableRow,
+    DataTablesListResponse,
     DataTableSource,
     DataTableSummary,
-    DataTablesListResponse,
     DataTableUpdateRequest,
 )
 from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
@@ -49,7 +49,6 @@ from tldw_Server_API.app.api.v1.schemas.file_artifacts_schemas import (
     FileCreateRequest,
     FileExportRequest,
 )
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.AuthNZ.permissions import (
     MEDIA_CREATE,
     MEDIA_DELETE,
@@ -57,8 +56,9 @@ from tldw_Server_API.app.core.AuthNZ.permissions import (
     MEDIA_UPDATE,
 )
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase, InputError
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import InputError, MediaDatabase
 from tldw_Server_API.app.core.exceptions import (
     FileArtifactsError,
     FileArtifactsValidationError,
@@ -73,12 +73,17 @@ from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent
 from tldw_Server_API.app.core.Utils.Utils import sanitize_filename
 
-
 router = APIRouter(prefix="/data-tables", tags=["data-tables"])
 
 MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
+
+
+def _data_tables_jobs_queue() -> str:
+    """Return the configured jobs queue for data tables workers."""
+    return (os.getenv("DATA_TABLES_JOBS_QUEUE") or "default").strip() or "default"
+
 
 def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
     """Translate file artifact errors into HTTP exceptions with status codes."""
@@ -91,10 +96,7 @@ def get_job_manager() -> JobManager:
     """Return a cached JobManager instance keyed by JOBS_DB_URL or JOBS_DB_PATH."""
     db_url = (os.getenv("JOBS_DB_URL") or "").strip()
     db_path = (os.getenv("JOBS_DB_PATH") or "").strip()
-    if db_url:
-        cache_key = f"url:{db_url}"
-    else:
-        cache_key = f"path:{db_path or 'default'}"
+    cache_key = f"url:{db_url}" if db_url else f"path:{db_path or 'default'}"
     with _job_manager_lock:
         cached = _job_manager_cache.get(cache_key)
         if cached is not None:
@@ -112,7 +114,7 @@ def get_job_manager() -> JobManager:
         return job_manager
 
 
-def _parse_json_value(raw: Optional[str]) -> Any:
+def _parse_json_value(raw: str | None) -> Any:
     """Parse a JSON string when possible, otherwise return the original value."""
     if raw is None:
         return None
@@ -126,7 +128,7 @@ def _parse_json_value(raw: Optional[str]) -> Any:
         return raw
 
 
-def _model_dump(obj: Any) -> Dict[str, Any]:
+def _model_dump(obj: Any) -> dict[str, Any]:
     """Return a dict representation of a Pydantic model (v1/v2 compatible)."""
     dump = getattr(obj, "model_dump", None)
     if callable(dump):
@@ -137,7 +139,7 @@ def _model_dump(obj: Any) -> Dict[str, Any]:
     return dict(obj)
 
 
-def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Optional[Union[int, str]]:
+def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> int | str | None:
     """Resolve the owner id for data table queries based on auth context."""
     if principal.is_admin:
         return None
@@ -172,10 +174,10 @@ def _resolve_owner_id(principal: AuthPrincipal, current_user: User) -> Optional[
 
 
 def _table_summary_from_row(
-    row: Dict[str, Any],
+    row: dict[str, Any],
     *,
-    column_count: Optional[int] = None,
-    source_count: Optional[int] = None,
+    column_count: int | None = None,
+    source_count: int | None = None,
 ) -> DataTableSummary:
     """Build a DataTableSummary response from a database row."""
     return DataTableSummary(
@@ -202,7 +204,7 @@ def _table_summary_from_row(
     )
 
 
-def _column_from_row(row: Dict[str, Any]) -> DataTableColumn:
+def _column_from_row(row: dict[str, Any]) -> DataTableColumn:
     """Build a DataTableColumn from a data table column row."""
     return DataTableColumn(
         column_id=str(row.get("column_id") or ""),
@@ -214,7 +216,7 @@ def _column_from_row(row: Dict[str, Any]) -> DataTableColumn:
     )
 
 
-def _row_from_row(row: Dict[str, Any]) -> DataTableRow:
+def _row_from_row(row: dict[str, Any]) -> DataTableRow:
     """Build a DataTableRow from a data table row record."""
     return DataTableRow(
         row_id=str(row.get("row_id") or ""),
@@ -224,7 +226,7 @@ def _row_from_row(row: Dict[str, Any]) -> DataTableRow:
     )
 
 
-def _source_from_row(row: Dict[str, Any]) -> DataTableSource:
+def _source_from_row(row: dict[str, Any]) -> DataTableSource:
     """Build a DataTableSource from a data table source row."""
     return DataTableSource(
         source_type=str(row.get("source_type") or ""),
@@ -238,9 +240,9 @@ def _source_from_row(row: Dict[str, Any]) -> DataTableSource:
 def _row_values_from_json(
     row_json: Any,
     *,
-    column_ids: List[str],
-    column_names: List[str],
-) -> List[Any]:
+    column_ids: list[str],
+    column_names: list[str],
+) -> list[Any]:
     """Return row values ordered to match column ids or names."""
     if row_json is None:
         return [None] * len(column_ids)
@@ -268,12 +270,12 @@ def _collect_export_rows(
     db: MediaDatabase,
     table_id: int,
     *,
-    column_ids: List[str],
-    column_names: List[str],
-    owner_user_id: Optional[Union[int, str]] = None,
-) -> List[List[Any]]:
+    column_ids: list[str],
+    column_names: list[str],
+    owner_user_id: int | str | None = None,
+) -> list[list[Any]]:
     """Collect all table rows in batches for export."""
-    rows: List[List[Any]] = []
+    rows: list[list[Any]] = []
     offset = 0
     batch_size = 2000
     while True:
@@ -312,7 +314,7 @@ def _build_export_filename(title: str, export_format: str) -> str:
     return f"{base}.{export_format}"
 
 
-async def _export_structured(adapter, structured: Dict[str, Any], export_format: str):
+async def _export_structured(adapter, structured: dict[str, Any], export_format: str):
     """Export structured payload, offloading XLSX work to a thread."""
     if export_format == "xlsx":
         return await asyncio.to_thread(adapter.export, structured, format=export_format)
@@ -325,7 +327,7 @@ async def _wait_for_job_completion(
     *,
     timeout_seconds: int = 300,
     poll_interval: float = 1.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Poll job status until completion or timeout."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -333,21 +335,21 @@ async def _wait_for_job_completion(
         if not job:
             raise HTTPException(status_code=404, detail="job_not_found")
         status_val = str(job.get("status") or "").lower()
-        if status_val in {"completed", "failed", "cancelled"}:
+        if status_val in {"completed", "failed", "cancelled", "quarantined"}:
             return job
         await asyncio.sleep(poll_interval)
     raise HTTPException(status_code=408, detail="data_table_job_timeout")
 
 
 def _build_table_detail_response(
-    table_row: Dict[str, Any],
+    table_row: dict[str, Any],
     db: MediaDatabase,
     *,
     rows_limit: int = 200,
     rows_offset: int = 0,
     include_rows: bool = True,
     include_sources: bool = True,
-    owner_user_id: Optional[Union[int, str]] = None,
+    owner_user_id: int | str | None = None,
 ) -> DataTableDetailResponse:
     """Assemble a detail response including columns, rows, and sources."""
     table_id = int(table_row.get("id"))
@@ -355,7 +357,7 @@ def _build_table_detail_response(
         _column_from_row(row)
         for row in db.list_data_table_columns(table_id, owner_user_id=owner_user_id)
     ]
-    rows: List[DataTableRow] = []
+    rows: list[DataTableRow] = []
     if include_rows:
         rows = [
             _row_from_row(row)
@@ -366,8 +368,8 @@ def _build_table_detail_response(
                 owner_user_id=owner_user_id,
             )
         ]
-    sources: List[DataTableSource] = []
-    source_count: Optional[int] = table_row.get("source_count")
+    sources: list[DataTableSource] = []
+    source_count: int | None = table_row.get("source_count")
     if include_sources:
         sources = [
             _source_from_row(row)
@@ -407,7 +409,7 @@ async def generate_data_table(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
+) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table generation job and optionally wait for completion."""
     rid = ensure_request_id(request)
     tp = ensure_traceparent(request)
@@ -435,8 +437,8 @@ async def generate_data_table(
         table_uuid = str(table_row.get("uuid"))
         table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
 
-        sources_db_payload: List[Dict[str, Any]] = []
-        job_sources: List[Dict[str, Any]] = []
+        sources_db_payload: list[dict[str, Any]] = []
+        job_sources: list[dict[str, Any]] = []
         for source in req.sources:
             src = _model_dump(source)
             job_sources.append(
@@ -460,7 +462,7 @@ async def generate_data_table(
         if sources_db_payload:
             db.insert_data_table_sources(table_id, sources_db_payload, owner_user_id=owner_user_id)
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "table_id": table_id,
             "table_uuid": table_uuid,
             "prompt": req.prompt,
@@ -474,7 +476,7 @@ async def generate_data_table(
 
         job = jm.create_job(
             domain="data_tables",
-            queue="default",
+            queue=_data_tables_jobs_queue(),
             job_type="data_table_generate",
             payload=payload,
             owner_user_id=str(current_user.id),
@@ -550,9 +552,9 @@ async def generate_data_table(
     ],
 )
 async def list_data_tables(
-    status_filter: Optional[str] = Query(None, description="Filter by status"),
-    search: Optional[str] = Query(None, description="Search by name/description"),
-    workspace_tag: Optional[str] = Query(None, description="Filter by workspace tag"),
+    status_filter: str | None = Query(None, description="Filter by status"),
+    search: str | None = Query(None, description="Search by name/description"),
+    workspace_tag: str | None = Query(None, description="Filter by workspace tag"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     current_user: User = Depends(get_request_user),
@@ -725,7 +727,7 @@ async def export_data_table(
             headers={"Content-Disposition": f'attachment; filename=\"{filename}\"'},
         )
 
-    options_payload: Dict[str, Any] = {"persist": True}
+    options_payload: dict[str, Any] = {"persist": True}
     if rows:
         options_payload["max_rows"] = len(rows)
         options_payload["max_cells"] = len(rows) * len(column_names)
@@ -791,12 +793,14 @@ async def update_data_table_content(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
 
     try:
         if not req.columns:
             raise InputError("columns_required")
 
-        columns_payload: List[Dict[str, Any]] = []
+        columns_payload: list[dict[str, Any]] = []
         seen_names = set()
         seen_ids = set()
         for idx, col in enumerate(req.columns):
@@ -826,7 +830,8 @@ async def update_data_table_content(
                 }
             )
 
-        rows_payload: List[Dict[str, Any]] = []
+        rows_payload: list[dict[str, Any]] = []
+        seen_row_indexes: set[int] = set()
         for idx, row in enumerate(req.rows or []):
             if not isinstance(row, dict):
                 raise InputError("row_payload_invalid")
@@ -837,7 +842,7 @@ async def update_data_table_content(
                 row_payload = {}
             if not isinstance(row_payload, dict):
                 raise InputError("row_payload_invalid")
-            row_json: Dict[str, Any] = {}
+            row_json: dict[str, Any] = {}
             for column in columns_payload:
                 col_id = column["column_id"]
                 col_name = column["name"]
@@ -857,6 +862,9 @@ async def update_data_table_content(
                 row_index = int(row_index) if row_index is not None else idx
             except (TypeError, ValueError):
                 row_index = idx
+            if row_index in seen_row_indexes:
+                raise InputError("duplicate_row_index")
+            seen_row_indexes.add(row_index)
             rows_payload.append(
                 {
                     "row_id": row_id or str(uuid.uuid4()),
@@ -876,12 +884,12 @@ async def update_data_table_content(
                 status="ready",
                 row_count=len(rows_payload),
                 last_error=None,
-                owner_user_id=owner_user_id,
+                owner_user_id=mutation_owner_user_id,
             )
     except InputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    updated_row = db.get_data_table(table_id, owner_user_id=owner_user_id) or table_row
+    updated_row = db.get_data_table(table_id, owner_user_id=mutation_owner_user_id) or table_row
     rows_limit = max(1, min(len(rows_payload) or 200, 2000))
     return _build_table_detail_response(
         updated_row,
@@ -915,15 +923,17 @@ async def update_data_table(
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
     updated = db.update_data_table(
         int(table_row.get("id")),
         name=req.name.strip() if req.name is not None else None,
         description=req.description,
-        owner_user_id=owner_user_id,
+        owner_user_id=mutation_owner_user_id,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="data_table_update_failed")
-    counts = db.get_data_table_counts([int(updated.get("id"))], owner_user_id=owner_user_id).get(
+    counts = db.get_data_table_counts([int(updated.get("id"))], owner_user_id=mutation_owner_user_id).get(
         int(updated.get("id")),
         {},
     )
@@ -954,7 +964,12 @@ async def delete_data_table(
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
-    deleted = db.soft_delete_data_table(int(table_row.get("id")), owner_user_id=owner_user_id)
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
+    deleted = db.soft_delete_data_table(
+        int(table_row.get("id")),
+        owner_user_id=mutation_owner_user_id,
+    )
     if not deleted:
         raise HTTPException(status_code=500, detail="data_table_delete_failed")
     return DataTableDeleteResponse(success=True)
@@ -980,7 +995,7 @@ async def regenerate_data_table(
     principal: AuthPrincipal = Depends(get_auth_principal),
     db: MediaDatabase = Depends(get_media_db_for_user),
     jm: JobManager = Depends(get_job_manager),
-) -> Union[DataTableGenerateResponse, DataTableDetailResponse]:
+) -> DataTableGenerateResponse | DataTableDetailResponse:
     """Queue a data table regeneration job."""
     rid = ensure_request_id(request)
     tp = ensure_traceparent(request)
@@ -1010,7 +1025,7 @@ async def regenerate_data_table(
     if prompt_override == "":
         prompt_override = None
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "table_id": table_id,
         "table_uuid": table_uuid,
         "prompt": prompt_override or table_row.get("prompt"),
@@ -1025,7 +1040,7 @@ async def regenerate_data_table(
 
     job = jm.create_job(
         domain="data_tables",
-        queue="default",
+        queue=_data_tables_jobs_queue(),
         job_type="data_table_generate",
         payload=payload,
         owner_user_id=str(current_user.id),
@@ -1039,7 +1054,7 @@ async def regenerate_data_table(
         status="queued",
         generation_model=req.model or table_row.get("generation_model"),
         prompt=prompt_override,
-        owner_user_id=owner_user_id,
+        owner_user_id=table_owner_client_id or owner_user_id,
     )
 
     if wait_for_completion:
@@ -1137,7 +1152,7 @@ async def cancel_data_table_job(
     current_user: User = Depends(get_request_user),
     principal: AuthPrincipal = Depends(get_auth_principal),
     jm: JobManager = Depends(get_job_manager),
-    reason: Optional[str] = None,
+    reason: str | None = None,
 ) -> DataTableJobCancelResponse:
     """Cancel a queued data table job."""
     job = jm.get_job(int(job_id))

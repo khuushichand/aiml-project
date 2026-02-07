@@ -16,16 +16,27 @@ the fields) and returns a bound logger for convenience.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator, Any, Optional
+from typing import Any
 
 from loguru import logger
+
 from tldw_Server_API.app.core.Security.request_id_middleware import _clean_request_id
+
 try:
     # Optional import for FastAPI Request type annotation
     from fastapi import Request  # type: ignore
-except Exception:  # pragma: no cover - typing aid only
+except ImportError:  # pragma: no cover - typing aid only
     Request = None  # type: ignore
+
+_LOG_CONTEXT_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def new_request_id() -> str:
@@ -61,11 +72,11 @@ def ensure_request_id(request: Any) -> str:
             header_value = headers.get("X-Request-ID") or headers.get("x-request-id")
             req_id = _clean_request_id(header_value)
             try:
-                setattr(request.state, "request_id", req_id)  # type: ignore[attr-defined]
-            except Exception:
+                request.state.request_id = req_id  # type: ignore[attr-defined]
+            except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
                 pass
         return str(req_id)
-    except Exception:
+    except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
         return new_request_id()
 
 
@@ -86,25 +97,25 @@ def ensure_traceparent(request: Any) -> str:
         )
         if tp:
             try:
-                setattr(request.state, "traceparent", tp)  # type: ignore[attr-defined]
-            except Exception:
+                request.state.traceparent = tp  # type: ignore[attr-defined]
+            except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
                 pass
         return tp
-    except Exception:
+    except _LOG_CONTEXT_NONCRITICAL_EXCEPTIONS:
         return ""
 
 
 def get_ps_logger(
     *,
-    evaluation_id: Optional[int] = None,
-    prompt_id: Optional[int] = None,
-    optimization_id: Optional[int] = None,
-    project_id: Optional[int] = None,
-    request_id: Optional[str] = None,
-    job_id: Optional[int] = None,
-    ps_component: Optional[str] = None,
-    ps_job_kind: Optional[str] = None,
-    traceparent: Optional[str] = None,
+    evaluation_id: int | None = None,
+    prompt_id: int | None = None,
+    optimization_id: int | None = None,
+    project_id: int | None = None,
+    request_id: str | None = None,
+    job_id: int | None = None,
+    ps_component: str | None = None,
+    ps_job_kind: str | None = None,
+    traceparent: str | None = None,
 ):
     """Return a bound logger with common Prompt Studio fields.
 

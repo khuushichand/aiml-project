@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
-import shlex
 import json
 import os
-import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
-from typing import Optional
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
 from tldw_Server_API.app.core.Utils.Utils import logging
@@ -40,7 +38,7 @@ class DotsOCRBackend(OCRBackend):
             if os.getenv("DOTS_VLLM_URL"):
                 return True
             return importlib.util.find_spec("dots_ocr") is not None
-        except Exception:
+        except (AttributeError, ImportError, OSError, TypeError, ValueError):
             return False
 
     def describe(self) -> dict:
@@ -60,7 +58,7 @@ class DotsOCRBackend(OCRBackend):
             return shlex.split(env_cmd) + [img_path]
         return [python_exe, "-m", "dots_ocr.parser", img_path, "--prompt", os.getenv("DOTS_OCR_PROMPT", "prompt_ocr")]
 
-    def ocr_image(self, image_bytes: bytes, lang: Optional[str] = None) -> str:
+    def ocr_image(self, image_bytes: bytes, lang: str | None = None) -> str:
         if not self.available():
             logging.warning("DotsOCRBackend not available: set DOTS_VLLM_URL or install dots_ocr module.")
             return ""
@@ -69,7 +67,7 @@ class DotsOCRBackend(OCRBackend):
         if os.getenv("DOTS_VLLM_URL"):
             try:
                 return _ocr_via_vllm(image_bytes, os.getenv("DOTS_OCR_PROMPT", "prompt_ocr"))
-            except Exception as e:
+            except (ConnectionError, OSError, RuntimeError, TimeoutError, TypeError, ValueError) as e:
                 logging.error(f"Dots vLLM path failed, falling back to CLI: {e}", exc_info=True)
 
         # Write the image to a temporary PNG file and run the parser
@@ -78,7 +76,7 @@ class DotsOCRBackend(OCRBackend):
             try:
                 with open(img_path, "wb") as f:
                     f.write(image_bytes)
-            except Exception as e:
+            except OSError as e:
                 logging.error(f"DotsOCRBackend: failed to write temp image: {e}", exc_info=True)
                 return ""
 
@@ -90,7 +88,7 @@ class DotsOCRBackend(OCRBackend):
                     text=True,
                     check=False,
                 )
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logging.error(f"DotsOCRBackend: parser invocation failed: {e}", exc_info=True)
                 return ""
 
@@ -109,7 +107,7 @@ class DotsOCRBackend(OCRBackend):
                     # Try whole stdout first
                     data = json.loads(raw_out)
                     text_out = _extract_text_from_any(data)
-                except Exception:
+                except (TypeError, ValueError, json.JSONDecodeError):
                     # Try line-by-line for a JSON object
                     for line in reversed(raw_out.splitlines()):
                         line = line.strip()
@@ -120,7 +118,7 @@ class DotsOCRBackend(OCRBackend):
                             text_out = _extract_text_from_any(data)
                             if text_out:
                                 break
-                        except Exception:
+                        except (TypeError, ValueError, json.JSONDecodeError):
                             continue
                     if not text_out:
                         # As a last resort, return raw stdout
@@ -176,7 +174,7 @@ def _extract_text_from_any(obj) -> str:
             return "\n".join(parts)
         # Fallback to string representation
         return str(obj)
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return ""
 
 
@@ -203,7 +201,7 @@ def _ocr_via_vllm(image_bytes: bytes, prompt: str) -> str:
     def _getf(env, cast, default):
         try:
             return cast(os.getenv(env, str(default)))
-        except Exception:
+        except (TypeError, ValueError):
             return default
 
     data = {

@@ -8,14 +8,14 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
+
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
-from tldw_Server_API.app.core.exceptions import InvalidStoragePathError, StorageUnavailableError
-
 
 UserId = Union[int, str]
 _SAFE_TEST_USER_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -142,13 +142,12 @@ def normalize_output_storage_filename(
 
     storage_path_str = str(storage_path)
 
-    if not check_relative_containment and isinstance(storage_path, str):
-        if (
-            _SAFE_OUTPUT_NAME_RE.match(storage_path)
-            and os.sep not in storage_path
-            and (os.altsep is None or os.altsep not in storage_path)
-        ):
-            return storage_path
+    if not check_relative_containment and isinstance(storage_path, str) and (
+        _SAFE_OUTPUT_NAME_RE.match(storage_path)
+        and os.sep not in storage_path
+        and (os.altsep is None or os.altsep not in storage_path)
+    ):
+        return storage_path
 
     candidate = Path(storage_path_str)
     if expand_user:
@@ -205,6 +204,7 @@ class DatabasePaths:
     AUDIT_DB_NAME = "unified_audit.db"
     EVALUATIONS_DB_NAME = "evaluations.db"
     PERSONALIZATION_DB_NAME = "Personalization.db"
+    GUARDIAN_DB_NAME = "Guardian.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     KANBAN_DB_NAME = "Kanban.db"
@@ -379,6 +379,12 @@ class DatabasePaths:
         return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
 
     @staticmethod
+    def get_guardian_db_path(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's Guardian/self-monitoring database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        return user_dir / DatabasePaths.GUARDIAN_DB_NAME
+
+    @staticmethod
     def get_workflows_db_path(user_id: Optional[UserId]) -> Path:
         """Get the path to the user's workflows database."""
         user_dir = DatabasePaths.get_user_base_directory(user_id)
@@ -526,7 +532,7 @@ class DatabasePaths:
         return user_dir / "rag_personalization.json"
 
     @staticmethod
-    def get_all_user_db_paths(user_id: Optional[UserId]) -> Dict[str, Path]:
+    def get_all_user_db_paths(user_id: Optional[UserId]) -> dict[str, Path]:
         """
         Get all database paths for a user.
 
@@ -558,7 +564,7 @@ class DatabasePaths:
             True if all directories exist or were created successfully
         """
         try:
-            paths = DatabasePaths.get_all_user_db_paths(user_id)
+            DatabasePaths.get_all_user_db_paths(user_id)
             logger.info(f"Database structure validated for user {user_id}")
             return True
         except Exception as e:

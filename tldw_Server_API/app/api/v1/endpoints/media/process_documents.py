@@ -1,38 +1,38 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
-
 import asyncio
 import functools
 from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter, Depends, File, UploadFile, status
 from loguru import logger
 from starlette.responses import JSONResponse
 
+import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
 from tldw_Server_API.app.api.v1.API_Deps.media_processing_deps import (
     get_process_documents_form,
 )
+from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
+    UsageEventLogger,
+    get_usage_event_logger,
+)
 from tldw_Server_API.app.api.v1.API_Deps.validations_deps import file_validator_instance
+from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 from tldw_Server_API.app.api.v1.schemas.media_request_models import ProcessDocumentsForm
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
+from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
+    apply_chunking_template_if_any,
+    prepare_chunking_options_dict,
+)
 from tldw_Server_API.app.core.Ingestion_Media_Processing.input_sourcing import (
     TempDirManager,
-)
-from tldw_Server_API.app.core.Ingestion_Media_Processing.chunking_options import (
-    prepare_chunking_options_dict,
-    apply_chunking_template_if_any,
 )
 from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
     ProcessItem,
     run_batch_processor,
 )
-import tldw_Server_API.app.core.Ingestion_Media_Processing.Plaintext.Plaintext_Files as docs
-from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import (
-    UsageEventLogger,
-    get_usage_event_logger,
-)
-from tldw_Server_API.app.api.v1.endpoints import media as media_mod
 
 router = APIRouter()
 
@@ -58,7 +58,7 @@ ALLOWED_DOC_EXTENSIONS = [
 async def process_documents_endpoint(
     db: MediaDatabase = Depends(get_media_db_for_user),
     form_data: ProcessDocumentsForm = Depends(get_process_documents_form),
-    files: Optional[List[UploadFile]] = File(
+    files: list[UploadFile] | None = File(
         None,
         description="Document file uploads (.txt, .md, .docx, .rtf, .html, .xml)",
     ),
@@ -96,15 +96,15 @@ async def process_documents_endpoint(
     media_mod._validate_inputs("document", form_data.urls, files)  # type: ignore[arg-type]
 
     # --- Prepare result structure ---
-    batch_result: Dict[str, Any] = {
+    batch_result: dict[str, Any] = {
         "errors": [],
         "results": [],
     }
-    saved_files_info: List[Dict[str, Any]] = []
+    saved_files_info: list[dict[str, Any]] = []
     # Map to track original ref -> temp path
-    source_map: Dict[str, Path] = {}
+    source_map: dict[str, Path] = {}
 
-    loop = asyncio.get_running_loop()
+    asyncio.get_running_loop()
     # Use TempDirManager for reliable cleanup
     with TempDirManager(
         cleanup=(not form_data.keep_original_file),
@@ -113,13 +113,13 @@ async def process_documents_endpoint(
         temp_dir = Path(temp_dir_path)
         logger.info("Using temporary directory for /process-documents: {}", temp_dir)
 
-        local_paths_to_process: List[Tuple[str, Path]] = []
+        local_paths_to_process: list[tuple[str, Path]] = []
 
         # --- Handle Uploads ---
         if files:
             # Preserve test-time monkeypatching of `media.file_validator_instance`
             # and `_save_uploaded_files` via the `media` shim.
-            save_uploaded_files = getattr(media_mod, "_save_uploaded_files")
+            save_uploaded_files = media_mod._save_uploaded_files
             validator = getattr(
                 media_mod,
                 "file_validator_instance",
@@ -178,14 +178,14 @@ async def process_documents_endpoint(
                 "Attempting to download {} document URLs asynchronously...",
                 len(form_data.urls),
             )
-            download_tasks: List[asyncio.Task[Path]] = []
-            url_task_map: Dict[asyncio.Task[Path], str] = {}
+            download_tasks: list[asyncio.Task[Path]] = []
+            url_task_map: dict[asyncio.Task[Path], str] = {}
 
             allowed_ext_set = set(ALLOWED_DOC_EXTENSIONS)
 
             # Preserve test-time monkeypatching of `_download_url_async`
             # via the media shim.
-            download_url_async = getattr(media_mod, "_download_url_async")
+            download_url_async = media_mod._download_url_async
 
             download_tasks = [
                 download_url_async(
@@ -204,9 +204,7 @@ async def process_documents_endpoint(
                 for url in form_data.urls
             ]
 
-            url_task_map = {
-                task: url for task, url in zip(download_tasks, form_data.urls)
-            }
+            url_task_map = dict(zip(download_tasks, form_data.urls))
 
             if download_tasks:
                 download_results = await asyncio.gather(
@@ -214,7 +212,7 @@ async def process_documents_endpoint(
                     return_exceptions=True,
                 )
             else:
-                download_results: List[Any] = []
+                download_results: list[Any] = []
 
             if download_tasks:
                 for task, result in zip(download_tasks, download_results):
@@ -315,7 +313,7 @@ async def process_documents_endpoint(
 
         # --- Prepare options for the worker ---
         if form_data.perform_chunking:
-            chunk_options_dict: Optional[Dict[str, Any]] = prepare_chunking_options_dict(
+            chunk_options_dict: dict[str, Any] | None = prepare_chunking_options_dict(
                 form_data
             )
             TemplateClassifier = getattr(media_mod, "TemplateClassifier", None)
@@ -338,7 +336,7 @@ async def process_documents_endpoint(
             chunk_options_dict = None
 
         # --- Build ProcessItem list and run batch processor ---
-        items: List[ProcessItem] = [
+        items: list[ProcessItem] = [
             ProcessItem(
                 input_ref=original_ref,
                 local_path=doc_path,
@@ -349,12 +347,12 @@ async def process_documents_endpoint(
         ]
 
         async def _document_batch_processor(
-            process_items: List[ProcessItem],
-        ) -> List[Dict[str, Any]]:
-            results: List[Dict[str, Any]] = []
+            process_items: list[ProcessItem],
+        ) -> list[dict[str, Any]]:
+            results: list[dict[str, Any]] = []
             loop = asyncio.get_running_loop()
 
-            tasks: List[asyncio.Future] = []
+            tasks: list[asyncio.Future] = []
             for item in process_items:
                 partial_func = functools.partial(
                     docs.process_document_content,
@@ -454,7 +452,7 @@ async def process_documents_endpoint(
 
             return results
 
-        base_batch: Dict[str, Any] = {
+        base_batch: dict[str, Any] = {
             "results": list(batch_result["results"]),
             "errors": list(batch_result["errors"]),
         }
@@ -473,10 +471,7 @@ async def process_documents_endpoint(
         batch_result.get("processed_count", 0) == 0
         and batch_result.get("errors_count", 0) == 0
     ):
-        if batch_result["results"]:
-            final_status_code = status.HTTP_207_MULTI_STATUS
-        else:
-            final_status_code = status.HTTP_400_BAD_REQUEST
+        final_status_code = status.HTTP_207_MULTI_STATUS if batch_result["results"] else status.HTTP_400_BAD_REQUEST
     else:
         logger.warning(
             "Reached unexpected state for final status code determination "
@@ -537,7 +532,7 @@ async def process_documents_endpoint(
                     chunks = _improved_chunking_process(text, chunk_options_dict)
 
                 res["chunks"] = chunks
-    except Exception as exc:
+    except Exception:
         logger.debug("Re-chunking failed during metadata normalization", exc_info=True)
 
     return JSONResponse(status_code=final_status_code, content=batch_result)

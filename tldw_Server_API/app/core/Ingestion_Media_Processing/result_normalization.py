@@ -8,8 +8,9 @@ utilities so that process-* endpoints share a consistent response shape while
 preserving the existing HTTP envelopes.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -25,21 +26,21 @@ class MediaItemProcessResponse:
 
     status: str
     input_ref: str
-    processing_source: Optional[str] = None
-    media_type: Optional[str] = None
-    content: Optional[Any] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    chunks: Optional[Any] = None
-    analysis: Optional[Any] = None
-    analysis_details: Dict[str, Any] = field(default_factory=dict)
-    keywords: Optional[Any] = None
-    warnings: Optional[Any] = None
-    error: Optional[str] = None
-    db_id: Optional[int] = None
-    db_message: Optional[str] = None
+    processing_source: str | None = None
+    media_type: str | None = None
+    content: Any | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    chunks: Any | None = None
+    analysis: Any | None = None
+    analysis_details: dict[str, Any] = field(default_factory=dict)
+    keywords: Any | None = None
+    warnings: Any | None = None
+    error: str | None = None
+    db_id: int | None = None
+    db_message: str | None = None
 
 
-def sort_results_success_first(results: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def sort_results_success_first(results: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Return results with Success/Warning entries before Error entries.
 
@@ -47,14 +48,14 @@ def sort_results_success_first(results: Iterable[Dict[str, Any]]) -> List[Dict[s
     inspect the first item see a successful or warning result when possible.
     """
 
-    def _key(r: Dict[str, Any]) -> int:
+    def _key(r: dict[str, Any]) -> int:
         status_value = str(r.get("status", "")).lower()
         return 0 if status_value in {"success", "warning"} else 1
 
-    return sorted(list(results), key=_key)
+    return sorted(results, key=_key)
 
 
-def normalize_process_batch(batch: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_process_batch(batch: dict[str, Any]) -> dict[str, Any]:
     """
     Normalize a process-only batch in-place.
 
@@ -74,7 +75,7 @@ def normalize_process_batch(batch: Dict[str, Any]) -> Dict[str, Any]:
     return batch
 
 
-def normalise_pdf_result(item: Dict[str, Any], original_ref: str) -> Dict[str, Any]:
+def normalise_pdf_result(item: dict[str, Any], original_ref: str) -> dict[str, Any]:
     """
     Ensure every required key is present and correctly typed for PDF results.
 
@@ -96,6 +97,9 @@ def normalise_pdf_result(item: Dict[str, Any], original_ref: str) -> Dict[str, A
 
     # Keys that can be None
     item.setdefault("content", None)
+    # Surface extracted text explicitly for clients that prefer a dedicated field
+    if item.get("conversion_text") is None:
+        item["conversion_text"] = item.get("content")
     item.setdefault("chunks", None)
     item.setdefault("analysis", None)
     item.setdefault("warnings", None)
@@ -111,7 +115,7 @@ def normalise_pdf_result(item: Dict[str, Any], original_ref: str) -> Dict[str, A
     # Normalize keywords to a list
     keywords = item.get("keywords", metadata.get("keywords"))
     if keywords is None:
-        keywords_list: List[str] = []
+        keywords_list: list[str] = []
     elif isinstance(keywords, list):
         keywords_list = keywords
     elif isinstance(keywords, str):

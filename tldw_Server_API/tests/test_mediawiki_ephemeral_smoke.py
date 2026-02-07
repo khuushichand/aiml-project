@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.endpoints.media import router as media_router
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 
 
 def _mini_mediawiki_xml() -> str:
@@ -61,10 +62,17 @@ def _gz_bytes(data: str) -> bytes:
 def test_mediawiki_process_dump_ephemeral_stream(monkeypatch, tmp_path: Path):
     # Force temp dirs outside CWD so allowed_dir enforcement is required
     monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "test-api-key-12345")
 
     app = FastAPI()
     app.include_router(media_router, prefix="/api/v1/media")
-    client = TestClient(app)
+
+    async def _override_user() -> User:
+        return User(id=1, username="tester", email=None, is_active=True, is_admin=True)
+
+    app.dependency_overrides[get_request_user] = _override_user
+    client = TestClient(app, headers={"X-API-KEY": "test-api-key-12345"})
 
     gz = _gz_bytes(_mini_mediawiki_xml())
 

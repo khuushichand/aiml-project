@@ -124,16 +124,10 @@ def check_ffmpeg():
             "ffmpeg is not installed. You can install it manually or via your package manager. "
             "Windows builds: https://www.gyan.dev/ffmpeg/builds/"
         )
-        if userOS == "Unknown":
-            userOS_guess = platform.system()
-        else:
-            userOS_guess = userOS
+        userOS_guess = platform.system() if userOS == "Unknown" else userOS
 
         if userOS_guess == "Windows":
-            if download_ffmpeg(): # call and check the return
-                return True
-            else:
-                return False
+            return download_ffmpeg()
 
         elif userOS_guess == "Linux":
             logging.info(
@@ -209,4 +203,4 @@ def download_ffmpeg():
 #
 #
 #######################################################################################################################
-from tldw_Server_API.app.core.http_client import download, DownloadError
+from tldw_Server_API.app.core.http_client import DownloadError, download

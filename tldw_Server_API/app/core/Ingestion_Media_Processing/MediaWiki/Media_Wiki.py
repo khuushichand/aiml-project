@@ -3,37 +3,43 @@
 #######################################################################################################################
 #
 # Imports
+import bz2
+import contextlib
+import gzip
 import json
 import os
 import re
 import sys
 import tempfile
 import traceback
-from pathlib import Path
-import gzip
-import bz2
-from typing import List, Dict, Any, Iterator, Optional, Union
+from collections.abc import Iterator
 from datetime import datetime, timezone  # Added for default ingestion_date
+from pathlib import Path
+from typing import Any, Optional, Union
 from urllib.parse import quote
-#
-# 3rd-Party Imports
-from loguru import logger as _base_logger
+
 import mwparserfromhell
 import mwxml
 import yaml
+
+#
+# 3rd-Party Imports
+from loguru import logger as _base_logger
+
+from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
+
 #
 # Local Imports
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
-from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
-from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
 from tldw_Server_API.app.core.Utils.Utils import logging
+
 try:  # Optional embeddings dependencies
     from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
     from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
         create_embeddings_batch,
     )
-except Exception:  # pragma: no cover - embeddings optional
+except (ImportError, AttributeError):  # pragma: no cover - embeddings optional
     ChromaDBManager = None  # type: ignore
     create_embeddings_batch = None  # type: ignore
 #
@@ -52,17 +58,33 @@ def load_mediawiki_import_config():
     if not str(config_path).startswith(str(project_root)):
         raise InvalidStoragePathError("Config file path is outside project directory")
 
-    with open(config_path, 'r') as f:
+    with open(config_path) as f:
         return yaml.safe_load(f)
 
-
-media_wiki_import_config = load_mediawiki_import_config()
 
 logger = _base_logger.bind(component="mediawiki_import")
 _STDOUT_HANDLER_ID: Optional[int] = None
 _FILE_HANDLER_ID: Optional[int] = None
 ALLOWED_MEDIAWIKI_DUMP_EXTENSIONS = frozenset({".xml", ".xml.bz2", ".xml.gz", ".bz2", ".gz"})
 MAX_MEDIAWIKI_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024  # 10GB limit
+MEDIAWIKI_RUNTIME_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+    json.JSONDecodeError,
+    InvalidStoragePathError,
+)
+MEDIAWIKI_EMBEDDING_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+    RuntimeError,
+)
 
 
 def get_safe_log_path(log_filename: str) -> Optional[Path]:
@@ -121,8 +143,8 @@ def get_safe_log_path(log_filename: str) -> Optional[Path]:
             return None
 
         return log_path
-    except Exception as e:
-        logger.error(f"Error creating safe log path: {e}")
+    except (OSError, ValueError, TypeError) as e:
+        logger.exception(f"Error creating safe log path: {e}")
         return None
 
 
@@ -158,6 +180,20 @@ def setup_media_wiki_logger(name: str, level: Union[int, str] = "INFO", log_file
 
 
 setup_media_wiki_logger('mediawiki_import', log_file='mediawiki_import.log')
+
+_mediawiki_import_config_cache: Optional[dict[str, Any]] = None
+
+
+def get_mediawiki_import_config() -> dict[str, Any]:
+    """Lazy-load and cache MediaWiki import config."""
+    global _mediawiki_import_config_cache
+    if _mediawiki_import_config_cache is None:
+        try:
+            _mediawiki_import_config_cache = load_mediawiki_import_config() or {}
+        except (OSError, yaml.YAMLError, InvalidStoragePathError, ValueError, TypeError) as exc:
+            logger.warning(f"Failed to load mediawiki_import_config.yaml, using defaults: {exc}")
+            _mediawiki_import_config_cache = {}
+    return _mediawiki_import_config_cache
 
 
 #
@@ -241,7 +277,7 @@ def validate_file_path(file_path: str, allowed_dir: Optional[Path] = None) -> Pa
         return path
     except (InvalidStoragePathError, OSError) as e:
         # Log the error internally but don't expose the path in the error message
-        logger.error(f"Path validation failed: {e}")
+        logger.exception(f"Path validation failed: {e}")
         raise InvalidStoragePathError(
             f"Invalid file path: {str(e).replace(file_path, '[REDACTED]')}"
         ) from e
@@ -276,7 +312,7 @@ def sanitize_wiki_name(wiki_name: str) -> str:
 
     # Limit length to prevent issues
     if len(safe_name) > 100:
-        raise ValueError(f"Wiki name too long (max 100 characters)")
+        raise ValueError("Wiki name too long (max 100 characters)")
 
     return safe_name
 
@@ -332,17 +368,17 @@ def _open_dump_file_text(safe_path: Path):
     if lower.endswith('.xml.gz') or lower.endswith('.gz'):
         return gzip.open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
     # Default to plain XML
-    return open(safe_path, mode='rt', encoding='utf-8', errors='ignore')
+    return open(safe_path, encoding='utf-8', errors='ignore')
 
 
 def parse_mediawiki_dump(
     file_path: Union[str, Path],
-    namespaces: Optional[List[int]] = None,
+    namespaces: Optional[list[int]] = None,
     skip_redirects: bool = False,
     allowed_dir: Optional[Path] = None,
     *,
     prevalidated_path: Optional[Path] = None,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     # Validate file path
     safe_path = prevalidated_path if prevalidated_path is not None else validate_file_path(
         str(file_path),
@@ -363,10 +399,7 @@ def parse_mediawiki_dump(
                 # Normalize timestamp to a timezone-aware datetime when possible
                 _ts = getattr(revision, "timestamp", None)
                 if isinstance(_ts, datetime):
-                    if _ts.tzinfo is None:
-                        timestamp_obj = _ts.replace(tzinfo=timezone.utc)
-                    else:
-                        timestamp_obj = _ts
+                    timestamp_obj = _ts.replace(tzinfo=timezone.utc) if _ts.tzinfo is None else _ts
                 elif _ts is not None:
                     # Attempt to parse from string representation (e.g., 'YYYY-MM-DDTHH:MM:SSZ')
                     try:
@@ -375,7 +408,7 @@ def parse_mediawiki_dump(
                         timestamp_obj = datetime.fromisoformat(ts_str)
                         if timestamp_obj.tzinfo is None:
                             timestamp_obj = timestamp_obj.replace(tzinfo=timezone.utc)
-                    except Exception:
+                    except (TypeError, ValueError):
                         timestamp_obj = datetime.now(timezone.utc)
                 else:
                     # Fallback timestamp if revision has none
@@ -392,14 +425,15 @@ def parse_mediawiki_dump(
             logging.debug(f"Yielded page: {page.title}")
 
 
-def optimized_chunking(text: str, chunk_options: Dict[str, Any]) -> List[Dict[str, Any]]:
+def optimized_chunking(text: str, chunk_options: dict[str, Any]) -> list[dict[str, Any]]:
     # Using simple newline splitting for sections as an example.
     # Your original implementation used re.split(r'\n==\s*(.*?)\s*==\n', text)
     # which is good for MediaWiki section syntax.
     # This function should produce a list of dictionaries, e.g.,
     # [{"text": "chunk text 1", "metadata": {"section_title": "Introduction", ...}}, ...]
 
-    max_size = chunk_options.get('max_size', media_wiki_import_config.get('chunking', {}).get('default_size', 1000))
+    cfg = get_mediawiki_import_config()
+    max_size = chunk_options.get('max_size', cfg.get('chunking', {}).get('default_size', 1000))
     # Fallback to simple splitting if no section-based logic is defined or needed
     # For this example, we'll just split by paragraphs if no section logic from original needed.
     # Your original `optimized_chunking` was section-aware. Let's keep that spirit.
@@ -473,8 +507,9 @@ def _build_mediawiki_embedding_config(
     *,
     api_name_vector_db: Optional[str],
     api_key_vector_db: Optional[str],
-) -> Optional[Dict[str, Any]]:
-    embeddings_cfg = media_wiki_import_config.get("embeddings", {}) or {}
+) -> Optional[dict[str, Any]]:
+    cfg = get_mediawiki_import_config()
+    embeddings_cfg = cfg.get("embeddings", {}) or {}
     provider = str(embeddings_cfg.get("provider") or "openai").strip()
     model = str(embeddings_cfg.get("model") or "text-embedding-3-small").strip()
     api_key = api_key_vector_db or embeddings_cfg.get("api_key")
@@ -503,7 +538,7 @@ def _build_mediawiki_embedding_config(
     model_id = f"{provider_norm}:{model}"
 
     if provider_norm == "openai":
-        model_cfg: Dict[str, Any] = {
+        model_cfg: dict[str, Any] = {
             "provider": "openai",
             "model_name_or_path": model,
         }
@@ -544,9 +579,8 @@ def _build_mediawiki_embedding_config(
 
 
 def _mediawiki_collection_name(wiki_name: str) -> str:
-    prefix = (
-        media_wiki_import_config.get("chromadb", {}) or {}
-    ).get("collection_prefix", "mediawiki_")
+    cfg = get_mediawiki_import_config()
+    prefix = (cfg.get("chromadb", {}) or {}).get("collection_prefix", "mediawiki_")
     safe_prefix = re.sub(r"[^a-zA-Z0-9_-]+", "_", str(prefix)).strip()
     safe_wiki = sanitize_wiki_name(wiki_name)
     if safe_prefix:
@@ -556,7 +590,7 @@ def _mediawiki_collection_name(wiki_name: str) -> str:
 
 def _store_mediawiki_chunks_in_vector_db(
     *,
-    chunks: List[Dict[str, Any]],
+    chunks: list[dict[str, Any]],
     media_id: int,
     title: str,
     wiki_name: str,
@@ -579,7 +613,7 @@ def _store_mediawiki_chunks_in_vector_db(
     if not user_db_base_dir:
         return False, "USER_DB_BASE_DIR is not configured."
 
-    user_embedding_config: Dict[str, Any] = {
+    user_embedding_config: dict[str, Any] = {
         "USER_DB_BASE_DIR": user_db_base_dir,
         "embedding_config": embedding_config,
     }
@@ -590,7 +624,7 @@ def _store_mediawiki_chunks_in_vector_db(
             user_id=str(vector_user_id),
             user_embedding_config=user_embedding_config,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Vector store init failed: {exc}"
 
     indexed_chunks = [
@@ -609,7 +643,7 @@ def _store_mediawiki_chunks_in_vector_db(
             user_app_config=user_embedding_config,
             model_id_override=model_id,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Embedding generation failed: {exc}"
 
     if not embeddings:
@@ -617,8 +651,8 @@ def _store_mediawiki_chunks_in_vector_db(
     if len(embeddings) != len(texts):
         return False, "Embedding generation returned a mismatched vector count."
 
-    metadatas: List[Dict[str, Any]] = []
-    ids: List[str] = []
+    metadatas: list[dict[str, Any]] = []
+    ids: list[str] = []
     for idx, ch in indexed_chunks:
         section = None
         metadata = ch.get("metadata") if isinstance(ch.get("metadata"), dict) else {}
@@ -647,7 +681,7 @@ def _store_mediawiki_chunks_in_vector_db(
             metadatas=metadatas,
             embedding_model_id_for_dim_check=model_id,
         )
-    except Exception as exc:
+    except MEDIAWIKI_EMBEDDING_EXCEPTIONS as exc:
         return False, f"Vector store write failed: {exc}"
 
     return True, f"Stored {len(texts)} chunks in vector store '{collection_name}'."
@@ -657,13 +691,13 @@ def process_single_item(
         content: str,
         title: str,
         wiki_name: str,
-        chunk_options: Dict[str, Any],
-        item: Dict[str, Any],  # Contains timestamp, page_id etc. from parse_mediawiki_dump
+        chunk_options: dict[str, Any],
+        item: dict[str, Any],  # Contains timestamp, page_id etc. from parse_mediawiki_dump
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
         api_key_vector_db: Optional[str] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         logging.debug(
             f"process_single_item: Processing item: {title} (StoreDB: {store_to_db}, StoreVector: {store_to_vector_db})")
@@ -774,7 +808,7 @@ def process_single_item(
         logging.info(f"Successfully processed item '{title}' (Status: {processed_data['status']})")
         return processed_data
 
-    except Exception as e:
+    except MEDIAWIKI_RUNTIME_EXCEPTIONS as e:
         logging.error(f"Error processing item {title}: {str(e)}")
         logging.error(f"Exception details: {traceback.format_exc()}")
         # Ensure all keys from 'processed_data' are present in error return
@@ -796,22 +830,43 @@ def process_single_item(
 
 
 def load_checkpoint(file_path: str) -> int:
-    # Validate checkpoint file path
-    try:
-        safe_path = validate_file_path(file_path)
-    except InvalidStoragePathError:
-        # File doesn't exist yet, which is fine for checkpoints
+    """Load checkpoint from file.
+
+    Args:
+        file_path: Path to checkpoint file (must be within ./checkpoints directory)
+
+    Returns:
+        The last processed ID from the checkpoint, or 0 if not found/invalid
+    """
+    # Enforce checkpoints directory for defense-in-depth
+    checkpoints_dir = Path('./checkpoints').resolve()
+
+    # Check for null bytes and traversal patterns first
+    if '\x00' in file_path or '../' in file_path or '..' + os.sep in file_path:
+        logging.warning("Invalid checkpoint path attempted: [REDACTED]")
         return 0
 
-    if safe_path.exists():
-        try:
-            with open(safe_path, 'r') as f:
-                data = json.load(f)
-                return data.get('last_processed_id', 0)
-        except json.JSONDecodeError:
-            logging.warning(f"Checkpoint file {safe_path} is corrupted. Starting from beginning.")
+    # Resolve and validate containment
+    try:
+        resolved_path = Path(file_path).resolve()
+        common_path = os.path.commonpath([str(resolved_path), str(checkpoints_dir)])
+        if common_path != str(checkpoints_dir):
+            logging.warning("Checkpoint path outside checkpoints directory")
             return 0
-    return 0
+    except ValueError:
+        # Different drives on Windows or other path resolution issues
+        return 0
+
+    if not resolved_path.exists():
+        return 0
+
+    try:
+        with open(resolved_path) as f:
+            data = json.load(f)
+            return data.get('last_processed_id', 0)
+    except (json.JSONDecodeError, OSError):
+        logging.warning("Checkpoint file is corrupted or unreadable. Starting from beginning.")
+        return 0
 
 
 def save_checkpoint(file_path: str, last_processed_id: int):
@@ -850,26 +905,24 @@ def save_checkpoint(file_path: str, last_processed_id: int):
         Path(temp_path).replace(safe_path)
     except Exception:
         # Clean up temp file on error
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(temp_path)
-        except OSError:
-            pass
         raise
 
 
 def import_mediawiki_dump(
         file_path: str,
         wiki_name: str,
-        namespaces: List[int] = None,
+        namespaces: list[int] = None,
         skip_redirects: bool = False,
-        chunk_options_override: Dict[str, Any] = None,
+        chunk_options_override: dict[str, Any] = None,
         progress_callback: Any = None,
         store_to_db: bool = True,
         store_to_vector_db: bool = True,
         api_name_vector_db: Optional[str] = None,
         api_key_vector_db: Optional[str] = None,
         allowed_dir: Optional[Path] = None,
-) -> Iterator[Dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     try:
         # Sanitize wiki_name and validate file_path
         safe_wiki_name = sanitize_wiki_name(wiki_name)
@@ -879,8 +932,8 @@ def import_mediawiki_dump(
 
         logging.info(
             f"Importing MediaWiki dump: {safe_file_path} for wiki: {safe_wiki_name}. StoreDB: {store_to_db}, StoreVector: {store_to_vector_db}")
-        final_chunk_options = chunk_options_override if chunk_options_override else media_wiki_import_config.get(
-            'chunking', {})
+        cfg = get_mediawiki_import_config()
+        final_chunk_options = chunk_options_override if chunk_options_override else cfg.get('chunking', {})
 
         # Get safe checkpoint path
         checkpoint_file = get_safe_checkpoint_path(safe_wiki_name)
@@ -968,10 +1021,10 @@ def import_mediawiki_dump(
                "message": f"Successfully processed MediaWiki dump: {wiki_name}. Processed {processed_pages_count}/{total_pages} pages."}
 
     except FileNotFoundError:
-        logger.error(f"MediaWiki dump file not found: {file_path}")
+        logger.exception(f"MediaWiki dump file not found: {file_path}")
         yield {"type": "error", "message": f"Error: File not found - {file_path}"}
     except PermissionError:
-        logger.error(f"Permission denied when trying to read: {file_path}")
+        logger.exception(f"Permission denied when trying to read: {file_path}")
         yield {"type": "error", "message": f"Error: Permission denied - {file_path}"}
     except Exception as e:
         logger.exception(f"Error during MediaWiki import: {str(e)}")
@@ -980,7 +1033,7 @@ def import_mediawiki_dump(
 
 def count_pages(
     file_path: Union[str, Path],
-    namespaces: Optional[List[int]] = None,
+    namespaces: Optional[list[int]] = None,
     skip_redirects: bool = False,
     allowed_dir: Optional[Path] = None,
     *,

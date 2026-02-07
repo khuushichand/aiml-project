@@ -5,14 +5,14 @@ Leverages PostgreSQL-specific features for optimal performance.
 
 import asyncio
 import json
-from typing import List, Optional, Dict, Any, Tuple
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
 import uuid
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
 
 try:
     import asyncpg
-    from asyncpg import Pool, Connection
+    from asyncpg import Connection, Pool
     HAS_ASYNCPG = True
 except ImportError:
     HAS_ASYNCPG = False
@@ -21,12 +21,9 @@ except ImportError:
 
 from loguru import logger
 
-from ..base import Task, TaskStatus, TaskPriority
+from ..base import Task, TaskStatus
+from ..base.exceptions import BackendError
 from ..base.queue_backend import QueueBackend
-from ..base.exceptions import (
-    BackendError, TaskNotFoundError, DependencyError,
-    LeaseError, PayloadError
-)
 from ..config import SchedulerConfig
 
 
@@ -58,7 +55,7 @@ class PostgreSQLBackend(QueueBackend):
         self.config = config
         self.pool: Optional[Pool] = None
         self._listener_task: Optional[asyncio.Task] = None
-        self._notifications: Dict[str, asyncio.Queue] = {}
+        self._notifications: dict[str, asyncio.Queue] = {}
 
         # Parse connection string
         self.dsn = config.database_url
@@ -96,7 +93,7 @@ class PostgreSQLBackend(QueueBackend):
 
         except Exception as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
-            raise BackendError(f"Connection failed: {e}")
+            raise BackendError(f"Connection failed: {e}") from e
 
     async def disconnect(self) -> None:
         """
@@ -104,10 +101,8 @@ class PostgreSQLBackend(QueueBackend):
         """
         if self._listener_task:
             self._listener_task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await self._listener_task
-            except asyncio.CancelledError:
-                pass
 
         if self.pool:
             await self.pool.close()
@@ -282,43 +277,42 @@ class PostgreSQLBackend(QueueBackend):
 
             except Exception as e:
                 logger.error(f"Failed to enqueue task: {e}")
-                raise BackendError(f"Enqueue failed: {e}")
+                raise BackendError(f"Enqueue failed: {e}") from e
 
-    async def bulk_enqueue(self, tasks: List[Task]) -> List[str]:
+    async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """
         Efficiently enqueue multiple tasks in a single transaction.
         """
         if not tasks:
             return []
 
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                task_ids = []
+        async with self.pool.acquire() as conn, conn.transaction():
+            task_ids = []
 
-                # Prepare data for bulk insert
-                values = []
-                for task in tasks:
-                    # Handle large payloads
-                    payload_ref = None
-                    payload_data = task.payload
+            # Prepare data for bulk insert
+            values = []
+            for task in tasks:
+                # Handle large payloads
+                payload_ref = None
+                payload_data = task.payload
 
-                    if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
-                        payload_ref = await self._store_external_payload(conn, task.id, payload_data)
-                        payload_data = None
+                if payload_data and len(json.dumps(payload_data)) > self.config.payload_threshold_bytes:
+                    payload_ref = await self._store_external_payload(conn, task.id, payload_data)
+                    payload_data = None
 
-                    values.append((
-                        task.id, task.handler,
-                        json.dumps(payload_data) if payload_data else None,
-                        payload_ref, task.status.value, task.priority,
-                        task.queue_name or self.config.default_queue_name,
-                        task.scheduled_at, task.depends_on, task.idempotency_key,
-                        task.max_retries, task.retry_delay, task.timeout,
-                        json.dumps(task.metadata) if task.metadata else None
-                    ))
-                    task_ids.append(task.id)
+                values.append((
+                    task.id, task.handler,
+                    json.dumps(payload_data) if payload_data else None,
+                    payload_ref, task.status.value, task.priority,
+                    task.queue_name or self.config.default_queue_name,
+                    task.scheduled_at, task.depends_on, task.idempotency_key,
+                    task.max_retries, task.retry_delay, task.timeout,
+                    json.dumps(task.metadata) if task.metadata else None
+                ))
+                task_ids.append(task.id)
 
-                # Bulk insert with ON CONFLICT
-                await conn.executemany("""
+            # Bulk insert with ON CONFLICT
+            await conn.executemany("""
                     INSERT INTO tasks (
                         id, handler, payload, payload_ref, status, priority,
                         queue_name, scheduled_at, depends_on, idempotency_key,
@@ -327,12 +321,12 @@ class PostgreSQLBackend(QueueBackend):
                     ON CONFLICT (idempotency_key) DO NOTHING
                 """, values)
 
-                # Notify all affected queues
-                queues = set(t.queue_name or self.config.default_queue_name for t in tasks)
-                for queue in queues:
-                    await self._notify_queue(conn, queue)
+            # Notify all affected queues
+            queues = {t.queue_name or self.config.default_queue_name for t in tasks}
+            for queue in queues:
+                await self._notify_queue(conn, queue)
 
-                return task_ids
+            return task_ids
 
     async def dequeue_atomic(self, queue_name: str, worker_id: str) -> Optional[Task]:
         """
@@ -467,7 +461,7 @@ class PostgreSQLBackend(QueueBackend):
             """, lease_id)
             return affected != "UPDATE 0"
 
-    async def get_expired_leases(self) -> List[Dict[str, Any]]:
+    async def get_expired_leases(self) -> list[dict[str, Any]]:
         """Get expired leases."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -496,7 +490,7 @@ class PostgreSQLBackend(QueueBackend):
             """)
 
             # Notify affected queues
-            queues = set(row['queue_name'] for row in rows)
+            queues = {row['queue_name'] for row in rows}
             for queue in queues:
                 await self._notify_queue(conn, queue)
 
@@ -566,19 +560,17 @@ class PostgreSQLBackend(QueueBackend):
             """, queue_name)
             return len(rows)
 
-    async def get_dead_letter_queue(self) -> List[Task]:
+    async def get_dead_letter_queue(self) -> list[Task]:
         """Get DLQ tasks."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM dead_letter_queue")
-        tasks: List[Task] = []
+        tasks: list[Task] = []
         for row in rows:
             row_dict = dict(row)
             payload = row_dict.get('payload')
             if isinstance(payload, str):
-                try:
+                with suppress(json.JSONDecodeError):
                     payload = json.loads(payload)
-                except json.JSONDecodeError:
-                    pass
             metadata = row_dict.get('metadata')
             if isinstance(metadata, str):
                 try:
@@ -631,7 +623,7 @@ class PostgreSQLBackend(QueueBackend):
 
         return True
 
-    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> List[str]:
+    async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
         Get IDs of tasks ready to run (dependencies satisfied).
         Uses efficient CTE for dependency checking.
@@ -740,7 +732,7 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             return await conn.execute(query, *args)
 
-    async def fetch(self, query: str, *args) -> List[Dict[str, Any]]:
+    async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
         """Execute query and fetch rows as dictionaries."""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
@@ -751,7 +743,7 @@ class PostgreSQLBackend(QueueBackend):
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *args)
 
-    async def fetchrow(self, query: str, *args) -> Optional[Dict[str, Any]]:
+    async def fetchrow(self, query: str, *args) -> Optional[dict[str, Any]]:
         """Execute query and fetch a single row as dictionary."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(query, *args)
@@ -760,11 +752,10 @@ class PostgreSQLBackend(QueueBackend):
     @asynccontextmanager
     async def transaction(self):
         """Transaction context manager (yields a live connection)."""
-        async with self.pool.acquire() as conn:
-            async with conn.transaction():
-                yield conn
+        async with self.pool.acquire() as conn, conn.transaction():
+            yield conn
 
-    async def _store_external_payload(self, conn: Connection, task_id: str, payload: Dict) -> str:
+    async def _store_external_payload(self, conn: Connection, task_id: str, payload: dict) -> str:
         """
         Store large payload externally.
         """
@@ -785,7 +776,7 @@ class PostgreSQLBackend(QueueBackend):
 
         return payload_id
 
-    async def _load_external_payload(self, conn: Connection, payload_ref: str) -> Optional[Dict]:
+    async def _load_external_payload(self, conn: Connection, payload_ref: str) -> Optional[dict]:
         """
         Load externally stored payload.
         """
@@ -914,7 +905,7 @@ class PostgreSQLBackend(QueueBackend):
         except asyncio.TimeoutError:
             return False
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """
         Get backend status for monitoring.
         """

@@ -7,6 +7,7 @@ import type { ActorSettings } from "@/types/actor"
 import type { ChatDocuments } from "@/models/ChatTypes"
 import type { SaveMessageData, SaveMessageErrorData } from "@/types/chat-modes"
 import { buildAssistantErrorContent } from "@/utils/chat-error-message"
+import { applyMcpModuleDisclosureFromToolCalls } from "@/utils/mcp-disclosure"
 import {
   buildMessageVariant,
   getLastUserMessageId,
@@ -18,8 +19,10 @@ import {
   consumeStreamingChunk,
   type StreamingChunk
 } from "@/utils/streaming-chunks"
+import { buildMessageSteeringSnippet } from "@/utils/message-steering"
 import type { ChatHistory, Message, ToolChoice } from "~/store/option"
 import type { ToolCall } from "@/types/tool-calls"
+import type { MessageSteeringFlags } from "@/types/message-steering"
 
 const STREAMING_UPDATE_INTERVAL_MS = 80
 
@@ -48,6 +51,7 @@ export type ChatModeParamsBase = {
   assistantParentMessageId?: string | null
   historyForModel?: ChatHistory
   regenerateFromMessage?: Message
+  messageSteering?: MessageSteeringFlags
 }
 
 export type ChatModeContext<TParams extends ChatModeParamsBase> = TParams & {
@@ -287,6 +291,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
       const sources = preflight.sources ?? []
       const images = preflight.images ?? []
       const toolCalls = extractToolCalls(preflight.generationInfo)
+      applyMcpModuleDisclosureFromToolCalls(toolCalls)
       const nextHistory = mode.updateHistory
         ? mode.updateHistory(context, fullText)
         : ([
@@ -346,6 +351,19 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
     }
 
     const promptData = await mode.preparePrompt(context)
+    const steeringSnippet = buildMessageSteeringSnippet(
+      context.messageSteering || {
+        continueAsUser: false,
+        impersonateUser: false,
+        forceNarrate: false
+      }
+    )
+    if (steeringSnippet) {
+      promptData.chatHistory = [
+        ...promptData.chatHistory,
+        { role: "system", content: steeringSnippet }
+      ]
+    }
     promptContent = promptData.promptContent
     promptId = promptData.promptId
     const sources = promptData.sources ?? []
@@ -414,6 +432,7 @@ export const runChatPipeline = async <TParams extends ChatModeParamsBase>(
 
     cancelStreamingUpdate()
     const toolCalls = extractToolCalls(generationInfo)
+    applyMcpModuleDisclosureFromToolCalls(toolCalls)
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === generateMessageId

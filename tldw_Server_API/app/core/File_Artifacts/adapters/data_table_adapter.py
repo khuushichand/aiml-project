@@ -3,12 +3,12 @@ from __future__ import annotations
 import csv
 import json
 from io import StringIO
-from typing import Any, ClassVar, Dict
+from typing import Any, ClassVar
 
+from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
 from tldw_Server_API.app.core.File_Artifacts.adapters.base import ExportResult
 from tldw_Server_API.app.core.File_Artifacts.adapters.table_adapter_base import TableAdapterBase
 from tldw_Server_API.app.core.File_Artifacts.adapters.xlsx_adapter import XlsxAdapter
-from tldw_Server_API.app.core.exceptions import FileArtifactsValidationError
 
 
 class DataTableAdapter(TableAdapterBase):
@@ -18,7 +18,7 @@ class DataTableAdapter(TableAdapterBase):
     export_formats: ClassVar[set[str]] = {"csv", "json", "xlsx"}
     validation_error: ClassVar[type[Exception]] = FileArtifactsValidationError
 
-    def export(self, structured: Dict[str, Any], *, format: str) -> ExportResult:
+    def export(self, structured: dict[str, Any], *, format: str) -> ExportResult:
         """Export structured table data in the requested format."""
         if format == "csv":
             return self._export_csv(structured)
@@ -28,7 +28,7 @@ class DataTableAdapter(TableAdapterBase):
             return self._export_xlsx(structured)
         raise FileArtifactsValidationError("unsupported_format")
 
-    def _export_csv(self, structured: Dict[str, Any]) -> ExportResult:
+    def _export_csv(self, structured: dict[str, Any]) -> ExportResult:
         """Export structured table data to CSV bytes."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
@@ -40,7 +40,7 @@ class DataTableAdapter(TableAdapterBase):
         data = buf.getvalue().encode("utf-8")
         return ExportResult(status="ready", content_type="text/csv", bytes_len=len(data), content=data)
 
-    def _export_json(self, structured: Dict[str, Any]) -> ExportResult:
+    def _export_json(self, structured: dict[str, Any]) -> ExportResult:
         """Export structured table data to JSON bytes."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []
@@ -51,7 +51,7 @@ class DataTableAdapter(TableAdapterBase):
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         return ExportResult(status="ready", content_type="application/json", bytes_len=len(data), content=data)
 
-    def _export_xlsx(self, structured: Dict[str, Any]) -> ExportResult:
+    def _export_xlsx(self, structured: dict[str, Any]) -> ExportResult:
         """Export structured table data to XLSX bytes via XlsxAdapter."""
         columns = structured.get("columns") or []
         rows = structured.get("rows") or []

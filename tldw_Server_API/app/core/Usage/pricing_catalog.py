@@ -17,12 +17,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict, Tuple, Optional, List
 
 from loguru import logger
 
 
-def _lower_keys(d: Dict) -> Dict:
+def _lower_keys(d: dict) -> dict:
     out = {}
     for k, v in d.items():
         if isinstance(v, dict):
@@ -34,7 +33,7 @@ def _lower_keys(d: Dict) -> Dict:
 
 # Baseline defaults (USD per 1K tokens). These are indicative and can be
 # refined over time. Kept conservative to avoid under-estimating.
-DEFAULT_PRICING: Dict[str, Dict[str, Dict[str, float]]] = {
+DEFAULT_PRICING: dict[str, dict[str, dict[str, float]]] = {
     "openai": {
         # Legacy generalizations
         "gpt-4": {"prompt": 30e-3, "completion": 60e-3},
@@ -173,7 +172,7 @@ class PricingCatalog:
         except Exception as e:
             logger.warning(f"Failed to load pricing overrides file: {e}")
 
-    def _merge_overrides(self, overrides: Dict) -> None:
+    def _merge_overrides(self, overrides: dict) -> None:
         for provider, models in overrides.items():
             if not isinstance(models, dict):
                 continue
@@ -198,7 +197,7 @@ class PricingCatalog:
                     entry["note"] = str(note)
                 base[model] = entry
 
-    def get_rates(self, provider: str, model: str) -> Tuple[float, float, bool]:
+    def get_rates(self, provider: str, model: str) -> tuple[float, float, bool]:
         """
         Return (prompt_per_1k, completion_per_1k, estimated) for provider/model.
         If exact model not found, try partial matches; otherwise fall back to a
@@ -245,7 +244,7 @@ def reset_pricing_catalog() -> PricingCatalog:
     return _DEFAULT_CATALOG
 
 
-def list_provider_models(provider: str) -> List[str]:
+def list_provider_models(provider: str) -> list[str]:
     """Return the list of known models for a provider from the pricing catalog.
 
     Sources include defaults and overrides loaded from the environment and

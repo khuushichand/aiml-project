@@ -1,18 +1,28 @@
 from __future__ import annotations
 
-from typing import Optional, Iterable, Any
 import ipaddress
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+
+_IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _normalize_entries(raw: Iterable[Any]) -> list[str]:
     return [str(entry).strip() for entry in raw if str(entry).strip()]
 
 
-def _ip_in_allowlist(ip: Optional[str], allowlist: list[str]) -> bool:
+def _ip_in_allowlist(ip: str | None, allowlist: list[str]) -> bool:
     """Return True when IP matches any entry in allowlist (CIDR or exact)."""
     if not ip:
         return False
@@ -38,7 +48,7 @@ def _ip_in_allowlist(ip: Optional[str], allowlist: list[str]) -> bool:
     return False
 
 
-def is_trusted_proxy_ip(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_trusted_proxy_ip(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when IP is in the trusted proxy allowlist."""
     s = settings or get_settings()
     raw = getattr(s, "AUTH_TRUSTED_PROXY_IPS", None) or []
@@ -48,24 +58,24 @@ def is_trusted_proxy_ip(ip: Optional[str], settings: Optional[Settings] = None) 
     return _ip_in_allowlist(ip, allowlist)
 
 
-def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Optional[str]:
+def resolve_client_ip(request: Any, settings: Settings | None = None) -> str | None:
     """Resolve client IP, honoring proxy headers only for trusted proxies."""
     if request is None:
         return None
     try:
         s = settings or get_settings()
-    except Exception:
+    except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
         s = settings
     try:
         peer = getattr(getattr(request, "client", None), "host", None)
-    except Exception:
+    except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
         peer = None
 
     trust_xff = bool(getattr(s, "AUTH_TRUST_X_FORWARDED_FOR", False)) if s is not None else False
     if trust_xff and is_trusted_proxy_ip(peer, s):
         try:
             xr = request.headers.get("x-real-ip") or request.headers.get("X-Real-IP")
-        except Exception:
+        except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
             xr = None
         if xr:
             xr_val = xr.strip()
@@ -76,12 +86,12 @@ def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Opti
                 pass
         try:
             fwd = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
-        except Exception:
+        except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
             fwd = None
         if fwd:
             try:
                 leftmost = fwd.split(",", 1)[0].strip()
-            except Exception:
+            except _IP_ALLOWLIST_NONCRITICAL_EXCEPTIONS:
                 leftmost = ""
             if leftmost:
                 try:
@@ -92,7 +102,7 @@ def resolve_client_ip(request: Any, settings: Optional[Settings] = None) -> Opti
     return peer
 
 
-def is_single_user_ip_allowed(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_single_user_ip_allowed(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when the client IP is allowed for single-user API key auth."""
     s = settings or get_settings()
     allowed_raw = getattr(s, "SINGLE_USER_ALLOWED_IPS", None) or []
@@ -102,7 +112,7 @@ def is_single_user_ip_allowed(ip: Optional[str], settings: Optional[Settings] = 
     return _ip_in_allowlist(ip, allowed)
 
 
-def is_service_token_ip_allowed(ip: Optional[str], settings: Optional[Settings] = None) -> bool:
+def is_service_token_ip_allowed(ip: str | None, settings: Settings | None = None) -> bool:
     """Return True when the client IP is allowed for service token auth."""
     s = settings or get_settings()
     allowed_raw = getattr(s, "SERVICE_TOKEN_ALLOWED_IPS", None) or []

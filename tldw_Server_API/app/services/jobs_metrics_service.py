@@ -20,20 +20,34 @@ Usage:
 Tests can call reconcile_once(limit) directly for determinism.
 """
 
+import contextlib
 import os
 import time
-from typing import List, Tuple, Optional
+from sqlite3 import Error as SQLiteError
 
 from loguru import logger
 
 try:
     # JobManager path in this repository
     from tldw_Server_API.app.core.Jobs.manager import JobManager
-except Exception:  # Fallback path for historical imports
+except ImportError:  # Fallback path for historical imports
     from tldw_Server_API.app.core.Jobs.manager import JobManager  # type: ignore
 
 
-def _is_truthy(v: Optional[str]) -> bool:
+_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+
+
+def _is_truthy(v: str | None) -> bool:
     return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
 
 
@@ -45,7 +59,7 @@ class JobsMetricsService:
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
         self.jm = JobManager(backend=backend, db_url=db_url)
 
-    def reconcile_once(self, *, limit_groups: Optional[int] = None) -> int:
+    def reconcile_once(self, *, limit_groups: int | None = None) -> int:
         """Recompute job_counters for up to limit_groups groups.
 
         Strategy:
@@ -106,10 +120,8 @@ class JobsMetricsService:
                             ),
                             (d, q, jt, int(r_ready), int(r_sched), int(r_proc)),
                         )
-                        try:
+                        with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                             jm._update_gauges(domain=d, queue=q, job_type=jt)
-                        except Exception:
-                            pass
                         reconciled += 1
             else:
                 # SQLite
@@ -148,20 +160,14 @@ class JobsMetricsService:
                         ),
                         (d, q, jt, int(q_ready), int(q_sched), int(p)),
                     )
-                    try:
+                    with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                         self.jm._update_gauges(domain=d, queue=q, job_type=jt)
-                    except Exception:
-                        pass
                     reconciled += 1
-                try:
+                with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                     conn.commit()
-                except Exception:
-                    pass
         finally:
-            try:
+            with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                 conn.close()
-            except Exception:
-                pass
         return reconciled
 
     def run_forever(self) -> None:
@@ -174,7 +180,7 @@ class JobsMetricsService:
             try:
                 n = self.reconcile_once()
                 logger.debug(f"Jobs metrics reconcile tick: updated {n} group(s)")
-            except Exception as e:
+            except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
                 logger.warning(f"Jobs metrics reconcile error: {e}")
             time.sleep(self.interval)
 
@@ -190,7 +196,7 @@ async def run_jobs_metrics_reconcile(stop_event) -> None:
     while not stop_event.is_set():
         try:
             svc.reconcile_once()
-        except Exception as e:
+        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs reconcile loop error: {e}")
         await asyncio.sleep(interval)
 
@@ -210,12 +216,10 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     try:
         from tldw_Server_API.app.core.Jobs.metrics import ensure_jobs_metrics_registered
         from tldw_Server_API.app.core.Metrics.metrics_manager import get_metrics_registry
-    except Exception:
+    except ImportError:
         return
-    try:
+    with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
         ensure_jobs_metrics_registered()
-    except Exception:
-        pass
     reg = get_metrics_registry()
     if not reg:
         return
@@ -224,18 +228,18 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
     jm = JobManager(backend=backend, db_url=db_url)
     try:
         interval = float(os.getenv("JOBS_METRICS_INTERVAL_SEC", "5") or "5")
-    except Exception:
+    except (TypeError, ValueError):
         interval = 5.0
     try:
         window_h = int(os.getenv("JOBS_SLO_WINDOW_HOURS", "24") or "24")
-    except Exception:
+    except (TypeError, ValueError):
         window_h = 24
     try:
         max_groups = int(os.getenv("JOBS_SLO_MAX_GROUPS", "100") or "100")
-    except Exception:
+    except (TypeError, ValueError):
         max_groups = 100
 
-    def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: Tuple[float,float,float], dur_p: Tuple[float,float,float]):
+    def _set_gauges(d: str, q: str, jt: str, owner: str, qlat_p: tuple[float,float,float], dur_p: tuple[float,float,float]):
         labels = {"domain": d, "queue": q, "job_type": jt or "", "owner_user_id": owner or ""}
         reg.set_gauge("jobs.queue_latency_p50_seconds", float(qlat_p[0]), labels)
         reg.set_gauge("jobs.queue_latency_p90_seconds", float(qlat_p[1]), labels)
@@ -244,7 +248,7 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
         reg.set_gauge("jobs.duration_p90_seconds", float(dur_p[1]), labels)
         reg.set_gauge("jobs.duration_p99_seconds", float(dur_p[2]), labels)
 
-    def _percentiles(values: List[float]) -> Tuple[float, float, float]:
+    def _percentiles(values: list[float]) -> tuple[float, float, float]:
         if not values:
             return (0.0, 0.0, 0.0)
         vs = sorted(values)
@@ -297,20 +301,16 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
                             grp[(str(owner or ""), str(d or ""), str(q or ""), str(jt or ""))]["qlat"].append(float(qlat))
                         if dur is not None:
                             grp[(str(owner or ""), str(d or ""), str(q or ""), str(jt or ""))]["dur"].append(float(dur))
-                    except Exception:
+                    except (TypeError, ValueError):
                         continue
                 # Limit groups per loop
-                count = 0
-                for (owner, d, q, jt), vals in grp.items():
+                for count, ((owner, d, q, jt), vals) in enumerate(grp.items(), 1):
                     _set_gauges(d, q, jt, owner, _percentiles(vals["qlat"]), _percentiles(vals["dur"]))
-                    count += 1
                     if count >= max_groups:
                         break
             finally:
-                try:
+                with contextlib.suppress(_JOBS_METRICS_BEST_EFFORT_EXCEPTIONS):
                     conn.close()
-                except Exception:
-                    pass
-        except Exception as e:
+        except _JOBS_METRICS_BEST_EFFORT_EXCEPTIONS as e:
             logger.debug(f"Jobs SLO gauges loop error: {e}")
         await asyncio.sleep(interval)

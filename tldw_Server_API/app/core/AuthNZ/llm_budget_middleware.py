@@ -1,21 +1,36 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Callable
 
+from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-import os
-from loguru import logger
-from fastapi import HTTPException
 
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
-from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
-from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
 from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import resolve_client_ip
+from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
+from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
+
+_LLM_BUDGET_PARSE_EXCEPTIONS = (TypeError, ValueError, UnicodeError, json.JSONDecodeError)
+_LLM_BUDGET_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeError,
+    json.JSONDecodeError,
+)
 
 
 class LLMBudgetMiddleware(BaseHTTPMiddleware):
@@ -51,7 +66,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         """
         try:
             gen = get_settings_generation()
-        except Exception:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             gen = -1
         if self._settings_cache is None or (gen >= 0 and gen != self._settings_gen):
             self._settings_cache = get_settings()
@@ -69,10 +84,10 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
         try:
             request.state.api_key_id = key_id
             request.state.user_id = user_id
-        except Exception as _state_exc:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as _state_exc:
             try:
                 path_ctx = getattr(getattr(request, "url", None), "path", None) or request.scope.get("path")
-            except Exception:
+            except (AttributeError, KeyError, TypeError):
                 path_ctx = None
             logger.exception(
                 "LLM budget: failed to set request.state attributes (path={path}, api_key_id={key_id}, user_id={user_id})",
@@ -113,7 +128,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     "/api/v1/embeddings",
                 ]
             return any(isinstance(p, str) and path.startswith(p) for p in endpoints)
-        except Exception:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             return False
 
     @staticmethod
@@ -149,7 +164,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 logger.debug(
                     f"LLM budget dispatch path={path} enforce={getattr(settings,'LLM_BUDGET_ENFORCE', True)} vkeys={getattr(settings,'VIRTUAL_KEYS_ENABLED', True)}"
                 )
-            except Exception:
+            except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
                 logger.debug(f"LLM budget dispatch path={path} (settings unavailable)")
 
         # Resolve key_id deterministically from header first (DB hash lookup),
@@ -180,7 +195,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                             logger.debug(f"LLM budget: resolved key_id via hash lookup: {key_id}")
                     elif _mw_debug:
                         logger.debug("LLM budget: hash lookup found no matching key")
-                except Exception as _e_hash:
+                except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as _e_hash:
                     if _mw_debug:
                         logger.debug(f"LLM budget: hash-lookup failed: {_e_hash}")
                     else:
@@ -204,7 +219,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                             logger.debug(f"LLM budget: resolved key_id via manager.validate: {key_id}")
                     elif _mw_debug:
                         logger.debug("LLM budget: manager.validate returned no info for api key")
-                except Exception as _e_mgr:
+                except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as _e_mgr:
                     if _mw_debug:
                         logger.debug(f"LLM budget: manager.validate failed: {_e_mgr}")
                     else:
@@ -218,13 +233,13 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
         try:
             limits = await get_key_limits(int(key_id))
-        except Exception as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             logger.exception("LLM budget: failed to read key limits; rejecting request")
             return JSONResponse(
                 {
                     "error": "budget_limits_unavailable",
                     "message": "Failed to load virtual key limits; request rejected",
-                    "details": {"reason": str(e)},
+                    "details": {"reason": "internal_error"},
                 },
                 status_code=503,
             )
@@ -258,7 +273,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                         "error": "forbidden",
                         "message": f"Endpoint '{code}' not allowed for this key"
                     }, status_code=403)
-        except Exception as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"LLM budget: allowlist check skipped/failed: {e}")
 
         # Optional provider/model allowlist enforcement
@@ -295,10 +310,10 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                                     "error": "forbidden",
                                     "message": f"Model '{model}' not allowed for this key"
                                 }, status_code=403)
-                    except Exception as _e:
+                    except _LLM_BUDGET_PARSE_EXCEPTIONS as _e:
                         # If body cannot be parsed, skip enforcement rather than break requests
                         logger.debug("LLM budget: model allowlist parse skipped/failed: {}", _e)
-        except Exception as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("LLM budget: provider/model allowlist skipped/failed: {}", e)
 
         # Budget enforcement
@@ -311,7 +326,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 user_id_value = getattr(request.state, "user_id", None)
                 try:
                     user_id_int = int(user_id_value) if user_id_value is not None else None
-                except Exception:
+                except (TypeError, ValueError):
                     user_id_int = None
                 org_ids: list[int] = []
                 team_ids: list[int] = []
@@ -319,13 +334,13 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     raw_org_ids = getattr(request.state, "org_ids", None)
                     if isinstance(raw_org_ids, (list, tuple)):
                         org_ids = [int(o) for o in raw_org_ids if o is not None]
-                except Exception:
+                except (TypeError, ValueError):
                     org_ids = []
                 try:
                     raw_team_ids = getattr(request.state, "team_ids", None)
                     if isinstance(raw_team_ids, (list, tuple)):
                         team_ids = [int(t) for t in raw_team_ids if t is not None]
-                except Exception:
+                except (TypeError, ValueError):
                     team_ids = []
                 principal = AuthPrincipal(
                     kind="api_key",
@@ -361,7 +376,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     "message": "Virtual key budget exceeded",
                     "details": result,
                 }, status_code=402)
-        except Exception as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             # Fail-closed: if we cannot evaluate the budget, do NOT allow the request.
             # Log with full exception details for operational visibility.
             logger.exception("LLM budget: budget check failed; rejecting request")
@@ -369,7 +384,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 {
                     "error": "budget_check_failed",
                     "message": "Failed to evaluate budget enforcement; request rejected",
-                    "details": {"reason": str(e)},
+                    "details": {"reason": "internal_error"},
                 },
                 status_code=503,
             )

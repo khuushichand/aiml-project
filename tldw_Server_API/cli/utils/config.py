@@ -7,7 +7,7 @@ error handling and defaults.
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 
 import yaml
 from loguru import logger
@@ -18,7 +18,7 @@ class ConfigError(Exception):
     pass
 
 
-def load_cli_config(config_path: Optional[str] = None, db_path_override: Optional[str] = None) -> Dict[str, Any]:
+def load_cli_config(config_path: Optional[str] = None, db_path_override: Optional[str] = None) -> dict[str, Any]:
     """
     Load CLI configuration from various sources.
 
@@ -38,13 +38,13 @@ def load_cli_config(config_path: Optional[str] = None, db_path_override: Optiona
     eval_config_path = _find_evaluations_config(config_path)
     if eval_config_path and eval_config_path.exists():
         try:
-            with open(eval_config_path, 'r') as f:
+            with open(eval_config_path) as f:
                 eval_config = yaml.safe_load(f)
                 if eval_config:
                     config.update(eval_config)
                     logger.debug(f"Loaded evaluations config from {eval_config_path}")
         except Exception as e:
-            raise ConfigError(f"Failed to load evaluations config from {eval_config_path}: {e}")
+            raise ConfigError(f"Failed to load evaluations config from {eval_config_path}: {e}") from e
 
     # Load from main tldw config file
     main_config_path = _find_main_config()
@@ -126,7 +126,7 @@ def _find_main_config() -> Optional[Path]:
     return None
 
 
-def _apply_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_defaults(config: dict[str, Any]) -> dict[str, Any]:
     """Apply default configuration values."""
     from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
     defaults = {
@@ -188,7 +188,7 @@ def _apply_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     return _deep_merge(defaults, config)
 
 
-def _deep_merge(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def _deep_merge(default: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge configuration dictionaries."""
     result = default.copy()
 
@@ -201,7 +201,7 @@ def _deep_merge(default: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, 
     return result
 
 
-def _validate_config(config: Dict[str, Any]):
+def _validate_config(config: dict[str, Any]):
     """Validate configuration structure and values."""
     errors = []
 
@@ -241,17 +241,17 @@ def _validate_config(config: Dict[str, Any]):
         raise ConfigError(f"Configuration validation failed: {'; '.join(errors)}")
 
 
-def get_database_path(config: Dict[str, Any]) -> str:
+def get_database_path(config: dict[str, Any]) -> str:
     """Get database path from configuration."""
     return config.get('database', {}).get('path', 'evaluations.db')
 
 
-def get_log_level(config: Dict[str, Any]) -> str:
+def get_log_level(config: dict[str, Any]) -> str:
     """Get logging level from configuration."""
     return config.get('monitoring', {}).get('logging', {}).get('level', 'INFO')
 
 
-def get_config_value(config: Dict[str, Any], path: str, default: Any = None) -> Any:
+def get_config_value(config: dict[str, Any], path: str, default: Any = None) -> Any:
     """
     Get configuration value by dot-separated path.
 
@@ -274,7 +274,7 @@ def get_config_value(config: Dict[str, Any], path: str, default: Any = None) -> 
     return current
 
 
-def save_config(config: Dict[str, Any], config_path: Optional[str] = None):
+def save_config(config: dict[str, Any], config_path: Optional[str] = None):
     """
     Save configuration to file.
 
@@ -298,4 +298,4 @@ def save_config(config: Dict[str, Any], config_path: Optional[str] = None):
 
         logger.info(f"Configuration saved to {config_path}")
     except Exception as e:
-        raise ConfigError(f"Failed to save configuration to {config_path}: {e}")
+        raise ConfigError(f"Failed to save configuration to {config_path}: {e}") from e

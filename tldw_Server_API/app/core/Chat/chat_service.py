@@ -9,82 +9,109 @@ keeping the wire behavior identical.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, List, Callable, AsyncIterator, Iterator, Awaitable
-from fastapi import HTTPException, status
-from loguru import logger
-import base64
-import uuid as _uuid
 import asyncio
-import time
+import base64
+import contextlib
+import inspect
 import json as _json
 import os
-import inspect
 import re
-from pathlib import Path
+import time
+import uuid as _uuid
+from collections.abc import AsyncIterator, Awaitable, Iterator
 from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable
 
-# Reuse existing helpers from chat_helpers and prompt templating
-from tldw_Server_API.app.core.Chat.chat_helpers import (
-    get_or_create_character_context,
-    get_or_create_conversation,
-)
+from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
+from loguru import logger
+from starlette.responses import StreamingResponse
+
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
 from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import replace_placeholders
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
     map_sender_to_role,
     sanitize_sender_name,
 )
-from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
-from tldw_Server_API.app.core.Chat.prompt_template_manager import (
-    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
-    load_template,
-    apply_template_to_string,
-)
-from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
-from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
-from tldw_Server_API.app.core.Chat.streaming_utils import (
-    CHAT_STREAM_INCLUDE_METADATA,
-    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
-    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
-    create_streaming_response_with_timeout,
-)
-from tldw_Server_API.app.core.Chat.request_queue import (
-    get_request_queue,
-    RequestPriority,
-)
-from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
-from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Chat.Chat_Deps import (
     ChatAPIError,
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
 )
-from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.core.Chat.chat_exceptions import get_request_id
-from fastapi.encoders import jsonable_encoder
-from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
-from starlette.responses import StreamingResponse
-from tldw_Server_API.app.core.Audit.unified_audit_service import AuditEventType
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import DEFAULT_CHARACTER_NAME
+
+# Reuse existing helpers from chat_helpers and prompt templating
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+)
+from tldw_Server_API.app.core.Chat.message_utils import should_persist_message_role
+from tldw_Server_API.app.core.Chat.prompt_template_manager import (
+    DEFAULT_RAW_PASSTHROUGH_TEMPLATE,
+    apply_template_to_string,
+    load_template,
+)
+from tldw_Server_API.app.core.Chat.request_queue import (
+    RequestPriority,
+    get_request_queue,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    CHAT_STREAM_INCLUDE_METADATA,
+    create_streaming_response_with_timeout,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    HEARTBEAT_INTERVAL as CHAT_HEARTBEAT_INTERVAL,
+)
+from tldw_Server_API.app.core.Chat.streaming_utils import (
+    STREAMING_IDLE_TIMEOUT as CHAT_IDLE_TIMEOUT,
+)
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_registry
+from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
+from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
+from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
+from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
+
+_CHAT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    ChatAPIError,
+    ChatBadRequestError,
+    ChatConfigurationError,
+    ChatProviderError,
+    HTTPException,
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    UnicodeDecodeError,
+    ValueError,
+    _json.JSONDecodeError,
+    asyncio.CancelledError,
+)
 
 _config = load_comprehensive_config()
-_chat_config: Dict[str, str] = {}
+_chat_config: dict[str, str] = {}
 if _config and _config.has_section("Chat-Module"):
     _chat_config = dict(_config.items("Chat-Module"))
 
 
-def _coerce_int(value: Optional[str], default: int) -> int:
+def _coerce_int(value: str | None, default: int) -> int:
     try:
         if value is None:
             return default
         return int(value)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         return default
 
 
-def _coerce_bool(value: Optional[str], default: bool) -> bool:
+def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
@@ -100,10 +127,8 @@ if "history_messages_limit" in _chat_config:
     )
 _env_history_limit = os.getenv("CHAT_HISTORY_LIMIT")
 if _env_history_limit:
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _default_history_limit = max(1, min(_MAX_HISTORY_MESSAGES, int(_env_history_limit)))
-    except Exception:
-        pass
 DEFAULT_HISTORY_MESSAGE_LIMIT = _default_history_limit
 
 _default_history_order = _chat_config.get("history_messages_order", "desc").strip().lower()
@@ -139,7 +164,7 @@ def should_force_normalize_string_responses() -> bool:
 
 # --- Cached helpers (module scope) -------------------------------------------
 @lru_cache(maxsize=16)
-def _load_models_with_case_cached(provider: str) -> List[str]:
+def _load_models_with_case_cached(provider: str) -> list[str]:
     """Load provider models preserving original key casing when possible.
 
     Attempts to read the raw model_pricing.json to preserve the original
@@ -156,8 +181,9 @@ def _load_models_with_case_cached(provider: str) -> List[str]:
     except (OSError, ValueError, KeyError, AttributeError) as _e:
         # Expected file/format issues: fall back to normalized catalog
         logger.debug(f"Model catalog raw load fallback for provider '{provider}': {_e}")
-    except Exception as _ue:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as _ue:
         # Unexpected exceptions should be visible in production logs
+        pass
         logger.warning(f"Unexpected error loading model catalog for provider '{provider}': {_ue}")
 
     # Fallback: use the normalized list (lowercase keys)
@@ -165,7 +191,7 @@ def _load_models_with_case_cached(provider: str) -> List[str]:
 
 
 @lru_cache(maxsize=1)
-def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
+def _load_alias_overrides_cached() -> dict[str, dict[str, str]]:
     """Load model alias overrides from env and pricing catalog.
 
     Resolution order:
@@ -186,8 +212,9 @@ def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
                 }
     except (ValueError, TypeError) as _e:
         logger.debug(f"CHAT_MODEL_ALIAS_OVERRIDES parse failed: {_e}")
-    except Exception as _ue:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as _ue:
         # Unexpected exceptions should be visible in production logs
+        pass
         logger.warning(f"Unexpected error parsing CHAT_MODEL_ALIAS_OVERRIDES: {_ue}")
 
     # 2) File keys in pricing catalog
@@ -205,8 +232,9 @@ def _load_alias_overrides_cached() -> Dict[str, Dict[str, str]]:
                     }
     except (OSError, ValueError, KeyError, AttributeError) as _e:
         logger.debug(f"Alias overrides load fallback: {_e}")
-    except Exception as _ue:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as _ue:
         # Unexpected exceptions should be visible in production logs
+        pass
         logger.warning(f"Unexpected error loading alias overrides: {_ue}")
 
     # 3) Test-friendly defaults (preserve legacy behavior under pytest only)
@@ -227,20 +255,16 @@ def invalidate_model_alias_caches() -> None:
     `_load_alias_overrides_cached`. Safe to call at runtime (no side effects
     beyond cache flush). Subsequent requests will repopulate from sources.
     """
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_models_with_case_cached.cache_clear()
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
         _load_alias_overrides_cached.cache_clear()
-    except Exception:
-        pass
 
 
 def queue_is_active(queue: Any) -> bool:
     """Return True when the request queue is running and able to process work."""
     try:
-        status = getattr(queue, "is_running")
+        status = queue.is_running
     except AttributeError:
         status = None
     if callable(status):
@@ -248,7 +272,7 @@ def queue_is_active(queue: Any) -> bool:
             result = status()
             if result is not None:
                 return bool(result)
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
     elif status is not None:
         return bool(status)
@@ -260,24 +284,61 @@ def queue_is_active(queue: Any) -> bool:
     return True
 
 
-def _attach_queue_future_logger(future: "asyncio.Future[Any]", request_id: str) -> None:
+def _attach_queue_future_logger(future: asyncio.Future[Any], request_id: str) -> None:
     """Consume queue future exceptions to avoid unhandled warnings in streaming mode."""
 
-    def _consume(fut: "asyncio.Future[Any]") -> None:
+    def _consume(fut: asyncio.Future[Any]) -> None:
         try:
             fut.result()
         except asyncio.CancelledError:
             return
-        except Exception as exc:
+        except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug("Queue streaming job {} failed: {}", request_id, exc)
 
     future.add_done_callback(_consume)
 
 
+def _schedule_background_task(
+    awaitable: Awaitable[Any],
+    *,
+    task_name: str,
+    pending_tasks: list[asyncio.Task[Any]] | None = None,
+) -> asyncio.Task[Any] | None:
+    """Schedule a background task and observe failures to avoid silent task leaks."""
+
+    try:
+        task = asyncio.create_task(awaitable)
+    except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to schedule background task {}: {}", task_name, exc)
+        return None
+
+    if pending_tasks is not None:
+        pending_tasks.append(task)
+
+    def _consume(completed: asyncio.Task[Any]) -> None:
+        if pending_tasks is not None:
+            with contextlib.suppress(ValueError):
+                pending_tasks.remove(completed)
+        if completed.cancelled():
+            return
+        try:
+            exc = completed.exception()
+        except asyncio.CancelledError:
+            return
+        except _CHAT_NONCRITICAL_EXCEPTIONS as consume_exc:
+            logger.debug("Background task {} observation failed: {}", task_name, consume_exc)
+            return
+        if exc is not None:
+            logger.debug("Background task {} failed: {}", task_name, exc)
+
+    task.add_done_callback(_consume)
+    return task
+
+
 def parse_provider_model_for_metrics(
     request_data: Any,
     default_provider: str,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Parse provider and model for metrics logging without mutating request_data.
 
     Accepts model strings like "anthropic/claude-opus-4.1" and an optional
@@ -324,8 +385,8 @@ def normalize_request_provider_and_model(
         # Determine provider context for alias resolution.
         # If model includes an inline provider (e.g., "anthropic/claude-sonnet"),
         # prefer that; else honor api_provider, then default_provider.
-        inline_provider: Optional[str] = None
-        inline_model_part: Optional[str] = None
+        inline_provider: str | None = None
+        inline_model_part: str | None = None
         if "/" in model_str:
             parts_for_alias = model_str.split("/", 1)
             if len(parts_for_alias) == 2:
@@ -333,7 +394,7 @@ def normalize_request_provider_and_model(
         provider_for_mapping = ((inline_provider or api_provider or default_provider) or "").strip().lower()
 
 
-        def _resolve_alias(provider: str, raw_model: str) -> Optional[str]:
+        def _resolve_alias(provider: str, raw_model: str) -> str | None:
             m = (raw_model or "").strip()
             if not m:
                 return None
@@ -387,8 +448,9 @@ def normalize_request_provider_and_model(
     except (AttributeError, KeyError, ValueError):
         # Expected lookup/attr issues: do not block request
         pass
-    except Exception as _unexpected:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as _unexpected:
         # Unexpected exceptions should be visible in production logs
+        pass
         logger.warning(f"Unexpected error during model alias resolution: {_unexpected}")
     provider = (api_provider or default_provider).lower()
     if "/" in model_str:
@@ -400,7 +462,7 @@ def normalize_request_provider_and_model(
             if not api_provider:
                 provider = inline_provider_lower
                 # In this case, strip the inline provider prefix from the model
-                setattr(request_data, "model", actual_model)
+                request_data.model = actual_model
             else:
                 # api_provider is explicitly set on the request. For OpenRouter and
                 # Hugging Face, many valid model IDs include a namespace
@@ -408,12 +470,12 @@ def normalize_request_provider_and_model(
                 # namespaced model id unless the inline namespace matches "openrouter".
                 if provider in {"openrouter", "huggingface"}:
                     if provider == "openrouter" and inline_provider_lower == "openrouter":
-                        setattr(request_data, "model", actual_model)
+                        request_data.model = actual_model
                     else:
-                        setattr(request_data, "model", model_str)
+                        request_data.model = model_str
                 else:
                     # Non-OpenRouter providers do not use namespaced model ids; strip prefix
-                    setattr(request_data, "model", actual_model)
+                    request_data.model = actual_model
     return provider
 
 
@@ -421,7 +483,7 @@ def resolve_provider_and_model(
     request_data: Any,
     metrics_default_provider: str,
     normalize_default_provider: str,
-) -> Tuple[str, str, str, str, Dict[str, Any]]:
+) -> tuple[str, str, str, str, dict[str, Any]]:
     """Resolve provider/model for metrics and execution and record the decision path.
 
     Returns a 5-tuple:
@@ -456,15 +518,16 @@ def resolve_provider_and_model(
         new_model = getattr(request_data, "model", None)
         if new_model:
             selected_model = new_model
-    except Exception as exc:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
         # Do not block the request if normalization fails; fall back to metrics values.
+        pass
         logger.debug(
             "resolve_provider_and_model: normalization failed, "
             "falling back to metrics provider/model. Error={}",
             exc,
         )
 
-    debug_info: Dict[str, Any] = {
+    debug_info: dict[str, Any] = {
         "raw": {
             "api_provider": raw_api_provider,
             "model": raw_model,
@@ -492,7 +555,7 @@ def resolve_provider_api_key(
     provider: str,
     *,
     prefer_module_keys_in_tests: bool = True,
-) -> Tuple[Optional[str], Dict[str, Any]]:
+) -> tuple[str | None, dict[str, Any]]:
     """
     Resolve the API key for a provider using env/config first, with optional test overrides.
 
@@ -503,7 +566,7 @@ def resolve_provider_api_key(
     Returns (normalized_key, debug_info).
     """
     provider_key = (provider or "").strip().lower()
-    debug_info: Dict[str, Any] = {
+    debug_info: dict[str, Any] = {
         "provider": provider_key or provider,
         "selected_source": "missing",
         "module_sources": [],
@@ -516,7 +579,7 @@ def resolve_provider_api_key(
 
     try:
         is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         is_pytest = False
     is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
     use_module_overrides = prefer_module_keys_in_tests and (is_pytest or is_test_mode)
@@ -526,19 +589,20 @@ def resolve_provider_api_key(
         from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
 
         dynamic_keys = _schemas_mod.get_api_keys() or {}
-    except Exception as _err:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as _err:
         # API key loading errors should be visible in production
+        pass
         logger.warning(f"resolve_provider_api_key failed to load dynamic keys: {_err}")
         dynamic_keys = {}
 
-    module_keys: Dict[str, Optional[str]] = {}
+    module_keys: dict[str, str | None] = {}
     if use_module_overrides:
         try:
             schema_keys = getattr(_schemas_mod, "API_KEYS", None)
             if isinstance(schema_keys, dict) and schema_keys:
                 module_keys.update(schema_keys)
                 debug_info["module_sources"].append("chat_request_schemas")
-        except Exception as _schema_err:
+        except _CHAT_NONCRITICAL_EXCEPTIONS as _schema_err:
             logger.warning(f"resolve_provider_api_key skipped schema module keys: {_schema_err}")
         try:
             from tldw_Server_API.app.api.v1.endpoints import chat as _chat_mod  # type: ignore
@@ -548,7 +612,7 @@ def resolve_provider_api_key(
                 # Endpoint-level patches override schema-level for tests.
                 module_keys.update(endpoint_keys)
                 debug_info["module_sources"].append("chat_endpoint")
-        except Exception as _chat_err:
+        except _CHAT_NONCRITICAL_EXCEPTIONS as _chat_err:
             logger.warning(f"resolve_provider_api_key skipped endpoint module keys: {_chat_err}")
 
     try:
@@ -556,7 +620,7 @@ def resolve_provider_api_key(
 
         override = get_llm_provider_override(provider_key)
         override_value = override.api_key if override else None
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         override_value = None
 
     debug_info["override_value_present"] = override_value is not None
@@ -564,7 +628,7 @@ def resolve_provider_api_key(
     dynamic_value = dynamic_keys.get(provider_key)
     debug_info["dynamic_value_present"] = dynamic_value is not None
 
-    def _normalize(value: Optional[str]) -> Optional[str]:
+    def _normalize(value: str | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, str) and value.strip() == "":
@@ -596,7 +660,7 @@ def resolve_provider_api_key(
     return normalized_value, debug_info
 
 
-def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Optional[str]:
+def _resolve_base_url_override(provider: str, chat_args: dict[str, Any]) -> str | None:
     base_url = chat_args.get("base_url")
     if base_url is None:
         base_url = chat_args.get("api_base_url")
@@ -632,7 +696,7 @@ def _resolve_base_url_override(provider: str, chat_args: Dict[str, Any]) -> Opti
         raise ChatBadRequestError(provider=provider_key or None, message=str(exc)) from exc
 
 
-def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+def _build_adapter_request_from_chat_args(chat_args: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """Translate chat_api_call-style args into an adapter request payload."""
     from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
         ensure_app_config,
@@ -675,7 +739,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
     api_key = chat_args.get("api_key") or resolve_provider_api_key_from_config(provider, app_config)
     messages_payload = chat_args.get("messages_payload") or chat_args.get("messages") or []
 
-    request: Dict[str, Any] = {
+    request: dict[str, Any] = {
         "messages": messages_payload,
         "system_message": chat_args.get("system_message"),
         "model": model,
@@ -712,6 +776,9 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         "trusted_base_url_override",
         "stream",
         "streaming",
+        "history_message_limit",
+        "history_message_order",
+        "slash_command_injection_mode",
     }
     for key, value in chat_args.items():
         if key in skip_keys or value is None:
@@ -719,7 +786,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
         if key not in request:
             request[key] = value
 
-    internal: Dict[str, Any] = {}
+    internal: dict[str, Any] = {}
     for key in ("http_client_factory", "http_fetcher"):
         if chat_args.get(key) is not None:
             internal[key] = chat_args[key]
@@ -727,7 +794,7 @@ def _build_adapter_request_from_chat_args(chat_args: Dict[str, Any]) -> Tuple[st
     return provider, request, internal
 
 
-def _attach_internal_http_hooks(adapter: Any, request: Dict[str, Any], internal: Dict[str, Any]) -> None:
+def _attach_internal_http_hooks(adapter: Any, request: dict[str, Any], internal: dict[str, Any]) -> None:
     """Attach http_client_factory/http_fetcher only for adapters that opt in."""
     if not internal:
         return
@@ -778,17 +845,17 @@ async def perform_chat_api_call_async(**kwargs: Any) -> Any:
 
 def merge_api_keys_for_provider(
     provider: str,
-    module_keys: Optional[Dict[str, Optional[str]]],
-    dynamic_keys: Dict[str, Optional[str]],
-    requires_key_map: Dict[str, bool],
-) -> Tuple[Optional[str], Optional[str]]:
+    module_keys: dict[str, str | None] | None,
+    dynamic_keys: dict[str, str | None],
+    requires_key_map: dict[str, bool],
+) -> tuple[str | None, str | None]:
     """Merge module-level and dynamic API keys, normalizing empties to None.
 
     Returns a tuple of (raw_value, normalized_value). The raw value is the
     original string (possibly empty) used to validate presence when a provider
     requires a key. The normalized value is None if empty-string-like.
     """
-    def _normalize(value: Optional[str]) -> Optional[str]:
+    def _normalize(value: str | None) -> str | None:
         if value is None:
             return None
         if isinstance(value, str) and value.strip() == "":
@@ -800,10 +867,7 @@ def merge_api_keys_for_provider(
 
     # Prefer dynamic/runtime keys (env/config) over module-level defaults.
     # If dynamic is explicitly empty/None, fall back to module-level value.
-    if raw_dynamic is not None and str(raw_dynamic).strip() != "":
-        raw_val = raw_dynamic
-    else:
-        raw_val = raw_module
+    raw_val = raw_dynamic if raw_dynamic is not None and str(raw_dynamic).strip() != "" else raw_module
 
     norm_val = _normalize(raw_val)
 
@@ -814,11 +878,11 @@ def merge_api_keys_for_provider(
 def build_call_params_from_request(
     request_data: Any,
     target_api_provider: str,
-    provider_api_key: Optional[str],
-    templated_llm_payload: List[Dict[str, Any]],
-    final_system_message: Optional[str],
-    app_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    provider_api_key: str | None,
+    templated_llm_payload: list[dict[str, Any]],
+    final_system_message: str | None,
+    app_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Construct the cleaned argument dictionary for chat_api_call.
 
     Mirrors the transformation previously in the endpoint: renames OpenAI-style
@@ -835,6 +899,9 @@ def build_call_params_from_request(
             "prompt_template_name",
             "stream",
             "save_to_db",
+            "history_message_limit",
+            "history_message_order",
+            "slash_command_injection_mode",
         },
     )
 
@@ -875,7 +942,7 @@ def estimate_tokens_from_json(request_json: str) -> int:
     try:
         sanitized = _sanitize_data_uris(request_json)
         return max(1, len(sanitized) // 4)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         return 1
 
 
@@ -886,20 +953,20 @@ def _sanitize_data_uris(text: str) -> str:
     """Redact data URI payloads to avoid inflating token estimates."""
     try:
         return _DATA_URI_RE.sub(r"\1<omitted>", text)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         return text
 
 
-def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _sanitize_messages_for_token_estimate(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return a copy of messages with base64 image payloads replaced."""
-    sanitized: List[Dict[str, Any]] = []
+    sanitized: list[dict[str, Any]] = []
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
         msg_copy = msg.copy()
         content = msg_copy.get("content")
         if isinstance(content, list):
-            new_parts: List[Any] = []
+            new_parts: list[Any] = []
             for part in content:
                 if not isinstance(part, dict):
                     new_parts.append(part)
@@ -921,12 +988,12 @@ def _sanitize_messages_for_token_estimate(messages: List[Dict[str, Any]]) -> Lis
     return sanitized
 
 
-def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
+def _estimate_tokens_from_messages(messages: list[dict[str, Any]]) -> int:
     """Estimate tokens from message payloads with base64 redaction."""
     try:
         sanitized = _sanitize_messages_for_token_estimate(messages)
         return max(1, len(_json.dumps(sanitized, default=str)) // 4)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         return 1
 
 
@@ -937,7 +1004,7 @@ def _extract_text_from_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for part in content:
             if isinstance(part, str):
                 if part:
@@ -952,16 +1019,15 @@ def _extract_text_from_content(content: Any) -> str:
                 try:
                     p_type = getattr(part, "type", None)
                     p_text = getattr(part, "text", None)
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     p_type = None
                     p_text = None
-            if p_type == "text" and isinstance(p_text, str):
-                if p_text:
-                    parts.append(p_text)
+            if p_type == "text" and isinstance(p_text, str) and p_text:
+                parts.append(p_text)
         return "\n".join(parts)
     try:
         return str(content)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         return ""
 
 
@@ -972,7 +1038,7 @@ def _apply_redaction_to_content(content: Any, moderation: Any, policy: Any) -> A
     if isinstance(content, str):
         return moderation.redact_text(content, policy)
     if isinstance(content, list):
-        redacted_parts: List[Any] = []
+        redacted_parts: list[Any] = []
         for part in content:
             if isinstance(part, str):
                 redacted_parts.append(moderation.redact_text(part, policy))
@@ -993,17 +1059,17 @@ def _apply_redaction_to_content(content: Any, moderation: Any, policy: Any) -> A
                     try:
                         updated = part.model_copy(update={"text": new_text})
                         redacted_parts.append(updated)
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         redacted_parts.append({"type": "text", "text": new_text})
                 else:
                     redacted_parts.append(part)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 redacted_parts.append(part)
         return redacted_parts
     return moderation.redact_text(str(content), policy)
 
 
-def _wrap_raw_string_response(content: str, model: Optional[str]) -> Dict[str, Any]:
+def _wrap_raw_string_response(content: str, model: str | None) -> dict[str, Any]:
     """Wrap raw string responses in an OpenAI-compatible payload."""
     model_name = model or "unknown"
     return {
@@ -1025,17 +1091,22 @@ async def moderate_input_messages(
     request_data: Any,
     request: Any,
     moderation_service: Any,
-    topic_monitoring_service: Optional[Any],
+    topic_monitoring_service: Any | None,
     metrics: Any,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
-    audit_event_type: Optional[Any] = None,
+    audit_event_type: Any | None = None,
+    supervised_policy_engine: Any | None = None,
+    self_monitoring_service: Any | None = None,
+    dependent_user_id: str | None = None,
 ) -> None:
     """Apply input moderation and redaction to user message text parts in-place.
 
     - Emits topic monitoring alerts non-blockingly when configured.
     - Tracks moderation metrics and audit events.
+    - Optionally overlays guardian supervised policies when engine is provided.
+    - Optionally runs self-monitoring checks when service is provided.
     - Raises HTTPException(400) when input is blocked by policy.
     """
     # Determine user id context for policy and telemetry
@@ -1043,14 +1114,23 @@ async def moderate_input_messages(
     try:
         if request is not None and hasattr(request, "state"):
             req_user_id = getattr(request.state, "user_id", None)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         req_user_id = None
 
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+    # Guardian policy overlay: merge supervised rules into eff_policy
+    if supervised_policy_engine and dependent_user_id:
+        try:
+            eff_policy = supervised_policy_engine.build_moderation_policy_overlay(
+                dependent_user_id, eff_policy
+            )
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Guardian policy overlay skipped: {e}")
     conv_id = None
     try:
         conv_id = getattr(request_data, "conversation_id", None)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         conv_id = None
 
     async def _moderate_text_in_place(text: str) -> str:
@@ -1063,7 +1143,7 @@ async def moderate_input_messages(
                 if request is not None and hasattr(request, "state"):
                     team_ids = getattr(request.state, "team_ids", None)
                     org_ids = getattr(request.state, "org_ids", None)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
             if mon is not None and text:
                 mon.schedule_evaluate_and_alert(
@@ -1076,8 +1156,29 @@ async def moderate_input_messages(
                     org_ids=org_ids,
                     source_id=str(conv_id) if conv_id is not None else None,
                 )
-        except Exception as _e:
+        except _CHAT_NONCRITICAL_EXCEPTIONS as _e:
             logger.debug(f"Topic monitoring (input) skipped: {_e}")
+
+        # Self-monitoring check (awareness/notifications)
+        if self_monitoring_service and text:
+            try:
+                sm_result = self_monitoring_service.check_text(
+                    text=text,
+                    user_id=str(req_user_id or client_id),
+                    phase="input",
+                    conversation_id=str(conv_id) if conv_id else None,
+                )
+                if sm_result.action == "block":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=sm_result.block_message or "Blocked by self-monitoring rule",
+                    )
+                if sm_result.action == "redact" and sm_result.redacted_text is not None:
+                    text = sm_result.redacted_text
+            except HTTPException:
+                raise
+            except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+                logger.debug(f"Self-monitoring check skipped: {e}")
 
         if not eff_policy.enabled or not eff_policy.input_enabled:
             return text
@@ -1097,12 +1198,12 @@ async def moderate_input_messages(
                     match_span = eval_res[4] if len(eval_res) >= 5 else None
                 else:
                     resolved_action, redacted, matched_pattern = eval_res  # type: ignore
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 resolved_action = None
             if match_span and hasattr(moderation_service, "build_sanitized_snippet"):
                 try:
                     sample = moderation_service.build_sanitized_snippet(text, eff_policy, match_span, matched_pattern)
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     sample = None
         elif hasattr(moderation_service, "evaluate_action"):
             try:
@@ -1112,12 +1213,12 @@ async def moderate_input_messages(
                     category = eval_res[3] if len(eval_res) >= 4 else None
                 else:
                     resolved_action, redacted, matched_pattern = eval_res  # type: ignore
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 resolved_action = None
             if resolved_action and resolved_action != "pass" and sample is None:
                 try:
                     _, sample = moderation_service.check_text(text, eff_policy, "input")
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     sample = None
         if not resolved_action:
             flagged, sample = moderation_service.check_text(text, eff_policy, "input")
@@ -1133,23 +1234,21 @@ async def moderate_input_messages(
         if resolved_action == "pass":
             return text
 
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
-        except Exception:
-            pass
         try:
             if audit_service and audit_context:
-                import asyncio as _asyncio
-                _asyncio.create_task(
+                _schedule_background_task(
                     audit_service.log_event(
                         event_type=audit_event_type,
                         context=audit_context,
                         action="moderation.input",
                         result=("failure" if resolved_action == "block" else "success"),
                         metadata={"phase": "input", "action": resolved_action, "pattern": sample},
-                    )
+                    ),
+                    task_name="chat.moderation.input.audit",
                 )
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
 
         if resolved_action == "block":
@@ -1162,8 +1261,9 @@ async def moderate_input_messages(
     # Moderate both "user" messages and "tool" messages (tool call results may contain
     # external content that should be checked for policy violations)
     MODERATED_ROLES = {"user", "tool"}
+    _should_moderate = (eff_policy.enabled and eff_policy.input_enabled) or self_monitoring_service
     try:
-        if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
+        if _should_moderate and request_data and request_data.messages:
             for m in request_data.messages:
                 if getattr(m, "role", None) not in MODERATED_ROLES:
                     continue
@@ -1175,10 +1275,10 @@ async def moderate_input_messages(
                         if try_type == "text":
                             current = getattr(part, "text", None)
                             if isinstance(current, str):
-                                setattr(part, "text", await _moderate_text_in_place(current))
+                                part.text = await _moderate_text_in_place(current)
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation input processing error: {e}")
 
 
@@ -1188,9 +1288,9 @@ async def build_context_and_messages(
     loop: Any,
     metrics: Any,
     default_save_to_db: bool,
-    final_conversation_id: Optional[str],
+    final_conversation_id: str | None,
     save_message_fn: Any,
-) -> Tuple[Dict[str, Any], Optional[int], str, bool, List[Dict[str, Any]], bool]:
+) -> tuple[dict[str, Any], int | None, str, bool, list[dict[str, Any]], bool]:
     """Resolve character/conversation context, load history, save current messages, and return LLM-ready payload.
 
     Returns (character_card, character_db_id, final_conversation_id, conversation_created, llm_payload_messages, should_persist)
@@ -1206,10 +1306,8 @@ async def build_context_and_messages(
         logger.debug(f"Loaded character: {character_card.get('name')} with system_prompt: {system_prompt_preview}")
 
     if character_card:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_character_access(character_id=str(request_data.character_id or "default"), cache_hit=False)
-        except Exception:
-            pass
 
     if not character_card:
         logger.warning("No character context found; proceeding with ephemeral default context.")
@@ -1247,10 +1345,8 @@ async def build_context_and_messages(
         conversation_created = False
 
     if conv_id:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             metrics.track_conversation(conv_id, conversation_created)
-        except Exception:
-            pass
     if not conv_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to establish conversation context.")
 
@@ -1261,9 +1357,9 @@ async def build_context_and_messages(
     else:
         try:
             history_limit = int(requested_history_limit)
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             history_limit = DEFAULT_HISTORY_MESSAGE_LIMIT
-        history_limit = max(1, min(_MAX_HISTORY_MESSAGES, history_limit))
+        history_limit = max(0, min(_MAX_HISTORY_MESSAGES, history_limit))
 
     requested_history_order = getattr(request_data, "history_message_order", None)
     if requested_history_order:
@@ -1274,7 +1370,7 @@ async def build_context_and_messages(
         history_order = DEFAULT_HISTORY_MESSAGE_ORDER
     db_order = "ASC" if history_order == "asc" else "DESC"
 
-    historical_msgs: List[Dict[str, Any]] = []
+    historical_msgs: list[dict[str, Any]] = []
     if conv_id and (not conversation_created) and history_limit > 0:
         raw_hist = await loop.run_in_executor(
             None,
@@ -1289,7 +1385,7 @@ async def build_context_and_messages(
             metadata = None
             try:
                 metadata = await loop.run_in_executor(None, chat_db.get_message_metadata, db_msg.get("id"))
-            except Exception as meta_err:
+            except _CHAT_NONCRITICAL_EXCEPTIONS as meta_err:
                 logger.debug("Metadata lookup failed for message {}: {}", db_msg.get("id"), meta_err)
 
             tool_calls_meta = None
@@ -1340,7 +1436,7 @@ async def build_context_and_messages(
                         "type": "image_url",
                         "image_url": {"url": f"data:{img_mime};base64,{b64_img.decode('utf-8')}"}
                     })
-                except Exception as e:
+                except _CHAT_NONCRITICAL_EXCEPTIONS as e:
                     logger.warning(f"Error encoding DB image for history (msg_id {db_msg.get('id')}): {e}")
             if msg_parts:
                 hist_entry = {"role": role}
@@ -1363,11 +1459,17 @@ async def build_context_and_messages(
                     hist_entry["content"] = ""
                 if role == "tool" and tool_call_id_meta:
                     hist_entry["tool_call_id"] = tool_call_id_meta
+                if role == "tool" and not tool_call_id_meta:
+                    logger.debug(
+                        "Skipping tool message {} without tool_call_id metadata.",
+                        db_msg.get("id"),
+                    )
+                    continue
                 historical_msgs.append(hist_entry)
         logger.info(f"Loaded {len(historical_msgs)} historical messages for conv_id '{conv_id}'.")
 
     # Process current turn messages (persist if needed)
-    request_messages: List[Dict[str, Any]] = []
+    request_messages: list[dict[str, Any]] = []
     for msg_model in request_data.messages:
         if not should_persist_message_role(msg_model.role):
             continue
@@ -1387,6 +1489,7 @@ async def build_context_and_messages(
         has_non_user_role = any(
             msg.get("role") in {"assistant", "tool"} for msg in request_messages
         )
+        all_user_roles = all(msg.get("role") == "user" for msg in request_messages)
         def _normalize_content(value: Any) -> Any:
             if isinstance(value, str):
                 return [{"type": "text", "text": value}]
@@ -1394,7 +1497,7 @@ async def build_context_and_messages(
                 return value
             return value
 
-        def _msg_sig(msg: Dict[str, Any]) -> str:
+        def _msg_sig(msg: dict[str, Any]) -> str:
             payload = {
                 "role": msg.get("role"),
                 "content": _normalize_content(msg.get("content")),
@@ -1404,7 +1507,7 @@ async def build_context_and_messages(
             }
             try:
                 return _json.dumps(payload, sort_keys=True, default=str)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 return str(payload)
 
         if has_non_user_role:
@@ -1436,8 +1539,32 @@ async def build_context_and_messages(
                         overlap_cut,
                         conv_id,
                     )
+        else:
+            try:
+                user_only_trim = str(os.getenv("CHAT_TRIM_USER_ONLY_OVERLAP", "false")).strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                user_only_trim = False
+            if user_only_trim and all_user_roles:
+                hist_for_overlap = (
+                    list(reversed(historical_msgs)) if history_order == "desc" else historical_msgs
+                )
+                hist_sigs = [_msg_sig(m) for m in hist_for_overlap]
+                req_sigs = [_msg_sig(m) for m in request_messages]
+                if req_sigs and len(req_sigs) <= len(hist_sigs):
+                    if hist_sigs[-len(req_sigs):] == req_sigs:
+                        overlap_cut = len(req_sigs)
+                        logger.debug(
+                            "Trimmed %d user-only request messages overlapping history for conv_id %s.",
+                            overlap_cut,
+                            conv_id,
+                        )
 
-    current_turn: List[Dict[str, Any]] = []
+    current_turn: list[dict[str, Any]] = []
     for msg_dict in request_messages[overlap_cut:]:
         role = msg_dict.get("role")
         msg_for_db = msg_dict.copy()
@@ -1453,18 +1580,17 @@ async def build_context_and_messages(
                 msg_for_llm["name"] = name
         current_turn.append(msg_for_llm)
 
+    # Preserve requested history ordering (DB fetch already honors ASC/DESC).
     historical_msgs_for_payload = historical_msgs
-    if history_order == "desc":
-        historical_msgs_for_payload = list(reversed(historical_msgs))
 
     llm_payload_messages = historical_msgs_for_payload + current_turn
 
     return character_card, character_db_id, conv_id, conversation_created, llm_payload_messages, should_persist
 
 
-def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
+def _extract_system_messages(messages: list[dict[str, Any]]) -> list[str]:
     """Extract system message text content from OpenAI-style message payloads."""
-    system_messages: List[str] = []
+    system_messages: list[str] = []
     for msg in messages or []:
         if not isinstance(msg, dict):
             continue
@@ -1477,7 +1603,7 @@ def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
                 system_messages.append(text_val)
             continue
         if isinstance(content, list):
-            text_parts: List[str] = []
+            text_parts: list[str] = []
             for part in content:
                 if not isinstance(part, dict):
                     continue
@@ -1491,9 +1617,9 @@ def _extract_system_messages(messages: List[Dict[str, Any]]) -> List[str]:
     return system_messages
 
 
-def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
+def _extract_system_messages_from_request(messages: list[Any]) -> list[str]:
     """Extract system messages from request model objects."""
-    system_messages: List[str] = []
+    system_messages: list[str] = []
     for msg in messages or []:
         try:
             if getattr(msg, "role", None) != "system":
@@ -1505,7 +1631,7 @@ def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
                     system_messages.append(text_val)
                 continue
             if isinstance(content, list):
-                text_parts: List[str] = []
+                text_parts: list[str] = []
                 for part in content:
                     try_type = getattr(part, "type", None)
                     if try_type is None and isinstance(part, dict):
@@ -1517,22 +1643,22 @@ def _extract_system_messages_from_request(messages: List[Any]) -> List[str]:
                 combined = "\n".join(text_parts).strip()
                 if combined:
                     system_messages.append(combined)
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             continue
     return system_messages
 
 
 def apply_prompt_templating(
     request_data: Any,
-    character_card: Dict[str, Any],
-    llm_payload_messages: List[Dict[str, Any]],
-) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    character_card: dict[str, Any],
+    llm_payload_messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
     """Compute final system message and apply content templating to payload messages.
 
     Returns (final_system_message, templated_llm_payload)
     """
     active_template = load_template(getattr(request_data, "prompt_template_name", None) or DEFAULT_RAW_PASSTHROUGH_TEMPLATE.name)
-    template_data: Dict[str, Any] = {}
+    template_data: dict[str, Any] = {}
     if character_card:
         template_data.update({k: v for k, v in character_card.items() if isinstance(v, (str, int, float))})
         template_data["char_name"] = character_card.get("name", "Character")
@@ -1550,7 +1676,7 @@ def apply_prompt_templating(
         or (payload_system_message or "")
     )
 
-    final_system_message: Optional[str] = None
+    final_system_message: str | None = None
     logger.debug(
         f"sys_msg_from_req: {sys_msg_from_req}, active_template: {active_template}, character: {character_card.get('name') if character_card else None}"
     )
@@ -1578,7 +1704,7 @@ def apply_prompt_templating(
     if final_system_message:
         llm_payload_messages = [m for m in llm_payload_messages if m.get("role") != "system"]
 
-    templated_llm_payload: List[Dict[str, Any]] = []
+    templated_llm_payload: list[dict[str, Any]] = []
     if active_template:
         for msg in llm_payload_messages:
             templated_msg_content = msg.get("content")
@@ -1613,7 +1739,7 @@ def apply_prompt_templating(
 
 
 async def _maybe_refund_streaming_rg(
-    rg_refund_cb: Optional[Callable[..., Any]],
+    rg_refund_cb: Callable[..., Any] | None,
     *,
     cancelled: bool = False,
     error: bool = True,
@@ -1625,14 +1751,14 @@ async def _maybe_refund_streaming_rg(
         res = rg_refund_cb(cancelled=cancelled, error=error)
         if hasattr(res, "__await__"):
             await res  # type: ignore[misc]
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         pass
 
 
 async def execute_streaming_call(
     *,
     current_loop: Any,
-    cleaned_args: Dict[str, Any],
+    cleaned_args: dict[str, Any],
     selected_provider: str,
     provider: str,
     model: str,
@@ -1640,24 +1766,24 @@ async def execute_streaming_call(
     request: Any,
     metrics: Any,
     provider_manager: Any,
-    templated_llm_payload: List[Dict[str, Any]],
+    templated_llm_payload: list[dict[str, Any]],
     should_persist: bool,
     final_conversation_id: str,
-    character_card_for_context: Optional[Dict[str, Any]],
+    character_card_for_context: dict[str, Any] | None,
     chat_db: Any,
     save_message_fn: Callable[..., Any],
-    system_message_id: Optional[str] = None,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    system_message_id: str | None = None,
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
-    moderation_getter: Optional[Callable[[], Any]] = None,
-    rg_commit_cb: Optional[Callable[[int], Any]] = None,
-    rg_refund_cb: Optional[Callable[..., Any]] = None,
-    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
+    moderation_getter: Callable[[], Any] | None = None,
+    rg_commit_cb: Callable[[int], Any] | None = None,
+    rg_refund_cb: Callable[..., Any] | None = None,
+    on_success: Callable[[str], Awaitable[None]] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -1668,13 +1794,16 @@ async def execute_streaming_call(
     - usage logging and audit success
     """
     llm_start_time = time.time()
-    raw_stream_iter: Optional[AsyncIterator[str] | Iterator[str]] = None
+    stream_metrics_recorded = False
+    stream_failure_recorded = False
+    raw_stream_iter: AsyncIterator[str] | Iterator[str] | None = None
     queue_for_exec = None
+    queue_future: asyncio.Future[Any] | None = None
     queue_enabled = False
     try:
         try:
             queue_for_exec = get_request_queue()
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             queue_for_exec = None
         queue_enabled = (
             queue_execution_enabled
@@ -1692,12 +1821,12 @@ async def execute_streaming_call(
                     _cp = load_comprehensive_config()
                     _maxsz_raw = _cp.get('Chat-Module', 'chat_stream_channel_maxsize', fallback='100') if _cp else '100'
                 stream_channel_maxsize = int(str(_maxsz_raw))
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 stream_channel_maxsize = 100
             stream_channel: asyncio.Queue = asyncio.Queue(maxsize=stream_channel_maxsize)
             est_tokens_for_queue = estimate_tokens_from_json(request_json)
 
-            def _refresh_params_sync(target_provider: str) -> Tuple[Dict[str, Any], Optional[str]]:
+            def _refresh_params_sync(target_provider: str) -> tuple[dict[str, Any], str | None]:
                 """Resolve provider params inside a sync queue processor."""
                 refreshed = refresh_provider_params(target_provider)
                 if inspect.isawaitable(refreshed):
@@ -1705,26 +1834,20 @@ async def execute_streaming_call(
                 return refreshed  # type: ignore[return-value]
 
             def _queued_processor():
-                nonlocal selected_provider, model, llm_call_func
+                nonlocal selected_provider, model, llm_call_func, stream_failure_recorded
                 local_start = time.time()
                 try:
                     result = llm_call_func()
-                    latency = time.time() - local_start
-                    metrics.track_llm_call(selected_provider, model, latency, success=True)
-                    if provider_manager:
-                        provider_manager.record_success(selected_provider, latency)
                     if selected_provider != provider:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=selected_provider,
                                 streaming=True,
                                 queued=True,
                             )
-                        except Exception:
-                            pass
                     return result
-                except Exception as proc_error:
+                except _CHAT_NONCRITICAL_EXCEPTIONS as proc_error:
                     latency = time.time() - local_start
                     metrics.track_llm_call(
                         selected_provider,
@@ -1733,6 +1856,7 @@ async def execute_streaming_call(
                         success=False,
                         error_type=type(proc_error).__name__,
                     )
+                    stream_failure_recorded = True
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
                         name_lower = type(proc_error).__name__.lower()
@@ -1756,32 +1880,27 @@ async def execute_streaming_call(
                                         raise ValueError(
                                             f"Invalid refreshed params for {fallback_provider}: missing required fields"
                                         )
-                                except Exception as refresh_error:
+                                except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                                     provider_manager.record_failure(fallback_provider, refresh_error)
                                     raise
                                 model = refreshed_model or model
-                                llm_call_func_fb = lambda: perform_chat_api_call(**refreshed_args)
+                                def llm_call_func_fb():
+                                    return perform_chat_api_call(**refreshed_args)
                                 try:
-                                    fb_start = time.time()
                                     result = llm_call_func_fb()
-                                    fb_latency = time.time() - fb_start
-                                    provider_manager.record_success(fallback_provider, fb_latency)
-                                    metrics.track_llm_call(fallback_provider, model, fb_latency, success=True)
                                     selected_provider = fallback_provider
                                     llm_call_func = llm_call_func_fb
-                                    try:
+                                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                                         metrics.track_provider_fallback_success(
                                             requested_provider=provider,
                                             selected_provider=fallback_provider,
                                             streaming=True,
                                             queued=True,
                                         )
-                                    except Exception:
-                                        pass
                                     return result
-                                except Exception as fallback_error:
+                                except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                                     provider_manager.record_failure(fallback_provider, fallback_error)
-                                    raise fallback_error
+                                    raise
                     raise
 
             queue_request_id = get_request_id() or "unknown"
@@ -1800,10 +1919,8 @@ async def execute_streaming_call(
                 )
                 _attach_queue_future_logger(queue_future, queue_request_id)
             except (ValueError, TimeoutError) as admission_error:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_rate_limit(str(client_id))
-                except Exception:
-                    pass
                 detail = str(admission_error) or "Service busy. Please retry."
                 status_code = (
                     status.HTTP_429_TOO_MANY_REQUESTS
@@ -1811,61 +1928,84 @@ async def execute_streaming_call(
                     else status.HTTP_503_SERVICE_UNAVAILABLE
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
-                setattr(queue_exc, "_chat_queue_admission", True)
-                raise queue_exc
+                queue_exc._chat_queue_admission = True
+                raise queue_exc from admission_error
 
             async def _channel_stream():
-                while True:
-                    try:
-                        # Add timeout to prevent indefinite hang if producer crashes
-                        # without sending the sentinel None value
-                        item = await asyncio.wait_for(
-                            stream_channel.get(),
-                            timeout=float(CHAT_IDLE_TIMEOUT)
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "Stream channel get timed out after {}s - "
-                            "producer may have crashed without sending sentinel",
-                            CHAT_IDLE_TIMEOUT
-                        )
+                graceful_end = False
+                try:
+                    while True:
                         try:
-                            error_payload = {
-                                "error": {
-                                    "message": "Stream channel timed out waiting for queued response.",
-                                    "type": "stream_timeout",
+                            # Add timeout to prevent indefinite hang if producer crashes
+                            # without sending the sentinel None value
+                            item = await asyncio.wait_for(
+                                stream_channel.get(),
+                                timeout=float(CHAT_IDLE_TIMEOUT)
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Stream channel get timed out after {}s - "
+                                "producer may have crashed without sending sentinel",
+                                CHAT_IDLE_TIMEOUT
+                            )
+                            try:
+                                if queue_future is not None and not queue_future.done():
+                                    queue_future.cancel()
+                            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                                pass
+                            try:
+                                while True:
+                                    stream_channel.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                error_payload = {
+                                    "error": {
+                                        "message": "Stream channel timed out waiting for queued response.",
+                                        "type": "stream_timeout",
+                                    }
                                 }
-                            }
-                            yield f"data: {_json.dumps(error_payload)}\n\n"
-                        except Exception:
-                            yield "data: {\"error\":{\"message\":\"Stream channel timed out waiting for queued response.\",\"type\":\"stream_timeout\"}}\n\n"
-                        break
-                    if item is None:
-                        break
-                    yield item
+                                yield f"data: {_json.dumps(error_payload)}\n\n"
+                            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                                yield "data: {\"error\":{\"message\":\"Stream channel timed out waiting for queued response.\",\"type\":\"stream_timeout\"}}\n\n"
+                            break
+                        if item is None:
+                            graceful_end = True
+                            break
+                        yield item
+                except asyncio.CancelledError:
+                    logger.info(
+                        "Queued stream consumer cancelled for request {}; cancelling queued job",
+                        queue_request_id,
+                    )
+                    raise
+                finally:
+                    # Pragmatic disconnect handling: cancel queued producer immediately so
+                    # workers do not remain blocked waiting on a full channel.
+                    if not graceful_end:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+                            if queue_future is not None and not queue_future.done():
+                                queue_future.cancel()
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+                            while True:
+                                try:
+                                    stream_channel.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    break
 
             raw_stream_iter = _channel_stream()
         else:
             # Execute provided LLM call function in a worker to avoid blocking the loop.
             # llm_call_func is a sync callable (partial of perform_chat_api_call or a mock).
             raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func)
-            latency = time.time() - llm_start_time
-            metrics.track_llm_call(selected_provider, model, latency, success=True)
-            try:
-                if provider_manager:
-                    provider_manager.record_success(selected_provider, latency)
-            except Exception:
-                pass
             if selected_provider != provider:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_provider_fallback_success(
                         requested_provider=provider,
                         selected_provider=selected_provider,
                         streaming=True,
                         queued=False,
                     )
-                except Exception:
-                    pass
     except HTTPException as he:
         if getattr(he, "_chat_queue_admission", False):
             raise
@@ -1891,8 +2031,9 @@ async def execute_streaming_call(
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
                 yield f"data: {_json.dumps(payload)}\n\n"
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 # Fallback string serialization
+                pass
                 if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
                     yield (
                         f"data: {{\"error\":{{\"message\":\"{msg}\",\"type\":\"{typ}\"}},"
@@ -1911,7 +2052,7 @@ async def execute_streaming_call(
                 "X-Accel-Buffering": "no",
             },
         )
-    except Exception as e:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         metrics.track_llm_call(
             selected_provider,
             model,
@@ -1944,13 +2085,14 @@ async def execute_streaming_call(
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
                             raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
-                    except Exception as refresh_error:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
                     cleaned_args = refreshed_args
                     model = refreshed_model or model
                     fallback_start_time = time.time()
-                    llm_call_func_fb = lambda: perform_chat_api_call(**cleaned_args)
+                    def llm_call_func_fb():
+                        return perform_chat_api_call(**cleaned_args)
                     try:
                         raw_stream_iter = await current_loop.run_in_executor(None, llm_call_func_fb)
                         fallback_latency = time.time() - fallback_start_time
@@ -1959,18 +2101,16 @@ async def execute_streaming_call(
                         selected_provider = fallback_provider
                         llm_call_func = llm_call_func_fb
                         # Explicit telemetry for direct (non-queued) streaming fallback success
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=fallback_provider,
                                 streaming=True,
                                 queued=False,
                             )
-                        except Exception:
-                            pass
-                    except Exception as fallback_error:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
-                        raise fallback_error
+                        raise
                 else:
                     # No fallback available: stream SSE error (200) instead of raising
                     pass
@@ -1996,7 +2136,7 @@ async def execute_streaming_call(
                     if system_message_id:
                         payload["tldw_system_message_id"] = system_message_id
                 yield f"data: {_json.dumps(payload)}\n\n"
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 if CHAT_STREAM_INCLUDE_METADATA and final_conversation_id:
                     yield (
                         f"data: {{\"error\":{{\"message\":\"{_err_message}\",\"type\":\"{_err_type}\"}},"
@@ -2024,10 +2164,11 @@ async def execute_streaming_call(
 
     async def save_callback(
         full_reply: str,
-        tool_calls: Optional[List[Dict[str, Any]]],
-        function_call: Optional[Dict[str, Any]],
+        tool_calls: list[dict[str, Any]] | None,
+        function_call: dict[str, Any] | None,
     ):
-        saved_message_id: Optional[str] = None
+        nonlocal stream_metrics_recorded
+        saved_message_id: str | None = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
         try:
@@ -2037,7 +2178,7 @@ async def execute_streaming_call(
             try:
                 if request is not None and hasattr(request, "state"):
                     req_user_id = getattr(request.state, "user_id", None)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 req_user_id = None
             eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
             if full_reply and eff_policy.enabled and eff_policy.output_enabled:
@@ -2058,7 +2199,7 @@ async def execute_streaming_call(
                     if match_span and hasattr(moderation, "build_sanitized_snippet"):
                         try:
                             sample = moderation.build_sanitized_snippet(full_reply, eff_policy, match_span, matched_pattern)
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             sample = None
                 elif hasattr(moderation, "evaluate_action"):
                     eval_res = moderation.evaluate_action(full_reply, eff_policy, "output")
@@ -2070,28 +2211,25 @@ async def execute_streaming_call(
                 if action and action != "pass" and sample is None:
                     try:
                         _, sample = moderation.check_text(full_reply, eff_policy, "output")
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         sample = None
                 if action is None:
                     flagged, sample = moderation.check_text(full_reply, eff_policy, "output")
                     if flagged:
                         action = eff_policy.output_action
                         if action == "redact":
-                            redacted = moderation.redact_text(full_reply, eff_policy)
+                            moderation.redact_text(full_reply, eff_policy)
 
                 if action == "block":
                     if not stream_mod_state["block_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(
                                 str(req_user_id or client_id),
                                 category=(category or "default"),
                             )
-                        except Exception:
-                            pass
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2103,28 +2241,26 @@ async def execute_streaming_call(
                                             "action": "block",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.stream.save.output.block.audit",
                                 )
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["block_logged"] = True
                     post_stream_blocked = True
                     full_reply_to_save = None
                 elif action == "redact":
                     if not stream_mod_state["redact_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(
                                 str(req_user_id or client_id),
                                 "redact",
                                 streaming=True,
                                 category=(category or "default"),
                             )
-                        except Exception:
-                            pass
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2136,14 +2272,25 @@ async def execute_streaming_call(
                                             "action": "redact",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.stream.save.output.redact.audit",
                                 )
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["redact_logged"] = True
                     full_reply_to_save = moderation.redact_text(full_reply, eff_policy)
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+
+        if not stream_metrics_recorded:
+            try:
+                latency = time.time() - llm_start_time
+                metrics.track_llm_call(selected_provider, model, latency, success=True)
+                if provider_manager:
+                    provider_manager.record_success(selected_provider, latency)
+                stream_metrics_recorded = True
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                pass
 
         if should_persist and final_conversation_id and not post_stream_blocked and (
             full_reply_to_save or tool_calls or function_call
@@ -2151,7 +2298,7 @@ async def execute_streaming_call(
             asst_name = sanitize_sender_name(
                 character_card_for_context.get("name") if character_card_for_context else None
             )
-            message_payload: Dict[str, Any] = {
+            message_payload: dict[str, Any] = {
                 "role": "assistant",
                 "name": asst_name,
             }
@@ -2173,7 +2320,7 @@ async def execute_streaming_call(
             pt_est = 0
             try:
                 pt_est = _estimate_tokens_from_messages(templated_llm_payload)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pt_est = 0
             ct_est = max(0, len(full_reply or "") // 4)
             user_id = None
@@ -2182,7 +2329,7 @@ async def execute_streaming_call(
                 if request is not None and hasattr(request, "state"):
                     user_id = getattr(request.state, "user_id", None)
                     api_key_id = getattr(request.state, "api_key_id", None)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
             latency_ms = int((time.time() - llm_start_time) * 1000)
             total_est = int(pt_est + ct_est)
@@ -2201,7 +2348,7 @@ async def execute_streaming_call(
                 request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
                 estimated=True,
             )
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
         # Commit reserved tokens to Resource Governor, if provided
         try:
@@ -2210,7 +2357,7 @@ async def execute_streaming_call(
                 res = rg_commit_cb(total_est)
                 if hasattr(res, "__await__"):
                     await res  # type: ignore[misc]
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
         # Audit success
         try:
@@ -2227,13 +2374,13 @@ async def execute_streaming_call(
                         "streaming": True,
                     },
                 )
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
         # BYOK usage tracking (best-effort)
         try:
             if callable(on_success):
                 await on_success(selected_provider)
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
         return saved_message_id
 
@@ -2245,7 +2392,7 @@ async def execute_streaming_call(
             try:
                 if request is not None and hasattr(request, "state"):
                     req_user_id = getattr(request.state, "user_id", None)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 req_user_id = None
             eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
 
@@ -2255,19 +2402,10 @@ async def execute_streaming_call(
             stream_id = _uuid.uuid4().hex
             chunk_seq = 0
 
-            def _track_audit_task(task: "asyncio.Task[Any]") -> None:
-                pending_audit_tasks.append(task)
-                def _cleanup(completed: "asyncio.Task[Any]") -> None:
-                    try:
-                        pending_audit_tasks.remove(completed)
-                    except ValueError:
-                        pass
-                task.add_done_callback(_cleanup)
-
             stream_holdback = ""
             try:
                 stream_buffer_limit = int(os.getenv("MODERATION_STREAM_BUFFER_CHARS", "1024"))
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 stream_buffer_limit = 1024
             if stream_buffer_limit < 0:
                 stream_buffer_limit = 0
@@ -2300,7 +2438,7 @@ async def execute_streaming_call(
                     mon = None
                     try:
                         mon = get_topic_monitoring_service()
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         mon = None
                     team_ids = None
                     org_ids = None
@@ -2308,7 +2446,7 @@ async def execute_streaming_call(
                         if request is not None and hasattr(request, "state"):
                             team_ids = getattr(request.state, "team_ids", None)
                             org_ids = getattr(request.state, "org_ids", None)
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
                     if mon is not None and s:
                         chunk_seq += 1
@@ -2325,7 +2463,7 @@ async def execute_streaming_call(
                             chunk_id=chunk_id,
                             chunk_seq=chunk_seq,
                         )
-                except Exception as _e:
+                except _CHAT_NONCRITICAL_EXCEPTIONS as _e:
                     logger.debug(f"Topic monitoring (stream chunk) skipped: {_e}")
                 if not eff_policy.enabled or not eff_policy.output_enabled:
                     if stream_holdback:
@@ -2349,12 +2487,12 @@ async def execute_streaming_call(
                             match_span = eval_res[4] if len(eval_res) >= 5 else None
                         else:
                             resolved_action, redacted_combined, matched_pattern = eval_res  # type: ignore
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         resolved_action = None
                     if match_span and hasattr(moderation, "build_sanitized_snippet"):
                         try:
                             sample = moderation.build_sanitized_snippet(combined, eff_policy, match_span, matched_pattern)
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             sample = None
                 elif hasattr(moderation, "evaluate_action"):
                     try:
@@ -2364,12 +2502,12 @@ async def execute_streaming_call(
                             out_category = eval_res[3] if len(eval_res) >= 4 else None
                         else:
                             resolved_action, redacted_combined, matched_pattern = eval_res  # type: ignore
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         resolved_action = None
                 if resolved_action and resolved_action != "pass" and sample is None:
                     try:
                         _, sample = moderation.check_text(combined, eff_policy, "output")
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         sample = None
                 if not resolved_action:
                     flagged, sample = moderation.check_text(combined, eff_policy, "output")
@@ -2379,14 +2517,11 @@ async def execute_streaming_call(
                     redacted_combined = moderation.redact_text(combined, eff_policy) if resolved_action == "redact" else None
                 if resolved_action == "block":
                     if not stream_mod_state["block_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
-                        except Exception:
-                            pass
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                task = _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2398,23 +2533,21 @@ async def execute_streaming_call(
                                             "action": "block",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.streaming.output.block.audit",
+                                    pending_tasks=pending_audit_tasks,
                                 )
-                                _track_audit_task(task)
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["block_logged"] = True
                     raise StopStreamWithError(message="Output violates moderation policy", error_type="output_moderation_block")
                 if resolved_action == "redact":
                     if not stream_mod_state["redact_logged"]:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
-                        except Exception:
-                            pass
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                task = _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2426,10 +2559,11 @@ async def execute_streaming_call(
                                             "action": "redact",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.streaming.output.redact.audit",
+                                    pending_tasks=pending_audit_tasks,
                                 )
-                                _track_audit_task(task)
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["redact_logged"] = True
                     redacted_out = (
@@ -2441,12 +2575,32 @@ async def execute_streaming_call(
                 return _emit_with_holdback(combined)
 
             # Allow streaming handler to flush any held-back tail at stream end
-            try:
-                setattr(_out_transform, "flush", _flush_holdback)
-            except Exception:
-                pass
+            with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
+                _out_transform.flush = _flush_holdback
 
             async def _finalize_stream(*, success: bool, cancelled: bool, error: bool) -> None:
+                nonlocal stream_failure_recorded, stream_metrics_recorded
+                if not success and not stream_failure_recorded and not stream_metrics_recorded:
+                    try:
+                        latency = time.time() - llm_start_time
+                        if cancelled:
+                            error_type = "stream_cancelled"
+                        elif error:
+                            error_type = "stream_error"
+                        else:
+                            error_type = "stream_incomplete"
+                        metrics.track_llm_call(
+                            selected_provider,
+                            model,
+                            latency,
+                            success=False,
+                            error_type=error_type,
+                        )
+                        if provider_manager and error and not cancelled:
+                            provider_manager.record_failure(selected_provider, RuntimeError(error_type))
+                        stream_failure_recorded = True
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
+                        pass
                 if success:
                     return
                 if callable(rg_refund_cb):
@@ -2459,7 +2613,7 @@ async def execute_streaming_call(
                 conversation_id=final_conversation_id,
                 model_name=model,
                 save_callback=save_callback,
-                finalize_callback=_finalize_stream if callable(rg_refund_cb) else None,
+                finalize_callback=_finalize_stream,
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,
@@ -2481,7 +2635,7 @@ async def execute_streaming_call(
     # Feature-flagged: route through unified SSE abstraction for pilot
     try:
         use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         use_unified = False
 
     if use_unified:
@@ -2507,8 +2661,9 @@ async def execute_streaming_call(
                     await sse_stream.send_raw_sse_line(ln)
                 if not done_seen:
                     await sse_stream.done()
-            except Exception as e:
+            except _CHAT_NONCRITICAL_EXCEPTIONS as e:
                 # As a safeguard; tracked_streaming_generator typically yields error frames itself
+                pass
                 await sse_stream.error("internal_error", f"{e}")
 
         async def _gen():
@@ -2519,22 +2674,16 @@ async def execute_streaming_call(
             except asyncio.CancelledError:
                 # Cancel producer promptly on client disconnect
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         prod.cancel()
-                    except Exception:
-                        pass
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         await prod
-                    except (asyncio.CancelledError, Exception):
-                        pass
                 raise
             else:
                 # Normal shutdown: ensure producer completes cleanly
                 if not prod.done():
-                    try:
+                    with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                         await prod
-                    except Exception:
-                        pass
 
         return StreamingResponse(
             _gen(),
@@ -2560,7 +2709,7 @@ async def execute_streaming_call(
 async def execute_non_stream_call(
     *,
     current_loop: Any,
-    cleaned_args: Dict[str, Any],
+    cleaned_args: dict[str, Any],
     selected_provider: str,
     provider: str,
     model: str,
@@ -2568,23 +2717,23 @@ async def execute_non_stream_call(
     request: Any,
     metrics: Any,
     provider_manager: Any,
-    templated_llm_payload: List[Dict[str, Any]],
+    templated_llm_payload: list[dict[str, Any]],
     should_persist: bool,
     final_conversation_id: str,
-    character_card_for_context: Optional[Dict[str, Any]],
+    character_card_for_context: dict[str, Any] | None,
     chat_db: Any,
     save_message_fn: Callable[..., Any],
-    system_message_id: Optional[str] = None,
-    audit_service: Optional[Any],
-    audit_context: Optional[Any],
+    system_message_id: str | None = None,
+    audit_service: Any | None,
+    audit_context: Any | None,
     client_id: str,
     queue_execution_enabled: bool,
     enable_provider_fallback: bool,
     llm_call_func: Callable[[], Any],
     refresh_provider_params: Callable[[str], Any],
-    moderation_getter: Optional[Callable[[], Any]] = None,
-    on_success: Optional[Callable[[str], Awaitable[None]]] = None,
-) -> Dict[str, Any]:
+    moderation_getter: Callable[[], Any] | None = None,
+    on_success: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
     Returns the encoded payload (dict) ready to be wrapped by JSONResponse.
@@ -2592,12 +2741,13 @@ async def execute_non_stream_call(
     llm_start_time = time.time()
     llm_response = None
     metrics_recorded = False
+    queue_failure_recorded = False
     queue_enabled = False
     try:
         queue_for_exec = None
         try:
             queue_for_exec = get_request_queue()
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             queue_for_exec = None
         queue_enabled = (
             queue_execution_enabled
@@ -2607,6 +2757,7 @@ async def execute_non_stream_call(
         if queue_enabled:
             est_tokens_for_queue = estimate_tokens_from_json(request_json)
             def _queued_processor():
+                nonlocal queue_failure_recorded
                 local_start = time.time()
                 try:
                     result = llm_call_func()
@@ -2615,17 +2766,15 @@ async def execute_non_stream_call(
                     if provider_manager:
                         provider_manager.record_success(selected_provider, latency)
                     if selected_provider != provider:
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=selected_provider,
                                 streaming=False,
                                 queued=True,
                             )
-                        except Exception:
-                            pass
                     return result
-                except Exception as proc_error:
+                except _CHAT_NONCRITICAL_EXCEPTIONS as proc_error:
                     latency = time.time() - local_start
                     metrics.track_llm_call(
                         selected_provider,
@@ -2636,6 +2785,7 @@ async def execute_non_stream_call(
                     )
                     if provider_manager:
                         provider_manager.record_failure(selected_provider, proc_error)
+                    queue_failure_recorded = True
                     raise
 
             try:
@@ -2652,10 +2802,8 @@ async def execute_non_stream_call(
                     stream_channel=None,
                 )
             except (ValueError, TimeoutError) as admission_error:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_rate_limit(str(client_id))
-                except Exception:
-                    pass
                 detail = str(admission_error) or "Service busy. Please retry."
                 status_code = (
                     status.HTTP_429_TOO_MANY_REQUESTS
@@ -2663,8 +2811,8 @@ async def execute_non_stream_call(
                     else status.HTTP_503_SERVICE_UNAVAILABLE
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
-                setattr(queue_exc, "_chat_queue_admission", True)
-                raise queue_exc
+                queue_exc._chat_queue_admission = True
+                raise queue_exc from admission_error
             llm_response = await fut
             metrics_recorded = True
         else:
@@ -2678,30 +2826,31 @@ async def execute_non_stream_call(
             if provider_manager:
                 provider_manager.record_success(selected_provider, llm_latency)
             if selected_provider != provider:
-                try:
+                with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                     metrics.track_provider_fallback_success(
                         requested_provider=provider,
                         selected_provider=selected_provider,
                         streaming=False,
                         queued=False,
                     )
-                except Exception:
-                    pass
     except HTTPException as he:
         if getattr(he, "_chat_queue_admission", False):
             raise
         raise
-    except Exception as e:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         llm_latency = time.time() - llm_start_time
-        metrics.track_llm_call(
-            selected_provider,
-            model,
-            llm_latency,
-            success=False,
-            error_type=type(e).__name__,
-        )
+        if not queue_failure_recorded:
+            metrics.track_llm_call(
+                selected_provider,
+                model,
+                llm_latency,
+                success=False,
+                error_type=type(e).__name__,
+            )
+            if provider_manager:
+                provider_manager.record_failure(selected_provider, e)
+
         if provider_manager:
-            provider_manager.record_failure(selected_provider, e)
             name_lower_e = type(e).__name__.lower()
             client_like_error = (
                 "authentication" in name_lower_e
@@ -2723,8 +2872,10 @@ async def execute_non_stream_call(
                             refreshed_args, refreshed_model = refreshed
                         # Validate refreshed params have required fields before proceeding
                         if not isinstance(refreshed_args, dict) or "messages_payload" not in refreshed_args:
-                            raise ValueError(f"Invalid refreshed params for {fallback_provider}: missing required fields")
-                    except Exception as refresh_error:
+                            raise ValueError(
+                                f"Invalid refreshed params for {fallback_provider}: missing required fields"
+                            )
+                    except _CHAT_NONCRITICAL_EXCEPTIONS as refresh_error:
                         provider_manager.record_failure(fallback_provider, refresh_error)
                         raise
                     cleaned_args = refreshed_args
@@ -2737,18 +2888,16 @@ async def execute_non_stream_call(
                         metrics.track_llm_call(fallback_provider, model, fallback_latency, success=True)
                         selected_provider = fallback_provider
                         metrics_recorded = True
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             metrics.track_provider_fallback_success(
                                 requested_provider=provider,
                                 selected_provider=fallback_provider,
                                 streaming=False,
                                 queued=False,
                             )
-                        except Exception:
-                            pass
-                    except Exception as fallback_error:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS as fallback_error:
                         provider_manager.record_failure(fallback_provider, fallback_error)
-                        raise fallback_error
+                        raise
                 else:
                     raise
             else:
@@ -2759,9 +2908,9 @@ async def execute_non_stream_call(
     if isinstance(llm_response, str) and should_force_normalize_string_responses():
         llm_response = _wrap_raw_string_response(llm_response, model)
 
-    content_to_save: Optional[str] = None
-    tool_calls_to_save: Optional[Any] = None
-    function_call_to_save: Optional[Any] = None
+    content_to_save: str | None = None
+    tool_calls_to_save: Any | None = None
+    function_call_to_save: Any | None = None
     if llm_response and isinstance(llm_response, dict):
         choices = llm_response.get("choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
@@ -2787,7 +2936,7 @@ async def execute_non_stream_call(
                     if request is not None and hasattr(request, "state"):
                         user_id = getattr(request.state, "user_id", None)
                         api_key_id = getattr(request.state, "api_key_id", None)
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     pass
                 await log_llm_usage(
                     user_id=user_id,
@@ -2803,7 +2952,7 @@ async def execute_non_stream_call(
                     total_tokens=int((usage.get("total_tokens") or 0) or (prompt_tokens + completion_tokens)),
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
                 )
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
         else:
             # Estimate usage if not provided
@@ -2811,7 +2960,7 @@ async def execute_non_stream_call(
                 pt_est = 0
                 try:
                     pt_est = _estimate_tokens_from_messages(templated_llm_payload)
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     pt_est = 0
                 content_text_for_usage = _extract_text_from_content(content_to_save)
                 ct_est = max(0, len(content_text_for_usage) // 4)
@@ -2821,7 +2970,7 @@ async def execute_non_stream_call(
                     if request is not None and hasattr(request, "state"):
                         user_id = getattr(request.state, "user_id", None)
                         api_key_id = getattr(request.state, "api_key_id", None)
-                except Exception:
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
                     pass
                 await log_llm_usage(
                     user_id=user_id,
@@ -2838,7 +2987,7 @@ async def execute_non_stream_call(
                     request_id=(request.headers.get("X-Request-ID") if request else None) or (get_request_id() or None),
                     estimated=True,
                 )
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
     elif isinstance(llm_response, str):
         content_to_save = llm_response
@@ -2857,7 +3006,7 @@ async def execute_non_stream_call(
             try:
                 if request is not None and hasattr(request, "state"):
                     req_user_id = getattr(request.state, "user_id", None)
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 req_user_id = None
             eff_policy = moderation.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
             if eff_policy.enabled and eff_policy.output_enabled:
@@ -2876,12 +3025,12 @@ async def execute_non_stream_call(
                             match_span = eval_res[4] if len(eval_res) >= 5 else None
                         else:
                             resolved_action, redacted_val, matched_pattern = eval_res  # type: ignore
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         resolved_action = None
                     if match_span and hasattr(moderation, "build_sanitized_snippet"):
                         try:
                             sample = moderation.build_sanitized_snippet(content_text_for_usage, eff_policy, match_span, matched_pattern)
-                        except Exception:
+                        except _CHAT_NONCRITICAL_EXCEPTIONS:
                             sample = None
                 elif hasattr(moderation, "evaluate_action"):
                     try:
@@ -2891,12 +3040,12 @@ async def execute_non_stream_call(
                             out_category2 = eval_res[3] if len(eval_res) >= 4 else None
                         else:
                             resolved_action, redacted_val, matched_pattern = eval_res  # type: ignore
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         resolved_action = None
                 if resolved_action and resolved_action != "pass" and sample is None:
                     try:
                         _, sample = moderation.check_text(content_text_for_usage, eff_policy, "output")
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         sample = None
                 if not resolved_action:
                     flagged, sample = moderation.check_text(content_text_for_usage, eff_policy, "output")
@@ -2908,7 +3057,7 @@ async def execute_non_stream_call(
                     mon3 = None
                     try:
                         mon3 = get_topic_monitoring_service()
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         mon3 = None
                     team_ids = None
                     org_ids = None
@@ -2916,7 +3065,7 @@ async def execute_non_stream_call(
                         if request is not None and hasattr(request, "state"):
                             team_ids = getattr(request.state, "team_ids", None)
                             org_ids = getattr(request.state, "org_ids", None)
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
                     if mon3 is not None and content_text_for_usage:
                         mon3.schedule_evaluate_and_alert(
@@ -2929,7 +3078,7 @@ async def execute_non_stream_call(
                             org_ids=org_ids,
                             source_id=str(final_conversation_id) if final_conversation_id else None,
                         )
-                except Exception as _ex:
+                except _CHAT_NONCRITICAL_EXCEPTIONS as _ex:
                     logger.debug(f"Topic monitoring (non-stream final) skipped: {_ex}")
 
                 if resolved_action == "block":
@@ -2938,7 +3087,7 @@ async def execute_non_stream_call(
                     try:
                         if sample is not None:
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=False, category=(out_category2 or "default"))
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
                     try:
                         if audit_service and audit_context:
@@ -2954,7 +3103,7 @@ async def execute_non_stream_call(
                                     "pattern": sample,
                                 },
                             )
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
                     if isinstance(content_to_save, str):
                         content_to_save = (
@@ -2971,14 +3120,14 @@ async def execute_non_stream_call(
                                 msg = llm_response["choices"][0].get("message") or {}
                                 if isinstance(msg, dict):
                                     msg["content"] = content_to_save
-                    except Exception:
+                    except _CHAT_NONCRITICAL_EXCEPTIONS:
                         pass
     except HTTPException:
         raise
-    except Exception as e:
+    except _CHAT_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Moderation output processing error: {e}")
 
-    assistant_message_id: Optional[str] = None
+    assistant_message_id: str | None = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -2988,7 +3137,7 @@ async def execute_non_stream_call(
         asst_name = sanitize_sender_name(
             character_card_for_context.get("name") if character_card_for_context else None
         )
-        message_payload: Dict[str, Any] = {"role": "assistant", "name": asst_name}
+        message_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
         if content_to_save is not None:
             message_payload["content"] = content_to_save
         if tool_calls_to_save is not None:
@@ -3013,7 +3162,7 @@ async def execute_non_stream_call(
                     )
                     if asst_name:
                         message_block["name"] = asst_name
-        except Exception:
+        except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
 
     # Encode payload (large responses via CPU-bound handler)
@@ -3035,7 +3184,7 @@ async def execute_non_stream_call(
                         )
                         if asst_name:
                             message_block["name"] = asst_name
-            except Exception:
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
                 pass
         encoded_payload["tldw_conversation_id"] = final_conversation_id
         if assistant_message_id:
@@ -3045,7 +3194,7 @@ async def execute_non_stream_call(
 
     # Audit success
     if audit_service and audit_context:
-        try:
+        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
             await audit_service.log_event(
                 event_type=AuditEventType.API_RESPONSE,
                 context=audit_context,
@@ -3058,14 +3207,12 @@ async def execute_non_stream_call(
                     "streaming": False,
                 },
             )
-        except Exception:
-            pass
 
     # BYOK usage tracking (best-effort)
     try:
         if callable(on_success):
             await on_success(selected_provider)
-    except Exception:
+    except _CHAT_NONCRITICAL_EXCEPTIONS:
         pass
 
     return encoded_payload

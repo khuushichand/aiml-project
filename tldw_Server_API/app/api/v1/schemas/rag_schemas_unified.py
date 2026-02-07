@@ -5,15 +5,18 @@ This schema maps directly to the unified_rag_pipeline parameters,
 providing a clean API interface with all features accessible.
 """
 
-from typing import List, Optional, Literal, Dict, Any
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel
+
 try:
     # Pydantic v2
-    from pydantic import model_validator, field_validator  # type: ignore
+    from pydantic import field_validator, model_validator  # type: ignore
 except Exception:
     model_validator = None  # type: ignore
     from pydantic import validator as field_validator  # type: ignore
 from pydantic import ConfigDict
+
 from ._compat import Field
 
 # Load contextual retrieval defaults from settings (config.txt/env)
@@ -54,7 +57,7 @@ class UnifiedRAGRequest(BaseModel):
     )
 
     # ========== DATA SOURCES ==========
-    sources: Optional[List[str]] = Field(
+    sources: Optional[list[str]] = Field(
         default=["media_db"],
         description="Databases to search: media_db, notes, characters, chats, kanban",
         example=["media_db", "notes", "kanban"]
@@ -104,7 +107,7 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError("sources entries must be strings")
             key = alias_map.get(s.strip().lower(), s.strip().lower())
             if key not in allowed:
-                raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(list(allowed))}")
+                raise ValueError(f"Invalid source '{s}'. Allowed: {sorted(allowed)}")
             normalized.append(key)
         return normalized
 
@@ -187,7 +190,7 @@ class UnifiedRAGRequest(BaseModel):
         example=True
     )
 
-    expansion_strategies: Optional[List[str]] = Field(
+    expansion_strategies: Optional[list[str]] = Field(
         default=None,
         description="Expansion strategies: acronym, synonym, domain, entity",
         example=["acronym", "synonym"]
@@ -228,19 +231,19 @@ class UnifiedRAGRequest(BaseModel):
     )
 
     # ========== FILTERING ==========
-    keyword_filter: Optional[List[str]] = Field(
+    keyword_filter: Optional[list[str]] = Field(
         default=None,
         description="Filter results by keywords",
         example=["python", "api"]
     )
 
     # Explicit selection of items per source
-    include_media_ids: Optional[List[int]] = Field(
+    include_media_ids: Optional[list[int]] = Field(
         default=None,
         description="Restrict search to these Media DB item IDs",
         example=[1, 2, 3]
     )
-    include_note_ids: Optional[List[str]] = Field(
+    include_note_ids: Optional[list[str]] = Field(
         default=None,
         description="Restrict search to these Note IDs (ChaChaNotes UUIDs)",
         example=["a1b2c3-uuid", "d4e5f6-uuid"]
@@ -323,7 +326,7 @@ class UnifiedRAGRequest(BaseModel):
 
     # ========== CHUNKING & CONTEXT ==========
 
-    chunk_type_filter: Optional[List[str]] = Field(
+    chunk_type_filter: Optional[list[str]] = Field(
         default=None,
         description="Filter chunks by type: text, code, table, list",
         example=["text", "code"]
@@ -652,6 +655,214 @@ class UnifiedRAGRequest(BaseModel):
         example=False,
     )
 
+    # ========== DOC-RESEARCHER FEATURES ==========
+    enable_dynamic_granularity: bool = Field(
+        default=False,
+        description="Auto-select retrieval granularity (document/chunk/passage) based on query type",
+        example=False,
+    )
+    enable_evidence_accumulation: bool = Field(
+        default=False,
+        description="Iteratively retrieve additional evidence until sufficient or budget reached",
+        example=False,
+    )
+    accumulation_max_rounds: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Maximum evidence accumulation rounds",
+        example=3,
+    )
+    accumulation_time_budget_sec: Optional[float] = Field(
+        default=None,
+        description="Optional time budget for evidence accumulation (seconds)",
+        example=3.0,
+    )
+    enable_evidence_chains: bool = Field(
+        default=False,
+        description="Build multi-hop evidence chains linking facts to claims",
+        example=False,
+    )
+
+    # ========== SELF-CORRECTING RAG ==========
+    # Stage 1: Document Grading - filter documents by LLM-assessed relevance
+    enable_document_grading: bool = Field(
+        default=False,
+        description="Pre-filter retrieved documents using LLM-based relevance grading before reranking",
+        example=False,
+    )
+    grading_threshold: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Minimum relevance score to keep a document during grading",
+        example=0.5,
+    )
+    grading_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for document grading",
+        example="gpt-4o-mini",
+    )
+    grading_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for document grading",
+        example="openai",
+    )
+    grading_batch_size: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Batch size for document grading requests",
+        example=5,
+    )
+    grading_timeout_sec: float = Field(
+        default=30.0,
+        ge=1.0,
+        le=120.0,
+        description="Timeout for document grading in seconds",
+        example=30.0,
+    )
+    grading_fallback_to_score: bool = Field(
+        default=True,
+        description="Fall back to document score when LLM grading fails",
+        example=True,
+    )
+    grading_fallback_min_score: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum score threshold for fallback scoring when LLM grading unavailable",
+        example=0.3,
+    )
+
+    # Stage 2: Query Rewriting Loop - rewrite query when grading shows low relevance
+    enable_query_rewriting_loop: bool = Field(
+        default=False,
+        description="Enable query rewriting loop when document grading shows low relevance",
+        example=False,
+    )
+    max_rewrite_attempts: int = Field(
+        default=2,
+        ge=1,
+        le=5,
+        description="Maximum query rewrite attempts in the loop",
+        example=2,
+    )
+    rewrite_relevance_threshold: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Average relevance below this triggers query rewriting",
+        example=0.3,
+    )
+
+    # Stage 3: Web Search Fallback - fall back to web search when local retrieval fails
+    enable_web_fallback: bool = Field(
+        default=False,
+        description="Enable web search fallback when local retrieval yields low relevance",
+        example=False,
+    )
+    web_fallback_threshold: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="Relevance threshold below which to trigger web fallback",
+        example=0.25,
+    )
+    web_search_engine: str = Field(
+        default="duckduckgo",
+        description="Web search engine to use for fallback",
+        example="duckduckgo",
+    )
+    web_fallback_result_count: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Number of web search results to fetch",
+        example=5,
+    )
+    web_fallback_merge_strategy: Literal["prepend", "append", "interleave"] = Field(
+        default="prepend",
+        description="How to merge web results with local results",
+        example="prepend",
+    )
+
+    # Stage 4: Knowledge Strips - partition documents into semantic units
+    enable_knowledge_strips: bool = Field(
+        default=False,
+        description="Partition documents into semantic strips and filter by relevance",
+        example=False,
+    )
+    strip_size_tokens: int = Field(
+        default=100,
+        ge=20,
+        le=500,
+        description="Target size for each knowledge strip in tokens",
+        example=100,
+    )
+    strip_min_relevance: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Minimum relevance score to keep a strip",
+        example=0.3,
+    )
+    max_strips: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Maximum number of strips to pass to generation",
+        example=20,
+    )
+
+    # Stage 5: Fast Hallucination Check - lightweight groundedness check
+    enable_fast_hallucination_check: bool = Field(
+        default=False,
+        description="Run fast groundedness check after generation (before full claims)",
+        example=False,
+    )
+    fast_hallucination_timeout_sec: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Timeout for fast hallucination check in seconds",
+        example=5.0,
+    )
+    fast_hallucination_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for groundedness check",
+        example="openai",
+    )
+    fast_hallucination_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for groundedness check",
+        example="gpt-4o-mini",
+    )
+
+    # Stage 6: Utility Grading - rate response usefulness
+    enable_utility_grading: bool = Field(
+        default=False,
+        description="Rate response usefulness on a 1-5 scale after claims verification",
+        example=False,
+    )
+    utility_grading_timeout_sec: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=30.0,
+        description="Timeout for utility grading in seconds",
+        example=5.0,
+    )
+    utility_grading_provider: Optional[str] = Field(
+        default=None,
+        description="Optional LLM provider for utility grading",
+        example="openai",
+    )
+    utility_grading_model: Optional[str] = Field(
+        default=None,
+        description="Optional model override for utility grading",
+        example="gpt-4o-mini",
+    )
+
     # ========== RERANKING ==========
     enable_reranking: bool = Field(
         default=True,
@@ -793,7 +1004,7 @@ class UnifiedRAGRequest(BaseModel):
         description="Apply PII/PHI content policy on retrieved chunks before generation",
         example=False,
     )
-    content_policy_types: Optional[List[str]] = Field(
+    content_policy_types: Optional[list[str]] = Field(
         default=None,
         description="Policy types to enforce: ['pii', 'phi']",
         example=["pii", "phi"],
@@ -808,12 +1019,12 @@ class UnifiedRAGRequest(BaseModel):
         description="Sanitize HTML with an allow-list of tags/attributes",
         example=False,
     )
-    html_allowed_tags: Optional[List[str]] = Field(
+    html_allowed_tags: Optional[list[str]] = Field(
         default=None,
         description="Allowed HTML tags for sanitizer",
         example=["p", "b", "i", "ul", "li", "code"],
     )
-    html_allowed_attrs: Optional[List[str]] = Field(
+    html_allowed_attrs: Optional[list[str]] = Field(
         default=None,
         description="Allowed HTML attributes for sanitizer",
         example=["href", "title"],
@@ -1070,7 +1281,7 @@ class UnifiedRAGRequest(BaseModel):
         example=False
     )
 
-    batch_queries: Optional[List[str]] = Field(
+    batch_queries: Optional[list[str]] = Field(
         default=None,
         description="Additional queries for batch processing",
         example=["query1", "query2"]
@@ -1116,6 +1327,28 @@ class UnifiedRAGRequest(BaseModel):
         default=None,
         description="Session ID for tracking",
         example="session456"
+    )
+
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    ground_truth_doc_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Ground truth relevant document IDs for computing retrieval metrics "
+                    "(precision@K, recall@K, MRR, NDCG@K). When provided, metrics are "
+                    "returned in the response metadata.",
+        example=["doc_1", "doc_3", "doc_7"]
+    )
+    metrics_k: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="K value for @K retrieval metrics (precision@K, recall@K, etc.)"
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    enable_faithfulness_eval: bool = Field(
+        default=False,
+        description="Enable claim-level faithfulness evaluation of generated answers. "
+                    "Requires a faithfulness_llm to be passed via kwargs."
     )
 
     model_config = ConfigDict(json_schema_extra={
@@ -1172,7 +1405,7 @@ class UnifiedRAGRequest(BaseModel):
 class UnifiedRAGResponse(BaseModel):
     """Unified response structure for RAG queries."""
 
-    documents: List[Dict[str, Any]] = Field(
+    documents: list[dict[str, Any]] = Field(
         description="Retrieved documents"
     )
 
@@ -1180,32 +1413,32 @@ class UnifiedRAGResponse(BaseModel):
         description="Original query"
     )
 
-    expanded_queries: List[str] = Field(
+    expanded_queries: list[str] = Field(
         default_factory=list,
         description="Expanded query variations"
     )
 
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata"
     )
 
-    timings: Dict[str, float] = Field(
+    timings: dict[str, float] = Field(
         default_factory=dict,
         description="Performance timings"
     )
 
-    citations: List[Dict[str, Any]] = Field(
+    citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Generated citations (academic and chunk-level)"
     )
 
-    academic_citations: List[str] = Field(
+    academic_citations: list[str] = Field(
         default_factory=list,
         description="Formatted academic citations (MLA/APA/etc)"
     )
 
-    chunk_citations: List[Dict[str, Any]] = Field(
+    chunk_citations: list[dict[str, Any]] = Field(
         default_factory=list,
         description="Chunk-level citations for answer verification"
     )
@@ -1225,12 +1458,12 @@ class UnifiedRAGResponse(BaseModel):
         description="Whether result was from cache"
     )
 
-    errors: List[str] = Field(
+    errors: list[str] = Field(
         default_factory=list,
         description="Any errors encountered"
     )
 
-    security_report: Optional[Dict[str, Any]] = Field(
+    security_report: Optional[dict[str, Any]] = Field(
         default=None,
         description="Security analysis report"
     )
@@ -1241,20 +1474,34 @@ class UnifiedRAGResponse(BaseModel):
     )
 
     # ========== CLAIMS & FACTUALITY ==========
-    claims: Optional[List[Dict[str, Any]]] = Field(
+    claims: Optional[list[dict[str, Any]]] = Field(
         default=None,
         description="Per-claim verification results with evidence",
     )
-    factuality: Optional[Dict[str, Any]] = Field(
+    factuality: Optional[dict[str, Any]] = Field(
         default=None,
         description="Summary of factuality (supported/refuted/nei, precision, coverage)",
     )
-    verification_report: Optional[Dict[str, Any]] = Field(
+    verification_report: Optional[dict[str, Any]] = Field(
         default=None,
         description="Structured verification report for machine-readable audit (when generate_verification_report=true)",
     )
 
-    model_config = ConfigDict(json_schema_extra={
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    retrieval_metrics: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Retrieval quality metrics (precision@K, recall@K, MRR, NDCG@K, F1@K) "
+                    "when ground_truth_doc_ids are provided",
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    faithfulness: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Faithfulness evaluation results (claim-level analysis, faithfulness score) "
+                    "when enable_faithfulness_eval is true",
+    )
+
+    model_config = ConfigDict(frozen=True, json_schema_extra={
         "example": {
             "documents": [
                 {
@@ -1296,7 +1543,7 @@ class UnifiedRAGResponse(BaseModel):
 class UnifiedBatchRequest(BaseModel):
     """Request for batch processing multiple queries."""
 
-    queries: List[str] = Field(
+    queries: list[str] = Field(
         ...,
         min_length=1,
         max_length=100,
@@ -1312,9 +1559,14 @@ class UnifiedBatchRequest(BaseModel):
         example=5
     )
 
+    enable_checkpoint: bool = Field(
+        default=False,
+        description="Enable incremental checkpointing for batch runs (supports resume).",
+    )
+
     # Include all optional parameters from UnifiedRAGRequest that will be applied to all queries
     # Data Sources
-    sources: Optional[List[str]] = Field(
+    sources: Optional[list[str]] = Field(
         default=["media_db", "notes", "characters"],
         description="Databases to search (media_db, notes, characters, chats, kanban)",
     )
@@ -1332,7 +1584,7 @@ class UnifiedBatchRequest(BaseModel):
 
     # Query Expansion
     expand_query: bool = Field(default=False)
-    expansion_strategies: Optional[List[str]] = Field(default=None)
+    expansion_strategies: Optional[list[str]] = Field(default=None)
     spell_check: bool = Field(default=False)
     max_query_variations: int = Field(default=3, ge=0, le=10)
 
@@ -1342,7 +1594,7 @@ class UnifiedBatchRequest(BaseModel):
     adaptive_cache: bool = Field(default=True)
 
     # Filtering
-    keyword_filter: Optional[List[str]] = Field(default=None)
+    keyword_filter: Optional[list[str]] = Field(default=None)
 
     # Security & Privacy
     enable_security_filter: bool = Field(default=False)
@@ -1363,7 +1615,7 @@ class UnifiedBatchRequest(BaseModel):
 
     # Chunking & Context
     enable_enhanced_chunking: bool = Field(default=_DEF_ENH_CHUNK)
-    chunk_type_filter: Optional[List[str]] = Field(default=None)
+    chunk_type_filter: Optional[list[str]] = Field(default=None)
     enable_parent_expansion: bool = Field(default=False)
     parent_context_size: int = Field(default=500, ge=100, le=2000)
     include_sibling_chunks: bool = Field(default=False)
@@ -1406,11 +1658,11 @@ class UnifiedBatchRequest(BaseModel):
     synthesis_refine_tokens: Optional[int] = Field(default=None, ge=32, le=4000)
     # Guardrails
     enable_content_policy_filter: bool = Field(default=False)
-    content_policy_types: Optional[List[str]] = Field(default=None)
+    content_policy_types: Optional[list[str]] = Field(default=None)
     content_policy_mode: Literal["redact", "drop", "annotate"] = Field(default="redact")
     enable_html_sanitizer: bool = Field(default=False)
-    html_allowed_tags: Optional[List[str]] = Field(default=None)
-    html_allowed_attrs: Optional[List[str]] = Field(default=None)
+    html_allowed_tags: Optional[list[str]] = Field(default=None)
+    html_allowed_attrs: Optional[list[str]] = Field(default=None)
     ocr_confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
     # Post-Verification (Adaptive)
@@ -1473,6 +1725,25 @@ class UnifiedBatchRequest(BaseModel):
     user_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None)
 
+    # ========== RETRIEVAL QUALITY METRICS ==========
+    ground_truth_doc_ids: Optional[list[str]] = Field(
+        default=None,
+        description="Ground truth relevant document IDs for computing retrieval metrics "
+                    "(precision@K, recall@K, MRR, NDCG@K). Applied to each query in the batch.",
+    )
+    metrics_k: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="K value for @K retrieval metrics (precision@K, recall@K, etc.)",
+    )
+
+    # ========== FAITHFULNESS EVALUATION ==========
+    enable_faithfulness_eval: bool = Field(
+        default=False,
+        description="Enable claim-level faithfulness evaluation of generated answers.",
+    )
+
     if model_validator is not None:
         @model_validator(mode="before")
         def _map_legacy_min_relevance_batch(cls, values):  # type: ignore
@@ -1510,7 +1781,7 @@ class UnifiedBatchRequest(BaseModel):
 class UnifiedBatchResponse(BaseModel):
     """Response for batch processing."""
 
-    results: List[UnifiedRAGResponse] = Field(
+    results: list[UnifiedRAGResponse] = Field(
         description="Results for each query"
     )
 
@@ -1530,13 +1801,19 @@ class UnifiedBatchResponse(BaseModel):
         description="Total batch processing time"
     )
 
-    model_config = ConfigDict(json_schema_extra={
+    checkpoint_id: Optional[str] = Field(
+        default=None,
+        description="Checkpoint ID when checkpointing is enabled.",
+    )
+
+    model_config = ConfigDict(frozen=True, json_schema_extra={
         "example": {
             "results": [],  # List of UnifiedRAGResponse objects
             "total_queries": 2,
             "successful": 2,
             "failed": 0,
-            "total_time": 0.75
+            "total_time": 0.75,
+            "checkpoint_id": "rag_batch_ab12cd34",
         }
     })
 
@@ -1549,9 +1826,9 @@ class ImplicitFeedbackEvent(BaseModel):
     query: Optional[str] = Field(default=None, description="Original query text")
     feedback_id: Optional[str] = Field(default=None, description="Optional feedback correlation id")
     doc_id: Optional[str] = Field(default=None, description="Document/chunk id involved")
-    chunk_ids: Optional[List[str]] = Field(default=None, description="Optional chunk ids involved")
+    chunk_ids: Optional[list[str]] = Field(default=None, description="Optional chunk ids involved")
     rank: Optional[int] = Field(default=None, description="Rank position of the doc in the displayed list")
-    impression_list: Optional[List[str]] = Field(
+    impression_list: Optional[list[str]] = Field(
         default=None,
         description="Ordered doc ids visible when the event happened"
     )

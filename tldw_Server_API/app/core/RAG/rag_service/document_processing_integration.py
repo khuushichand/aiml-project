@@ -6,25 +6,23 @@ This module integrates with the unified v2 chunking module to provide enhanced
 document processing capabilities specifically optimized for RAG retrieval.
 """
 
-import re
 import hashlib
-from typing import List, Dict, Any, Optional, Tuple
-from dataclasses import dataclass, field
-from collections import defaultdict
+import re
 import unicodedata
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from loguru import logger
 
 # Import from new modular chunking system
 try:
     from ...Chunking import (
-        EnhancedChunk,
-        ChunkType,
-        improved_chunking_process,
         ChunkingError,
+        ChunkType,
+        EnhancedChunk,
         InvalidInputError,
-        Chunker,
-        ChunkerConfig
+        improved_chunking_process,
     )
     CHUNK_LIB_AVAILABLE = True
 except ImportError as e:
@@ -62,7 +60,7 @@ class DocumentProcessor:
         self.config = config or ProcessingConfig()
         self.artifact_patterns = self._compile_artifact_patterns()
 
-    def _compile_artifact_patterns(self) -> List[re.Pattern]:
+    def _compile_artifact_patterns(self) -> list[re.Pattern]:
         """Compile regex patterns for artifact detection."""
         patterns = [
             # PDF artifacts
@@ -86,8 +84,8 @@ class DocumentProcessor:
         self,
         content: str,
         source: str = "unknown",
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> List[EnhancedChunk]:
+        metadata: Optional[dict[str, Any]] = None
+    ) -> list[EnhancedChunk]:
         """
         Process document with enhanced chunking for RAG.
 
@@ -225,7 +223,7 @@ class DocumentProcessor:
 
         return fixed
 
-    def _detect_structure(self, content: str) -> Dict[str, Any]:
+    def _detect_structure(self, content: str) -> dict[str, Any]:
         """Detect document structure elements."""
         structure = {
             "has_headers": False,
@@ -263,7 +261,7 @@ class DocumentProcessor:
     def _determine_chunk_type(
         self,
         chunk_text: str,
-        structure_info: Dict[str, Any]
+        structure_info: dict[str, Any]
     ) -> ChunkType:
         """Determine the type of a chunk based on its content."""
         # Check for specific patterns
@@ -278,7 +276,7 @@ class DocumentProcessor:
         else:
             return ChunkType.PARAGRAPH
 
-    def _optimize_boundaries(self, chunks: List[EnhancedChunk]) -> List[EnhancedChunk]:
+    def _optimize_boundaries(self, chunks: list[EnhancedChunk]) -> list[EnhancedChunk]:
         """Optimize chunk boundaries to avoid breaking sentences."""
         optimized = []
 
@@ -307,7 +305,7 @@ class DocumentProcessor:
 
         return optimized
 
-    def _merge_small_chunks(self, chunks: List[EnhancedChunk]) -> List[EnhancedChunk]:
+    def _merge_small_chunks(self, chunks: list[EnhancedChunk]) -> list[EnhancedChunk]:
         """Merge chunks that are too small."""
         if not chunks:
             return chunks
@@ -349,9 +347,9 @@ class DocumentProcessor:
 
     def _enrich_metadata(
         self,
-        chunks: List[EnhancedChunk],
-        document_metadata: Optional[Dict[str, Any]] = None
-    ) -> List[EnhancedChunk]:
+        chunks: list[EnhancedChunk],
+        document_metadata: Optional[dict[str, Any]] = None
+    ) -> list[EnhancedChunk]:
         """Enrich chunks with additional metadata for RAG."""
         doc_metadata = document_metadata or {}
 
@@ -395,7 +393,7 @@ class DocumentValidator:
     """Validates document chunks for quality."""
 
     @staticmethod
-    def validate_chunks(chunks: List[EnhancedChunk]) -> Tuple[bool, List[str]]:
+    def validate_chunks(chunks: list[EnhancedChunk]) -> tuple[bool, list[str]]:
         """
         Validate chunks for quality issues.
 

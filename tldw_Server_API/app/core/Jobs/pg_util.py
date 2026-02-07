@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse, quote
-from typing import Dict, Optional
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 # Cache negotiation results per host:port signature to avoid repeated probes
-_NEGOTIATED_OPTIONS_CACHE: Dict[str, str] = {}
+_NEGOTIATED_OPTIONS_CACHE: dict[str, str] = {}
 
 
 def normalize_pg_dsn(
@@ -43,7 +42,7 @@ def normalize_pg_dsn(
     return urlunparse(new_p)
 
 
-def _replace_options(dsn: str, options: Optional[str]) -> str:
+def _replace_options(dsn: str, options: str | None) -> str:
     """Return DSN with provided libpq options string (or remove it if None)."""
     p = urlparse(dsn)
     q = dict(parse_qsl(p.query, keep_blank_values=True))
@@ -127,7 +126,7 @@ def negotiate_pg_dsn(
         return base
 
     # Progressive fallback candidates
-    opts_full = (
+    (
         f"-c statement_timeout={int(max(1, statement_timeout_ms))} "
         f"-c lock_timeout={int(max(1, lock_timeout_ms))} "
         f"-c idle_in_transaction_session_timeout={int(max(1, idle_in_xact_timeout_ms))}"
@@ -137,7 +136,7 @@ def negotiate_pg_dsn(
         f"-c lock_timeout={int(max(1, lock_timeout_ms))}"
     )
     opts_stmt_only = f"-c statement_timeout={int(max(1, statement_timeout_ms))}"
-    candidates: list[Optional[str]] = [opts_stmt_lock, opts_stmt_only, None]
+    candidates: list[str | None] = [opts_stmt_lock, opts_stmt_only, None]
 
     for opt in candidates:
         trial = _replace_options(base, opt)

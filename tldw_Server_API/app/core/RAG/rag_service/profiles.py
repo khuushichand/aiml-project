@@ -18,9 +18,9 @@ pipeline parameters and rely on function-level defaults for everything else.
 Callers can always override any individual flag on top of a profile.
 """
 
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
-from typing import Any, Dict, Literal, Mapping, MutableMapping, Optional
-
+from typing import Any, Literal, Optional
 
 ProfileName = Literal["production", "research", "cheap"]
 
@@ -34,7 +34,7 @@ class RAGProfile:
     defaults: Mapping[str, Any]
 
 
-_PROFILES: Dict[ProfileName, RAGProfile] = {
+_PROFILES: dict[ProfileName, RAGProfile] = {
     "production": RAGProfile(
         name="production",
         description=(
@@ -186,7 +186,7 @@ _PROFILES: Dict[ProfileName, RAGProfile] = {
 }
 
 
-def list_profiles() -> Dict[ProfileName, RAGProfile]:
+def list_profiles() -> dict[ProfileName, RAGProfile]:
     """Return a copy of all registered profiles keyed by name."""
     return dict(_PROFILES)
 
@@ -202,7 +202,7 @@ def get_profile(name: ProfileName) -> RAGProfile:
 def get_profile_kwargs(
     name: ProfileName,
     overrides: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build keyword arguments for `unified_rag_pipeline` from a profile.
 
@@ -210,7 +210,7 @@ def get_profile_kwargs(
     provided overrides take precedence over profile defaults.
     """
     profile = get_profile(name)
-    kwargs: Dict[str, Any] = dict(profile.defaults)
+    kwargs: dict[str, Any] = dict(profile.defaults)
     if overrides:
         # Copy into a mutable dict to avoid mutating caller mappings
         for key, value in overrides.items():
@@ -221,7 +221,7 @@ def get_profile_kwargs(
 def apply_profile_to_kwargs(
     name: ProfileName,
     existing: Optional[MutableMapping[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Merge a profile into an existing kwargs-style mapping.
 
@@ -237,7 +237,7 @@ def apply_profile_to_kwargs(
 def get_multi_tenant_safe_kwargs(
     namespace: str,
     overrides: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build kwargs for a multi-tenant-safe production configuration.
 

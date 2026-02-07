@@ -139,7 +139,8 @@ Key settings in `.env`:
     ```bash
     export DATABASE_URL=postgresql://tldw_user:TestPassword123!@postgres:5432/tldw_users
     ```
-  - See Multi-User Deployment Guide for more details.
+  - For a focused walkthrough, see `Docs/User_Guides/Multi-User_Postgres_Setup.md`.
+  - See Multi-User Deployment Guide for broader production guidance.
 
 ### Security Best Practices
 
@@ -181,6 +182,7 @@ Rotation guidance: see `Docs/Operations/JWT_Rotation_Runbook.md`.
 ### Documentation
 
 - AuthNZ API Guide: `../API-related/AuthNZ-API-Guide.md`
+- Family/Guardian setup: `Docs/User_Guides/Family_Guardian_Setup.md`
 
 ## Quick Setup (Multi-User with SQLite - Dev)
 
@@ -205,6 +207,7 @@ open http://localhost:8080/login   # macOS (run the Next.js client separately)
 Notes
 - This is suitable for development and light testing. For production multi-user, use PostgreSQL for `DATABASE_URL`.
 - The login flow posts to `/api/v1/auth/register` and `/api/v1/auth/login` and shows the access token.
+- For a deeper explanation of how multi-user SQLite is wired (AuthNZ DB + per-user storage) and common limitations, see `Docs/User_Guides/Multi-User_SQLite_Setup.md`.
 
 ## Using config.txt for AuthNZ
 

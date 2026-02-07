@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,10 +24,10 @@ class ReadingProgressUpdate(BaseModel):
     total_pages: int = Field(..., ge=1, description="Total pages in the document")
     zoom_level: int = Field(default=100, ge=25, le=400, description="Zoom level percentage")
     view_mode: ViewMode = Field(default=ViewMode.single, description="View mode")
-    cfi: Optional[str] = Field(
+    cfi: str | None = Field(
         None, description="EPUB CFI (Canonical Fragment Identifier) for precise position"
     )
-    percentage: Optional[float] = Field(
+    percentage: float | None = Field(
         None, ge=0, le=100, description="Reading progress percentage for EPUB"
     )
 
@@ -42,7 +41,7 @@ class ReadingProgressResponse(BaseModel):
     zoom_level: int = Field(default=100, ge=25, le=400, description="Zoom level percentage")
     view_mode: ViewMode = Field(default=ViewMode.single, description="View mode")
     percent_complete: float = Field(..., ge=0, le=100, description="Reading progress percentage")
-    cfi: Optional[str] = Field(
+    cfi: str | None = Field(
         None, description="EPUB CFI for precise position restoration"
     )
     last_read_at: datetime = Field(..., description="When the document was last read")

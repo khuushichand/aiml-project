@@ -1,6 +1,3 @@
-import json
-import base64
-import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -18,7 +15,7 @@ async def test_ws_concurrent_streams_denied(monkeypatch):
     """
     from tldw_Server_API.app.main import app
     from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-    import tldw_Server_API.app.api.v1.endpoints.audio as audio_ep
+    import tldw_Server_API.app.api.v1.endpoints.audio.audio as audio_ep
 
     async def _deny_stream(_user_id: int):
         """

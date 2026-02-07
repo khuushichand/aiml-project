@@ -3,21 +3,37 @@
 #
 # Imports
 import asyncio
-import json
-import time
-import threading
 import concurrent.futures
-from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, Iterator, Optional, Union, Tuple, List
-from loguru import logger
+import contextlib
+import json
 
 #######################################################################################################################
 #
 # Constants:
-
 # Load configuration values
 import os
+import threading
+import time
+from collections.abc import AsyncIterator, Iterator
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
+
+from loguru import logger
+
 from tldw_Server_API.app.core.config import load_comprehensive_config
+
+_STREAMING_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    asyncio.TimeoutError,
+    json.JSONDecodeError,
+)
 
 _config = load_comprehensive_config()
 # ConfigParser uses sections, check if Chat-Module section exists
@@ -31,7 +47,7 @@ def _parse_int(value: Any, default: int, *, min_value: Optional[int] = None) -> 
         if value is None:
             return default
         parsed = int(str(value).strip())
-    except Exception:
+    except _STREAMING_NONCRITICAL_EXCEPTIONS:
         return default
     if min_value is not None and parsed < min_value:
         return min_value
@@ -122,7 +138,7 @@ except (ValueError, TypeError) as exc:
 #
 # Functions:
 
-def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Optional[Dict[str, Any]], bool]:
+def _extract_text_from_upstream_sse(chunk_str: str) -> tuple[Optional[str], Optional[dict[str, Any]], bool]:
     """
     Normalize provider-emitted SSE frames to plain text content.
 
@@ -166,7 +182,7 @@ def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Opti
                 continue
             try:
                 data = json.loads(payload_str)
-            except Exception:
+            except _STREAMING_NONCRITICAL_EXCEPTIONS:
                 # Try next line if present
                 continue
 
@@ -174,7 +190,7 @@ def _extract_text_from_upstream_sse(chunk_str: str) -> Tuple[Optional[str], Opti
                 try:
                     _ = json.dumps({"error": data.get("error")})
                     first_error = {"error": data.get("error")}
-                except Exception:
+                except _STREAMING_NONCRITICAL_EXCEPTIONS:
                     first_error = {"error": {"message": "Upstream error (unparseable)", "type": "stream_error"}}
                 continue
 
@@ -224,10 +240,10 @@ async def _async_iter_sync_stream(
     """
     loop = asyncio.get_running_loop()
     maxsize = max(int(queue_maxsize or 0), 1)
-    queue: asyncio.Queue[Tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=maxsize)
     stop_event = threading.Event()
 
-    def _queue_put(item: Tuple[str, Any]) -> None:
+    def _queue_put(item: tuple[str, Any]) -> None:
         if loop.is_closed():
             return
         try:
@@ -257,7 +273,7 @@ async def _async_iter_sync_stream(
                 if stop_event.is_set():
                     break
                 _queue_put(("data", chunk))
-        except Exception as exc:
+        except _STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             _queue_put(("error", exc))
         finally:
             _queue_put(("done", None))
@@ -281,7 +297,7 @@ async def _async_iter_sync_stream(
         try:
             if hasattr(stream, "close") and callable(stream.close):  # type: ignore[attr-defined]
                 stream.close()  # type: ignore[attr-defined]
-        except Exception as exc:
+        except _STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 f"Exception while closing bridged sync stream ({type(stream).__name__}): {exc}"
             )
@@ -320,7 +336,7 @@ class StreamingResponseHandler:
         self.max_response_size = max_response_size
         self.last_activity = time.time()
         self.is_cancelled = False
-        self.full_response: List[str] = []
+        self.full_response: list[str] = []
         self.response_size = 0
         self.error_occurred = False
         # Optional transform to apply to textual deltas before emission (e.g., moderation redaction)
@@ -330,15 +346,15 @@ class StreamingResponseHandler:
         # Track upstream DONE so we can defer the terminal sentinel until after metadata.
         self.upstream_done_received = False
         # Accumulate tool/function call deltas for persistence once the stream completes
-        self.tool_call_accumulator: Dict[int, Dict[str, Any]] = {}
-        self.tool_call_order: List[int] = []
-        self.function_call_accumulator: Optional[Dict[str, Any]] = None
+        self.tool_call_accumulator: dict[int, dict[str, Any]] = {}
+        self.tool_call_order: list[int] = []
+        self.function_call_accumulator: Optional[dict[str, Any]] = None
         self.saved_message_id: Optional[str] = None
         self.system_message_id: Optional[str] = None
         # Lock for thread-safe state modifications
         self._state_lock = asyncio.Lock()
 
-    def _attach_stream_metadata(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _attach_stream_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, dict):
             return payload
         if not CHAT_STREAM_INCLUDE_METADATA:
@@ -365,7 +381,7 @@ class StreamingResponseHandler:
         self.is_cancelled = True
         logger.info(f"Stream cancelled for conversation {self.conversation_id}")
 
-    def _accumulate_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> None:
+    def _accumulate_tool_calls(self, tool_calls: list[dict[str, Any]]) -> None:
         """Merge incremental tool call deltas into a final structure.
 
         This method includes bounds checking to prevent memory exhaustion from
@@ -381,7 +397,7 @@ class StreamingResponseHandler:
                 call_index = idx
             try:
                 call_index = int(call_index)
-            except Exception:
+            except _STREAMING_NONCRITICAL_EXCEPTIONS:
                 call_index = idx
 
             # Bounds check to prevent memory exhaustion
@@ -422,7 +438,7 @@ class StreamingResponseHandler:
                 else:
                     accumulator["function"]["arguments"] += new_args
 
-    def _accumulate_function_call(self, function_delta: Dict[str, Any]) -> None:
+    def _accumulate_function_call(self, function_delta: dict[str, Any]) -> None:
         """Merge incremental function call deltas into a final structure."""
         if not isinstance(function_delta, dict):
             return
@@ -444,12 +460,12 @@ class StreamingResponseHandler:
             else:
                 self.function_call_accumulator["arguments"] += new_args
 
-    def get_accumulated_tool_calls(self) -> Optional[List[Dict[str, Any]]]:
+    def get_accumulated_tool_calls(self) -> Optional[list[dict[str, Any]]]:
         """Return the finalized list of tool calls, if any were streamed."""
         if not self.tool_call_accumulator:
             return None
         ordered_indices = sorted(set(self.tool_call_order))
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for index in ordered_indices:
             data = self.tool_call_accumulator.get(index)
             if not data:
@@ -467,7 +483,7 @@ class StreamingResponseHandler:
             )
         return results or None
 
-    def get_accumulated_function_call(self) -> Optional[Dict[str, Any]]:
+    def get_accumulated_function_call(self) -> Optional[dict[str, Any]]:
         """Return the finalized function call payload, if one was streamed."""
         if not self.function_call_accumulator:
             return None
@@ -529,7 +545,7 @@ class StreamingResponseHandler:
             yield f"event: stream_start\ndata: {json.dumps(start_payload)}\n\n"
             self.update_activity()
 
-            def iter_logical_lines(raw_chunk: str) -> List[str]:
+            def iter_logical_lines(raw_chunk: str) -> list[str]:
                 return raw_chunk.splitlines() if ("\n" in raw_chunk or raw_chunk.count("data:") > 1) else [raw_chunk]
 
             def append_content(text_piece: str) -> bool:
@@ -548,8 +564,8 @@ class StreamingResponseHandler:
                 self.response_size += chunk_size
                 return True
 
-            def process_line(raw_line: str) -> Tuple[List[str], bool]:
-                outputs: List[str] = []
+            def process_line(raw_line: str) -> tuple[list[str], bool]:
+                outputs: list[str] = []
                 stripped_leading = raw_line.lstrip("\ufeff\u200b\u200c\u200d\u2060")
                 candidate = stripped_leading.strip()
                 if not candidate and not stripped_leading:
@@ -565,7 +581,7 @@ class StreamingResponseHandler:
                         return outputs, True
                     try:
                         data = json.loads(payload_str)
-                    except Exception:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS:
                         outputs.append(f"data: {payload_str}\n\n")
                         self.update_activity()
                         return outputs, False
@@ -574,7 +590,7 @@ class StreamingResponseHandler:
                             err_payload = {"error": data.get("error")}
                             self._attach_stream_metadata(err_payload)
                             outputs.append(f"data: {json.dumps(err_payload)}\n\n")
-                        except Exception:
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS:
                             err_payload = {"error": {"message": "Upstream error"}}
                             self._attach_stream_metadata(err_payload)
                             outputs.append(f"data: {json.dumps(err_payload)}\n\n")
@@ -619,7 +635,7 @@ class StreamingResponseHandler:
                                         return outputs, True
                                     except StopIteration:
                                         return outputs, True
-                                    except Exception as transform_err:
+                                    except _STREAMING_NONCRITICAL_EXCEPTIONS as transform_err:
                                         logger.debug(f"text_transform error ignored: {transform_err}")
                                     if text_piece and not append_content(text_piece):
                                         err_payload = {"error": {"message": "Response size limit exceeded"}}
@@ -639,10 +655,8 @@ class StreamingResponseHandler:
                     return outputs, False
                 # Non-SSE chunk: preserve spaces (avoid stripping)
                 text_piece = stripped_leading
-                try:
+                with contextlib.suppress(_STREAMING_NONCRITICAL_EXCEPTIONS):
                     text_piece = str(text_piece)
-                except Exception:
-                    pass
                 try:
                     if self.text_transform:
                         text_piece = self.text_transform(text_piece)
@@ -661,7 +675,7 @@ class StreamingResponseHandler:
                     return outputs, True
                 except StopIteration:
                     return outputs, True
-                except Exception as transform_err:
+                except _STREAMING_NONCRITICAL_EXCEPTIONS as transform_err:
                     logger.debug(f"text_transform error ignored: {transform_err}")
                 if text_piece and not append_content(text_piece):
                     err_payload = {"error": {"message": "Response size limit exceeded"}}
@@ -705,7 +719,7 @@ class StreamingResponseHandler:
                                 break
                         if stop_stream:
                             break
-                    except Exception as e:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Error processing stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
                         err_payload = {"error": {"message": f"Error processing chunk: {str(e)}"}}
@@ -748,7 +762,7 @@ class StreamingResponseHandler:
                                 break
                         if stop_stream:
                             break
-                    except Exception as e:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Error processing sync stream chunk for {self.conversation_id}: {e}")
                         self.error_occurred = True
                         err_payload = {"error": {"message": f"Error processing chunk: {str(e)}"}}
@@ -766,7 +780,7 @@ class StreamingResponseHandler:
             self.cancel()
             # Re-raise to ensure proper generator closure semantics
             raise
-        except Exception as e:
+        except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
             # Unexpected error
             logger.error(f"Unexpected error in stream for {self.conversation_id}: {e}", exc_info=True)
             # Best-effort: flush any buffered tail before emitting the error frame.
@@ -776,13 +790,13 @@ class StreamingResponseHandler:
                 if callable(flush_fn):
                     try:
                         flush_text = flush_fn()
-                    except Exception as flush_err:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as flush_err:
                         logger.debug(f"text_transform flush on error ignored: {flush_err}")
                         flush_text = None
                     if flush_text:
                         try:
                             flush_text = str(flush_text)
-                        except Exception:
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS:
                             flush_text = ""
                         if flush_text:
                             if append_content(flush_text):
@@ -806,13 +820,13 @@ class StreamingResponseHandler:
             try:
                 # Always attempt to close the upstream stream first
                 try:
-                    if hasattr(stream, "aclose") and callable(getattr(stream, "aclose")):
+                    if hasattr(stream, "aclose") and callable(stream.aclose):
                         # Async generator
                         await stream.aclose()  # type: ignore[attr-defined]
-                    elif hasattr(stream, "close") and callable(getattr(stream, "close")):
+                    elif hasattr(stream, "close") and callable(stream.close):
                         # Sync generator
                         stream.close()  # type: ignore[attr-defined]
-                except Exception as cleanup_err:
+                except _STREAMING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     # Log cleanup errors for debugging, but don't propagate
                     logger.debug(
                         f"Stream cleanup warning for {self.conversation_id}: {cleanup_err}"
@@ -829,9 +843,9 @@ class StreamingResponseHandler:
                             )
                             if hasattr(maybe_result, "__await__"):
                                 await maybe_result
-                        except Exception as finalize_err:
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS as finalize_err:
                             logger.debug(f"Finalize callback error after cancel: {finalize_err}")
-                    return
+                    return  # noqa: B012
 
                 # Flush any pending tail from text_transform (e.g., moderation holdback)
                 if not self.error_occurred and self.text_transform:
@@ -839,13 +853,13 @@ class StreamingResponseHandler:
                     if callable(flush_fn):
                         try:
                             flush_text = flush_fn()
-                        except Exception as flush_err:
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS as flush_err:
                             logger.debug(f"text_transform flush error ignored: {flush_err}")
                             flush_text = None
                         if flush_text:
                             try:
                                 flush_text = str(flush_text)
-                            except Exception:
+                            except _STREAMING_NONCRITICAL_EXCEPTIONS:
                                 flush_text = ""
                             if flush_text:
                                 if not append_content(flush_text):
@@ -895,7 +909,7 @@ class StreamingResponseHandler:
                             len(aggregated_tool_calls or []),
                             "yes" if aggregated_function_call else "no",
                         )
-                    except Exception as e:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Failed to save streaming response for {self.conversation_id}: {e}")
 
                 # Send completion marker(s) after save so metadata includes IDs.
@@ -919,7 +933,7 @@ class StreamingResponseHandler:
                         )
                         if hasattr(maybe_result, "__await__"):
                             await maybe_result
-                    except Exception as finalize_err:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as finalize_err:
                         logger.debug(f"Finalize callback error after stream error: {finalize_err}")
 
                 # Send stream end event (only when not cancelled)
@@ -933,15 +947,12 @@ class StreamingResponseHandler:
                     yield f"event: stream_end\ndata: {json.dumps(end_payload)}\n\n"
                 # Ensure final [DONE] sentinel for client compatibility (unless already sent).
                 # If upstream already sent [DONE], defer emission until after stream_end.
-                if self.upstream_done_received and not self.done_sent:
-                    yield "data: [DONE]\n\n"
-                    self.done_sent = True
-                elif not self.done_sent:
+                if self.upstream_done_received and not self.done_sent or not self.done_sent:
                     yield "data: [DONE]\n\n"
                     self.done_sent = True
                 self.upstream_done_received = False
 
-            except Exception as e:
+            except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Error in stream cleanup for {self.conversation_id}: {e}")
 
 
@@ -1020,7 +1031,7 @@ async def create_streaming_response_with_timeout(
                     except asyncio.CancelledError:
                         # Task was cancelled (likely due to shutdown); exit loop
                         should_exit = True
-                    except Exception as e:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Error in streaming task: {e}")
                         handler.error_occurred = True
                         should_exit = True
@@ -1036,14 +1047,14 @@ async def create_streaming_response_with_timeout(
                     if gather_targets:
                         try:
                             await asyncio.gather(*gather_targets, return_exceptions=True)
-                        except Exception as gather_err:
+                        except _STREAMING_NONCRITICAL_EXCEPTIONS as gather_err:
                             logger.debug(f"Task gather cleanup: {gather_err}")
                     # As a safety net, emit a final [DONE] only if it hasn't been sent yet
                     try:
                         if not handler.done_sent and not handler.is_cancelled:
                             yield "data: [DONE]\n\n"
                             handler.done_sent = True
-                    except Exception as done_err:
+                    except _STREAMING_NONCRITICAL_EXCEPTIONS as done_err:
                         logger.debug(f"Final DONE emission error: {done_err}")
                     break
         finally:
@@ -1055,17 +1066,17 @@ async def create_streaming_response_with_timeout(
             if remaining_tasks:
                 try:
                     await asyncio.gather(*remaining_tasks, return_exceptions=True)
-                except Exception as final_gather_err:
+                except _STREAMING_NONCRITICAL_EXCEPTIONS as final_gather_err:
                     logger.debug(f"Final task cleanup: {final_gather_err}")
             # Ensure generators are properly closed; avoid yielding here
             try:
                 await stream_gen.aclose()
-            except Exception as stream_close_err:
+            except _STREAMING_NONCRITICAL_EXCEPTIONS as stream_close_err:
                 logger.debug(f"Stream generator close: {stream_close_err}")
             if heartbeat_gen is not None:
                 try:
                     await heartbeat_gen.aclose()
-                except Exception as heartbeat_close_err:
+                except _STREAMING_NONCRITICAL_EXCEPTIONS as heartbeat_close_err:
                     logger.debug(f"Heartbeat generator close: {heartbeat_close_err}")
 
     async for message in stream_with_heartbeat():

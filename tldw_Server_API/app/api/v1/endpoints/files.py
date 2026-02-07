@@ -4,6 +4,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path as PathlibPath
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from loguru import logger
 from starlette.background import BackgroundTask
@@ -23,7 +24,6 @@ from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDat
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import FileArtifactsError, file_artifacts_http_status
 from tldw_Server_API.app.core.File_Artifacts.file_artifacts_service import FileArtifactsService
-
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -92,18 +92,18 @@ def _clear_export_state(
     consumed_at: str | None,
 ) -> None:
     try:
-        cdb = CollectionsDatabase.for_user(user_id=user_id)
-        cdb.update_file_artifact_export(
-            file_id,
-            export_status="none",
-            export_format=row.export_format,
-            export_storage_path=None,
-            export_bytes=row.export_bytes,
-            export_content_type=row.export_content_type,
-            export_job_id=row.export_job_id,
-            export_expires_at=row.export_expires_at,
-            export_consumed_at=consumed_at,
-        )
+        with CollectionsDatabase.for_user(user_id=user_id) as cdb:
+            cdb.update_file_artifact_export(
+                file_id,
+                export_status="none",
+                export_format=row.export_format,
+                export_storage_path=None,
+                export_bytes=row.export_bytes,
+                export_content_type=row.export_content_type,
+                export_job_id=row.export_job_id,
+                export_expires_at=row.export_expires_at,
+                export_consumed_at=consumed_at,
+            )
     except Exception as exc:
         logger.warning("files.export: failed to clear export state for %s: %s", file_id, exc)
 

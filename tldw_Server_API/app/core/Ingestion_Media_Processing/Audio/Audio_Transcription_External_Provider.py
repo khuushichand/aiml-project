@@ -14,20 +14,22 @@
 #
 ####################
 
-import os
-from loguru import logger
+import asyncio
+import contextlib
 import io
-from typing import Optional, Dict, Any, Union, Tuple
-from pathlib import Path
+import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional, Union
+from urllib.parse import urljoin, urlparse
+
 import numpy as np
 import soundfile as sf
-import asyncio
-from urllib.parse import urlparse, urljoin
+from loguru import logger
 
+from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
+from tldw_Server_API.app.core.http_client import RetryPolicy, afetch
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import open_safe_local_path
-from tldw_Server_API.app.core.http_client import afetch, RetryPolicy
-from tldw_Server_API.app.core.exceptions import RetryExhaustedError, NetworkError
 
 logger = logger
 
@@ -41,7 +43,7 @@ class ExternalProviderConfig:
     timeout: float = 300.0  # 5 minutes default
     max_retries: int = 3
     verify_ssl: bool = True
-    custom_headers: Optional[Dict[str, str]] = None
+    custom_headers: Optional[dict[str, str]] = None
     response_format: str = "json"
     temperature: float = 0.0
     language: Optional[str] = None
@@ -49,7 +51,15 @@ class ExternalProviderConfig:
 
 
 # Global cache for provider configurations
-_provider_configs: Dict[str, ExternalProviderConfig] = {}
+_provider_configs: dict[str, ExternalProviderConfig] = {}
+EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    TypeError,
+    KeyError,
+    AttributeError,
+)
 
 
 async def _close_response(resp: Any) -> None:
@@ -93,7 +103,7 @@ def load_external_provider_config(provider_name: str = "default") -> Optional[Ex
             external_config = config_data.get('STT-Settings', {}).get('external_providers', {}).get(provider_name, {})
             if external_config:
                 base_url = external_config.get('base_url')
-        except Exception as e:
+        except (ImportError, OSError, RuntimeError, ValueError, TypeError, KeyError, AttributeError) as e:
             logger.debug(f"Could not load config for external provider {provider_name}: {e}")
             return None
 
@@ -119,7 +129,7 @@ def load_external_provider_config(provider_name: str = "default") -> Optional[Ex
     return config
 
 
-def validate_external_provider_config(config: ExternalProviderConfig) -> Tuple[bool, Optional[str]]:
+def validate_external_provider_config(config: ExternalProviderConfig) -> tuple[bool, Optional[str]]:
     """
     Validate external provider configuration.
 
@@ -134,7 +144,7 @@ def validate_external_provider_config(config: ExternalProviderConfig) -> Tuple[b
         parsed = urlparse(config.base_url)
         if not parsed.scheme or not parsed.netloc:
             return False, "Invalid base URL format"
-    except Exception as e:
+    except (ValueError, TypeError, AttributeError) as e:
         return False, f"Invalid base URL: {e}"
 
     # Validate timeout
@@ -264,10 +274,8 @@ async def transcribe_with_external_provider_async(
 
             resp = None
             try:
-                try:
+                with contextlib.suppress(OSError, ValueError):
                     file_handle.seek(0)
-                except Exception:
-                    pass
 
                 resp = await afetch(
                     method="POST",
@@ -300,7 +308,7 @@ async def transcribe_with_external_provider_async(
                 try:
                     error_json = resp.json()
                     error_detail = error_json.get('error', {}).get('message', error_detail)
-                except Exception as parse_err:
+                except (ValueError, TypeError, AttributeError) as parse_err:
                     logger.debug(f"Failed to parse provider error JSON: error={parse_err}")
                 return f"[Error: API returned {status_code} - {error_detail}]"
 
@@ -308,15 +316,15 @@ async def transcribe_with_external_provider_async(
                 return f"[Error: {str(e)}]"
             except NetworkError as e:
                 return f"[Error: {str(e)}]"
-            except Exception as e:
+            except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
                 return f"[Error: {str(e)}]"
             finally:
                 await _close_response(resp)
 
         return "[Error: Failed to transcribe after all retries]"
 
-    except Exception as e:
-        logger.error(f"Error in external provider transcription: {e}")
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
+        logger.exception(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
     finally:
@@ -383,8 +391,8 @@ def transcribe_with_external_provider(
                     **kwargs,
                 )
             )
-    except Exception as e:
-        logger.error(f"Error in external provider transcription: {e}")
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
+        logger.exception(f"Error in external provider transcription: {e}")
         return f"[Error: {str(e)}]"
 
 
@@ -439,7 +447,7 @@ def remove_external_provider(name: str) -> bool:
 async def test_external_provider(
     provider_name: str = "default",
     config: Optional[ExternalProviderConfig] = None
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Test an external provider with a simple audio sample.
 
@@ -477,7 +485,7 @@ async def test_external_provider(
             'provider': provider_name
         }
 
-    except Exception as e:
+    except EXTERNAL_PROVIDER_RUNTIME_EXCEPTIONS as e:
         return {
             'success': False,
             'error': str(e),
@@ -495,7 +503,7 @@ def register_external_provider_with_library():
     """
     try:
         from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Lib import (
-            register_transcription_provider
+            register_transcription_provider,
         )
 
         def external_provider_wrapper(audio_data, sample_rate=16000, **kwargs):

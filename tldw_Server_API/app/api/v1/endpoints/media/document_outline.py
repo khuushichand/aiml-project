@@ -3,7 +3,7 @@
 #
 from __future__ import annotations
 
-from typing import BinaryIO, List, Union
+from typing import BinaryIO
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
 from loguru import logger
@@ -17,7 +17,6 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_u
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Storage import get_storage_backend
 from tldw_Server_API.app.core.Storage.storage_interface import StorageError
-
 
 router = APIRouter(tags=["Document Workspace"])
 
@@ -34,7 +33,7 @@ def _check_pymupdf_available() -> bool:
         return False
 
 
-def _extract_pdf_outline(pdf_data: Union[bytes, BinaryIO]) -> tuple[List[OutlineEntry], int]:
+def _extract_pdf_outline(pdf_data: bytes | BinaryIO) -> tuple[list[OutlineEntry], int]:
     """
     Extract table of contents from PDF using PyMuPDF.
 
@@ -54,12 +53,9 @@ def _extract_pdf_outline(pdf_data: Union[bytes, BinaryIO]) -> tuple[List[Outline
         raise RuntimeError("PyMuPDF is not installed") from exc
 
     # Handle both bytes and file-like objects
-    if hasattr(pdf_data, "read"):
-        pdf_bytes = pdf_data.read()
-    else:
-        pdf_bytes = pdf_data
+    pdf_bytes = pdf_data.read() if hasattr(pdf_data, "read") else pdf_data
 
-    entries: List[OutlineEntry] = []
+    entries: list[OutlineEntry] = []
 
     try:
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")

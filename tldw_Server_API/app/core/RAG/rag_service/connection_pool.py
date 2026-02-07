@@ -5,15 +5,40 @@ This module provides thread-safe connection pooling for SQLite databases
 to improve performance and reduce connection overhead.
 """
 
+import queue
 import sqlite3
 import threading
-import queue
 import time
-from typing import Dict, Optional, Any, Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import Any, Optional
 
 from loguru import logger
+
+
+class ConnectionPoolError(RuntimeError):
+    """Base error for connection pool failures."""
+
+
+class PoolClosedError(ConnectionPoolError):
+    """Raised when the pool is closed."""
+
+    def __init__(self) -> None:
+        super().__init__("Connection pool is closed")
+
+
+class ConnectionCreationError(ConnectionPoolError):
+    """Raised when a connection cannot be created."""
+
+    def __init__(self) -> None:
+        super().__init__("Failed to create connection")
+
+
+class ConnectionExhaustedError(ConnectionPoolError):
+    """Raised when no connections are available."""
+
+    def __init__(self, max_connections: int) -> None:
+        super().__init__(f"Connection pool exhausted (max={max_connections})")
 
 
 class ConnectionPool:
@@ -56,8 +81,8 @@ class ConnectionPool:
         self.enable_wal = enable_wal
 
         # Pool state
-        self._pool = queue.Queue(maxsize=max_connections)
-        self._all_connections: Dict[int, Dict[str, Any]] = {}
+        self._pool: queue.Queue[sqlite3.Connection] = queue.Queue(maxsize=max_connections)
+        self._all_connections: dict[int, dict[str, Any]] = {}
         self._lock = threading.RLock()
         self._closed = False
 
@@ -117,11 +142,11 @@ class ConnectionPool:
                 self._stats["connections_created"] += 1
 
             logger.debug(f"Created new connection {conn_id} for {self.db_path}")
-            return conn
-
-        except Exception as e:
+        except (OSError, RuntimeError, TypeError, ValueError, sqlite3.Error) as e:
             logger.error(f"Failed to create connection to {self.db_path}: {e}")
-            return None
+        else:
+            return conn
+        return None
 
     def _is_connection_valid(self, conn: sqlite3.Connection) -> bool:
         """
@@ -135,10 +160,11 @@ class ConnectionPool:
         """
         try:
             conn.execute("SELECT 1")
-            return True
-        except Exception as e:
+        except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
             logger.debug(f"Connection validation failed: error={e}")
-            return False
+        else:
+            return True
+        return False
 
     @contextmanager
     def get_connection(self):
@@ -152,7 +178,7 @@ class ConnectionPool:
             TimeoutError: If unable to acquire connection within timeout
         """
         if self._closed:
-            raise RuntimeError("Connection pool is closed")
+            raise PoolClosedError()
 
         conn = None
         wait_start = time.time()
@@ -168,7 +194,7 @@ class ConnectionPool:
                     self._close_connection(conn)
                     conn = self._create_connection()
                     if not conn:
-                        raise RuntimeError("Failed to create replacement connection")
+                        raise ConnectionCreationError()
 
                 with self._lock:
                     self._stats["connections_reused"] += 1
@@ -181,12 +207,10 @@ class ConnectionPool:
                     if active_count < self.max_connections:
                         conn = self._create_connection()
                         if not conn:
-                            raise RuntimeError("Failed to create new connection")
+                            raise ConnectionCreationError() from None
                     else:
                         self._stats["pool_exhausted_count"] += 1
-                        raise TimeoutError(
-                            f"Connection pool exhausted (max={self.max_connections})"
-                        )
+                        raise ConnectionExhaustedError(self.max_connections) from None
 
             # Update connection state
             conn_id = id(conn)
@@ -235,7 +259,7 @@ class ConnectionPool:
                     del self._all_connections[conn_id]
                 self._stats["connections_closed"] += 1
 
-        except Exception as e:
+        except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Error closing connection: {e}")
 
     def close_idle_connections(self):
@@ -244,7 +268,7 @@ class ConnectionPool:
         connections_to_close = []
 
         with self._lock:
-            for conn_id, info in self._all_connections.items():
+            for _conn_id, info in self._all_connections.items():
                 if not info["in_use"]:
                     idle_time = current_time - info["last_used"]
                     if idle_time > self.max_idle_time:
@@ -253,18 +277,16 @@ class ConnectionPool:
         for conn in connections_to_close:
             try:
                 # Try to remove from pool
-                try:
+                with suppress(queue.Empty):
                     self._pool.get_nowait()
-                except queue.Empty:
-                    pass
 
                 self._close_connection(conn)
-                logger.debug(f"Closed idle connection")
+                logger.debug("Closed idle connection")
 
-            except Exception as e:
+            except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
                 logger.error(f"Error closing idle connection: {e}")
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get pool statistics.
 
@@ -303,7 +325,7 @@ class ConnectionPool:
             for info in list(self._all_connections.values()):
                 try:
                     info["connection"].close()
-                except Exception as e:
+                except (sqlite3.Error, RuntimeError, TypeError, ValueError) as e:
                     logger.debug(f"Error closing pooled connection during shutdown: error={e}")
 
             self._all_connections.clear()
@@ -318,14 +340,14 @@ class MultiDatabasePool:
     This is useful when working with Media_DB, ChaChaNotes_DB, etc.
     """
 
-    def __init__(self, default_config: Optional[Dict[str, Any]] = None):
+    def __init__(self, default_config: Optional[dict[str, Any]] = None):
         """
         Initialize multi-database pool manager.
 
         Args:
             default_config: Default configuration for new pools
         """
-        self._pools: Dict[str, ConnectionPool] = {}
+        self._pools: dict[str, ConnectionPool] = {}
         self._lock = threading.RLock()
         self._default_config = default_config or {
             "min_connections": 2,
@@ -385,7 +407,7 @@ class MultiDatabasePool:
             for pool in self._pools.values():
                 pool.close_idle_connections()
 
-    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
+    def get_all_stats(self) -> dict[str, dict[str, Any]]:
         """
         Get statistics for all pools.
 

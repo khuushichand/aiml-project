@@ -9,19 +9,17 @@ This module provides:
 """
 
 import re
-import difflib
-from typing import List, Dict, Any, Optional, Tuple, Set
-from dataclasses import dataclass, field
-from enum import Enum
-import hashlib
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
+from typing import Any, Optional
 
-import numpy as np
 from loguru import logger
+
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 
-from .types import Document, Citation, CitationType
+from .types import Document, EvidenceChain, EvidenceNode
 
 
 class CitationStyle(Enum):
@@ -45,7 +43,7 @@ class ChunkCitation:
     confidence: float
     usage_context: str  # How this chunk was used in the answer
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "chunk_id": self.chunk_id,
@@ -61,12 +59,12 @@ class ChunkCitation:
 @dataclass
 class DualCitationResult:
     """Combined result containing both academic and chunk citations."""
-    academic_citations: List[str]  # Formatted academic citations
-    chunk_citations: List[ChunkCitation]  # Chunk-level citations
-    inline_markers: Dict[str, str]  # Mapping of inline markers to chunks
-    citation_map: Dict[str, List[str]]  # Document ID to chunk IDs mapping
+    academic_citations: list[str]  # Formatted academic citations
+    chunk_citations: list[ChunkCitation]  # Chunk-level citations
+    inline_markers: dict[str, str]  # Mapping of inline markers to chunks
+    citation_map: dict[str, list[str]]  # Document ID to chunk IDs mapping
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for API response."""
         return {
             "academic_citations": self.academic_citations,
@@ -81,7 +79,7 @@ class AcademicCitationFormatter:
 
     def format_citation(
         self,
-        metadata: Dict[str, Any],
+        metadata: dict[str, Any],
         style: CitationStyle
     ) -> str:
         """
@@ -107,7 +105,7 @@ class AcademicCitationFormatter:
         else:
             return self._format_generic(metadata)
 
-    def _format_mla(self, meta: Dict[str, Any]) -> str:
+    def _format_mla(self, meta: dict[str, Any]) -> str:
         """
         Format MLA citation.
         Format: Author. "Title." Publication, Date, Pages.
@@ -158,7 +156,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_apa(self, meta: Dict[str, Any]) -> str:
+    def _format_apa(self, meta: dict[str, Any]) -> str:
         """
         Format APA citation.
         Format: Author. (Date). Title. Publication.
@@ -200,7 +198,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_chicago(self, meta: Dict[str, Any]) -> str:
+    def _format_chicago(self, meta: dict[str, Any]) -> str:
         """
         Format Chicago citation (Notes-Bibliography style).
         """
@@ -246,7 +244,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_harvard(self, meta: Dict[str, Any]) -> str:
+    def _format_harvard(self, meta: dict[str, Any]) -> str:
         """
         Format Harvard citation.
         """
@@ -286,7 +284,7 @@ class AcademicCitationFormatter:
 
         return ". ".join(parts) + "."
 
-    def _format_ieee(self, meta: Dict[str, Any], number: int = 1) -> str:
+    def _format_ieee(self, meta: dict[str, Any], number: int = 1) -> str:
         """
         Format IEEE citation.
         """
@@ -323,7 +321,7 @@ class AcademicCitationFormatter:
 
         return " ".join(parts) + "."
 
-    def _format_generic(self, meta: Dict[str, Any]) -> str:
+    def _format_generic(self, meta: dict[str, Any]) -> str:
         """Fallback generic citation format."""
         parts = []
 
@@ -349,10 +347,7 @@ class AcademicCitationFormatter:
         if not author:
             return None
 
-        if isinstance(author, list):
-            authors = author
-        else:
-            authors = [str(author)]
+        authors = author if isinstance(author, list) else [str(author)]
 
         if not authors:
             return None
@@ -511,7 +506,7 @@ class CitationGenerator:
 
     async def generate_citations(
         self,
-        documents: List[Document],
+        documents: list[Document],
         query: str = "",
         style: CitationStyle = CitationStyle.MLA,
         include_chunks: bool = True,
@@ -570,7 +565,7 @@ class CitationGenerator:
             citation_map=citation_map
         )
 
-    def _group_by_source(self, documents: List[Document]) -> Dict[str, List[Document]]:
+    def _group_by_source(self, documents: list[Document]) -> dict[str, list[Document]]:
         """Group documents by their source document ID."""
         groups = defaultdict(list)
 
@@ -729,6 +724,125 @@ class CitationGenerator:
                 lines.append("")
 
         return "\n".join(lines)
+
+    def link_citations_to_chain(
+        self,
+        citations: DualCitationResult,
+        chain: EvidenceChain,
+    ) -> DualCitationResult:
+        """
+        Link citations to an evidence chain for multi-hop transparency.
+
+        Args:
+            citations: The citation results
+            chain: Evidence chain to link
+
+        Returns:
+            Updated DualCitationResult with chain information
+        """
+        if not chain or not chain.nodes:
+            return citations
+
+        # Build a mapping of document IDs to chain nodes
+        doc_to_nodes: dict[str, list[EvidenceNode]] = {}
+        for node in chain.nodes:
+            if node.document_id not in doc_to_nodes:
+                doc_to_nodes[node.document_id] = []
+            doc_to_nodes[node.document_id].append(node)
+
+        # Update chunk citations with chain info
+        for chunk_cite in citations.chunk_citations:
+            doc_id = chunk_cite.source_document_id
+            if doc_id in doc_to_nodes:
+                nodes = doc_to_nodes[doc_id]
+                # Add chain metadata to the citation
+                chunk_cite.usage_context = self._enhance_usage_context(
+                    chunk_cite.usage_context,
+                    nodes,
+                    chain,
+                )
+
+        return citations
+
+    def _enhance_usage_context(
+        self,
+        current_context: str,
+        nodes: list,
+        chain: EvidenceChain,
+    ) -> str:
+        """Enhance usage context with chain information."""
+        facts = [n.fact[:50] + "..." if len(n.fact) > 50 else n.fact for n in nodes[:2]]
+        claims_supported = set()
+        for n in nodes:
+            claims_supported.update(n.supports)
+
+        chain_info = []
+        if chain.hop_count > 1:
+            chain_info.append(f"Multi-hop evidence ({chain.hop_count} sources)")
+        if claims_supported:
+            chain_info.append(f"Supports {len(claims_supported)} claim(s)")
+        if facts:
+            chain_info.append(f"Key facts: {'; '.join(facts)}")
+
+        if chain_info:
+            return f"{current_context}. {'. '.join(chain_info)}"
+        return current_context
+
+    async def generate_citations_with_chains(
+        self,
+        documents: list[Document],
+        query: str = "",
+        generated_answer: Optional[str] = None,
+        style: CitationStyle = CitationStyle.MLA,
+        include_chunks: bool = True,
+        max_citations: int = 10,
+    ) -> tuple[DualCitationResult, Optional[Any]]:
+        """
+        Generate citations with evidence chain building.
+
+        Args:
+            documents: Documents to generate citations from
+            query: The search query
+            generated_answer: The generated answer for claim extraction
+            style: Academic citation style
+            include_chunks: Whether to include chunk-level citations
+            max_citations: Maximum number of citations
+
+        Returns:
+            Tuple of (DualCitationResult, ChainBuildResult or None)
+        """
+        # Generate base citations
+        citations = await self.generate_citations(
+            documents=documents,
+            query=query,
+            style=style,
+            include_chunks=include_chunks,
+            max_citations=max_citations,
+        )
+
+        # Try to build evidence chains
+        chain_result = None
+        try:
+            from .evidence_chains import EvidenceChainBuilder
+
+            builder = EvidenceChainBuilder()
+            chain_result = await builder.build_chains(
+                query=query,
+                documents=documents,
+                generated_answer=generated_answer,
+            )
+
+            # Link citations to chains
+            if chain_result and chain_result.chains:
+                for chain in chain_result.chains:
+                    citations = self.link_citations_to_chain(citations, chain)
+
+        except ImportError:
+            logger.debug("Evidence chains module not available")
+        except Exception as e:
+            logger.warning(f"Evidence chain building failed: {e}")
+
+        return citations, chain_result
 
 
 # Pipeline integration function

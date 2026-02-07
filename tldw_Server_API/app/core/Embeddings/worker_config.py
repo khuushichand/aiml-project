@@ -2,8 +2,10 @@
 # Configuration schemas for worker pools and orchestration
 
 import os
-from typing import Dict, List, Optional
+from typing import Optional
+
 from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 
@@ -46,7 +48,7 @@ class EmbeddingWorkerPoolConfig(WorkerPoolConfig):
     queue_name: str = "embeddings:embedding"
     consumer_group: str = "embedding-workers"
     batch_size: int = Field(default=16, ge=1, description="Embeddings per batch")
-    gpu_allocation: Optional[List[int]] = Field(default=None, description="GPU IDs to use")
+    gpu_allocation: Optional[list[int]] = Field(default=None, description="GPU IDs to use")
     default_model_provider: str = Field(default="huggingface", description="Default embedding provider")
     default_model_name: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
     max_model_cache_size: int = Field(default=5, ge=1, description="Maximum models to cache")
@@ -66,7 +68,7 @@ class StorageWorkerPoolConfig(WorkerPoolConfig):
 class OrchestrationConfig(BaseModel):
     """Main orchestration configuration"""
     redis: RedisConfig = Field(default_factory=RedisConfig)
-    worker_pools: Dict[str, WorkerPoolConfig] = Field(default_factory=dict)
+    worker_pools: dict[str, WorkerPoolConfig] = Field(default_factory=dict)
     enable_monitoring: bool = Field(default=True, description="Enable monitoring dashboard")
     monitoring_port: int = Field(default=9090, description="Monitoring dashboard port")
     log_level: str = Field(default="INFO", description="Logging level")
@@ -100,12 +102,12 @@ class OrchestrationConfig(BaseModel):
         """Load configuration from YAML file"""
         import yaml
 
-        with open(path, 'r') as f:
+        with open(path) as f:
             data = yaml.safe_load(f) or {}
 
         pools = data.get("worker_pools")
         if isinstance(pools, dict):
-            typed_pools: Dict[str, WorkerPoolConfig] = {}
+            typed_pools: dict[str, WorkerPoolConfig] = {}
             pool_classes = {
                 "chunking": ChunkingWorkerPoolConfig,
                 "embedding": EmbeddingWorkerPoolConfig,

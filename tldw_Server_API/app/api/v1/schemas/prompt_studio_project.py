@@ -1,15 +1,13 @@
 # prompt_studio_project.py
 # Project and prompt schemas for Prompt Studio
 
-from typing import List, Optional, Dict, Any
-from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID
 
-from .prompt_studio_base import (
-    TimestampMixin, SoftDeleteMixin, UUIDMixin,
-    ProjectStatus, FieldDefinition, ConstraintDefinition
-)
+from pydantic import BaseModel, ConfigDict, Field
+
+from .prompt_studio_base import ConstraintDefinition, FieldDefinition, ProjectStatus, TimestampMixin, UUIDMixin
 
 ########################################################################################################################
 # Project Schemas
@@ -19,7 +17,7 @@ class ProjectBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Project name")
     description: Optional[str] = Field(None, max_length=2000, description="Project description")
     status: ProjectStatus = Field(default=ProjectStatus.DRAFT, description="Project status")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Additional metadata")
 
 class ProjectCreate(ProjectBase):
     """Project creation request"""
@@ -30,7 +28,7 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=2000)
     status: Optional[ProjectStatus] = None
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 class ProjectResponse(ProjectBase, TimestampMixin, UUIDMixin):
     """Project response model"""
@@ -60,10 +58,10 @@ class ProjectListItem(BaseModel):
 class SignatureBase(BaseModel):
     """Base signature model"""
     name: str = Field(..., min_length=1, max_length=255, description="Signature name")
-    input_schema: List[FieldDefinition] = Field(..., description="Input field definitions")
-    output_schema: List[FieldDefinition] = Field(..., description="Output field definitions")
-    constraints: Optional[List[ConstraintDefinition]] = Field(None, description="Validation constraints")
-    validation_rules: Optional[Dict[str, Any]] = Field(None, description="Additional validation rules")
+    input_schema: list[FieldDefinition] = Field(..., description="Input field definitions")
+    output_schema: list[FieldDefinition] = Field(..., description="Output field definitions")
+    constraints: Optional[list[ConstraintDefinition]] = Field(None, description="Validation constraints")
+    validation_rules: Optional[dict[str, Any]] = Field(None, description="Additional validation rules")
 
 class SignatureCreate(SignatureBase):
     """Signature creation request"""
@@ -72,10 +70,10 @@ class SignatureCreate(SignatureBase):
 class SignatureUpdate(BaseModel):
     """Signature update request"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    input_schema: Optional[List[FieldDefinition]] = None
-    output_schema: Optional[List[FieldDefinition]] = None
-    constraints: Optional[List[ConstraintDefinition]] = None
-    validation_rules: Optional[Dict[str, Any]] = None
+    input_schema: Optional[list[FieldDefinition]] = None
+    output_schema: Optional[list[FieldDefinition]] = None
+    constraints: Optional[list[ConstraintDefinition]] = None
+    validation_rules: Optional[dict[str, Any]] = None
 
 class SignatureResponse(SignatureBase, TimestampMixin, UUIDMixin):
     """Signature response model"""
@@ -87,14 +85,14 @@ class SignatureResponse(SignatureBase, TimestampMixin, UUIDMixin):
 class SignatureValidateRequest(BaseModel):
     """Request to validate data against a signature"""
     signature_id: int
-    data: Dict[str, Any]
+    data: dict[str, Any]
     validate_inputs: bool = True
     validate_outputs: bool = False
 
 class SignatureValidateResponse(BaseModel):
     """Signature validation response"""
     valid: bool
-    errors: Optional[List[Dict[str, str]]] = None
+    errors: Optional[list[dict[str, str]]] = None
 
 ########################################################################################################################
 # Prompt Schemas
@@ -103,12 +101,12 @@ class PromptModule(BaseModel):
     """Configuration for a prompt module (CoT, ReAct, etc.)"""
     type: str = Field(..., description="Module type")
     enabled: bool = Field(default=True)
-    config: Optional[Dict[str, Any]] = Field(None, description="Module-specific configuration")
+    config: Optional[dict[str, Any]] = Field(None, description="Module-specific configuration")
 
 class FewShotExample(BaseModel):
     """Few-shot example for prompts"""
-    inputs: Dict[str, Any]
-    outputs: Dict[str, Any]
+    inputs: dict[str, Any]
+    outputs: dict[str, Any]
     explanation: Optional[str] = None
 
 class PromptBase(BaseModel):
@@ -116,8 +114,8 @@ class PromptBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Prompt name")
     system_prompt: Optional[str] = Field(None, max_length=50000, description="System prompt")
     user_prompt: Optional[str] = Field(None, max_length=50000, description="User prompt template")
-    few_shot_examples: Optional[List[FewShotExample]] = Field(None, description="Few-shot examples")
-    modules_config: Optional[List[PromptModule]] = Field(None, description="Module configurations")
+    few_shot_examples: Optional[list[FewShotExample]] = Field(None, description="Few-shot examples")
+    modules_config: Optional[list[PromptModule]] = Field(None, description="Module configurations")
     change_description: Optional[str] = Field(None, max_length=500, description="Description of changes")
 
 class PromptCreate(PromptBase):
@@ -131,8 +129,8 @@ class PromptUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     system_prompt: Optional[str] = Field(None, max_length=50000)
     user_prompt: Optional[str] = Field(None, max_length=50000)
-    few_shot_examples: Optional[List[FewShotExample]] = None
-    modules_config: Optional[List[PromptModule]] = None
+    few_shot_examples: Optional[list[FewShotExample]] = None
+    modules_config: Optional[list[PromptModule]] = None
     change_description: str = Field(..., min_length=1, max_length=500, description="Required change description")
 
 class PromptResponse(PromptBase, TimestampMixin, UUIDMixin):
@@ -167,8 +165,8 @@ class PromptCompareResponse(BaseModel):
     """Prompt comparison response"""
     prompt_1: PromptResponse
     prompt_2: PromptResponse
-    differences: Dict[str, Any]
-    metrics_comparison: Optional[Dict[str, Any]] = None
+    differences: dict[str, Any]
+    metrics_comparison: Optional[dict[str, Any]] = None
 
 ########################################################################################################################
 # Generation Requests
@@ -185,8 +183,8 @@ class PromptGenerateRequest(BaseModel):
 class PromptImproveRequest(BaseModel):
     """Request to improve an existing prompt"""
     prompt_id: int
-    improvement_goals: Optional[List[str]] = Field(None, description="Specific improvement goals")
-    test_case_ids: Optional[List[int]] = Field(None, description="Test cases to optimize against")
+    improvement_goals: Optional[list[str]] = Field(None, description="Specific improvement goals")
+    test_case_ids: Optional[list[int]] = Field(None, description="Test cases to optimize against")
     preserve_structure: bool = Field(default=True, description="Preserve prompt structure")
 
 class ExampleGenerateRequest(BaseModel):

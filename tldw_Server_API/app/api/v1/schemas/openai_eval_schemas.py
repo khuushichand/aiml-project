@@ -9,11 +9,9 @@ Follows OpenAI's API conventions:
 - Consistent list response format
 """
 
-from typing import Dict, List, Optional, Any, Literal, Union
-from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic import ConfigDict
-from datetime import datetime
+from typing import Any, Literal, Optional, Union
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ============= Base Models =============
 
@@ -34,7 +32,7 @@ class EvaluationSpec(OpenAIBaseModel):
         default="gpt-4",
         description="Model to use for evaluation"
     )
-    metrics: List[str] = Field(
+    metrics: list[str] = Field(
         default_factory=list,
         description="Metrics to evaluate"
     )
@@ -57,9 +55,9 @@ class EvaluationSpec(OpenAIBaseModel):
 class EvaluationMetadata(OpenAIBaseModel):
     """Metadata for an evaluation"""
     author: Optional[str] = None
-    tags: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     version: Optional[str] = None
-    custom_fields: Dict[str, Any] = Field(default_factory=dict)
+    custom_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class CreateEvaluationRequest(OpenAIBaseModel):
@@ -72,7 +70,7 @@ class CreateEvaluationRequest(OpenAIBaseModel):
     )
     eval_spec: EvaluationSpec = Field(..., description="Evaluation specification")
     dataset_id: Optional[str] = Field(None, description="Reference to existing dataset")
-    dataset: Optional[List[Dict[str, Any]]] = Field(
+    dataset: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Inline dataset (if not using dataset_id)"
     )
@@ -94,7 +92,7 @@ class UpdateEvaluationRequest(OpenAIBaseModel):
     description: Optional[str] = None
     eval_spec: Optional[EvaluationSpec] = None
     dataset_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None  # Accept any dict for flexible updates
+    metadata: Optional[dict[str, Any]] = None  # Accept any dict for flexible updates
 
 
 class EvaluationResponse(OpenAIBaseModel):
@@ -105,9 +103,9 @@ class EvaluationResponse(OpenAIBaseModel):
     name: str
     description: Optional[str] = None
     eval_type: str
-    eval_spec: Dict[str, Any]
+    eval_spec: dict[str, Any]
     dataset_id: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # ============= Run Models =============
@@ -122,7 +120,7 @@ class RunConfig(OpenAIBaseModel):
 
 class DatasetOverride(OpenAIBaseModel):
     """Override dataset for a specific run"""
-    samples: List[Dict[str, Any]] = Field(..., description="Evaluation samples")
+    samples: list[dict[str, Any]] = Field(..., description="Evaluation samples")
 
 
 class CreateRunRequest(OpenAIBaseModel):
@@ -172,7 +170,7 @@ class RunResponse(OpenAIBaseModel):
     progress: Optional[RunProgress] = None
     estimated_completion: Optional[int] = None
     error_message: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class MetricStats(OpenAIBaseModel):
@@ -198,7 +196,7 @@ class AggregateResults(OpenAIBaseModel):
 class SampleResult(OpenAIBaseModel):
     """Result for a single evaluation sample"""
     sample_id: str
-    scores: Dict[str, float]
+    scores: dict[str, float]
     passed: bool
     error: Optional[str] = None
 
@@ -219,7 +217,7 @@ class RunResultsResponse(OpenAIBaseModel):
     status: Literal["completed", "failed"]
     started_at: int
     completed_at: int
-    results: Dict[str, Any] = Field(
+    results: dict[str, Any] = Field(
         ...,
         description="Contains aggregate, by_metric, and sample_results"
     )
@@ -233,11 +231,11 @@ class CreateDatasetRequest(OpenAIBaseModel):
     """Request to create a dataset"""
     name: str = Field(..., description="Dataset name")
     description: Optional[str] = None
-    samples: List[Dict[str, Any]] = Field(
+    samples: list[dict[str, Any]] = Field(
         ...,
         description="Dataset samples"
     )
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[dict[str, Any]] = None
 
 
 class DatasetResponse(OpenAIBaseModel):
@@ -248,8 +246,8 @@ class DatasetResponse(OpenAIBaseModel):
     name: str
     description: Optional[str] = None
     sample_count: int
-    samples: Optional[List[Dict[str, Any]]] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    samples: Optional[list[dict[str, Any]]] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # ============= List Response Models =============
@@ -257,7 +255,7 @@ class DatasetResponse(OpenAIBaseModel):
 class ListResponse(OpenAIBaseModel):
     """Generic list response following OpenAI conventions"""
     object: Literal["list"] = "list"
-    data: List[Union[EvaluationResponse, RunResponse, DatasetResponse]]
+    data: list[Union[EvaluationResponse, RunResponse, DatasetResponse]]
     has_more: bool = False
     first_id: Optional[str] = None
     last_id: Optional[str] = None
@@ -265,17 +263,17 @@ class ListResponse(OpenAIBaseModel):
 
 class EvaluationListResponse(ListResponse):
     """List of evaluations"""
-    data: List[EvaluationResponse]
+    data: list[EvaluationResponse]
 
 
 class RunListResponse(ListResponse):
     """List of runs"""
-    data: List[RunResponse]
+    data: list[RunResponse]
 
 
 class DatasetListResponse(ListResponse):
     """List of datasets"""
-    data: List[DatasetResponse]
+    data: list[DatasetResponse]
 
 
 # ============= Error Models =============
@@ -324,4 +322,4 @@ class WebhookPayload(OpenAIBaseModel):
     status: str
     completed_at: int
     results_url: str
-    summary: Optional[Dict[str, Any]] = None
+    summary: Optional[dict[str, Any]] = None

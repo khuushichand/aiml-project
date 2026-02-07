@@ -12,25 +12,22 @@ This module includes adapters for audio operations:
 - audio_diarize: Speaker diarization
 """
 
-from tldw_Server_API.app.core.Workflows.adapters.audio.tts import (
-    run_tts_adapter,
+from tldw_Server_API.app.core.Workflows.adapters.audio.diarize import (
+    run_audio_diarize_adapter,
 )
-
-from tldw_Server_API.app.core.Workflows.adapters.audio.stt import (
-    run_stt_transcribe_adapter,
-)
-
 from tldw_Server_API.app.core.Workflows.adapters.audio.processing import (
-    run_audio_normalize_adapter,
     run_audio_concat_adapter,
-    run_audio_trim_adapter,
     run_audio_convert_adapter,
     run_audio_extract_adapter,
     run_audio_mix_adapter,
+    run_audio_normalize_adapter,
+    run_audio_trim_adapter,
 )
-
-from tldw_Server_API.app.core.Workflows.adapters.audio.diarize import (
-    run_audio_diarize_adapter,
+from tldw_Server_API.app.core.Workflows.adapters.audio.stt import (
+    run_stt_transcribe_adapter,
+)
+from tldw_Server_API.app.core.Workflows.adapters.audio.tts import (
+    run_tts_adapter,
 )
 
 __all__ = [

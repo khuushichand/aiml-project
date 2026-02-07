@@ -26,35 +26,27 @@ Features:
 """
 
 import json
-import sqlite3
-import time as _time_module
-from loguru import logger
 import random
 import re
-import regex as _regex
+import sqlite3
 import warnings
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Union, Any, Set, Tuple
 from pathlib import Path
+from typing import Any, Optional, Union
+
+import regex as _regex
+from loguru import logger
 
 try:
     from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens  # Case-sensitive envs
-except Exception:  # fallback for alternate casing
+except ImportError:  # fallback for alternate casing
     from tldw_Server_API.app.core.utils.tokenizer import count_tokens as _count_tokens
 
 # Local imports
-from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
-    CharactersRAGDB,
-    CharactersRAGDBError,
-    InputError,
-    ConflictError,
-)
-from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
-
 # Import shared constants and helpers
 from tldw_Server_API.app.core.Character_Chat.constants import (
-    MAX_REGEX_MATCH_TIME_MS,
     MAX_CHAT_DICTIONARY_TEXT_LENGTH,
+    MAX_REGEX_MATCH_TIME_MS,
     safe_parse_json_dict,
 )
 
@@ -62,7 +54,42 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
 from tldw_Server_API.app.core.Character_Chat.regex_safety import (
     safe_compile_regex as _safe_compile_regex,
 )
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType
+from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
+    CharactersRAGDB,
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+)
 
+# `regex.TimeoutError` is not present in all `regex` package builds.
+_REGEX_TIMEOUT_ERROR = getattr(_regex, "TimeoutError", TimeoutError)
+
+_CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    CharactersRAGDBError,
+    ConflictError,
+    ConnectionError,
+    FileNotFoundError,
+    ImportError,
+    IndexError,
+    InputError,
+    KeyError,
+    LookupError,
+    OSError,
+    PermissionError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    UnicodeDecodeError,
+    sqlite3.Error,
+    re.error,
+    _regex.error,
+    _REGEX_TIMEOUT_ERROR,
+    json.JSONDecodeError,
+)
 
 # Whitelisted field names for dynamic UPDATE statements (SQL injection prevention)
 _DICTIONARY_UPDATE_FIELDS = frozenset({
@@ -149,7 +176,7 @@ class ChatDictionaryEntry:
         content: str,
         probability: Union[int, float] = 1.0,
         group: Optional[str] = None,
-        timed_effects: Optional[Dict[str, int]] = None,
+        timed_effects: Optional[dict[str, int]] = None,
         max_replacements: int = 0,
         entry_id: Optional[int] = None,
         enabled: bool = True,
@@ -275,7 +302,7 @@ class ChatDictionaryEntry:
                 if isinstance(self.key, _regex.Pattern):
                     return bool(self.key.search(text, timeout=_regex_timeout_seconds()))
                 return bool(self.key.search(text))
-            except _regex.TimeoutError:
+            except _REGEX_TIMEOUT_ERROR:
                 preview = self.key_pattern_str
                 if len(preview) > 50:
                     preview = preview[:50] + "..."
@@ -292,18 +319,16 @@ class ChatDictionaryEntry:
     def should_apply(self) -> bool:
         """Check probability and timed effects to determine if replacement should occur."""
         # Check probability (0.0 - 1.0)
-        if self.probability < 1.0:
-            if random.random() > self.probability:
-                return False
+        if self.probability < 1.0 and random.random() > self.probability:
+            return False
 
         # Check timed effects
         now = datetime.now(timezone.utc)
         if self.last_triggered:
             # Cooldown check
             cooldown = self.timed_effects.get("cooldown", 0)
-            if cooldown > 0:
-                if (now - self.last_triggered) < timedelta(seconds=cooldown):
-                    return False
+            if cooldown > 0 and (now - self.last_triggered) < timedelta(seconds=cooldown):
+                return False
 
             # Delay check (initial delay before first trigger)
             delay = self.timed_effects.get("delay", 0)
@@ -319,7 +344,7 @@ class ChatDictionaryEntry:
 
         return True
 
-    def apply_replacement(self, text: str) -> Tuple[str, int]:
+    def apply_replacement(self, text: str) -> tuple[str, int]:
         """
         Apply the replacement to the text.
 
@@ -345,7 +370,7 @@ class ChatDictionaryEntry:
                     )
                 else:
                     text, replacement_count = self.key.subn(self.content, text, count=max_count)
-            except _regex.TimeoutError:
+            except _REGEX_TIMEOUT_ERROR:
                 preview = self.key_pattern_str
                 if len(preview) > 50:
                     preview = preview[:50] + "..."
@@ -362,7 +387,7 @@ class ChatDictionaryEntry:
                 if len(parts) > 1:
                     replacements_to_make = (len(parts) - 1) if max_count == 0 else min(len(parts) - 1, max_count)
                     replacement_count = replacements_to_make
-                    result: List[str] = []
+                    result: list[str] = []
                     for i, part in enumerate(parts):
                         result.append(part)
                         if i < len(parts) - 1:
@@ -379,7 +404,7 @@ class ChatDictionaryEntry:
 
         return text, replacement_count
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for database storage."""
         return {
             "id": self.entry_id,
@@ -395,7 +420,7 @@ class ChatDictionaryEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ChatDictionaryEntry":
+    def from_dict(cls, data: dict[str, Any]) -> "ChatDictionaryEntry":
         """Create instance from database dictionary."""
         # Use safe parsing with structure validation for timed_effects
         timed_effects = safe_parse_json_dict(data.get("timed_effects"), "timed_effects")
@@ -436,7 +461,7 @@ class ChatDictionaryEntry:
                     entry._loaded_at = (
                         parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
                     )
-            except Exception:
+            except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 entry._loaded_at = datetime.now(timezone.utc)
         return entry
 
@@ -464,12 +489,12 @@ class ChatDictionaryService:
         # Note: No lock needed - this service is instantiated per-request and
         # Python's async model runs on a single-threaded event loop with no
         # concurrent access within a single request.
-        self._entry_cache: Optional[List[ChatDictionaryEntry]] = None
+        self._entry_cache: Optional[list[ChatDictionaryEntry]] = None
         self._cache_timestamp: Optional[datetime] = None
         self._cache_ttl = timedelta(seconds=60)  # Cache for 1 minute within request
         # Simple in-memory usage tracking for tests/analytics
-        self._usage_counts: Dict[int, int] = {}
-        self._last_used_at: Dict[int, datetime] = {}
+        self._usage_counts: dict[int, int] = {}
+        self._last_used_at: dict[int, datetime] = {}
 
     def _init_tables(self):
         """Initialize dictionary tables in the user's database if they don't exist."""
@@ -555,9 +580,9 @@ class ChatDictionaryService:
 
                 conn.commit()
                 logger.info("Chat dictionary tables initialized")
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize dictionary tables: {e}")
-            raise CharactersRAGDBError(f"Failed to initialize dictionary tables: {e}")
+            raise CharactersRAGDBError(f"Failed to initialize dictionary tables: {e}") from e
 
     # --- Dictionary CRUD Operations ---
 
@@ -612,19 +637,19 @@ class ChatDictionaryService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name)
-            raise CharactersRAGDBError(f"Database error creating dictionary: {e}")
+                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name) from e
+            raise CharactersRAGDBError(f"Database error creating dictionary: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name)
+                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name) from e
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database error creating dictionary: {e}")
             raise CharactersRAGDBError(f"Database error creating dictionary: {e}") from e
 
     def get_dictionary(
         self, dictionary_id: Optional[int] = None, name: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get a dictionary by ID or name.
 
@@ -653,11 +678,11 @@ class ChatDictionaryService:
                     return dict(row)
                 return None
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary: {e}") from e
 
-    def list_dictionaries(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+    def list_dictionaries(self, include_inactive: bool = False) -> list[dict[str, Any]]:
         """
         List all dictionaries for the user.
 
@@ -670,7 +695,7 @@ class ChatDictionaryService:
         try:
             with self.db.get_connection() as conn:
                 query = "SELECT * FROM chat_dictionaries WHERE deleted = ?"
-                params: List[Any] = [False]
+                params: list[Any] = [False]
                 if not include_inactive:
                     query += " AND is_active = ?"
                     params.append(True)
@@ -679,11 +704,11 @@ class ChatDictionaryService:
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries: {e}")
-            raise CharactersRAGDBError(f"Error listing dictionaries: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionaries: {e}") from e
 
-    def list_dictionaries_with_entry_counts(self, include_inactive: bool = False) -> List[Dict[str, Any]]:
+    def list_dictionaries_with_entry_counts(self, include_inactive: bool = False) -> list[dict[str, Any]]:
         """
         List dictionaries with precomputed entry counts in a single query.
 
@@ -705,7 +730,7 @@ class ChatDictionaryService:
                     ON d.id = cnt.dictionary_id
                     WHERE d.deleted = ?
                 """
-                params: List[Any] = [False]
+                params: list[Any] = [False]
                 if not include_inactive:
                     query += " AND d.is_active = ?"
                     params.append(True)
@@ -713,9 +738,9 @@ class ChatDictionaryService:
 
                 cursor = conn.execute(query, tuple(params))
                 return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries with counts: {e}")
-            raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}") from e
 
     def update_dictionary(
         self,
@@ -744,8 +769,8 @@ class ChatDictionaryService:
             # Accept alias
             if dictionary_id is None:
                 dictionary_id = kwargs.get("dict_id")
-            updates: List[str] = []
-            params: List[Any] = []
+            updates: list[str] = []
+            params: list[Any] = []
 
             if name is not None:
                 updates.append("name = ?")
@@ -779,11 +804,11 @@ class ChatDictionaryService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name)
-            raise CharactersRAGDBError(f"Database error updating dictionary: {e}")
+                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name) from e
+            raise CharactersRAGDBError(f"Database error updating dictionary: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name)
+                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name) from e
             raise
 
     def delete_dictionary(self, dictionary_id: int, hard_delete: bool = False) -> bool:
@@ -814,9 +839,9 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary: {e}")
-            raise CharactersRAGDBError(f"Error deleting dictionary: {e}")
+            raise CharactersRAGDBError(f"Error deleting dictionary: {e}") from e
 
     # --- Entry CRUD Operations ---
 
@@ -827,7 +852,7 @@ class ChatDictionaryService:
         content: Optional[str] = None,
         probability: Optional[Union[int, float]] = None,
         group: Optional[str] = None,
-        timed_effects: Optional[Dict[str, int]] = None,
+        timed_effects: Optional[dict[str, int]] = None,
         max_replacements: Optional[int] = None,
         **kwargs,
     ) -> int:
@@ -951,16 +976,16 @@ class ChatDictionaryService:
         except re.error:
             # Preserve regex errors for caller/tests
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error adding dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error adding dictionary entry: {e}") from e
 
     def get_entries(
         self,
         dictionary_id: Optional[int] = None,
         group: Optional[str] = None,
         active_only: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get dictionary entries as dictionaries.
 
@@ -978,7 +1003,7 @@ class ChatDictionaryService:
                     "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
                     "WHERE d.deleted = ?"
                 )
-                params: List[Any] = [False]
+                params: list[Any] = [False]
                 if active_only:
                     query += " AND d.is_active = ? AND e.enabled = ?"
                     params.extend([True, True])
@@ -991,7 +1016,7 @@ class ChatDictionaryService:
                 query += " ORDER BY e.id"
 
                 cursor = conn.execute(query, tuple(params))
-                result: List[Dict[str, Any]] = []
+                result: list[dict[str, Any]] = []
                 for row in cursor.fetchall():
                     row_dict = dict(row)
                     entry_obj = ChatDictionaryEntry.from_dict(row_dict)
@@ -1005,11 +1030,11 @@ class ChatDictionaryService:
                         entry["group"] = row_dict.get("group_name")
                     result.append(entry)
                 return result
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entries: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}") from e
 
-    def get_entry(self, entry_id: int, active_only: bool = True) -> Optional[Dict[str, Any]]:
+    def get_entry(self, entry_id: int, active_only: bool = True) -> Optional[dict[str, Any]]:
         """
         Get a single dictionary entry by ID, including metadata.
 
@@ -1026,7 +1051,7 @@ class ChatDictionaryService:
                     "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
                     "WHERE d.deleted = ? AND e.id = ?"
                 )
-                params: List[Any] = [False, entry_id]
+                params: list[Any] = [False, entry_id]
                 if active_only:
                     query += " AND d.is_active = ? AND e.enabled = ?"
                     params.extend([True, True])
@@ -1044,16 +1069,16 @@ class ChatDictionaryService:
                 if not entry.get("group") and row_dict.get("group_name"):
                     entry["group"] = row_dict.get("group_name")
                 return entry
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}") from e
 
     def get_entry_objects(
         self,
         dictionary_id: Optional[int] = None,
         group: Optional[str] = None,
         active_only: bool = True,
-    ) -> List[ChatDictionaryEntry]:
+    ) -> list[ChatDictionaryEntry]:
         """Internal: get entries as objects for processing, with basic caching."""
         # Check cache (no lock needed - request-scoped service instance)
         if (
@@ -1072,7 +1097,7 @@ class ChatDictionaryService:
                     "SELECT e.* FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id "
                     "WHERE d.deleted = ?"
                 )
-                params: List[Any] = [False]
+                params: list[Any] = [False]
                 if active_only:
                     query += " AND d.is_active = ? AND e.enabled = ?"
                     params.extend([True, True])
@@ -1085,7 +1110,7 @@ class ChatDictionaryService:
                 query += " ORDER BY e.id"
 
                 cursor = conn.execute(query, tuple(params))
-                entries: List[ChatDictionaryEntry] = []
+                entries: list[ChatDictionaryEntry] = []
                 for row in cursor.fetchall():
                     entry = ChatDictionaryEntry.from_dict(dict(row))
                     entries.append(entry)
@@ -1102,12 +1127,12 @@ class ChatDictionaryService:
                         rows = self.db.execute_query("dictionary_entries")
                         for r in rows or []:
                             entries.append(ChatDictionaryEntry.from_dict(r))
-                    except Exception:
+                    except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                         pass
                 return entries
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry objects: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}") from e
 
     def update_entry(
         self,
@@ -1116,7 +1141,7 @@ class ChatDictionaryService:
         content: Optional[str] = None,
         probability: Optional[Union[int, float]] = None,
         group: Optional[str] = None,
-        timed_effects: Optional[Dict[str, int]] = None,
+        timed_effects: Optional[dict[str, int]] = None,
         max_replacements: Optional[int] = None,
         **kwargs,
     ) -> bool:
@@ -1131,8 +1156,8 @@ class ChatDictionaryService:
             True if updated successfully
         """
         try:
-            updates: List[str] = []
-            params: List[Any] = []
+            updates: list[str] = []
+            params: list[Any] = []
 
             pattern = kwargs.get("pattern", key)
             replacement = kwargs.get("replacement", content)
@@ -1150,7 +1175,7 @@ class ChatDictionaryService:
                         try:
                             _safe_compile_regex(pattern)
                         except re.error as e:
-                            raise InputError(f"Invalid regex pattern: {e}")
+                            raise InputError(f"Invalid regex pattern: {e}") from e
                     entry.is_regex = is_regex_requested
                 updates.append("key = ?")
                 updates.append("is_regex = ?")
@@ -1209,9 +1234,9 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error updating dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error updating dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error updating dictionary entry: {e}") from e
 
     def delete_entry(self, entry_id: int) -> bool:
         """
@@ -1234,9 +1259,9 @@ class ChatDictionaryService:
                     return True
                 return False
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}") from e
 
     # --- Text Processing ---
 
@@ -1249,7 +1274,7 @@ class ChatDictionaryService:
         token_budget: Optional[int] = None,
         return_stats: bool = False,
         **kwargs,
-    ) -> Union[str, Tuple[str, Dict[str, Any]]]:
+    ) -> Union[str, tuple[str, dict[str, Any]]]:
         """
         Process text through dictionary replacements.
 
@@ -1304,10 +1329,10 @@ class ChatDictionaryService:
             try:
                 self._usage_counts[dictionary_id] = self._usage_counts.get(dictionary_id, 0) + 1
                 self._last_used_at[dictionary_id] = datetime.now()
-            except Exception:
+            except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
                 pass
 
-        for iteration in range(max_iterations):
+        for _iteration in range(max_iterations):
             iteration_replacements = 0
 
             for entry in entries:
@@ -1332,7 +1357,7 @@ class ChatDictionaryService:
                         if token_budget and self.count_tokens(text) > token_budget:
                             warnings.warn(
                                 f"Token budget ({token_budget}) exceeded after {stats['replacements']} replacements",
-                                TokenBudgetExceededWarning,
+                                TokenBudgetExceededWarning, stacklevel=2,
                             )
                             stats["token_budget_exceeded"] = True
                             if return_stats:
@@ -1378,7 +1403,7 @@ class ChatDictionaryService:
         content: Optional[str] = None
         if isinstance(markdown_or_path, Path):
             fp = markdown_or_path
-            with open(fp, "r", encoding="utf-8") as f:
+            with open(fp, encoding="utf-8") as f:
                 content = f.read()
             if dictionary_name is None:
                 dictionary_name = fp.stem
@@ -1394,13 +1419,13 @@ class ChatDictionaryService:
             dictionary_name = m.group(1).strip() if m else "Imported Dictionary"
 
         # Create dictionary
-        dict_id = self.create_dictionary(dictionary_name, f"Imported from markdown")
+        dict_id = self.create_dictionary(dictionary_name, "Imported from markdown")
 
         try:
             # Parse entries by scanning headings and blocks
             lines = content.splitlines()
             current_entry_name: Optional[str] = None
-            current_block_lines: List[str] = []
+            current_block_lines: list[str] = []
 
             def flush_block():
                 if current_entry_name is None:
@@ -1447,9 +1472,9 @@ class ChatDictionaryService:
                         self.add_entry(dict_id, pattern=k.strip(), replacement=v.strip())
 
             return dict_id
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             self.delete_dictionary(dict_id, hard_delete=True)
-            raise CharactersRAGDBError(f"Failed to import dictionary: {e}")
+            raise CharactersRAGDBError(f"Failed to import dictionary: {e}") from e
 
     def export_to_markdown(self, dictionary_id: int, file_path: Optional[Path] = None) -> Union[bool, str]:
         """
@@ -1469,7 +1494,7 @@ class ChatDictionaryService:
 
         entries = self.get_entries(dictionary_id, active_only=False)
 
-        lines: List[str] = []
+        lines: list[str] = []
         lines.append(f"# {dict_info['name']}")
         lines.append("")
         if dict_info.get("description"):
@@ -1499,9 +1524,9 @@ class ChatDictionaryService:
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(content)
             return True
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to export dictionary: {e}")
-            raise CharactersRAGDBError(f"Failed to export dictionary: {e}")
+            raise CharactersRAGDBError(f"Failed to export dictionary: {e}") from e
 
     # --- Helper Methods ---
 
@@ -1517,7 +1542,7 @@ class ChatDictionaryService:
                 cursor = conn.execute("SELECT dictionary_id FROM dictionary_entries WHERE id = ?", (entry_id,))
                 row = cursor.fetchone()
                 return row["dictionary_id"] if row else None
-        except Exception:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             return None
 
     def get_entry_dictionary_id(self, entry_id: int) -> Optional[int]:
@@ -1549,7 +1574,7 @@ class ChatDictionaryService:
             is_active = not current
         return self.update_dictionary(dictionary_id, is_active=is_active)
 
-    def get_statistics(self, dictionary_id: Optional[int] = None) -> Dict[str, Any]:
+    def get_statistics(self, dictionary_id: Optional[int] = None) -> dict[str, Any]:
         """Get statistics for a specific dictionary (or global if None).
 
         Backward-compatible query patterns that minimize DB calls to align with legacy tests.
@@ -1636,11 +1661,11 @@ class ChatDictionaryService:
                         "regex_entries": regex_entries,
                         "probabilistic_entries": probabilistic_entries,
                     }
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
-            raise CharactersRAGDBError(f"Error getting statistics: {e}")
+            raise CharactersRAGDBError(f"Error getting statistics: {e}") from e
 
-    def bulk_add_entries(self, dictionary_id: int, entries: List[Dict[str, Any]]) -> Any:
+    def bulk_add_entries(self, dictionary_id: int, entries: list[dict[str, Any]]) -> Any:
         """
         Add multiple entries at once.
 
@@ -1723,11 +1748,11 @@ class ChatDictionaryService:
 
             return _BulkAddResult(added_count)
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding bulk entries: {e}")
-            raise CharactersRAGDBError(f"Error adding bulk entries: {e}")
+            raise CharactersRAGDBError(f"Error adding bulk entries: {e}") from e
 
-    def search_entries(self, dictionary_id: Optional[int] = None, query: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search_entries(self, dictionary_id: Optional[int] = None, query: Optional[str] = None) -> list[dict[str, Any]]:
         """
         Search for entries by pattern.
 
@@ -1744,7 +1769,7 @@ class ChatDictionaryService:
                     "SELECT e.*, d.name as dictionary_name FROM dictionary_entries e JOIN chat_dictionaries d ON e.dictionary_id = d.id",
                     "WHERE d.deleted = ?",
                 ]
-                params: List[Any] = [False]
+                params: list[Any] = [False]
                 if dictionary_id is not None:
                     q.append("AND e.dictionary_id = ?")
                     params.append(dictionary_id)
@@ -1755,7 +1780,7 @@ class ChatDictionaryService:
                     params.extend([f"%{escaped_term}%", f"%{escaped_term}%"])
                 q.append("ORDER BY d.name, e.key")
                 cursor = conn.execute(" ".join(q), tuple(params))
-                results: List[Dict[str, Any]] = []
+                results: list[dict[str, Any]] = []
                 for row in cursor.fetchall():
                     rd = dict(row)
                     entry = ChatDictionaryEntry.from_dict(rd)
@@ -1768,9 +1793,9 @@ class ChatDictionaryService:
                     results.append(d)
                 return results
 
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error searching entries: {e}")
-            raise CharactersRAGDBError(f"Error searching entries: {e}")
+            raise CharactersRAGDBError(f"Error searching entries: {e}") from e
 
     # --- Additional Developer-Friendly APIs ---
 
@@ -1780,7 +1805,7 @@ class ChatDictionaryService:
         type: Optional[str] = None,
         active_only: bool = True,
         group: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         entries = self.get_entries(dictionary_id=dictionary_id, group=group, active_only=active_only)
         if type is not None:
             if type not in ("literal", "regex"):
@@ -1805,22 +1830,22 @@ class ChatDictionaryService:
                     self._invalidate_cache()
                     return True
                 return False
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error toggling entry active: {e}")
-            raise CharactersRAGDBError(f"Error toggling entry active: {e}")
+            raise CharactersRAGDBError(f"Error toggling entry active: {e}") from e
 
     def clear_cache(self) -> None:
         self._entry_cache = None
         self._cache_timestamp = None
 
-    def export_to_json(self, dictionary_id: int) -> Dict[str, Any]:
+    def export_to_json(self, dictionary_id: int) -> dict[str, Any]:
         info = self.get_dictionary(dictionary_id)
         if not info:
             raise InputError(f"Dictionary {dictionary_id} not found")
         entries = self.get_entries(dictionary_id, active_only=False)
         return {"name": info["name"], "description": info.get("description"), "entries": entries}
 
-    def import_from_json(self, data: Dict[str, Any]) -> int:
+    def import_from_json(self, data: dict[str, Any]) -> int:
         name = data.get("name") or "Imported Dictionary"
         description = data.get("description")
         dict_id = self.create_dictionary(name=name, description=description)
@@ -1838,7 +1863,7 @@ class ChatDictionaryService:
                     case_sensitive=e.get("case_sensitive", True),
                 )
             return dict_id
-        except Exception:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS:
             self.delete_dictionary(dict_id, hard_delete=True)
             raise
 
@@ -1937,11 +1962,11 @@ class ChatDictionaryService:
 
         except ConflictError:
             raise
-        except Exception as e:
+        except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cloning dictionary: {e}")
-            raise CharactersRAGDBError(f"Error cloning dictionary: {e}")
+            raise CharactersRAGDBError(f"Error cloning dictionary: {e}") from e
 
-    def get_usage_statistics(self, dictionary_id: int) -> Dict[str, Any]:
+    def get_usage_statistics(self, dictionary_id: int) -> dict[str, Any]:
         """Return simple usage statistics based on in-memory counters."""
         return {
             "times_used": int(self._usage_counts.get(dictionary_id, 0)) if hasattr(self, "_usage_counts") else 0,
@@ -1973,7 +1998,7 @@ class _ProcessedTextResult(str):
     result['processed_text'] to both succeed.
     """
 
-    def __new__(cls, value: str, stats: Optional[Dict[str, Any]] = None):
+    def __new__(cls, value: str, stats: Optional[dict[str, Any]] = None):
         obj = super().__new__(cls, value)
         obj._stats = stats or {}
         return obj

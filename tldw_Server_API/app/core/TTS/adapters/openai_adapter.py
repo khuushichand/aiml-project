@@ -4,39 +4,38 @@
 # Imports
 import asyncio
 import os
-from typing import Optional, Dict, Any, AsyncGenerator, Set
+from collections.abc import AsyncGenerator
+from typing import Any, Optional
+
 #
 from loguru import logger
+
+from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError
+from tldw_Server_API.app.core.exceptions import RetryExhaustedError
+
 #
 # Local Imports
 from tldw_Server_API.app.core.http_client import apost, astream_bytes
-from tldw_Server_API.app.core.exceptions import NetworkError as CoreNetworkError, RetryExhaustedError
-from .base import (
-    TTSAdapter,
-    TTSCapabilities,
-    TTSRequest,
-    TTSResponse,
-    AudioFormat,
-    VoiceInfo,
-    ProviderStatus
-)
+
 from ..tts_exceptions import (
-    TTSProviderNotConfiguredError,
-    TTSProviderInitializationError,
     TTSAuthenticationError,
-    TTSRateLimitError,
-    TTSNetworkError,
-    TTSTimeoutError,
-    TTSProviderError,
-    TTSValidationError,
     TTSGenerationError,
+    TTSNetworkError,
+    TTSProviderError,
+    TTSProviderInitializationError,
+    TTSProviderNotConfiguredError,
+    TTSRateLimitError,
+    TTSTimeoutError,
+    TTSValidationError,
     auth_error,
-    rate_limit_error,
     network_error,
+    rate_limit_error,
     timeout_error,
 )
-from ..tts_validation import validate_tts_request
 from ..tts_resource_manager import get_resource_manager
+from ..tts_validation import validate_tts_request
+from .base import AudioFormat, ProviderStatus, TTSAdapter, TTSCapabilities, TTSRequest, TTSResponse, VoiceInfo
+
 #
 #######################################################################################################################
 #
@@ -105,7 +104,7 @@ class OpenAIAdapter(TTSAdapter):
         )
     }
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         super().__init__(config)
         self.api_key = self.config.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
         # Normalize placeholder/empty keys often present in test envs to None
@@ -225,7 +224,7 @@ class OpenAIAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e)}
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         """Get OpenAI TTS capabilities"""
@@ -325,16 +324,16 @@ class OpenAIAdapter(TTSAdapter):
                 reason = str(e) or e.__class__.__name__
                 if _is_timeout_error(e) or "timeout" in reason.lower():
                     # Map any timeout-like condition (including wrapped ones) to TTSTimeoutError
-                    raise timeout_error(self.provider_name, timeout_seconds=60.0)
+                    raise timeout_error(self.provider_name, timeout_seconds=60.0) from e
                 # All other transport failures are treated as network errors
-                raise network_error(self.provider_name, e)
+                raise network_error(self.provider_name, e) from e
             if not isinstance(e, (TTSProviderError, TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError)):
                 logger.error(f"{self.provider_name} unexpected error: {e}")
                 raise TTSProviderError(
                     f"Unexpected error in {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "error_type": type(e).__name__}
-                )
+                ) from e
             raise
 
     async def _handle_http_status_error(self, e: Exception) -> None:
@@ -379,8 +378,8 @@ class OpenAIAdapter(TTSAdapter):
 
     async def _stream_audio(
         self,
-        headers: Dict[str, str],
-        payload: Dict[str, Any]
+        headers: dict[str, str],
+        payload: dict[str, Any]
     ) -> AsyncGenerator[bytes, None]:
         """Stream audio from OpenAI API with egress policy enforcement."""
         try:
@@ -412,8 +411,8 @@ class OpenAIAdapter(TTSAdapter):
 
     async def _generate_complete(
         self,
-        headers: Dict[str, str],
-        payload: Dict[str, Any]
+        headers: dict[str, str],
+        payload: dict[str, Any]
     ) -> bytes:
         """Generate complete audio from OpenAI API"""
         logger.debug(f"{self.provider_name}: _generate_complete calling apost url={self.base_url}")
@@ -469,9 +468,9 @@ class OpenAITTSAdapter(OpenAIAdapter):
     PROVIDER_KEY = "openai"
     SUPPORTED_MODELS = ["tts-1", "tts-1-hd"]
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Optional[dict[str, Any]] = None):
         cfg = config.copy() if isinstance(config, dict) else {}
-        mapped_cfg: Dict[str, Any] = {}
+        mapped_cfg: dict[str, Any] = {}
         if "api_key" in cfg:
             mapped_cfg["openai_api_key"] = cfg.get("api_key")
         if "openai_api_key" in cfg and "openai_api_key" not in mapped_cfg:
@@ -557,10 +556,10 @@ class OpenAITTSAdapter(OpenAIAdapter):
             raise
         except (TTSProviderError, TTSNetworkError, TTSTimeoutError) as e:
             # Normalize to generation error for tests
-            raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__})
+            raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__}) from e
         except Exception as e:
             if _is_httpx_exception(e):
-                raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__})
+                raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__}) from e
             raise
         finally:
             if old_model is not None:
@@ -605,10 +604,10 @@ class OpenAITTSAdapter(OpenAIAdapter):
         except Exception as e:
             if isinstance(e, (CoreNetworkError, RetryExhaustedError)) or _is_httpx_exception(e):
                 # Wrap network/API issues as generation errors per tests
-                raise TTSGenerationError(str(e), provider=self._provider_simple)
+                raise TTSGenerationError(str(e), provider=self._provider_simple) from e
             raise
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_info(self) -> dict[str, Any]:
         return {
             "provider": self._provider_simple,
             "models": list(self.SUPPORTED_MODELS),

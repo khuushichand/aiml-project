@@ -2,18 +2,27 @@
 Configuration management for the scheduler system.
 """
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any
-import os
+from typing import Any, Optional
+
 from loguru import logger
 
 # Prefer using the central project config when available so we place
 # the scheduler DB alongside other Databases by default.
 try:
     from tldw_Server_API.app.core.config import settings as core_settings  # type: ignore
-except Exception:
+except ImportError:
     core_settings = None  # Fallback if import graph changes
+
+_SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS = (
+    AttributeError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def _default_scheduler_db_url() -> str:
@@ -33,7 +42,8 @@ def _default_scheduler_db_url() -> str:
     # Preserve test behavior
     if (os.getenv('PYTEST_CURRENT_TEST') is not None or
             os.getenv('TEST_MODE', '').strip().lower() in {'1', 'true', 'yes', 'on'}):
-        import tempfile, os as _os
+        import os as _os
+        import tempfile
         return f"sqlite:///{tempfile.gettempdir()}/scheduler_{_os.getpid()}.db"
 
     # Try to use the repo's Databases directory
@@ -44,7 +54,7 @@ def _default_scheduler_db_url() -> str:
         if project_root:
             db_path = Path(project_root) / 'Databases' / 'scheduler.db'
             return f"sqlite:///{str(db_path.resolve())}"
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # As a final fallback, use a relative Databases path if present
@@ -52,7 +62,7 @@ def _default_scheduler_db_url() -> str:
         cwd = Path(os.getcwd())
         candidate = cwd / 'Databases' / 'scheduler.db'
         return f"sqlite:///{str(candidate.resolve())}"
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         # Last resort: CWD scheduler.db
         return 'sqlite:///scheduler.db'
 
@@ -63,7 +73,7 @@ def _default_scheduler_base_path() -> Path:
     if env_base:
         try:
             return Path(env_base)
-        except Exception:
+        except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
     try:
@@ -71,14 +81,14 @@ def _default_scheduler_base_path() -> Path:
             project_root = core_settings.get('PROJECT_ROOT')
             if project_root:
                 return Path(project_root) / 'Databases' / 'scheduler'
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         pass
 
     # Fallback: put under local Databases if present; else default to ~/.local/share/scheduler
     try:
         local = Path(os.getcwd()) / 'Databases' / 'scheduler'
         return local
-    except Exception:
+    except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
         return Path.home() / '.local' / 'share' / 'scheduler'
 
 
@@ -236,12 +246,12 @@ class SchedulerConfig:
             self.emergency_backup_path.parent.mkdir(parents=True, exist_ok=True)
         except (PermissionError, OSError) as e:
             logger.error(f"Failed to create scheduler directories: {e}")
-            raise ValueError(f"Cannot create scheduler directories at {self.base_path}: {e}")
+            raise ValueError(f"Cannot create scheduler directories at {self.base_path}: {e}") from e
 
         # Validate configuration
         self._validate()
 
-        logger.info(f"Scheduler configuration initialized:")
+        logger.info("Scheduler configuration initialized:")
         logger.info(f"  Database: {self._safe_database_url()}")
         logger.info(f"  Base path: {self.base_path}")
         logger.info(f"  Workers: {self.min_workers}-{self.max_workers}")
@@ -261,7 +271,7 @@ class SchedulerConfig:
             realpath = _os.path.realpath(original_base)
             if abspath != realpath or _os.path.islink(original_base):
                 raise ValueError(f"Base path cannot be a symlink: {self.base_path}")
-        except Exception:
+        except _SCHEDULER_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
 
         # Detect and prevent directory traversal attempts
@@ -357,7 +367,7 @@ class SchedulerConfig:
                     return f"{scheme_user}:****@{parts[1]}"
         return url
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary"""
         return {
             'database_url': self._safe_database_url(),

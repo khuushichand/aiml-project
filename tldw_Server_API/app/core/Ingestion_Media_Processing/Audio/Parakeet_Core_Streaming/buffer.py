@@ -12,7 +12,7 @@ The buffer stores float32 mono audio samples and provides:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+
 import numpy as np
 
 
@@ -20,7 +20,7 @@ import numpy as np
 class AudioBuffer:
     sample_rate: int
     max_duration: float
-    data: List[np.ndarray] = field(default_factory=list)
+    data: list[np.ndarray] = field(default_factory=list)
 
     def add(self, audio_chunk: np.ndarray) -> None:
         """
@@ -63,7 +63,7 @@ class AudioBuffer:
         total_samples = sum(len(chunk) for chunk in self.data)
         return float(total_samples) / float(self.sample_rate or 1)
 
-    def get_audio(self, duration: Optional[float] = None) -> Optional[np.ndarray]:
+    def get_audio(self, duration: float | None = None) -> np.ndarray | None:
         """
         Return buffered mono audio as a contiguous float32 array, optionally limited to a requested duration.
 

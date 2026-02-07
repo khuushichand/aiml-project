@@ -48,6 +48,23 @@ class _CountingAsyncIterator:
         self.closed = True
 
 
+class _UnboundedAsyncIterator:
+    def __init__(self):
+        self.closed = False
+        self._i = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        self._i += 1
+        await asyncio.sleep(0)
+        return f"chunk-{self._i}"
+
+    async def aclose(self):
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_request_queue_stream_cancel_stops_async_iterator():
     queue = RequestQueue(max_queue_size=10, max_concurrent=1)
@@ -94,3 +111,56 @@ async def test_request_queue_stream_cancel_stops_async_iterator():
     assert async_iter.count <= 2
 
     queue._executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_request_queue_stream_cancel_with_full_channel_exits():
+    queue = RequestQueue(max_queue_size=10, max_concurrent=1)
+    queue._running = True
+    stream_channel: asyncio.Queue = asyncio.Queue(maxsize=1)
+    await stream_channel.put("prefill")
+    async_iter = _UnboundedAsyncIterator()
+
+    def processor():
+        return async_iter
+
+    future: asyncio.Future = asyncio.Future()
+    request = QueuedRequest(
+        priority=RequestPriority.HIGH.value,
+        timestamp=0.0,
+        request_id="stream-full-1",
+        request_data={},
+        future=future,
+        client_id="client-1",
+        estimated_tokens=0,
+        processor=processor,
+        processor_args=(),
+        processor_kwargs={},
+        streaming=True,
+        stream_channel=stream_channel,
+    )
+
+    task = asyncio.create_task(queue._process_request(request))
+
+    await asyncio.sleep(0.05)
+    future.cancel()
+    while True:
+        try:
+            stream_channel.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+
+    await asyncio.wait_for(task, timeout=1.5)
+    assert async_iter.closed is True
+
+    queue._executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_request_queue_is_one_shot_after_stop():
+    queue = RequestQueue(max_queue_size=10, max_concurrent=1)
+    await queue.start(num_workers=1)
+    await queue.stop()
+
+    with pytest.raises(RuntimeError, match="cannot be restarted"):
+        await queue.start(num_workers=1)

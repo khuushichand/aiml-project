@@ -14,23 +14,53 @@ from typing import Optional
 from fastapi import HTTPException, Request, status
 from loguru import logger
 
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.AuthNZ import User_DB_Handling
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
+    is_service_token_ip_allowed,
+    is_single_user_ip_allowed,
+    resolve_client_ip,
+)
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.principal_model import (
     AuthContext,
     AuthPrincipal,
     PrincipalKind,
 )
-from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
-    is_single_user_ip_allowed,
-    is_service_token_ip_allowed,
-    resolve_client_ip,
-)
-from tldw_Server_API.app.core.AuthNZ.settings import get_settings
-from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+
+_RESOLVER_MODE_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_TOKEN_PEEK_EXCEPTIONS = (
+    AttributeError,
+    ImportError,
+    KeyError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
+_USER_VALUE_EXCEPTIONS = (AttributeError, TypeError, ValueError)
+_STATE_ATTACH_EXCEPTIONS = (AttributeError, RuntimeError, TypeError, ValueError)
+_SINGLE_USER_COMPAT_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    HTTPException,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+)
 
 
 def is_single_user_mode() -> bool:
@@ -44,7 +74,7 @@ def is_single_user_mode() -> bool:
         from tldw_Server_API.app.core.AuthNZ.settings import is_single_user_mode as _is_single_user_mode  # noqa: WPS433
 
         return _is_single_user_mode()
-    except Exception:
+    except _RESOLVER_MODE_EXCEPTIONS:
         return False
 
 
@@ -88,7 +118,7 @@ def _peek_jwt_token_type(token: str) -> Optional[str]:
             raw_type = claims.get("type")
             if raw_type:
                 return str(raw_type)
-    except Exception:
+    except _TOKEN_PEEK_EXCEPTIONS:
         return None
     return None
 
@@ -185,13 +215,13 @@ def _build_principal_from_user(
         raw_username = getattr(user, "username", None)
         if raw_username:
             username = str(raw_username)
-    except Exception:
+    except _USER_VALUE_EXCEPTIONS:
         username = None
     try:
         raw_email = getattr(user, "email", None)
         if raw_email:
             email = str(raw_email)
-    except Exception:
+    except _USER_VALUE_EXCEPTIONS:
         email = None
 
     principal = AuthPrincipal(
@@ -271,7 +301,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
         try:
             settings = get_settings()
             auth_mode = getattr(settings, "AUTH_MODE", None)
-        except Exception:
+        except _RESOLVER_MODE_EXCEPTIONS:
             auth_mode = None
         if auth_mode == "single_user":
             # In single-user mode, treat Bearer tokens as API keys (no legacy bearer tokens).
@@ -333,7 +363,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
 
                 try:
                     settings = get_settings()
-                except Exception:
+                except _RESOLVER_MODE_EXCEPTIONS:
                     settings = None
                 client_ip = resolve_client_ip(request, settings)
                 if not is_service_token_ip_allowed(client_ip, settings):
@@ -369,7 +399,7 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                     request.state.auth = ctx
                     request.state.api_key_id = None
                     request.state.user_id = None
-                except Exception as state_exc:
+                except _STATE_ATTACH_EXCEPTIONS as state_exc:
                     logger.debug(
                         "auth_principal_resolver: unable to attach service principal context: {}",
                         state_exc,
@@ -472,13 +502,13 @@ async def get_auth_principal(request: Request) -> AuthPrincipal:
                         request.state.api_key_id = None
                         request.state.team_ids = []
                         request.state.org_ids = []
-                    except Exception as state_exc:
+                    except _STATE_ATTACH_EXCEPTIONS as state_exc:
                         logger.debug(
                             "auth_principal_resolver: unable to attach single-user state context: {}",
                             state_exc,
                         )
                     return principal
-        except Exception as single_exc:
+        except _SINGLE_USER_COMPAT_EXCEPTIONS as single_exc:
             logger.debug(
                 "auth_principal_resolver: single-user API key compat path failed; falling back: {}",
                 single_exc,

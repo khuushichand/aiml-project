@@ -82,6 +82,8 @@ export interface ChunkingCapabilities {
   llm_required_methods: string[]
   hierarchical_support: boolean
   notes?: string
+  options_schema?: Record<string, any>
+  pdf_parsing_engines?: string[]
   method_specific_options?: {
     code?: {
       code_mode: string[]
@@ -173,6 +175,115 @@ export interface TemplateDiagnosticsResponse {
   hint?: string
 }
 
+export interface ProcessPdfsResult {
+  status: string
+  input_ref?: string
+  processing_source?: string
+  media_type?: string
+  conversion_text?: string | null
+  content?: string | null
+  chunks?: Chunk[] | null
+  metadata?: Record<string, any> | null
+  analysis?: string | null
+  warnings?: any
+  error?: string | null
+  [key: string]: any
+}
+
+export interface ProcessPdfsResponse {
+  results: ProcessPdfsResult[]
+  errors?: string[]
+  processed_count?: number
+  errors_count?: number
+  [key: string]: any
+}
+
+export interface PdfProcessOptions {
+  pdf_parsing_engine?: string
+  enable_ocr?: boolean
+  ocr_backend?: string
+  ocr_lang?: string
+  ocr_dpi?: number
+  ocr_mode?: string
+  ocr_min_page_text_chars?: number
+  ocr_output_format?: string
+  ocr_prompt_preset?: string
+}
+
+const PROCESS_PDF_ALLOWED_CHUNKING_KEYS = [
+  "method",
+  "max_size",
+  "overlap",
+  "adaptive",
+  "multi_level",
+  "language",
+  "custom_chapter_pattern",
+  "template_name",
+  "proposition_engine",
+  "proposition_aggressiveness",
+  "proposition_min_proposition_length",
+  "proposition_prompt_profile"
+] as const
+
+const PROCESS_PDF_ALLOWED_PDF_KEYS = [
+  "pdf_parsing_engine",
+  "enable_ocr",
+  "ocr_backend",
+  "ocr_lang",
+  "ocr_dpi",
+  "ocr_mode",
+  "ocr_min_page_text_chars",
+  "ocr_output_format",
+  "ocr_prompt_preset"
+] as const
+
+const listProvidedKeys = (value?: unknown): string[] => {
+  if (!value || typeof value !== "object") return []
+  const record = value as Record<string, unknown>
+  return Object.entries(record)
+    .filter(([, entry]) => entry != null)
+    .map(([key]) => key)
+}
+
+const validateProcessPdfOptions = (
+  options?: ChunkingOptions,
+  pdfOptions?: PdfProcessOptions
+): void => {
+  const allowedChunking = new Set<string>(PROCESS_PDF_ALLOWED_CHUNKING_KEYS)
+  const allowedPdf = new Set<string>(PROCESS_PDF_ALLOWED_PDF_KEYS)
+
+  const unsupportedChunking = listProvidedKeys(options).filter(
+    (key) => !allowedChunking.has(key)
+  )
+  const unsupportedPdf = listProvidedKeys(pdfOptions).filter(
+    (key) => !allowedPdf.has(key)
+  )
+
+  if (unsupportedChunking.length === 0 && unsupportedPdf.length === 0) {
+    return
+  }
+
+  const messages: string[] = []
+  if (unsupportedChunking.length > 0) {
+    messages.push(
+      `Unsupported chunking options for /media/process-pdfs: ${unsupportedChunking.join(", ")}.`
+    )
+  }
+  if (unsupportedPdf.length > 0) {
+    messages.push(
+      `Unsupported PDF options for /media/process-pdfs: ${unsupportedPdf.join(", ")}.`
+    )
+  }
+  messages.push(
+    `Supported chunking options: ${PROCESS_PDF_ALLOWED_CHUNKING_KEYS.join(", ")}.`
+  )
+  messages.push(
+    `Supported PDF options: ${PROCESS_PDF_ALLOWED_PDF_KEYS.join(", ")}.`
+  )
+
+  throw new Error(messages.join(" "))
+}
+
 /**
  * Get available chunking methods and capabilities
  */
@@ -261,6 +372,79 @@ export async function chunkFile(
     file: {
       name: file.name,
       type: file.type || "text/plain",
+      data
+    }
+  })
+}
+
+/**
+ * Process a PDF (no DB) and return extracted text + chunks.
+ */
+export async function processPdfForChunking(
+  file: File,
+  options?: ChunkingOptions,
+  pdfOptions?: PdfProcessOptions
+): Promise<ProcessPdfsResponse> {
+  validateProcessPdfOptions(options, pdfOptions)
+
+  const fields: Record<string, string | boolean | number> = {
+    perform_chunking: true
+  }
+
+  if (options?.method) fields.chunk_method = options.method
+  if (options?.max_size != null) fields.chunk_size = options.max_size
+  if (options?.overlap != null) fields.chunk_overlap = options.overlap
+  if (options?.language) fields.chunk_language = options.language
+  if (options?.adaptive != null) fields.use_adaptive_chunking = options.adaptive
+  if (options?.multi_level != null) fields.use_multi_level_chunking = options.multi_level
+  if (options?.custom_chapter_pattern) {
+    fields.custom_chapter_pattern = options.custom_chapter_pattern
+  }
+  if (options?.template_name) {
+    fields.chunking_template_name = options.template_name
+  }
+  if (options?.proposition_engine) {
+    fields.proposition_engine = options.proposition_engine
+  }
+  if (options?.proposition_aggressiveness != null) {
+    fields.proposition_aggressiveness = options.proposition_aggressiveness
+  }
+  if (options?.proposition_min_proposition_length != null) {
+    fields.proposition_min_proposition_length = options.proposition_min_proposition_length
+  }
+  if (options?.proposition_prompt_profile) {
+    fields.proposition_prompt_profile = options.proposition_prompt_profile
+  }
+
+  if (pdfOptions?.pdf_parsing_engine) {
+    fields.pdf_parsing_engine = pdfOptions.pdf_parsing_engine
+  }
+  if (pdfOptions?.enable_ocr != null) fields.enable_ocr = pdfOptions.enable_ocr
+  if (pdfOptions?.ocr_backend) fields.ocr_backend = pdfOptions.ocr_backend
+  if (pdfOptions?.ocr_lang) fields.ocr_lang = pdfOptions.ocr_lang
+  if (pdfOptions?.ocr_dpi != null) fields.ocr_dpi = pdfOptions.ocr_dpi
+  if (pdfOptions?.ocr_mode) fields.ocr_mode = pdfOptions.ocr_mode
+  if (pdfOptions?.ocr_min_page_text_chars != null) {
+    fields.ocr_min_page_text_chars = pdfOptions.ocr_min_page_text_chars
+  }
+  if (pdfOptions?.ocr_output_format) {
+    fields.ocr_output_format = pdfOptions.ocr_output_format
+  }
+  if (pdfOptions?.ocr_prompt_preset) {
+    fields.ocr_prompt_preset = pdfOptions.ocr_prompt_preset
+  }
+
+  const buffer = await file.arrayBuffer()
+  const data = new Uint8Array(buffer)
+
+  return await bgUpload<ProcessPdfsResponse>({
+    path: "/api/v1/media/process-pdfs",
+    method: "POST",
+    fields,
+    fileFieldName: "files",
+    file: {
+      name: file.name,
+      type: file.type || "application/pdf",
       data
     }
   })

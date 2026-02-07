@@ -2,13 +2,9 @@ import React, { useRef, useEffect, useCallback, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Input, Button, Spin } from "antd"
 import { X, ChevronUp, ChevronDown } from "lucide-react"
+import type { EpubSearchResult } from "@/hooks/document-workspace/useEpubSearch"
 import type { Book, Rendition } from "epubjs"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
-
-interface EpubSearchResult {
-  cfi: string
-  excerpt: string
-}
 
 interface EpubSearchProps {
   bookRef: React.RefObject<Book | null>
@@ -42,8 +38,9 @@ export const EpubSearch: React.FC<EpubSearchProps> = ({ bookRef, renditionRef })
     setIsSearching(true)
 
     try {
-      const results = await book.search(query)
-      const mapped: EpubSearchResult[] = results.map((r: any) => ({
+      const searchFn = (book as any)?.search
+      const results = searchFn ? await searchFn.call(book, query) : []
+      const mapped: EpubSearchResult[] = (results || []).map((r: any) => ({
         cfi: r.cfi,
         excerpt: r.excerpt || query
       }))

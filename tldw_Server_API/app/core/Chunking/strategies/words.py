@@ -4,11 +4,13 @@ Word-based chunking strategy.
 Splits text into chunks based on word count with optional overlap.
 """
 
-import re
-from typing import List, Optional, Dict, Any, Generator
+import contextlib
+from collections.abc import Generator
+from typing import Any
+
 from loguru import logger
 
-from ..base import BaseChunkingStrategy, ChunkResult, ChunkMetadata
+from ..base import BaseChunkingStrategy, ChunkMetadata, ChunkResult
 
 
 class WordChunkingStrategy(BaseChunkingStrategy):
@@ -43,7 +45,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
               text: str,
               max_size: int,
               overlap: int = 0,
-              **options) -> List[str]:
+              **options) -> list[str]:
         """
         Chunk text by word count.
 
@@ -75,7 +77,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         logger.debug(f"Created {len(chunks)} chunks from {len(tokens)} words")
         return chunks
 
-    def _tokenize_text(self, text: str) -> List[str]:
+    def _tokenize_text(self, text: str) -> list[str]:
         """
         Tokenize text into words based on language.
 
@@ -93,7 +95,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
 
         return tokenizer(text)
 
-    def _tokenize_with_spans(self, text: str) -> tuple[List[str], List[tuple[int, int]]]:
+    def _tokenize_with_spans(self, text: str) -> tuple[list[str], list[tuple[int, int]]]:
         """Tokenize text and return tokens with character spans.
 
         Implementation notes:
@@ -104,7 +106,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
           to maintain monotonic spans. This guarantees linear-time progress.
         """
         tokens = self._tokenize_text(text)
-        spans: List[tuple[int, int]] = []
+        spans: list[tuple[int, int]] = []
         n = len(text)
         cursor = 0
 
@@ -144,12 +146,12 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         max_size: int,
         overlap: int,
         **options,
-    ) -> tuple[List[Dict[str, Any]], List[str], List[tuple[int, int]]]:
+    ) -> tuple[list[dict[str, Any]], list[str], list[tuple[int, int]]]:
         """Generate chunk records with token index mappings."""
         tokens, spans = self._tokenize_with_spans(text)
         if not tokens:
             return [], tokens, spans
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         step = max(1, max_size - overlap)
         try:
             min_size = int(options.get('min_chunk_size', 0))
@@ -207,7 +209,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
 
         return records, tokens, spans
 
-    def _tokenize_default(self, text: str) -> List[str]:
+    def _tokenize_default(self, text: str) -> list[str]:
         """
         Default word tokenization using simple splitting.
 
@@ -221,7 +223,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         words = text.split()
         return words
 
-    def _tokenize_chinese(self, text: str) -> List[str]:
+    def _tokenize_chinese(self, text: str) -> list[str]:
         """
         Chinese word tokenization.
 
@@ -258,7 +260,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                 words.extend(list(tail))
             return words
 
-    def _tokenize_japanese(self, text: str) -> List[str]:
+    def _tokenize_japanese(self, text: str) -> list[str]:
         """
         Japanese word tokenization.
 
@@ -297,7 +299,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             words.extend(list(tail))
         return words
 
-    def _tokenize_korean(self, text: str) -> List[str]:
+    def _tokenize_korean(self, text: str) -> list[str]:
         """
         Korean word tokenization.
 
@@ -317,7 +319,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             logger.warning("KoNLPy not available, using space splitting for Korean")
             return text.split()
 
-    def _tokenize_thai(self, text: str) -> List[str]:
+    def _tokenize_thai(self, text: str) -> list[str]:
         """
         Thai word tokenization.
 
@@ -337,7 +339,7 @@ class WordChunkingStrategy(BaseChunkingStrategy):
             # Thai doesn't use spaces between words
             return [ch for ch in text if ch != '\r']
 
-    def _join_words(self, words: List[str]) -> str:
+    def _join_words(self, words: list[str]) -> str:
         """
         Join words back into text based on language.
 
@@ -398,8 +400,13 @@ class WordChunkingStrategy(BaseChunkingStrategy):
                             text: str,
                             max_size: int,
                             overlap: int = 0,
-                            **options) -> List[ChunkResult]:
-        """Chunk text and return metadata with accurate offsets."""
+                            **options) -> list[ChunkResult]:
+        """Chunk text and return metadata with accurate offsets.
+
+        By default, chunk text is sliced from the original source span to
+        preserve whitespace and multilingual fidelity. Pass
+        align_text_to_source=False to keep the normalized token-joined text.
+        """
         if not self.validate_parameters(text, max_size, overlap):
             return []
 
@@ -416,20 +423,25 @@ class WordChunkingStrategy(BaseChunkingStrategy):
         except Exception:
             min_size_opt = 0
 
-        results: List[ChunkResult] = []
+        results: list[ChunkResult] = []
+        align_text_to_source = bool(options.get("align_text_to_source", True))
+        text_len = len(text)
         total = len(records)
         for idx, record in enumerate(records):
-            token_indices: List[int] = record.get('token_indices', [])
+            token_indices: list[int] = record.get('token_indices', [])
             if not token_indices:
                 continue
             start_idx = token_indices[0]
             end_idx = token_indices[-1]
             start_char, end_char = spans[start_idx][0], spans[end_idx][1]
-            try:
+            with contextlib.suppress(Exception):
                 end_char = self._expand_end_to_grapheme_boundary(text, end_char, options=options)
-            except Exception:
-                pass
+            # Default to source-aligned text for multilingual fidelity.
             chunk_text = record.get('text', '')
+            if align_text_to_source:
+                start_char = max(0, min(int(start_char), text_len))
+                end_char = max(start_char, min(int(end_char), text_len))
+                chunk_text = text[start_char:end_char]
             word_count = len(token_indices)
             metadata = ChunkMetadata(
                 index=idx,

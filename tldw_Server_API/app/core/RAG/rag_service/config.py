@@ -6,9 +6,10 @@ integrating with the existing TOML configuration system.
 """
 
 import os
-from pathlib import Path
-from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Optional
+
 import tomli
 from loguru import logger
 
@@ -234,7 +235,7 @@ class RAGConfig:
     def _apply_env_overrides(self):
         """Apply environment variable overrides."""
         # Examples of environment variables that can override config
-        env_mappings = {
+        env_mappings: dict[str, tuple[Optional[str], str, Callable[[str], Any]]] = {
             "RAG_FTS_TOP_K": ("retriever", "fts_top_k", int),
             "RAG_VECTOR_TOP_K": ("retriever", "vector_top_k", int),
             "RAG_ENABLE_RERANKING": ("processor", "enable_reranking", lambda x: x.lower() == "true"),
@@ -257,7 +258,7 @@ class RAGConfig:
                 except Exception as e:
                     logger.warning(f"Failed to apply env override {env_var}: {e}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
             "retriever": self.retriever.__dict__,
@@ -272,7 +273,7 @@ class RAGConfig:
             "log_performance_metrics": self.log_performance_metrics
         }
 
-    def validate(self) -> List[str]:
+    def validate(self) -> list[str]:
         """
         Validate configuration settings.
 

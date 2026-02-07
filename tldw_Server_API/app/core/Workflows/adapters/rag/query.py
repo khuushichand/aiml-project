@@ -10,9 +10,10 @@ This module includes adapters for query operations:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 from loguru import logger
 
@@ -27,6 +28,63 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     SemanticCacheCheckConfig,
 )
 
+_QUERY_CONTEXT_EXCEPTIONS = (AttributeError, TypeError, ValueError)
+_QUERY_STRATEGY_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_QUERY_ADAPTER_EXCEPTIONS = (
+    AttributeError,
+    ConnectionError,
+    ImportError,
+    KeyError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
+_QUERY_JSON_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
+
+
+def _get_workflow_chroma_manager():
+    """Resolve the default ChromaDB manager for workflow adapters."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
+
+    return get_default_chroma_manager()
+
+
+def _get_semantic_cache_collection(collection_name: str) -> tuple[Any, Any]:
+    """Resolve semantic-cache collection and return (manager, collection)."""
+    manager = _get_workflow_chroma_manager()
+    if not manager:
+        return None, None
+    collection = manager.get_or_create_collection(collection_name=collection_name)
+    return manager, collection
+
+
+def _build_semantic_cache_query_embedding(query: str, manager: Any) -> list[float]:
+    """Build query embedding for semantic cache lookup."""
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
+
+    model_override = getattr(manager, "default_embedding_model_id", None)
+    user_cfg = getattr(manager, "user_embedding_config", None)
+    if not isinstance(user_cfg, dict):
+        raise ValueError("Chroma manager is missing embedding configuration.")
+    return create_embedding(
+        text=query,
+        user_app_config=user_cfg,
+        model_id_override=model_override,
+    )
+
 
 @registry.register(
     "query_rewrite",
@@ -36,7 +94,7 @@ from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     tags=["rag", "query"],
     config_model=QueryRewriteConfig,
 )
-async def run_query_rewrite_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_query_rewrite_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Rewrite a search query for better retrieval results.
 
     Config:
@@ -102,7 +160,7 @@ Return exactly {max_rewrites} rewritten queries, one per line. No numbering, no 
             "strategy": strategy,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Query rewrite adapter error: {e}")
         return {"error": f"query_rewrite_error:{e}", "original_query": query, "rewritten_queries": []}
 
@@ -115,7 +173,7 @@ Return exactly {max_rewrites} rewritten queries, one per line. No numbering, no 
     tags=["rag", "query"],
     config_model=QueryExpandConfig,
 )
-async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Expand search queries using multiple strategies.
 
     Config:
@@ -144,7 +202,7 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
             last = context.get("prev") or context.get("last") or {}
             if isinstance(last, dict):
                 query = str(last.get("query") or last.get("text") or "")
-        except Exception:
+        except _QUERY_CONTEXT_EXCEPTIONS:
             pass
     query = query or ""
 
@@ -186,13 +244,12 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
 
     try:
         from tldw_Server_API.app.core.RAG.rag_service.query_expansion import (
-            SynonymExpansion,
-            MultiQueryGeneration,
             AcronymExpansion,
             DomainExpansion,
             EntityExpansion,
             HybridQueryExpansion,
-            ExpandedQuery,
+            MultiQueryGeneration,
+            SynonymExpansion,
         )
 
         # Build strategy instances
@@ -204,10 +261,10 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
             "entity": EntityExpansion,
         }
 
-        all_variations: List[str] = []
-        all_synonyms: Dict[str, List[str]] = {}
-        all_keywords: List[str] = []
-        all_entities: List[str] = []
+        all_variations: list[str] = []
+        all_synonyms: dict[str, list[str]] = {}
+        all_keywords: list[str] = []
+        all_entities: list[str] = []
 
         # If hybrid, use the combined strategy
         if "hybrid" in strategies:
@@ -229,7 +286,7 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
                         all_synonyms.update(result.synonyms)
                         all_keywords.extend(result.keywords)
                         all_entities.extend(result.entities)
-                    except Exception as strat_e:
+                    except _QUERY_STRATEGY_EXCEPTIONS as strat_e:
                         logger.debug(f"Query expansion strategy {strat_name} failed: {strat_e}")
 
         # Deduplicate
@@ -258,7 +315,7 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
             "strategies_used": strategies,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Query expand adapter error: {e}")
         return {"error": f"query_expand_error:{e}"}
 
@@ -271,7 +328,7 @@ async def run_query_expand_adapter(config: Dict[str, Any], context: Dict[str, An
     tags=["rag", "query"],
     config_model=HyDEGenerateConfig,
 )
-async def run_hyde_generate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_hyde_generate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Generate a Hypothetical Document Embedding (HyDE) for improved similarity search.
 
     Config:
@@ -337,7 +394,7 @@ Generate {num_hypothetical} hypothetical document(s). If multiple, separate with
             "document_type": document_type,
         }
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"HyDE generate adapter error: {e}")
         return {"error": f"hyde_error:{e}", "query": query, "hypothetical_documents": []}
 
@@ -350,7 +407,7 @@ Generate {num_hypothetical} hypothetical document(s). If multiple, separate with
     tags=["rag", "cache"],
     config_model=SemanticCacheCheckConfig,
 )
-async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Check semantic cache for similar queries before running expensive searches.
 
     Config:
@@ -378,26 +435,17 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
     max_age_seconds = int(config.get("max_age_seconds", 3600))
 
     try:
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client, embedding_function_factory
         import time
 
-        client = chroma_client()
-        if not client:
+        manager, collection = _get_semantic_cache_collection(cache_collection)
+        if not collection:
             return {"cache_hit": False, "query": query, "error": "chroma_unavailable"}
 
-        # Get or create cache collection
-        try:
-            collection = client.get_or_create_collection(
-                name=cache_collection,
-                embedding_function=embedding_function_factory(),
-            )
-        except Exception as e:
-            logger.debug(f"Semantic cache collection error: {e}")
-            return {"cache_hit": False, "query": query, "error": "collection_error"}
+        query_embedding = _build_semantic_cache_query_embedding(query, manager)
 
         # Search for similar queries
         results = collection.query(
-            query_texts=[query],
+            query_embeddings=[query_embedding],
             n_results=1,
             include=["metadatas", "distances", "documents"],
         )
@@ -419,10 +467,8 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
 
                         cached_result = meta.get("result")
                         if isinstance(cached_result, str):
-                            try:
+                            with contextlib.suppress(_QUERY_JSON_PARSE_EXCEPTIONS):
                                 cached_result = json.loads(cached_result)
-                            except Exception:
-                                pass
 
                         return {
                             "cache_hit": True,
@@ -434,7 +480,7 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
 
         return {"cache_hit": False, "query": query}
 
-    except Exception as e:
+    except _QUERY_ADAPTER_EXCEPTIONS as e:
         logger.exception(f"Semantic cache check error: {e}")
         return {"cache_hit": False, "query": query, "error": str(e)}
 
@@ -447,7 +493,7 @@ async def run_semantic_cache_check_adapter(config: Dict[str, Any], context: Dict
     tags=["rag", "search"],
     config_model=SearchAggregateConfig,
 )
-async def run_search_aggregate_adapter(config: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+async def run_search_aggregate_adapter(config: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Aggregate and deduplicate results from multiple search steps.
 
     Config:

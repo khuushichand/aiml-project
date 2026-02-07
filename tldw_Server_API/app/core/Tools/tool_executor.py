@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-from loguru import logger
+from typing import Any
 
 try:
     from tldw_Server_API.app.core.MCP_unified import get_mcp_server
@@ -31,14 +30,17 @@ class ToolExecutor:
     def _make_context(
         self,
         *,
-        user_id: Optional[str],
-        client_id: Optional[str],
-        request_id: Optional[str] = None,
+        user_id: str | None,
+        client_id: str | None,
+        request_id: str | None = None,
         admin_override: bool = False,
+        allowed_tools: list[str] | None = None,
     ) -> Any:
         if RequestContext is None:
             raise RuntimeError("MCP RequestContext unavailable")
         meta = {"admin_override": bool(admin_override)}
+        if allowed_tools is not None:
+            meta["allowed_tools"] = allowed_tools
         return RequestContext(
             request_id=str(request_id or "tools"),
             user_id=str(user_id) if user_id else None,
@@ -46,7 +48,7 @@ class ToolExecutor:
             metadata=meta,
         )
 
-    async def list_tools(self, *, user_id: Optional[str], client_id: Optional[str]) -> Dict[str, Any]:
+    async def list_tools(self, *, user_id: str | None, client_id: str | None) -> dict[str, Any]:
         ctx = self._make_context(user_id=user_id, client_id=client_id)
         req = MCPRequest(method="tools/list", params={})
         resp = await self.server.protocol.process_request(req, ctx)
@@ -57,13 +59,14 @@ class ToolExecutor:
     async def execute(
         self,
         *,
-        user_id: Optional[str],
-        client_id: Optional[str],
+        user_id: str | None,
+        client_id: str | None,
         tool_name: str,
-        arguments: Optional[Dict[str, Any]] = None,
-        idempotency_key: Optional[str] = None,
+        arguments: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
         validate_only: bool = False,
-    ) -> Dict[str, Any]:
+        allowed_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
         if validate_only:
             # Lightweight permission probe via tools/list; skips actual execution
             listing = await self.list_tools(user_id=user_id, client_id=client_id)
@@ -76,7 +79,7 @@ class ToolExecutor:
                 raise ToolExecutionError("Permission denied for tool or tool not found")
             return {"validated": True}
 
-        ctx = self._make_context(user_id=user_id, client_id=client_id)
+        ctx = self._make_context(user_id=user_id, client_id=client_id, allowed_tools=allowed_tools)
         req = MCPRequest(
             method="tools/call",
             params={

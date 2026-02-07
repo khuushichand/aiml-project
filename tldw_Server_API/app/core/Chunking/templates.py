@@ -6,14 +6,13 @@ and postprocessing stages.
 """
 
 import json
+import re
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable, Union
-from dataclasses import dataclass, field
-from loguru import logger
-import re
+from typing import Any, Callable, Optional
 
-from .base import ChunkerConfig
+from loguru import logger
 
 # Pre-compiled regex patterns for common operations (performance optimization)
 _RE_MULTI_SPACE = re.compile(r'[ \t]+')
@@ -26,17 +25,28 @@ def _get_linebreak_pattern(max_breaks: int) -> re.Pattern:
     return re.compile(r'\n{' + str(max_breaks + 1) + ',}')
 
 
-from .regex_safety import check_pattern as _rx_check
-from .regex_safety import compile_flags as _rx_flags
 from .chunker import Chunker
 from .exceptions import TemplateError
+from .regex_safety import check_pattern as _rx_check
+from .regex_safety import compile_flags as _rx_flags
+
+_TEMPLATE_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TypeError,
+    ValueError,
+    re.error,
+    json.JSONDecodeError,
+)
 
 
 @dataclass
 class TemplateStage:
     """Represents a stage in the chunking pipeline."""
     name: str  # 'preprocess', 'chunk', 'postprocess'
-    operations: List[Dict[str, Any]] = field(default_factory=list)
+    operations: list[dict[str, Any]] = field(default_factory=list)
     enabled: bool = True
 
 
@@ -46,9 +56,9 @@ class ChunkingTemplate:
     name: str
     description: str = ""
     base_method: str = "words"  # Default chunking method
-    stages: List[TemplateStage] = field(default_factory=list)
-    default_options: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    stages: list[TemplateStage] = field(default_factory=list)
+    default_options: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class TemplateProcessor:
@@ -60,7 +70,7 @@ class TemplateProcessor:
         Args:
             chunker: Optional preconfigured Chunker instance (e.g., with LLM hooks)
         """
-        self._operations: Dict[str, Callable] = {}
+        self._operations: dict[str, Callable] = {}
         self._register_builtin_operations()
         self._chunker = chunker
 
@@ -102,7 +112,7 @@ class TemplateProcessor:
     def process_template(self,
                         text: str,
                         template: ChunkingTemplate,
-                        **options) -> List[Dict[str, Any]]:
+                        **options) -> list[dict[str, Any]]:
         """
         Process text through a template pipeline.
 
@@ -137,7 +147,7 @@ class TemplateProcessor:
                 logger.warning(f"Unknown stage: {stage.name}")
 
         # Ensure standardized shape: List[Dict{text, metadata}]
-        out_chunks: List[Dict[str, Any]] = []
+        out_chunks: list[dict[str, Any]] = []
         for ch in data.get("chunks", []) or []:
             if isinstance(ch, dict) and 'text' in ch:
                 out_chunks.append(ch)
@@ -146,9 +156,9 @@ class TemplateProcessor:
         return out_chunks
 
     def _run_preprocess_stage(self,
-                             data: Dict[str, Any],
+                             data: dict[str, Any],
                              stage: TemplateStage,
-                             options: Dict[str, Any]) -> Dict[str, Any]:
+                             options: dict[str, Any]) -> dict[str, Any]:
         """Run preprocessing operations on text.
 
         Supports both {"type", "params"} and {"operation", "config"} schemas.
@@ -180,10 +190,10 @@ class TemplateProcessor:
         return data
 
     def _run_chunk_stage(self,
-                        data: Dict[str, Any],
+                        data: dict[str, Any],
                         stage: TemplateStage,
-                        options: Dict[str, Any],
-                        base_method: str) -> Dict[str, Any]:
+                        options: dict[str, Any],
+                        base_method: str) -> dict[str, Any]:
         """Run chunking operation.
 
         Supports both {"method", "params"} and {"method", "config"} schemas.
@@ -210,10 +220,7 @@ class TemplateProcessor:
 
         # Additional params may be under "params" or "config"
         extra_params_src = chunk_ops.get("params")
-        if isinstance(extra_params_src, dict):
-            extra_params = dict(extra_params_src)
-        else:
-            extra_params = dict(nested_cfg)
+        extra_params = dict(extra_params_src) if isinstance(extra_params_src, dict) else dict(nested_cfg)
         # Determine language override precedence
         language_override = None
         for candidate in (
@@ -250,7 +257,7 @@ class TemplateProcessor:
                 cfg.get('hierarchical_template') or
                 (extra_params or {}).get('hierarchical_template')
             )
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             hierarchical = False
             hier_template = None
 
@@ -280,9 +287,9 @@ class TemplateProcessor:
         return data
 
     def _run_postprocess_stage(self,
-                              data: Dict[str, Any],
+                              data: dict[str, Any],
                               stage: TemplateStage,
-                              options: Dict[str, Any]) -> Dict[str, Any]:
+                              options: dict[str, Any]) -> dict[str, Any]:
         """Run postprocessing operations on chunks.
 
         Supports both {"type", "params"} and {"operation", "config"} schemas.
@@ -296,7 +303,7 @@ class TemplateProcessor:
 
         chunks = data.get("chunks", [])
         # Normalize to a list of strings for postprocessors which operate on text
-        texts: List[str] = []
+        texts: list[str] = []
         for c in (chunks or []):
             if isinstance(c, dict) and 'text' in c:
                 texts.append(str(c.get('text', '')))
@@ -323,7 +330,7 @@ class TemplateProcessor:
         return data
 
     # Built-in preprocessing operations
-    def _normalize_whitespace(self, text: str, options: Dict[str, Any]) -> str:
+    def _normalize_whitespace(self, text: str, options: dict[str, Any]) -> str:
         """Normalize whitespace in text."""
         # Replace multiple spaces with single space (using cached pattern)
         text = _RE_MULTI_SPACE.sub(' ', text)
@@ -332,14 +339,14 @@ class TemplateProcessor:
         # Remove excessive line breaks (coerce provided value to int safely)
         try:
             max_breaks = int(options.get("max_line_breaks", 2))
-        except Exception:
+        except (TypeError, ValueError):
             max_breaks = 2
         # Use cached compiled pattern for line break normalization
         linebreak_pattern = _get_linebreak_pattern(max_breaks)
         text = linebreak_pattern.sub('\n' * max_breaks, text)
         return text.strip()
 
-    def _remove_headers(self, text: str, options: Dict[str, Any]) -> str:
+    def _remove_headers(self, text: str, options: dict[str, Any]) -> str:
         """Remove headers/footers from text."""
         patterns = options.get("patterns", [])
         for pattern in patterns:
@@ -353,11 +360,11 @@ class TemplateProcessor:
                 if ferr is not None:
                     flags = re.MULTILINE
                 text = re.sub(pattern, '', text, flags=flags)
-            except Exception as e:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
                 logger.warning(f"Failed to apply header removal pattern; skipping. Error: {e}")
         return text
 
-    def _extract_sections(self, text: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_sections(self, text: str, options: dict[str, Any]) -> dict[str, Any]:
         """Extract sections from text and store as metadata."""
         raw_pat = options.get("pattern", r'^#+\s+(.+)$')
         section_pattern = r'^#+\s+(.+)$'
@@ -367,7 +374,7 @@ class TemplateProcessor:
                 section_pattern = str(raw_pat)
             else:
                 logger.warning(f"Unsafe section pattern provided; using default. Reason: {err}")
-        except Exception:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
             # Fall back to default
             pass
         sections = []
@@ -376,14 +383,14 @@ class TemplateProcessor:
             for match in re.finditer(section_pattern, text, re.MULTILINE):
                 try:
                     title = match.group(1)
-                except Exception:
+                except (AttributeError, IndexError):
                     # If no capture group provided, use whole match
                     title = match.group(0)
                 sections.append({
                     "title": title,
                     "position": match.start()
                 })
-        except Exception as e:
+        except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
             logger.warning(f"Section extraction regex failed; returning empty sections. Error: {e}")
 
         return {
@@ -391,7 +398,7 @@ class TemplateProcessor:
             "metadata": {"sections": sections}
         }
 
-    def _clean_markdown(self, text: str, options: Dict[str, Any]) -> str:
+    def _clean_markdown(self, text: str, options: dict[str, Any]) -> str:
         """Clean markdown formatting from text."""
         if options.get("remove_links", False):
             # Remove markdown links but keep text
@@ -408,7 +415,7 @@ class TemplateProcessor:
 
         return text
 
-    def _detect_language(self, text: str, options: Dict[str, Any]) -> Dict[str, Any]:
+    def _detect_language(self, text: str, options: dict[str, Any]) -> dict[str, Any]:
         """Detect text language and store as metadata."""
         # Simplified language detection based on character patterns
         language = "en"  # Default
@@ -429,7 +436,7 @@ class TemplateProcessor:
         }
 
     # Built-in postprocessing operations
-    def _add_overlap(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
+    def _add_overlap(self, chunks: list[str], options: dict[str, Any]) -> list[str]:
         """Add overlap context between chunks."""
         overlap_size = options.get("size", 50)  # characters
         overlap_marker = options.get("marker", "")
@@ -450,12 +457,12 @@ class TemplateProcessor:
 
         return enhanced_chunks
 
-    def _filter_empty(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
+    def _filter_empty(self, chunks: list[str], options: dict[str, Any]) -> list[str]:
         """Filter out empty or too-small chunks."""
         min_length = options.get("min_length", 10)
         return [chunk for chunk in chunks if len(chunk.strip()) >= min_length]
 
-    def _merge_small(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
+    def _merge_small(self, chunks: list[str], options: dict[str, Any]) -> list[str]:
         """Merge small chunks together."""
         min_size = options.get("min_size", 100)
         separator = options.get("separator", "\n\n")
@@ -479,7 +486,7 @@ class TemplateProcessor:
 
         return merged_chunks
 
-    def _add_metadata(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
+    def _add_metadata(self, chunks: list[str], options: dict[str, Any]) -> list[str]:
         """Add metadata to chunks."""
         prefix = options.get("prefix", "")
         suffix = options.get("suffix", "")
@@ -497,7 +504,7 @@ class TemplateProcessor:
 
         return enhanced_chunks
 
-    def _format_chunks(self, chunks: List[str], options: Dict[str, Any]) -> List[str]:
+    def _format_chunks(self, chunks: list[str], options: dict[str, Any]) -> list[str]:
         """Format chunks according to template."""
         template_str = options.get("template", "{chunk}")
 
@@ -526,7 +533,7 @@ class TemplateManager:
         self.templates_dir = templates_dir or Path(__file__).parent / "template_library"
         self.templates_dir.mkdir(parents=True, exist_ok=True)
 
-        self._cache: Dict[str, ChunkingTemplate] = {}
+        self._cache: dict[str, ChunkingTemplate] = {}
         self._processor = TemplateProcessor()
 
         # Load built-in templates
@@ -610,7 +617,7 @@ class TemplateManager:
         if template_file.exists():
             try:
                 return self.load_template(template_file)
-            except Exception as e:
+            except _TEMPLATE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load template {name}: {e}")
 
         return None
@@ -621,10 +628,10 @@ class TemplateManager:
         Supports both the stage-based schema and the simpler
         {preprocessing, chunking, postprocessing} schema used in the DB.
         """
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, encoding='utf-8') as f:
             data = json.load(f)
 
-        stages: List[TemplateStage] = []
+        stages: list[TemplateStage] = []
 
         if "stages" in data:
             # Stage-based schema
@@ -702,7 +709,7 @@ class TemplateManager:
 
         logger.info(f"Saved template {template.name} to {path}")
 
-    def list_templates(self) -> List[str]:
+    def list_templates(self) -> list[str]:
         """List available template names."""
         templates = set(self._cache.keys())
 
@@ -711,9 +718,9 @@ class TemplateManager:
             for path in self.templates_dir.glob("*.json"):
                 templates.add(path.stem)
 
-        return sorted(list(templates))
+        return sorted(templates)
 
-    def process(self, text: str, template_name: str, **options) -> List[str]:
+    def process(self, text: str, template_name: str, **options) -> list[str]:
         """
         Process text using a named template.
 
@@ -741,7 +748,7 @@ class TemplateClassifier:
     """Simple metadata-based classifier for choosing a template."""
 
     @staticmethod
-    def score(template_cfg: Dict[str, Any], *, media_type: Optional[str], title: Optional[str], url: Optional[str], filename: Optional[str]) -> float:
+    def score(template_cfg: dict[str, Any], *, media_type: Optional[str], title: Optional[str], url: Optional[str], filename: Optional[str]) -> float:
         cfg = template_cfg or {}
         # Allow classifier at top-level or under chunking.config
         classifier = (cfg.get('classifier') or ((cfg.get('chunking') or {}).get('config') or {}).get('classifier')) or {}
@@ -764,13 +771,13 @@ class TemplateClassifier:
                         continue
                     if re.search(pat, text, re.IGNORECASE):
                         regex_hits += 1
-                except Exception:
+                except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                     pass
         score += weight_regex * (regex_hits / 3.0)
         # Clamp with min_score if provided
         try:
             min_score = float(classifier.get('min_score', 0.0))
-        except Exception:
+        except (TypeError, ValueError):
             min_score = 0.0
         return score if score >= min_score else 0.0
 
@@ -779,7 +786,7 @@ class TemplateLearner:
     """Learn a basic boundary rule-set from an example text."""
 
     @staticmethod
-    def learn_boundaries(example_text: str) -> Dict[str, Any]:
+    def learn_boundaries(example_text: str) -> dict[str, Any]:
         if not isinstance(example_text, str) or not example_text.strip():
             return {"boundaries": []}
         patterns = []

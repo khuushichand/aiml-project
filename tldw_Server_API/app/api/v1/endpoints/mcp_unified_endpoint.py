@@ -9,44 +9,59 @@ Environment:
       via the multi-user API key manager path regardless of AUTH_MODE/PROFILE.
 """
 
+import contextlib
 import ipaddress
 import os
 import secrets
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, WebSocket, HTTPException, Depends, Query, Header, Security, status, Request
-from pydantic import BaseModel, Field
-from loguru import logger
+from typing import Any, Optional
 
-from tldw_Server_API.app.core.MCP_unified import (
-    get_mcp_server,
-    MCPRequest,
-    MCPResponse,
-    get_config
-)
-from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
-from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
-from fastapi import Response
-from tldw_Server_API.app.core.MCP_unified.auth import UserRole
-from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
-from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from tldw_Server_API.app.core.AuthNZ.settings import (
-    is_single_user_mode,
-    is_single_user_profile_mode,
-    get_settings,
-)
-from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, Security, WebSocket, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from loguru import logger
+from pydantic import BaseModel, Field
+
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
+    get_db_transaction,
     require_permissions,
-    get_auth_principal,
 )
-from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
-from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
+from tldw_Server_API.app.api.v1.schemas.admin_schemas import ToolCatalogResponse
+from tldw_Server_API.app.core.AuthNZ.api_key_manager import get_api_key_manager
+from tldw_Server_API.app.core.AuthNZ.database import (
+    build_postgres_in_clause,
+    build_sqlite_in_clause,
+    is_postgres_backend,
+)
 from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
     is_single_user_ip_allowed,
     resolve_client_ip,
+)
+from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
+from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
+from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.AuthNZ.settings import (
+    get_settings,
+    is_single_user_profile_mode,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import verify_jwt_and_fetch_user
+from tldw_Server_API.app.core.MCP_unified import MCPRequest, MCPResponse, get_config, get_mcp_server
+from tldw_Server_API.app.core.MCP_unified.auth import UserRole
+from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get_jwt_manager
+from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
+from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
+from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+
+_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    RuntimeError,
+    AttributeError,
+    ConnectionError,
+    TimeoutError,
+    ipaddress.AddressValueError,
+    ipaddress.NetmaskValueError,
 )
 
 # Create router
@@ -62,20 +77,20 @@ class ServerStatusResponse(BaseModel):
     status: str
     version: str
     uptime_seconds: float
-    connections: Dict[str, int]
-    modules: Dict[str, int]
+    connections: dict[str, int]
+    modules: dict[str, int]
 
 
 class ServerMetricsResponse(BaseModel):
     """Server metrics response"""
-    connections: Dict[str, Any]
-    modules: Dict[str, Dict[str, Any]]
+    connections: dict[str, Any]
+    modules: dict[str, dict[str, Any]]
 
 
 class ToolExecutionRequest(BaseModel):
     """Tool execution request"""
     tool_name: str = Field(..., min_length=1, max_length=100)
-    arguments: Dict[str, Any] = Field(default_factory=dict)
+    arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolExecutionResponse(BaseModel):
@@ -90,8 +105,8 @@ class ModuleHealthResponse(BaseModel):
     module_id: str
     status: str
     message: str
-    checks: Dict[str, bool]
-    metrics: Optional[Dict[str, Any]] = None
+    checks: dict[str, bool]
+    metrics: Optional[dict[str, Any]] = None
 
 
 class AuthTokenRequest(BaseModel):
@@ -109,18 +124,27 @@ class AuthTokenResponse(BaseModel):
     refresh_token: Optional[str] = None
 
 
+class AuthRefreshRequest(BaseModel):
+    """Refresh authentication request payload."""
+    refresh_token: str = Field(..., description="Refresh token value. Must be sent in the JSON body.")
+    token_id: Optional[str] = Field(
+        default=None,
+        description="Optional refresh token identifier when known by the client.",
+    )
+
+
 def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     """Return user.sub when available, otherwise None."""
     return user.sub if user else None
 
 
-def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
+def _extract_api_key_permissions(info: Optional[dict[str, Any]]) -> list[str]:
     """Normalize API key scopes into MCP permissions."""
     if not info:
         return []
     try:
         from tldw_Server_API.app.core.AuthNZ.api_key_manager import normalize_scope
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         return []
 
     raw_scopes = info.get("scopes")
@@ -129,7 +153,7 @@ def _extract_api_key_permissions(info: Optional[Dict[str, Any]]) -> List[str]:
 
     try:
         scopes = normalize_scope(raw_scopes)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         scopes = set()
 
     return sorted(scopes) if scopes else []
@@ -151,7 +175,7 @@ def _should_use_single_user_api_key_compat() -> bool:
         return False
     try:
         return is_single_user_profile_mode()
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: single-user profile detection failed; defaulting compat shim to False",
             extra={"auth_method": "single_user_compat_shim"},
@@ -166,7 +190,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
         return None
     try:
         return resolve_client_ip(request, get_settings())
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to extract client IP", exc_info=True)
     return None
 
@@ -175,7 +199,7 @@ def _get_client_ip(request: Optional[Request]) -> Optional[str]:
 class McpAuthContext:
     """Resolved authentication context for MCP HTTP endpoints."""
     user: Optional[TokenData]
-    api_key_info: Optional[Dict[str, Any]]
+    api_key_info: Optional[dict[str, Any]]
     raw_api_key: Optional[str]
 
 
@@ -204,13 +228,14 @@ async def get_current_user(
     """
     # Try AuthNZ JWT first (multi-user)
     authnz_token_failed = False
+    token = credentials.credentials if credentials and credentials.credentials else None
     try:
-        if credentials and credentials.credentials:
+        if token:
             if request is None:
                 from starlette.requests import Request as _Request
 
                 request = _Request({"type": "http", "headers": []})
-            user = await verify_jwt_and_fetch_user(request, credentials.credentials)
+            user = await verify_jwt_and_fetch_user(request, token)
             uid = str(getattr(user, "id", None))
             if uid:
                 return TokenData(
@@ -220,13 +245,32 @@ async def get_current_user(
                     permissions=list(getattr(user, "permissions", []) or []),
                     token_type="access",
                 )
-    except Exception:
+    except HTTPException:
+        logger.debug(
+            "AuthNZ JWT verification rejected the token",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
+        if token and _is_authnz_access_token(token):
+            logger.debug(
+                "AuthNZ JWT rejected; not falling back to MCP JWT",
+                extra={"auth_method": "authnz_jwt"},
+                exc_info=True,
+            )
+            authnz_token_failed = True
+            if not x_api_key:
+                return None
+        logger.debug(
+            "AuthNZ JWT check failed; falling back to MCP JWT / API key",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "AuthNZ JWT verification raised an exception",
             extra={"auth_method": "authnz_jwt"},
             exc_info=True,
         )
-        token = credentials.credentials if credentials and credentials.credentials else None
         if token and _is_authnz_access_token(token):
             logger.debug(
                 "AuthNZ JWT rejected; not falling back to MCP JWT",
@@ -247,7 +291,7 @@ async def get_current_user(
         if not authnz_token_failed and credentials and credentials.credentials:
             jwt_manager = get_jwt_manager()
             return jwt_manager.verify_token(credentials.credentials)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP token verification failed; falling back to API key",
             extra={"auth_method": "mcp_jwt"},
@@ -274,7 +318,7 @@ async def get_current_user(
                         # in clear dev/test contexts (debug or explicit env/pytest).
                         try:
                             cfg = get_config()
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             cfg = None
                         env = (
                             os.getenv("ENVIRONMENT")
@@ -291,7 +335,7 @@ async def get_current_user(
 
                             if "pytest" in _sys.modules:
                                 is_dev_ctx = True
-                        except Exception:
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                             pass
                         if env in {"dev", "development", "test", "ci"}:
                             is_dev_ctx = True
@@ -323,7 +367,7 @@ async def get_current_user(
                             permissions=perms,
                             token_type="access",
                         )
-            except Exception:
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                 # Fall through to multi-user API key validation
                 logger.debug(
                     "Single-user API key check failed, falling through to multi-user validation",
@@ -341,7 +385,7 @@ async def get_current_user(
                 try:
                     if request is not None:
                         request.state.mcp_api_key_info = info
-                except Exception:
+                except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
                     logger.debug(
                         "MCP unified: failed to attach API key info to request state",
                         extra={"auth_method": "api_key"},
@@ -354,7 +398,7 @@ async def get_current_user(
                     permissions=_extract_api_key_permissions(info),
                     token_type="access",
                 )
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "API key check failed in MCP unified get_current_user",
             extra={"auth_method": "api_key"},
@@ -377,11 +421,11 @@ async def get_mcp_auth_context(
     :class:`McpAuthContext` (and helper functions like ``_attach_api_key_metadata``)
     rather than re-validating API keys themselves.
     """
-    api_key_info: Optional[Dict[str, Any]] = None
+    api_key_info: Optional[dict[str, Any]] = None
     try:
         if request is not None:
             api_key_info = getattr(request.state, "mcp_api_key_info", None)
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "MCP unified: failed to read API key info from request state",
             exc_info=True,
@@ -396,7 +440,7 @@ async def _attach_api_key_metadata(
     *,
     log_on_error: bool = False,
     log_prefix: str = "HTTP",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Attach API-key-derived metadata (org/team) for MCP HTTP endpoints.
 
     Prefers any API key info already attached to the auth context and falls back
@@ -407,8 +451,8 @@ async def _attach_api_key_metadata(
     so this helper intentionally avoids re-validating when cached API key info
     is already available on the auth context.
     """
-    metadata: Dict[str, Any] = {}
-    api_key_info: Optional[Dict[str, Any]] = None
+    metadata: dict[str, Any] = {}
+    api_key_info: Optional[dict[str, Any]] = None
 
     if auth.api_key_info is not None:
         api_key_info = auth.api_key_info
@@ -418,7 +462,7 @@ async def _attach_api_key_metadata(
             api_mgr = await get_api_key_manager()
             client_ip = _get_client_ip(http_request)
             api_key_info = await api_mgr.validate_api_key(auth.raw_api_key, ip_address=client_ip)
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             if log_on_error:
                 logger.debug(
                     "MCP unified {} API key metadata attach failed",
@@ -441,7 +485,7 @@ async def _attach_api_key_metadata(
             if scopes:
                 metadata["api_key_scopes"] = sorted(scopes)
                 metadata["auth_via"] = "api_key"
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             logger.debug(
                 "MCP unified {} API key scope normalization failed",
                 log_prefix,
@@ -452,7 +496,7 @@ async def _attach_api_key_metadata(
     return metadata
 
 
-def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional[Request]) -> None:
+def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional[Request]) -> None:
     """Attach RG ingress metadata when policy has been enforced upstream."""
     if not http_request:
         return
@@ -461,7 +505,7 @@ def _attach_rg_ingress_metadata(metadata: Dict[str, Any], http_request: Optional
         if policy_id:
             metadata["rg_ingress_enforced"] = True
             metadata["rg_policy_id"] = str(policy_id)
-    except Exception as exc:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Failed to read rg_policy_id from request state",
             error=str(exc),
@@ -570,15 +614,16 @@ async def mcp_request(
     derived_user_id = _get_derived_user_id(auth.user)
 
     # Parse optional safe config (base64-encoded JSON)
-    safe_config: Dict[str, Any] = {}
+    safe_config: dict[str, Any] = {}
     if config:
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             decoded = base64.b64decode(config).decode("utf-8")
             cfg = _json.loads(decoded)
             if isinstance(cfg, dict):
                 safe_config = cfg
-        except Exception as e:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Failed to parse safe config: {e}")
 
     # Session lifecycle: if initialize and no session id provided, generate one and return header
@@ -588,7 +633,7 @@ async def mcp_request(
             mcp_session_id = _uuid.uuid4().hex
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to generate session ID for initialize request", exc_info=True)
 
     if auth.user:
@@ -618,7 +663,7 @@ async def mcp_request(
                 tname = (request.params or {}).get("name") if isinstance(request.params, dict) else None
                 if tname:
                     hint = f"Permission denied. Ask an admin to grant tools.execute:{tname} or tools.execute:* to your role (Admin → Access Control)."
-        except Exception:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
             hint = None
         raise HTTPException(status_code=403, detail={
             "message": resp_obj.error.message or "Insufficient permissions",
@@ -662,15 +707,16 @@ async def mcp_request_batch(
     derived_user_id = _get_derived_user_id(auth.user)
 
     # Optional safe config
-    safe_config: Dict[str, Any] = {}
+    safe_config: dict[str, Any] = {}
     if config:
         try:
-            import base64, json as _json
+            import base64
+            import json as _json
             decoded = base64.b64decode(config).decode("utf-8")
             cfg = _json.loads(decoded)
             if isinstance(cfg, dict):
                 safe_config = cfg
-        except Exception as e:
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Batch failed to parse safe config: {e}")
 
     # If any initialize request is present and no session id was provided, generate one.
@@ -680,7 +726,7 @@ async def mcp_request_batch(
             mcp_session_id = _uuid.uuid4().hex
             if response is not None:
                 response.headers["mcp-session-id"] = mcp_session_id
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug("Failed to generate session ID for batch initialize", exc_info=True)
 
     # Build metadata for batch processing
@@ -775,23 +821,26 @@ async def get_prometheus_metrics(
     description=(
         "List available MCP tools. Tools are filtered by RBAC; catalog filters shape discovery only.\n\n"
         "Parameters:\n"
-        "- `module`: Filter by module id.\n"
+        "- `module`: Filter by module id (repeat or comma-separate for multiple modules).\n"
         "- `catalog`: Filter by tool catalog name. The server resolves the name with precedence\n"
         "  `team > org > global` based on the authenticated context (API key or JWT). When both\n"
         "  `catalog` and `catalog_id` are provided, `catalog_id` takes precedence.\n"
         "- `catalog_id`: Filter by tool catalog id directly.\n\n"
+        "- `catalog_strict`: When true, unresolved catalogs return an empty tool list instead\n"
+        "  of falling back to the full discovery set.\n\n"
         "Behavior:\n"
         "- If the catalog name/id cannot be resolved, the server fails open (no catalog filter),\n"
-        "  but RBAC is still enforced.\n"
+        "  but RBAC is still enforced unless `catalog_strict` is enabled.\n"
         "- `canExecute` reflects the caller's permissions. Catalog membership does not grant\n"
         "  execution rights; it only affects discovery."
     ),
 )
 async def list_tools(
     http_request: Request,
-    module: Optional[str] = Query(None, description="Filter by module"),
+    module: Optional[list[str]] = Query(None, description="Filter by module(s)"),
     catalog: Optional[str] = Query(None, description="Filter by tool catalog name"),
     catalog_id: Optional[int] = Query(None, description="Filter by tool catalog id"),
+    catalog_strict: Optional[bool] = Query(None, description="Fail closed on unresolved catalogs"),
     auth: McpAuthContext = Depends(get_mcp_auth_context),
     _guard: None = Depends(enforce_http_security),
 ):
@@ -801,13 +850,24 @@ async def list_tools(
     Returns tools with their descriptions and required parameters.
     Tools are filtered based on user permissions if authenticated.
     """
-    params: Dict[str, Any] = {}
+    params: dict[str, Any] = {}
     if module:
-        params["module"] = module
+        module_values: list[str] = []
+        for item in module:
+            if not isinstance(item, str):
+                continue
+            for part in item.split(","):
+                part = part.strip()
+                if part:
+                    module_values.append(part)
+        if module_values:
+            params["module"] = module_values
     if catalog is not None:
         params["catalog"] = catalog
     if catalog_id is not None:
         params["catalog_id"] = catalog_id
+    if catalog_strict is not None:
+        params["catalog_strict"] = catalog_strict
     request = MCPRequest(method="tools/list", params=params, id="http-tools-list")
 
     server = get_mcp_server()
@@ -840,6 +900,212 @@ async def list_tools(
         raise HTTPException(status_code=500, detail=response.error.message)
 
     return response.result
+
+
+@router.get(
+    "/tool_catalogs",
+    response_model=list[ToolCatalogResponse],
+    summary="List MCP tool catalogs visible to the current user",
+    description=(
+        "Return MCP tool catalogs scoped to the current user context.\n\n"
+        "Scopes:\n"
+        "- global: org_id and team_id are NULL\n"
+        "- org: org_id matches any org the user belongs to\n"
+        "- team: team_id matches any team the user belongs to\n\n"
+        "Admins can see all catalogs.\n"
+    ),
+)
+async def list_tool_catalogs(
+    http_request: Request,
+    scope: str = Query("all", description="Filter by scope: all|global|org|team"),
+    auth: McpAuthContext = Depends(get_mcp_auth_context),
+    _guard: None = Depends(enforce_http_security),
+    db=Depends(get_db_transaction),
+) -> list[ToolCatalogResponse]:
+    user = auth.user
+    metadata = await _attach_api_key_metadata(auth, http_request)
+
+    if user is None and not metadata:
+        raise HTTPException(status_code=403, detail="Authentication required")
+
+    admin_all = False
+    if user and user.roles:
+        admin_all = any(str(r).lower() == "admin" for r in user.roles)
+
+    org_ids: set[int] = set()
+    team_ids: set[int] = set()
+    if metadata.get("org_id") is not None:
+        with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+            org_ids.add(int(metadata["org_id"]))
+    if metadata.get("team_id") is not None:
+        with contextlib.suppress(_MCP_UNIFIED_NONCRITICAL_EXCEPTIONS):
+            team_ids.add(int(metadata["team_id"]))
+
+    if user and not admin_all:
+        try:
+            uid = int(user.sub)
+        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+            uid = None
+        if uid is not None:
+            try:
+                memberships = await list_org_memberships_for_user(uid)
+                for m in memberships:
+                    try:
+                        org_id = int(m.get("org_id"))
+                        org_ids.add(org_id)
+                    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                        continue
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"MCP tool catalogs: org membership lookup failed: {exc}")
+
+            try:
+                is_pg = await is_postgres_backend()
+                if is_pg:
+                    rows = await db.fetch(
+                        "SELECT team_id FROM team_members WHERE user_id = $1 AND status = 'active'",
+                        uid,
+                    )
+                    for row in rows or []:
+                        try:
+                            team_id_val = row["team_id"] if isinstance(row, dict) else row[0]
+                            team_ids.add(int(team_id_val))
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                            continue
+                else:
+                    cur = await db.execute(
+                        "SELECT team_id FROM team_members WHERE user_id = ? AND status = 'active'",
+                        (uid,),
+                    )
+                    rows = await cur.fetchall()
+                    for row in rows or []:
+                        try:
+                            team_ids.add(int(row[0]))
+                        except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                            continue
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug(f"MCP tool catalogs: team membership lookup failed: {exc}")
+
+    scope_norm = scope.strip().lower()
+    if scope_norm not in {"all", "global", "org", "team"}:
+        raise HTTPException(status_code=422, detail="Invalid scope value")
+
+    is_pg = await is_postgres_backend()
+    results: list[ToolCatalogResponse] = []
+
+    async def _add_rows(rows: list[Any]) -> None:
+        for r in rows or []:
+            try:
+                data = dict(r) if isinstance(r, dict) else {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "org_id": r[3],
+                    "team_id": r[4],
+                    "is_active": bool(r[5]),
+                    "created_at": r[6],
+                    "updated_at": r[7],
+                }
+                results.append(ToolCatalogResponse(**data))
+            except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+                continue
+
+    if admin_all:
+        if scope_norm in {"all", "global"}:
+            if is_pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+
+        if scope_norm in {"all", "org"}:
+            if is_pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NOT NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+
+        if scope_norm in {"all", "team"}:
+            if is_pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE team_id IS NOT NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+    else:
+        if scope_norm in {"all", "global"}:
+            if is_pg:
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+            else:
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    "FROM tool_catalogs WHERE org_id IS NULL AND team_id IS NULL ORDER BY created_at DESC"
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+
+        if scope_norm in {"all", "org"} and org_ids:
+            if is_pg:
+                placeholders, params = build_postgres_in_clause(sorted(org_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(org_ids))
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    f"FROM tool_catalogs WHERE org_id IN ({placeholders}) AND team_id IS NULL ORDER BY created_at DESC",
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+
+        if scope_norm in {"all", "team"} and team_ids:
+            if is_pg:
+                placeholders, params = build_postgres_in_clause(sorted(team_ids))
+                rows = await db.fetch(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active, TRUE) as is_active, created_at, updated_at "
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    *params,
+                )
+            else:
+                placeholders, params = build_sqlite_in_clause(sorted(team_ids))
+                cur = await db.execute(
+                    "SELECT id, name, description, org_id, team_id, COALESCE(is_active,1), created_at, updated_at "
+                    f"FROM tool_catalogs WHERE team_id IN ({placeholders}) ORDER BY created_at DESC",
+                    params,
+                )
+                rows = await cur.fetchall()
+            await _add_rows(rows)
+
+    unique: dict[int, ToolCatalogResponse] = {}
+    for entry in results:
+        unique[entry.id] = entry
+    return list(unique.values())
 
 
 @router.post("/tools/execute", response_model=ToolExecutionResponse)
@@ -925,14 +1191,14 @@ async def execute_tool(
                 first = content[0]
                 if isinstance(first, dict) and first.get("type") == "text" and isinstance(first.get("text"), str):
                     display_result = first.get("text")
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         display_result = result_payload
 
     served_by = None
     try:
         if isinstance(result_payload, dict):
             served_by = result_payload.get("module")
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         served_by = None
 
     return ToolExecutionResponse(
@@ -1004,7 +1270,7 @@ async def get_modules_health(
     if not server.initialized:
         await server.initialize()
 
-    meta: Dict[str, Any] = {"admin_override": True}
+    meta: dict[str, Any] = {"admin_override": True}
     if principal.roles:
         meta["roles"] = principal.roles
     if principal.permissions:
@@ -1200,40 +1466,42 @@ async def create_token(
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)
 async def refresh_token(
-    refresh_token: str = Query(..., description="Refresh token"),
-    token_id: Optional[str] = Query(None, description="Refresh token id (if available)"),
+    auth_request: AuthRefreshRequest,
     _guard: None = Depends(enforce_http_security),
 ):
     """
     Refresh authentication token.
 
     Exchange a valid refresh token for a new access token using rotation.
+    The refresh token must be provided in the request JSON body.
     If `token_id` is not provided, the system attempts to locate it by scanning
     active refresh tokens (acceptable for in-memory DEV mode).
     """
     jwt_manager = get_jwt_manager()
+    refresh_token_value = auth_request.refresh_token
+    token_id = auth_request.token_id
     # Attempt to find token_id if not provided
     resolved_token_id = token_id
     try:
         if not resolved_token_id:
             # Scan in-memory store (DEV): find first token_id matching token
             for tid, rt in jwt_manager._refresh_tokens.items():  # noqa: SLF001
-                if rt.token == refresh_token and not rt.revoked:
+                if rt.token == refresh_token_value and not rt.revoked:
                     resolved_token_id = tid
                     break
-    except Exception:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         resolved_token_id = token_id
 
     if not resolved_token_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
     try:
-        new_access, new_refresh, new_tid = jwt_manager.rotate_refresh_token(refresh_token, resolved_token_id)
+        new_access, new_refresh, _new_tid = jwt_manager.rotate_refresh_token(refresh_token_value, resolved_token_id)
     except HTTPException:
         raise
-    except Exception as e:
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Refresh token rotation failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token") from e
 
     return AuthTokenResponse(
         access_token=new_access,

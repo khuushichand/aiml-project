@@ -7,20 +7,22 @@ readiness polling, and command redaction for safer logging.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional, Iterable, Tuple
 import re
+from collections.abc import Iterable
+from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import NetworkError, RetryExhaustedError
 from tldw_Server_API.app.core.http_client import (
-    create_async_client as _create_async_client,
-    afetch_json,
+    RetryPolicy,
     adownload,
     afetch,
-    RetryPolicy,
+    afetch_json,
 )
-
+from tldw_Server_API.app.core.http_client import (
+    create_async_client as _create_async_client,
+)
 
 DEFAULT_TIMEOUT: float = 120.0
 DEFAULT_RETRIES: int = 2
@@ -42,7 +44,7 @@ def _is_httpx_async_client(client: Any) -> bool:
     return module.startswith("httpx") and client.__class__.__name__ == "AsyncClient"
 
 
-def get_http_status_from_exception(exc: Exception) -> Optional[int]:
+def get_http_status_from_exception(exc: Exception) -> int | None:
     resp = getattr(exc, "response", None)
     if resp is not None:
         for attr in ("status_code", "status"):
@@ -95,7 +97,7 @@ def is_network_error(exc: Exception) -> bool:
 
 def redact_cmd_args(
     args: Iterable[str],
-    sensitive_flags: Tuple[str, ...] = (
+    sensitive_flags: tuple[str, ...] = (
         "--api-key",
         "--hf-token",
         "--token",
@@ -142,7 +144,7 @@ def redact_cmd_args(
     return redacted
 
 
-def create_async_client(timeout: Optional[float] = None) -> Any:
+def create_async_client(timeout: float | None = None) -> Any:
     """Create a configured AsyncClient via central factory.
 
     Uses centralized defaults (trust_env=False, HTTP/2 if available).
@@ -155,8 +157,8 @@ async def request_json(
     method: str,
     url: str,
     *,
-    json: Optional[dict] = None,
-    headers: Optional[dict] = None,
+    json: dict | None = None,
+    headers: dict | None = None,
     retries: int = DEFAULT_RETRIES,
     backoff: float = DEFAULT_BACKOFF,
 ):
@@ -222,7 +224,7 @@ async def request_json(
 async def wait_for_http_ready(
     base_url: str,
     *,
-    paths: Tuple[str, ...] = ("/health", "/v1/models"),
+    paths: tuple[str, ...] = ("/health", "/v1/models"),
     timeout_total: float = 30.0,
     interval: float = 0.5,
     accept_any_non_5xx: bool = False,

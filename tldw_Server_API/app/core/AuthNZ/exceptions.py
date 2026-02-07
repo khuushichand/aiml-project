@@ -141,10 +141,7 @@ class WeakPasswordError(RegistrationError):
 class UserNotFoundError(UserRegistrationException):
     """User not found in database"""
     def __init__(self, identifier: Optional[str] = None):
-        if identifier:
-            message = f"User not found: {identifier}"
-        else:
-            message = "User not found"
+        message = f"User not found: {identifier}" if identifier else "User not found"
         super().__init__(message)
 
 

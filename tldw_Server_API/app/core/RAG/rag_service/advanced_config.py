@@ -1,4 +1,5 @@
 # advanced_config.py
+# mypy: disable-error-code=import-untyped
 """
 Advanced configuration management for the RAG service.
 
@@ -6,17 +7,16 @@ This module provides dynamic configuration, A/B testing, feature flags,
 and configuration validation for the RAG pipeline.
 """
 
-import json
-import os
 import hashlib
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-from typing import Any, Dict, List, Optional, Union, Callable
-from pathlib import Path
-import yaml
-import toml
+import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Optional, Union
 
+import toml
+import yaml
 from loguru import logger
 
 
@@ -40,10 +40,10 @@ class ConfigProfile:
     """A configuration profile for different scenarios."""
     name: str
     description: str
-    settings: Dict[str, Any]
+    settings: dict[str, Any]
     priority: int = 0
-    conditions: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    conditions: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -52,20 +52,20 @@ class FeatureFlag:
     name: str
     state: FeatureState
     rollout_percentage: float = 100.0
-    conditions: Dict[str, Any] = field(default_factory=dict)
-    variants: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    conditions: dict[str, Any] = field(default_factory=dict)
+    variants: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ConfigValidation:
     """Configuration validation rules."""
     field: str
-    type: type
+    type: Union[type, tuple[type, ...]]
     required: bool = True
     min_value: Optional[Union[int, float]] = None
     max_value: Optional[Union[int, float]] = None
-    allowed_values: Optional[List[Any]] = None
+    allowed_values: Optional[list[Any]] = None
     validator: Optional[Callable] = None
 
 
@@ -74,7 +74,7 @@ class ConfigManager:
 
     def __init__(
         self,
-        base_config: Optional[Dict[str, Any]] = None,
+        base_config: Optional[dict[str, Any]] = None,
         config_path: Optional[str] = None
     ):
         """
@@ -86,10 +86,10 @@ class ConfigManager:
         """
         self.base_config = base_config or self._get_default_config()
         self.config_path = config_path
-        self.profiles: Dict[str, ConfigProfile] = {}
-        self.feature_flags: Dict[str, FeatureFlag] = {}
-        self.overrides: Dict[str, Any] = {}
-        self.validation_rules: List[ConfigValidation] = []
+        self.profiles: dict[str, ConfigProfile] = {}
+        self.feature_flags: dict[str, FeatureFlag] = {}
+        self.overrides: dict[str, Any] = {}
+        self.validation_rules: list[ConfigValidation] = []
 
         # Load configuration from file if provided
         if config_path:
@@ -98,7 +98,7 @@ class ConfigManager:
         # Initialize validation rules
         self._init_validation_rules()
 
-    def _get_default_config(self) -> Dict[str, Any]:
+    def _get_default_config(self) -> dict[str, Any]:
         """Get default RAG configuration."""
         return {
             # Retrieval settings
@@ -242,7 +242,7 @@ class ConfigManager:
         # Determine format from extension
         extension = path_obj.suffix.lower()
 
-        with open(path, 'r') as f:
+        with open(path) as f:
             if extension == '.json':
                 config = json.load(f)
             elif extension in ['.yaml', '.yml']:
@@ -323,8 +323,8 @@ class ConfigManager:
     def get_config(
         self,
         profile: Optional[str] = None,
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        context: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """
         Get configuration with profile and overrides applied.
 
@@ -363,11 +363,11 @@ class ConfigManager:
 
     def _apply_feature_flags(
         self,
-        config: Dict[str, Any],
-        context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        config: dict[str, Any],
+        context: Optional[dict[str, Any]] = None
+    ) -> dict[str, Any]:
         """Apply feature flags to configuration."""
-        for flag_name, flag in self.feature_flags.items():
+        for _flag_name, flag in self.feature_flags.items():
             if flag.state == FeatureState.DISABLED:
                 continue
 
@@ -406,8 +406,8 @@ class ConfigManager:
 
     def _check_conditions(
         self,
-        conditions: Dict[str, Any],
-        context: Dict[str, Any]
+        conditions: dict[str, Any],
+        context: dict[str, Any]
     ) -> bool:
         """Check if conditions are met."""
         for key, expected_value in conditions.items():
@@ -436,7 +436,7 @@ class ConfigManager:
 
         return True
 
-    def _validate_config(self, config: Dict[str, Any]) -> None:
+    def _validate_config(self, config: dict[str, Any]) -> None:
         """Validate configuration against rules."""
         for rule in self.validation_rules:
             value = self._get_nested(config, rule.field)
@@ -453,12 +453,12 @@ class ConfigManager:
                 )
 
             # Range checks
-            if rule.min_value is not None and value < rule.min_value:
+            if rule.min_value is not None and isinstance(value, (int, float)) and value < rule.min_value:
                 raise ValueError(
                     f"Field {rule.field} must be >= {rule.min_value}, got {value}"
                 )
 
-            if rule.max_value is not None and value > rule.max_value:
+            if rule.max_value is not None and isinstance(value, (int, float)) and value > rule.max_value:
                 raise ValueError(
                     f"Field {rule.field} must be <= {rule.max_value}, got {value}"
                 )
@@ -473,7 +473,7 @@ class ConfigManager:
             if rule.validator and not rule.validator(value):
                 raise ValueError(f"Field {rule.field} failed custom validation")
 
-    def _deep_merge(self, base: Dict, overlay: Dict) -> Dict:
+    def _deep_merge(self, base: dict, overlay: dict) -> dict:
         """Deep merge two dictionaries."""
         result = base.copy()
 
@@ -485,7 +485,7 @@ class ConfigManager:
 
         return result
 
-    def _get_nested(self, data: Dict, path: str) -> Any:
+    def _get_nested(self, data: dict, path: str) -> Any:
         """Get nested value from dictionary using dot notation."""
         keys = path.split('.')
         value = data
@@ -498,7 +498,7 @@ class ConfigManager:
 
         return value
 
-    def _set_nested(self, data: Dict, path: str, value: Any) -> None:
+    def _set_nested(self, data: dict, path: str, value: Any) -> None:
         """Set nested value in dictionary using dot notation."""
         keys = path.split('.')
 
@@ -517,11 +517,11 @@ class ConfigExporter:
     """Export configuration in various formats."""
 
     @staticmethod
-    def export_env_vars(config: Dict[str, Any], prefix: str = "RAG_") -> str:
+    def export_env_vars(config: dict[str, Any], prefix: str = "RAG_") -> str:
         """Export configuration as environment variables."""
         lines = []
 
-        def flatten(data: Dict, parent_key: str = ""):
+        def flatten(data: dict, parent_key: str = ""):
             for key, value in data.items():
                 full_key = f"{parent_key}_{key}".upper() if parent_key else key.upper()
 
@@ -538,11 +538,11 @@ class ConfigExporter:
         return "\n".join(lines)
 
     @staticmethod
-    def export_markdown(config: Dict[str, Any]) -> str:
+    def export_markdown(config: dict[str, Any]) -> str:
         """Export configuration as markdown documentation."""
         lines = ["# RAG Configuration\n"]
 
-        def format_section(data: Dict, level: int = 2):
+        def format_section(data: dict, level: int = 2):
             for key, value in data.items():
                 header = "#" * level
                 lines.append(f"\n{header} {key.replace('_', ' ').title()}\n")

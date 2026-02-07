@@ -16,12 +16,13 @@
 ####################
 
 import math
-from loguru import logger
-from typing import Optional, List, Tuple, Union, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
-import numpy as np
 from pathlib import Path
+from typing import Callable, Optional, Union
+
+import numpy as np
+from loguru import logger
 
 logger = logger
 
@@ -161,7 +162,7 @@ class BufferedTranscriber:
 
         return merged_text
 
-    def _create_chunks(self, audio_data: np.ndarray) -> List[dict]:
+    def _create_chunks(self, audio_data: np.ndarray) -> list[dict]:
         """
         Create overlapping chunks from audio data.
 
@@ -212,7 +213,7 @@ class BufferedTranscriber:
 
         return chunks
 
-    def _merge_results(self, chunk_results: List[dict]) -> str:
+    def _merge_results(self, chunk_results: list[dict]) -> str:
         """
         Merge chunk results based on configured algorithm.
 
@@ -225,7 +226,7 @@ class BufferedTranscriber:
             # Default to middle merge
             return self._middle_merge(chunk_results)
 
-    def _middle_merge(self, chunk_results: List[dict]) -> str:
+    def _middle_merge(self, chunk_results: list[dict]) -> str:
         """
         Implement middle token merge algorithm.
 
@@ -276,7 +277,7 @@ class LCSMergeTranscriber(BufferedTranscriber):
     Better handling of overlapping regions by finding common sequences.
     """
 
-    def _merge_results(self, chunk_results: List[dict]) -> str:
+    def _merge_results(self, chunk_results: list[dict]) -> str:
         """Merge using LCS algorithm."""
         if not chunk_results:
             return ""
@@ -350,7 +351,7 @@ class LCSMergeTranscriber(BufferedTranscriber):
         # No overlap found, simple concatenation
         return text1 + ' ' + text2
 
-    def _lcs_length(self, X: List[str], Y: List[str]) -> int:
+    def _lcs_length(self, X: list[str], Y: list[str]) -> int:
         """
         Calculate length of longest common subsequence.
         """
@@ -431,17 +432,17 @@ def transcribe_long_audio(
         # Import appropriate transcription function
         if variant == 'mlx':
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_MLX import (
-                transcribe_with_parakeet_mlx
+                transcribe_with_parakeet_mlx,
             )
             return transcribe_with_parakeet_mlx(chunk_audio, sample_rate=16000)
         elif variant == 'onnx':
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Parakeet_ONNX import (
-                transcribe_with_parakeet_onnx
+                transcribe_with_parakeet_onnx,
             )
             return transcribe_with_parakeet_onnx(chunk_audio, sample_rate=16000, device=device)
         else:
             from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Transcription_Nemo import (
-                transcribe_with_nemo
+                transcribe_with_nemo,
             )
             return transcribe_with_nemo(
                 chunk_audio,

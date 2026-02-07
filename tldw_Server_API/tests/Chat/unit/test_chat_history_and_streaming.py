@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, List
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+pytestmark = pytest.mark.unit
+
 from tldw_Server_API.app.core.Chat import chat_service
 from tldw_Server_API.app.core.Chat.streaming_utils import StreamingResponseHandler
 
@@ -38,7 +40,7 @@ class DummyChatDB:
 
         return {"id": char_id, "name": "Assistant", "system_prompt": "Prompt"}
 
-    def get_message_metadata(self, message_id: str):
+    def get_message_metadata(self, _message_id: str):
         return {}
 
     def get_connection(self):
@@ -47,7 +49,7 @@ class DummyChatDB:
 
 
 class DummyChatDBWithMetadata(DummyChatDB):
-    def get_message_metadata(self, message_id: str):
+    def get_message_metadata(self, _message_id: str):
         return {
             "tool_calls": None,
             "extra": {
@@ -60,7 +62,13 @@ class DummyChatDBWithMetadata(DummyChatDB):
 @pytest.mark.asyncio
 async def test_build_context_uses_history_knobs():
     records = [
-        {"id": f"msg-{idx}", "sender": "user" if idx % 2 == 0 else "assistant", "content": f"text-{idx}", "timestamp": idx, "images": []}
+        {
+            "id": f"msg-{idx}",
+            "sender": "user" if idx % 2 == 0 else "assistant",
+            "content": f"text-{idx}",
+            "timestamp": idx,
+            "images": [],
+        }
         for idx in range(10)
     ]
     db = DummyChatDB(records)
@@ -88,16 +96,63 @@ async def test_build_context_uses_history_knobs():
 
     history = result[4]
     assert len(history) == 3
-    # History is normalized to chronological order in the payload
+    # History preserves requested order in the payload
     timestamps = [msg_part["content"][0]["text"].split("-")[-1] for msg_part in history if msg_part["content"]]
-    assert timestamps == ["7", "8", "9"]
+    assert timestamps == ["9", "8", "7"]
+
+
+@pytest.mark.asyncio
+async def test_build_context_history_limit_zero_skips_history():
+    records = [
+        {"id": f"msg-{idx}", "sender": "user", "content": f"text-{idx}", "timestamp": idx, "images": []}
+        for idx in range(5)
+    ]
+    db = DummyChatDB(records)
+    request_data = DummyRequestData(history_message_limit=0, history_message_order="asc")
+
+    class DummyMessage:
+        def __init__(self, role: str, content: Any):
+            self.role = role
+            self.content = content
+
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
+            return {"role": self.role, "content": self.content}
+
+    request_data.messages = [DummyMessage("user", "current")]
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    history = result[4]
+    assert len(history) == 1
+    assert history[0]["role"] == "user"
 
 
 class DummySave:
     def __init__(self):
         self.calls: List[Dict[str, Any]] = []
 
-    async def __call__(self, text: str, tool_calls: Optional[List[Dict[str, Any]]], function_call: Optional[Dict[str, Any]]):
+    async def __call__(
+        self,
+        text: str,
+        tool_calls: Optional[List[Dict[str, Any]]],
+        function_call: Optional[Dict[str, Any]],
+    ):
         self.calls.append({
             "text": text,
             "tool_calls": tool_calls,
@@ -116,7 +171,17 @@ async def test_build_context_skips_tool_placeholder_replacement():
             "images": [],
         }
     ]
-    db = DummyChatDB(records)
+    class DummyChatDBWithToolId(DummyChatDB):
+        def get_message_metadata(self, _message_id: str):
+            return {
+                "tool_calls": None,
+                "extra": {
+                    "tool_call_id": "tool-1",
+                    "sender_role": "tool",
+                },
+            }
+
+    db = DummyChatDBWithToolId(records)
     request_data = DummyRequestData(history_message_limit=5, history_message_order="asc")
     request_data.messages = []
     loop = asyncio.get_running_loop()
@@ -143,6 +208,92 @@ async def test_build_context_skips_tool_placeholder_replacement():
     tool_msgs = [msg for msg in history if msg.get("role") == "tool"]
     assert tool_msgs
     assert tool_msgs[0]["content"] == "{\"query\":\"{{char}}\"}"
+
+
+@pytest.mark.asyncio
+async def test_build_context_skips_tool_message_without_tool_call_id():
+    records = [
+        {
+            "id": "msg-tool-missing",
+            "sender": "tool",
+            "content": "{\"result\": 1}",
+            "timestamp": 1,
+            "images": [],
+        }
+    ]
+    db = DummyChatDB(records)
+    request_data = DummyRequestData(history_message_limit=5, history_message_order="asc")
+    request_data.messages = []
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    history = result[4]
+    assert all(msg.get("role") != "tool" for msg in history)
+
+
+@pytest.mark.asyncio
+async def test_build_context_keeps_tool_message_with_tool_call_id():
+    class DummyChatDBWithToolId(DummyChatDB):
+        def get_message_metadata(self, _message_id: str):
+            return {
+                "tool_calls": None,
+                "extra": {
+                    "tool_call_id": "tool-1",
+                    "sender_role": "tool",
+                },
+            }
+
+    records = [
+        {
+            "id": "msg-tool-1",
+            "sender": "tool",
+            "content": "{\"result\": 1}",
+            "timestamp": 1,
+            "images": [],
+        }
+    ]
+    db = DummyChatDBWithToolId(records)
+    request_data = DummyRequestData(history_message_limit=5, history_message_order="asc")
+    request_data.messages = []
+    loop = asyncio.get_running_loop()
+
+    class DummyMetrics:
+        def track_character_access(self, *args, **kwargs):
+            pass
+
+        def track_conversation(self, *args, **kwargs):
+            pass
+
+    result = await chat_service.build_context_and_messages(
+        chat_db=db,
+        request_data=request_data,
+        loop=loop,
+        metrics=DummyMetrics(),
+        default_save_to_db=False,
+        final_conversation_id="conv",
+        save_message_fn=AsyncMock(),
+    )
+
+    history = result[4]
+    tool_msgs = [msg for msg in history if msg.get("role") == "tool"]
+    assert tool_msgs
+    assert tool_msgs[0].get("tool_call_id") == "tool-1"
 
 
 @pytest.mark.asyncio
@@ -194,7 +345,7 @@ async def test_build_context_persists_full_transcript_when_enabled():
             self.role = role
             self.content = content
 
-        def model_dump(self, exclude_none: bool = True):
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
             return {"role": self.role, "content": self.content}
 
     db = DummyChatDBWithConversation([])
@@ -241,7 +392,7 @@ async def test_build_context_sanitizes_message_names():
             self.content = content
             self.name = name
 
-        def model_dump(self, exclude_none: bool = True):
+        def model_dump(self, _exclude_none: bool = True, **_kwargs):
             data = {"role": self.role, "content": self.content}
             if self.name is not None:
                 data["name"] = self.name
@@ -410,8 +561,6 @@ async def test_streaming_topic_monitoring_runs_without_output_moderation(monkeyp
 
 
 def test_document_generator_accepts_string_ids(tmp_path):
-
-
     from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
     from tldw_Server_API.app.core.Chat.document_generator import DocumentGeneratorService, DocumentType
 
@@ -424,7 +573,13 @@ def test_document_generator_accepts_string_ids(tmp_path):
 
     # Insert with UUID conversation id
     conv_id = "550e8400-e29b-41d4-a716-446655440000"
-    job_id = generator.create_generation_job(conv_id, DocumentType.SUMMARY, provider="openai", model="gpt", prompt_config={})
+    job_id = generator.create_generation_job(
+        conv_id,
+        DocumentType.SUMMARY,
+        provider="openai",
+        model="gpt",
+        prompt_config={},
+    )
     generator._save_generated_document(
         conversation_id=conv_id,
         document_type=DocumentType.SUMMARY,

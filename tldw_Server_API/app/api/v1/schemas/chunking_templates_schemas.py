@@ -3,42 +3,45 @@
 Pydantic schemas for chunking template API endpoints.
 """
 
-from typing import Optional, List, Dict, Any
-from uuid import UUID
 from datetime import datetime
+from typing import Any, Optional
+from uuid import UUID
+
 from pydantic import BaseModel, Field
+
 try:
     from pydantic import field_validator
 except Exception:
     from pydantic import validator as field_validator  # type: ignore
-from pydantic import ConfigDict
 import json
+
+from pydantic import ConfigDict
 
 
 class ChunkingTemplateBase(BaseModel):
     """Base schema for chunking template data."""
     name: str = Field(..., description="Template name (must be unique)")
     description: Optional[str] = Field(None, description="Template description")
-    tags: Optional[List[str]] = Field(default_factory=list, description="Tags for categorization")
+    tags: Optional[list[str]] = Field(default_factory=list, description="Tags for categorization")
 
 
 class TemplateConfig(BaseModel):
     """Template configuration structure."""
-    preprocessing: Optional[List[Dict[str, Any]]] = Field(
+    preprocessing: Optional[list[dict[str, Any]]] = Field(
         default_factory=list,
         description="List of preprocessing operations"
     )
-    chunking: Dict[str, Any] = Field(
+    chunking: dict[str, Any] = Field(
         ...,
         description="Chunking method configuration"
     )
-    postprocessing: Optional[List[Dict[str, Any]]] = Field(
+    postprocessing: Optional[list[dict[str, Any]]] = Field(
         default_factory=list,
         description="List of postprocessing operations"
     )
     # Optional hierarchical + classifier directives
     # Backwards-compatible: these can live inside chunking.config too; validator will accept either
-    classifier: Optional[Dict[str, Any]] = Field(
+    classifier: Optional[dict[str, Any]] = Field(
         default=None,
         description="Optional classifier for auto-apply (media_types, filename_regex, title_regex, url_regex, min_score, priority)"
     )
@@ -88,7 +91,7 @@ class ChunkingTemplateCreate(ChunkingTemplateBase):
 class ChunkingTemplateUpdate(BaseModel):
     """Schema for updating an existing chunking template."""
     description: Optional[str] = Field(None, description="New template description")
-    tags: Optional[List[str]] = Field(None, description="New tags list")
+    tags: Optional[list[str]] = Field(None, description="New tags list")
     template: Optional[TemplateConfig] = Field(None, description="New template configuration")
 
 
@@ -116,7 +119,7 @@ class ChunkingTemplateResponse(ChunkingTemplateBase):
 
 class ChunkingTemplateListResponse(BaseModel):
     """Response schema for listing chunking templates."""
-    templates: List[ChunkingTemplateResponse] = Field(
+    templates: list[ChunkingTemplateResponse] = Field(
         ...,
         description="List of chunking templates"
     )
@@ -129,7 +132,7 @@ class ChunkingTemplateFilter(BaseModel):
     """Schema for filtering chunking templates."""
     include_builtin: bool = Field(True, description="Include built-in templates")
     include_custom: bool = Field(True, description="Include custom templates")
-    tags: Optional[List[str]] = Field(None, description="Filter by tags")
+    tags: Optional[list[str]] = Field(None, description="Filter by tags")
     user_id: Optional[str] = Field(None, description="Filter by user ID")
 
 
@@ -137,7 +140,7 @@ class ApplyTemplateRequest(BaseModel):
     """Request schema for applying a template to text."""
     template_name: str = Field(..., description="Name of the template to apply")
     text: str = Field(..., description="Text to chunk using the template")
-    override_options: Optional[Dict[str, Any]] = Field(
+    override_options: Optional[dict[str, Any]] = Field(
         None,
         description="Options to override template defaults"
     )
@@ -146,8 +149,8 @@ class ApplyTemplateRequest(BaseModel):
 class ApplyTemplateResponse(BaseModel):
     """Response schema for template application."""
     template_name: str = Field(..., description="Applied template name")
-    chunks: List[Any] = Field(..., description="Resulting chunks (text or {text, metadata} when include_metadata=true)")
-    metadata: Optional[Dict[str, Any]] = Field(
+    chunks: list[Any] = Field(..., description="Resulting chunks (text or {text, metadata} when include_metadata=true)")
+    metadata: Optional[dict[str, Any]] = Field(
         None,
         description="Additional metadata from processing"
     )
@@ -162,11 +165,11 @@ class TemplateValidationError(BaseModel):
 class TemplateValidationResponse(BaseModel):
     """Response schema for template validation."""
     valid: bool = Field(..., description="Whether the template is valid")
-    errors: Optional[List[TemplateValidationError]] = Field(
+    errors: Optional[list[TemplateValidationError]] = Field(
         None,
         description="List of validation errors if invalid"
     )
-    warnings: Optional[List[str]] = Field(
+    warnings: Optional[list[str]] = Field(
         None,
         description="Non-critical warnings about the template"
     )
@@ -179,11 +182,11 @@ class BulkTemplateOperation(BaseModel):
         description="Operation to perform",
         pattern="^(delete|export|tag)$"
     )
-    template_ids: List[int] = Field(
+    template_ids: list[int] = Field(
         ...,
         description="List of template IDs to operate on"
     )
-    options: Optional[Dict[str, Any]] = Field(
+    options: Optional[dict[str, Any]] = Field(
         None,
         description="Operation-specific options"
     )
@@ -194,7 +197,7 @@ class BulkTemplateOperationResponse(BaseModel):
     operation: str = Field(..., description="Operation performed")
     success_count: int = Field(..., description="Number of successful operations")
     failed_count: int = Field(..., description="Number of failed operations")
-    errors: Optional[List[Dict[str, Any]]] = Field(
+    errors: Optional[list[dict[str, Any]]] = Field(
         None,
         description="Details of failed operations"
     )

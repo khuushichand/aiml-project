@@ -425,6 +425,7 @@ const SidepanelChat = () => {
     playgroundReady: !isRestoringChat,
     selectedCharacter,
     serverChatId,
+    historyId,
     messagesLength: messages.length,
     setMessages,
     setHistory,

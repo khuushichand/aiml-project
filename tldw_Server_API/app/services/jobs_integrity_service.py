@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-from typing import Optional
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 
 
-async def run_jobs_integrity_sweeper(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_jobs_integrity_sweeper(stop_event: asyncio.Event | None = None) -> None:
     """Periodically validate and optionally repair Jobs invariants.
 
     Controlled by env flags:
@@ -30,10 +30,8 @@ async def run_jobs_integrity_sweeper(stop_event: Optional[asyncio.Event] = None)
                 logger.info("Stopping Jobs integrity sweeper on shutdown signal")
                 return
             stats = jm.integrity_sweep(fix=do_fix)
-            try:
+            with contextlib.suppress(Exception):
                 logger.debug(f"Jobs integrity sweep: {stats}")
-            except Exception:
-                pass
         except Exception as e:
             logger.debug(f"Jobs integrity sweep error: {e}")
         await asyncio.sleep(interval)

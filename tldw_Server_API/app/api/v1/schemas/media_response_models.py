@@ -3,11 +3,13 @@
 #
 # Imports
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Union
+from typing import Any, Optional, Union
 from uuid import UUID
+
 #
 # 3rd-party imports
-from pydantic import BaseModel, Field, HttpUrl, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+
 #
 # Local Imports
 #
@@ -62,7 +64,7 @@ class MediaListItem(BaseModel):
 
 class MediaListResponse(BaseModel):
     """Response model for listing all media items (GET /)."""
-    items: List[MediaListItem] = Field(..., description="A list of media items on the current page.")
+    items: list[MediaListItem] = Field(..., description="A list of media items on the current page.")
     pagination: PaginationInfo = Field(..., description="Pagination details for the media list.")
 
 
@@ -79,13 +81,13 @@ class MediaProcessingDetail(BaseModel):
     """Details about the processing applied to the media."""
     prompt: Optional[str] = Field(None, description="The last prompt used for analysis or processing.", json_schema_extra={"example": "Summarize the key points."})
     analysis: Optional[str] = Field(None, description="The last analysis or summary generated.", json_schema_extra={"example": "The video discusses the fundamentals of AI..."})
-    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Safe metadata JSON associated with the latest document version (if available).")
+    safe_metadata: Optional[dict[str, Any]] = Field(None, description="Safe metadata JSON associated with the latest document version (if available).")
     model: Optional[str] = Field(None, description="The transcription model used (if applicable).", json_schema_extra={"example": "whisper-large-v3"})
     timestamp_option: Optional[bool] = Field(None, description="Whether timestamps were requested/generated during transcription.", json_schema_extra={"example": True})
 
 class MediaContentDetail(BaseModel):
     """Details about the extracted content of the media."""
-    metadata: Dict[str, Any] = Field(..., description="Extracted metadata from the media file or source.", json_schema_extra={"example": """"channel": "Tech Explained", "upload_date": "2023-10-26" """})
+    metadata: dict[str, Any] = Field(..., description="Extracted metadata from the media file or source.", json_schema_extra={"example": """"channel": "Tech Explained", "upload_date": "2023-10-26" """})
     text: str = Field(..., description="The full extracted text or transcript.", json_schema_extra={"example": "Hello and welcome to the channel..."})
     word_count: int = Field(..., description="Approximate word count of the extracted text.", json_schema_extra={"example": 1500})
 
@@ -98,7 +100,7 @@ class VersionDetailResponse(BaseModel):
     #content_hash: Optional[str] = Field(None, description="SHA-256 hash of the content for this version.", json_schema_extra={"example": "a1b2c3d4..."})
     prompt: Optional[str] = Field(None, description="Prompt associated with this version.", json_schema_extra={"example": "Summarize the previous version."})
     analysis_content: Optional[str] = Field(None, description="Analysis content associated with this version.", json_schema_extra={"example": "This version focuses on..."})
-    safe_metadata: Optional[Dict[str, Any]] = Field(None, description="Safe metadata JSON captured for this version.")
+    safe_metadata: Optional[dict[str, Any]] = Field(None, description="Safe metadata JSON captured for this version.")
     # Conditionally include content based on 'include_content' query param
     content: Optional[str] = Field(None, description="The full content of this version (if requested).", json_schema_extra={"example": "This is the text content for version 2..."})
 
@@ -110,9 +112,9 @@ class MediaDetailResponse(BaseModel):
     source: MediaSourceDetail = Field(..., description="Details about the original source.")
     processing: MediaProcessingDetail = Field(..., description="Details about the processing applied.")
     content: MediaContentDetail = Field(..., description="Details about the extracted content.")
-    keywords: List[str] = Field(..., description="Keywords associated with the media item.", json_schema_extra={"example": ["ai", "machine learning", "tech"]})
-    timestamps: List[str] = Field(..., description="List of timestamps extracted from the content (if applicable).", json_schema_extra={"example": ["00:00:05", "00:01:12"]})
-    versions: List[VersionDetailResponse] = Field([], description="List of document versions, if applicable.")
+    keywords: list[str] = Field(..., description="Keywords associated with the media item.", json_schema_extra={"example": ["ai", "machine learning", "tech"]})
+    timestamps: list[str] = Field(..., description="List of timestamps extracted from the content (if applicable).", json_schema_extra={"example": ["00:00:05", "00:01:12"]})
+    versions: list[VersionDetailResponse] = Field([], description="List of document versions, if applicable.")
     has_original_file: bool = Field(False, description="Whether the original file (e.g., PDF) is available for download.", json_schema_extra={"example": True})
     original_file_url: Optional[str] = Field(None, description="API URL to download the original file, if available.", json_schema_extra={"example": "/api/v1/media/123/file"})
 
@@ -151,7 +153,7 @@ class MediaDetailResponse(BaseModel):
 class MediaKeywordsResponse(BaseModel):
     """Response model for media keyword updates."""
     media_id: int = Field(..., description="Media item ID")
-    keywords: List[str] = Field(default_factory=list, description="Updated keyword list")
+    keywords: list[str] = Field(default_factory=list, description="Updated keyword list")
 
 
 # --- /api/v1/media/{media_id}/versions ---
@@ -171,7 +173,7 @@ class MediaKeywordsResponse(BaseModel):
 
 class VersionListResponse(BaseModel):
     """Response model for listing versions of a media item."""
-    versions: List[VersionDetailResponse] = Field(..., description="A list of available versions.")
+    versions: list[VersionDetailResponse] = Field(..., description="A list of available versions.")
 
 class VersionCreateResponse(BaseModel):
     """Response model after successfully creating a new version."""
@@ -205,11 +207,11 @@ class MediaSearchResultItem(BaseModel):
     content_preview: Optional[str] = Field(None, description="A short preview of the media's content.", json_schema_extra={"example": "This document contains important information about..."})
     author: Optional[str] = Field(None, description="Author of the media item.", json_schema_extra={"example": "Jane Doe"})
     date: Optional[datetime] = Field(None, description="Creation or publication date of the media.")
-    keywords: List[str] = Field(..., description="Keywords associated with the media item.", json_schema_extra={"example": ["search", "document", "important"]})
+    keywords: list[str] = Field(..., description="Keywords associated with the media item.", json_schema_extra={"example": ["search", "document", "important"]})
 
 class MediaSearchResponse(BaseModel):
     """Response model for the media search endpoint (GET /search)."""
-    results: List[MediaSearchResultItem] = Field(..., description="List of media items matching the search criteria.")
+    results: list[MediaSearchResultItem] = Field(..., description="List of media items matching the search criteria.")
     pagination: PaginationInfoSearch = Field(..., description="Pagination details for the search results.")
 
 ######################## Media Processing Response Model ###################################
@@ -227,16 +229,16 @@ class MediaItemProcessResult(BaseModel):
     input_ref: str = Field(..., description="The original URL or filename provided by the user.", json_schema_extra={"example": "https://example.com/my_video.mp4"})
     processing_source: Optional[str] = Field(None, description="The actual source used by the processor (e.g., temp file path or URL).",json_schema_extra={"example": "/tmp/media_processing_xyz/my_video.mp4"})
     media_type: str = Field(..., description="Detected or specified media type.", json_schema_extra={"example": "video"})
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Extracted metadata.", json_schema_extra={"example": {"title": "My Video", "duration": 120.5}})
+    metadata: Optional[dict[str, Any]] = Field(None, description="Extracted metadata.", json_schema_extra={"example": {"title": "My Video", "duration": 120.5}})
     content: Optional[str] = Field(None, description="Extracted text content or transcript.")
     transcript: Optional[str] = Field(None, description="Alias or specific field for transcript.") # Added for clarity
-    segments: Optional[List[Dict[str, Any]]] = Field(None, description="Time-coded transcript segments, if applicable.")
-    chunks: Optional[List[Any]] = Field(None, description="List of content chunks, if chunking was performed.") # Type depends on chunking output
+    segments: Optional[list[dict[str, Any]]] = Field(None, description="Time-coded transcript segments, if applicable.")
+    chunks: Optional[list[Any]] = Field(None, description="List of content chunks, if chunking was performed.") # Type depends on chunking output
     analysis: Optional[str] = Field(None, description="Generated analysis or summary.")
     summary: Optional[str] = Field(None, description="Alias or specific field for summary.") # Added for clarity
-    analysis_details: Optional[Dict[str, Any]] = Field(None, description="Details about the analysis process (e.g., model used).", json_schema_extra={"example": {"transcription_model": "whisper-large-v3"}})
+    analysis_details: Optional[dict[str, Any]] = Field(None, description="Details about the analysis process (e.g., model used).", json_schema_extra={"example": {"transcription_model": "whisper-large-v3"}})
     error: Optional[str] = Field(None, description="Error message if status is 'Error'.")
-    warnings: Optional[List[str]] = Field(None, description="List of warnings if status is 'Warning' or non-critical issues occurred.")
+    warnings: Optional[list[str]] = Field(None, description="List of warnings if status is 'Warning' or non-critical issues occurred.")
     # --- Persistence Specific (Null for /process-* endpoints) ---
     db_id: Optional[int] = Field(None, description="Database ID if persisted, null otherwise.", json_schema_extra={"example": 456})
     db_message: Optional[str] = Field(None, description="Message related to database interaction.", json_schema_extra={"example": "Media added to database."})
@@ -251,7 +253,7 @@ class MediaItemProcessResult(BaseModel):
 
 class BatchMediaAddResponse(BaseModel):
     """Response model for the /add endpoint (POST /api/v1/media/add)."""
-    results: List[MediaItemProcessResult] = Field(..., description="List containing the processing result for each input item.")
+    results: list[MediaItemProcessResult] = Field(..., description="List containing the processing result for each input item.")
 
 class BatchMediaProcessResponse(BaseModel):
     """
@@ -260,8 +262,8 @@ class BatchMediaProcessResponse(BaseModel):
     """
     processed_count: int = Field(..., description="Number of items successfully processed (or with warnings).", json_schema_extra={"example": 2})
     errors_count: int = Field(..., description="Number of items that failed processing.", json_schema_extra={"example": 1})
-    errors: List[str] = Field(..., description="List of unique error messages encountered.", json_schema_extra={"example": ["Download failed for URL X", "Transcription timed out for file Y"]})
-    results: List[MediaItemProcessResult] = Field(..., description="List containing the processing result for each input item.")
+    errors: list[str] = Field(..., description="List of unique error messages encountered.", json_schema_extra={"example": ["Download failed for URL X", "Transcription timed out for file Y"]})
+    results: list[MediaItemProcessResult] = Field(..., description="List containing the processing result for each input item.")
     # Specific outputs like confabulation might be added optionally
     confabulation_results: Optional[Any] = Field(None, description="Results from confabulation check, if performed.")
 
@@ -301,12 +303,12 @@ class WebScrapedItemResult(BaseModel):
     author: Optional[str] = Field(None, description="Extracted or provided author.")
     content: Optional[str] = Field(None, description="Main text content extracted from the page.")
     # Optional fields based on processing steps
-    keywords: Optional[Union[str, List[str]]] = Field(None, description="Keywords associated with the content.")
+    keywords: Optional[Union[str, list[str]]] = Field(None, description="Keywords associated with the content.")
     analysis: Optional[str] = Field(None, description="Generated summary or analysis (if requested).")
-    chunks: Optional[List[Any]] = Field(None, description="Content chunks (if requested).")
+    chunks: Optional[list[Any]] = Field(None, description="Content chunks (if requested).")
     ingested_at: Optional[datetime] = Field(None, description="Timestamp when the content was processed.")
     # Add other fields returned by your scraping/processing functions
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Other extracted metadata.")
+    metadata: Optional[dict[str, Any]] = Field(None, description="Other extracted metadata.")
     extraction_successful: Optional[bool] = Field(None, description="Flag indicating if scraping succeeded for this URL.")
 
 class WebProcessResponse(BaseModel):
@@ -315,8 +317,8 @@ class WebProcessResponse(BaseModel):
     message: str = Field(..., description="Summary message about the operation.", json_schema_extra={"example": "Web content processed"})
     count: int = Field(..., description="Number of items successfully processed/scraped.", json_schema_extra={"example": 5})
     # One of these will be present depending on persistence
-    results: Optional[List[WebScrapedItemResult]] = Field(None, description="List of processed web content data (if not persisted or mode=ephemeral).")
-    media_ids: Optional[List[Union[int, str]]] = Field(None, description="List of database IDs or ephemeral IDs for the persisted/stored items.")
+    results: Optional[list[WebScrapedItemResult]] = Field(None, description="List of processed web content data (if not persisted or mode=ephemeral).")
+    media_ids: Optional[list[Union[int, str]]] = Field(None, description="List of database IDs or ephemeral IDs for the persisted/stored items.")
 
 
 #
@@ -332,9 +334,9 @@ class WebProcessResponse(BaseModel):
 
 class DebugSchemaResponse(BaseModel):
     """Response model for the debug schema endpoint."""
-    tables: List[str] = Field(..., description="List of tables found in the database.")
-    media_columns: List[str] = Field(..., description="List of column names in the 'Media' table.")
-    media_mods_columns: List[str] = Field(..., description="List of column names in the 'MediaModifications' table.")
+    tables: list[str] = Field(..., description="List of tables found in the database.")
+    media_columns: list[str] = Field(..., description="List of column names in the 'Media' table.")
+    media_mods_columns: list[str] = Field(..., description="List of column names in the 'MediaModifications' table.")
     media_count: int = Field(..., description="Total number of rows in the 'Media' table.")
 
 #

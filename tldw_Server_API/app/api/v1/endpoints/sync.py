@@ -6,36 +6,35 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import Dict, Optional, List, Tuple
+from typing import Optional
+
 #
 # 3rd-party imports
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
-    File,
-    Form,
-    Header,
     HTTPException,
-    Query,
-    Request,
-    Response,
     status,
-    UploadFile
 )
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps.DB_Deps import get_media_db_for_user
+
 #
 # Local Imports
-from tldw_Server_API.app.api.v1.schemas.sync_server_models import ClientChangesPayload, ServerChangesResponse, \
-    SyncLogEntry
-from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
+from tldw_Server_API.app.api.v1.schemas.sync_server_models import (
+    ClientChangesPayload,
+    ServerChangesResponse,
+    SyncLogEntry,
+)
+from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+
 #
 # DB Mgmt
-from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, ConflictError, MediaDatabase, InputError
-from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ConflictError, DatabaseError, InputError, MediaDatabase
 from tldw_Server_API.app.core.Sync.Sync_Client import SYNC_BATCH_SIZE
+from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
+
 #
 #
 #######################################################################################################################
@@ -119,7 +118,7 @@ async def receive_changes_from_client(
     except Exception as e:
         # Catch unexpected errors during thread execution or processing
         logger.exception(f"[{user_id.username}] Unexpected error in /send endpoint from client {requesting_client_id}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}") from e
 
 
 @router.get("/get",
@@ -172,7 +171,7 @@ async def send_changes_to_client(
         changes_raw, latest_server_id = await asyncio.to_thread(_get_changes_sync)
         # --- End Thread Pool Execution ---
 
-        changes_models: List[SyncLogEntry] = []
+        changes_models: list[SyncLogEntry] = []
         for row_dict in changes_raw: # Assuming fetchall returns list of dicts/Rows
              try:
                   # Convert row (which should be dict-like if row_factory is set) to SyncLogEntry model
@@ -191,10 +190,10 @@ async def send_changes_to_client(
 
     except (DatabaseError, sqlite3.Error) as e: # Catch errors raised from sync helper
         logger.error(f"Database error getting changes for user '{user_id.username}', client '{client_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve changes from database.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to retrieve changes from database.") from e
     except Exception as e: # Catch unexpected errors
         logger.error(f"Unexpected server error getting changes for user '{user_id.username}', client '{client_id}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal server error: {e}") from e
 
 #
 # End of API endpoints
@@ -213,7 +212,7 @@ class ServerSyncProcessor:
         logger.info(f"ServerSyncProcessor initialized for user '{self.user_id}', request from '{self.requesting_client_id}'.")
 
     # --- SYNCHRONOUS BATCH APPLICATION ---
-    def apply_client_changes_batch(self, changes: List[Dict]) -> Tuple[bool, List[str]]:
+    def apply_client_changes_batch(self, changes: list[dict]) -> tuple[bool, list[str]]:
         """
         Applies a batch of ordered changes received from a client within a single transaction.
         Returns (success_status, list_of_error_messages).
@@ -245,7 +244,8 @@ class ServerSyncProcessor:
                     except (DatabaseError, sqlite3.Error, ConflictError, json.JSONDecodeError, KeyError, InputError, ValueError) as item_error:
                         error_msg = f"Failed Processing Change ID {change.get('change_id','?')}: {item_error}"
                         logger.error(f"[{self.user_id}] {error_msg}", exc_info=True)
-                        if error_msg not in errors: errors.append(error_msg) # Avoid duplicate if already logged
+                        if error_msg not in errors:
+                            errors.append(error_msg) # Avoid duplicate if already logged
                         all_applied_or_skipped = False
                         raise # Re-raise to trigger transaction rollback
 
@@ -253,7 +253,8 @@ class ServerSyncProcessor:
 
         except (DatabaseError, sqlite3.Error, ConflictError) as e:
             logger.error(f"Transaction rolled back applying changes for user {self.user_id} from client {self.requesting_client_id}: {e}")
-            if not errors: errors.append(f"Transaction rolled back: {e}")
+            if not errors:
+                errors.append(f"Transaction rolled back: {e}")
             all_applied_or_skipped = False
         except Exception as e:
             logger.error(f"Unexpected error applying client changes batch for user {self.user_id}: {e}", exc_info=True)
@@ -263,7 +264,7 @@ class ServerSyncProcessor:
         return all_applied_or_skipped, errors
 
     # --- SYNCHRONOUS SINGLE CHANGE APPLICATION ---
-    def _apply_single_client_change_sync(self, cursor: sqlite3.Cursor, change: Dict, current_server_time_str: str) -> Tuple[bool, Optional[str]]:
+    def _apply_single_client_change_sync(self, cursor: sqlite3.Cursor, change: dict, current_server_time_str: str) -> tuple[bool, Optional[str]]:
         """
         Applies a single change from a client synchronously. Handles conflict detection/resolution.
         Returns (success, error_message). Runs within the transaction from apply_client_changes_batch.
@@ -283,7 +284,8 @@ class ServerSyncProcessor:
             logger.error(f"[{self.user_id}] {error_msg}")
             return False, error_msg
         try:
-            if payload_str: payload = json.loads(payload_str)
+            if payload_str:
+                payload = json.loads(payload_str)
         except json.JSONDecodeError as e:
              error_msg = f"Failed to decode payload for change ID {change.get('change_id', 'N/A')}: {e}"
              logger.error(f"[{self.user_id}] {error_msg}", exc_info=True)
@@ -324,7 +326,7 @@ class ServerSyncProcessor:
             )
             return True, None # Success
 
-        except ConflictError as cf_err:
+        except ConflictError:
             # Optimistic lock failed during direct apply
             logger.warning(f"[{self.user_id}] Optimistic lock failed applying change for {entity} {entity_uuid}. Attempting resolution.")
             # Fetch current state again for resolution
@@ -346,7 +348,7 @@ class ServerSyncProcessor:
             return False, error_msg # Return failure status and message
 
     # --- SYNCHRONOUS CONFLICT RESOLUTION ---
-    def _resolve_server_conflict_sync(self, cursor: sqlite3.Cursor, client_change: Dict, server_record_info: Optional[tuple], current_server_time_str: str) -> Tuple[bool, Optional[str]]:
+    def _resolve_server_conflict_sync(self, cursor: sqlite3.Cursor, client_change: dict, server_record_info: Optional[tuple], current_server_time_str: str) -> tuple[bool, Optional[str]]:
         """
         Resolves conflict synchronously using LWW based on parsed timestamps.
         Returns (resolved_successfully, error_message).
@@ -364,7 +366,7 @@ class ServerSyncProcessor:
             logger.error(f"[{self.user_id}] Cannot resolve conflict for {entity} {entity_uuid}: server record info is missing.")
             return False, "Cannot resolve conflict without server record state."
 
-        server_version = server_record_info[0]
+        server_record_info[0]
         server_last_modified_str = server_record_info[2] if len(server_record_info) > 2 and isinstance(
             server_record_info[2], str) else '1970-01-01T00:00:00Z'
 
@@ -388,7 +390,7 @@ class ServerSyncProcessor:
                 except ValueError:
                     # If both fail, raise a clearer error
                     raise ValueError(
-                        f"Could not parse server timestamp '{server_last_modified_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'")
+                        f"Could not parse server timestamp '{server_last_modified_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'") from None
 
             # --- Try parsing authoritative timestamp ---
             # (It should match iso_format_frac_z generated by strftime)
@@ -400,7 +402,7 @@ class ServerSyncProcessor:
                     authoritative_dt = datetime.strptime(current_server_time_str, iso_format_no_frac_z)
                 except ValueError:
                     raise ValueError(
-                        f"Could not parse authoritative timestamp '{current_server_time_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'")
+                        f"Could not parse authoritative timestamp '{current_server_time_str}' with formats '{iso_format_frac_z}' or '{iso_format_no_frac_z}'") from None
 
             # Ensure timezone aware (strptime with %Z *should* handle UTC, but explicit is safer)
             # If %Z parsing worked, tzinfo might already be set. replace() only sets if naive.
@@ -448,7 +450,7 @@ class ServerSyncProcessor:
                 return False, error_msg
 
     # --- SYNCHRONOUS SQL EXECUTION ---
-    def _execute_server_change_sql_sync(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: Dict, uuid: str,
+    def _execute_server_change_sql_sync(self, cursor: sqlite3.Cursor, entity: str, operation: str, payload: dict, uuid: str,
                                      client_version: int, originating_client_id: str, server_timestamp: str,
                                      force_apply: bool = False):
         """Executes SQL synchronously on server DB."""
@@ -487,8 +489,7 @@ class ServerSyncProcessor:
                  logger.debug(f"[{self.user_id}] Applying {operation} (Sync) based on client version {client_version}...")
 
         sql = ""
-        params_tuple = tuple()
-        sql_executed_in_fts_block = False # Flag to prevent double execution
+        params_tuple = ()
 
         # --- SQL Generation (Sync) ---
         if operation == 'create':
@@ -497,14 +498,17 @@ class ServerSyncProcessor:
             core_sync_meta = {'uuid': uuid, 'last_modified': server_timestamp, 'version': target_sql_version, 'client_id': originating_client_id}
             all_data = {**payload, **core_sync_meta, 'deleted': payload.get('deleted', 0)}
             for col in table_columns:
-                if col == 'id': continue
+                if col == 'id':
+                    continue
                 if col in all_data:
                     value = all_data[col]
-                    if isinstance(value, bool): value = 1 if value else 0
+                    if isinstance(value, bool):
+                        value = 1 if value else 0
                     cols_sql.append(f"`{col}`")
                     placeholders_sql.append("?")
                     params_list.append(value)
-            if not cols_sql: raise ValueError(f"Cannot build INSERT for {entity} {uuid}: No columns")
+            if not cols_sql:
+                raise ValueError(f"Cannot build INSERT for {entity} {uuid}: No columns")
             sql = f"INSERT OR IGNORE INTO `{entity}` ({', '.join(cols_sql)}) VALUES ({', '.join(placeholders_sql)})"
             params_tuple = tuple(params_list)
 
@@ -513,7 +517,8 @@ class ServerSyncProcessor:
             for col in table_columns:
                  if col in payload and col not in ['id', 'uuid']:
                      value = payload[col]
-                     if isinstance(value, bool): value = 1 if value else 0
+                     if isinstance(value, bool):
+                         value = 1 if value else 0
                      set_clauses.append(f"`{col}` = ?")
                      params_list.append(value)
 
@@ -590,7 +595,7 @@ class ServerSyncProcessor:
             if not force_apply and operation in ['update', 'delete'] and optimistic_lock_sql:
                 if cursor.rowcount == 0:
                     logger.warning(f"[{self.user_id}] Optimistic lock failed applying client change (Sync)...")
-                    raise ConflictError(f"Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
+                    raise ConflictError("Optimistic lock failed applying client change.", entity=entity, identifier=uuid)
                 else:
                     logger.debug(f"[{self.user_id}] Optimistic lock successful applying client change (Sync). Rowcount {cursor.rowcount}.")
             # --- END TEMP ---
@@ -604,11 +609,13 @@ class ServerSyncProcessor:
 
     # --- Define SYNCHRONOUS versions of helpers ---
     _server_column_cache = {}
-    def _get_table_columns_sync(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[List[str]]:
+    def _get_table_columns_sync(self, cursor: sqlite3.Cursor, table_name: str) -> Optional[list[str]]:
          """Synchronous version for getting table columns."""
-         if table_name in self._server_column_cache: return self._server_column_cache[table_name]
+         if table_name in self._server_column_cache:
+             return self._server_column_cache[table_name]
          try:
-              if not table_name.replace('_','').isalnum(): raise ValueError(f"Invalid table name: {table_name}")
+              if not table_name.replace('_','').isalnum():
+                  raise ValueError(f"Invalid table name: {table_name}")
               cursor.execute(f"PRAGMA table_info(`{table_name}`)")
               columns_info = cursor.fetchall() # Sync fetchall
               columns = [row[1] for row in columns_info]
@@ -616,20 +623,29 @@ class ServerSyncProcessor:
                    self._server_column_cache[table_name] = columns
                    logger.debug(f"[{self.user_id}] Cached columns for server table '{table_name}': {columns}")
                    return columns
-              else: logger.error(f"[{self.user_id}] Could not retrieve columns for server table: {table_name}"); return None
-         except (sqlite3.Error, ValueError) as e: logger.error(f"[{self.user_id}] Error getting columns for server table {table_name}: {e}"); return None
+              else:
+                  logger.error(f"[{self.user_id}] Could not retrieve columns for server table: {table_name}")
+                  return None
+         except (sqlite3.Error, ValueError) as e:
+             logger.error(f"[{self.user_id}] Error getting columns for server table {table_name}: {e}")
+             return None
 
-    def _execute_server_media_keyword_sql_sync(self, cursor: sqlite3.Cursor, operation: str, payload: Dict):
+    def _execute_server_media_keyword_sql_sync(self, cursor: sqlite3.Cursor, operation: str, payload: dict):
         """Synchronous version for MediaKeywords SQL execution."""
         media_uuid = payload.get('media_uuid')
         keyword_uuid = payload.get('keyword_uuid')
-        if not media_uuid or not keyword_uuid: raise ValueError(f"Missing UUIDs for MediaKeywords {operation}")
+        if not media_uuid or not keyword_uuid:
+            raise ValueError(f"Missing UUIDs for MediaKeywords {operation}")
         cursor.execute("SELECT id FROM Media WHERE uuid = ?", (media_uuid,))
         media_rec = cursor.fetchone() # Sync
         cursor.execute("SELECT id FROM Keywords WHERE uuid = ?", (keyword_uuid,))
         kw_rec = cursor.fetchone() # Sync
-        if not media_rec: logger.warning(f"[{self.user_id}] Skipping Server MediaKeywords {operation}: Media UUID {media_uuid} not found."); return
-        if not kw_rec: logger.warning(f"[{self.user_id}] Skipping Server MediaKeywords {operation}: Keyword UUID {keyword_uuid} not found."); return
+        if not media_rec:
+            logger.warning(f"[{self.user_id}] Skipping Server MediaKeywords {operation}: Media UUID {media_uuid} not found.")
+            return
+        if not kw_rec:
+            logger.warning(f"[{self.user_id}] Skipping Server MediaKeywords {operation}: Keyword UUID {keyword_uuid} not found.")
+            return
         media_id_local, keyword_id_local = media_rec[0], kw_rec[0]
         if operation == 'link':
              sql = "INSERT OR IGNORE INTO MediaKeywords (media_id, keyword_id) VALUES (?, ?)"
@@ -641,10 +657,11 @@ class ServerSyncProcessor:
              params_tuple = (media_id_local, keyword_id_local)
              logger.debug(f"[{self.user_id}] Executing Server SQL (Sync): {sql} | Params: {params_tuple}")
              cursor.execute(sql, params_tuple) # Sync
-        else: raise ValueError(f"Unsupported server operation '{operation}' for MediaKeywords entity")
+        else:
+            raise ValueError(f"Unsupported server operation '{operation}' for MediaKeywords entity")
 
 
-    def _update_fts_manually_sync(self, cursor: sqlite3.Cursor, entity: str, payload: Dict, uuid: str):
+    def _update_fts_manually_sync(self, cursor: sqlite3.Cursor, entity: str, payload: dict, uuid: str):
          """Updates the corresponding FTS table manually on the server (sync version)."""
          if entity == 'Media':
              if 'title' in payload or 'content' in payload:
@@ -660,8 +677,10 @@ class ServerSyncProcessor:
                           if cursor.rowcount == 0:
                               logger.warning(f"[{self.user_id}] FTS row not found for update (Media ID: {media_id}), attempting insert.")
                               cursor.execute("INSERT INTO media_fts (rowid, title, content) VALUES (?, ?, ?)", (media_id, new_title, new_content)) # Sync
-                     except sqlite3.Error as fts_err: logger.error(f"[{self.user_id}] Failed to manually update media_fts (Sync) for Media ID {media_id}: {fts_err}", exc_info=True)
-                 else: logger.warning(f"[{self.user_id}] Cannot update media_fts (Sync): Media record not found for UUID {uuid}")
+                     except sqlite3.Error as fts_err:
+                         logger.error(f"[{self.user_id}] Failed to manually update media_fts (Sync) for Media ID {media_id}: {fts_err}", exc_info=True)
+                 else:
+                     logger.warning(f"[{self.user_id}] Cannot update media_fts (Sync): Media record not found for UUID {uuid}")
          elif entity == 'Keywords':
              if 'keyword' in payload:
                  cursor.execute("SELECT id FROM Keywords WHERE uuid = ?", (uuid,))
@@ -675,8 +694,10 @@ class ServerSyncProcessor:
                           if cursor.rowcount == 0:
                               logger.warning(f"[{self.user_id}] FTS row not found for update (Keyword ID: {kw_id}), attempting insert.")
                               cursor.execute("INSERT INTO keyword_fts (rowid, keyword) VALUES (?, ?)", (kw_id, new_keyword)) # Sync
-                     except sqlite3.Error as fts_err: logger.error(f"[{self.user_id}] Failed to manually update keyword_fts (Sync) for Keyword ID {kw_id}: {fts_err}", exc_info=True)
-                 else: logger.warning(f"[{self.user_id}] Cannot update keyword_fts (Sync): Keyword record not found for UUID {uuid}")
+                     except sqlite3.Error as fts_err:
+                         logger.error(f"[{self.user_id}] Failed to manually update keyword_fts (Sync) for Keyword ID {kw_id}: {fts_err}", exc_info=True)
+                 else:
+                     logger.warning(f"[{self.user_id}] Cannot update keyword_fts (Sync): Keyword record not found for UUID {uuid}")
 
 #
 # End of sync-endpoint.py

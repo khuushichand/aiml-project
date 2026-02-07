@@ -33,6 +33,7 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
     ContentType,
     ConflictResolution,
 )
+from tldw_Server_API.app.core.Chatbooks.exceptions import SecurityError
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 
@@ -317,6 +318,61 @@ class TestChatbookService:
         assert img_payload["image_data"] == image_bytes
         assert img_payload["image_mime_type"] == "image/png"
 
+    def test_import_conversation_legacy_fields(self, service, mock_db, tmp_path):
+        """Legacy conversation exports should import title/sender/message fields."""
+        conv_id = "legacy-conv"
+        content_root = tmp_path / "content" / "conversations"
+        content_root.mkdir(parents=True, exist_ok=True)
+
+        conversation_payload = {
+            "id": conv_id,
+            "title": "Legacy Conversation Title",
+            "created_at": "2024-01-01T00:00:00",
+            "character_id": 1,
+            "messages": [
+                {
+                    "id": "msg-legacy",
+                    "sender": "user",
+                    "message": "Hello from legacy export",
+                    "timestamp": "2024-01-01T00:00:00",
+                }
+            ],
+        }
+
+        conversation_file = content_root / f"conversation_{conv_id}.json"
+        conversation_file.write_text(json.dumps(conversation_payload), encoding="utf-8")
+
+        mock_db.get_character_card_by_id.return_value = {"id": 1}
+        mock_db.add_conversation.return_value = "new-conv-id"
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        status = ImportJob(
+            job_id="job",
+            user_id="test_user",
+            status=ImportStatus.PENDING,
+            chatbook_path="dummy",
+        )
+
+        with patch.object(service, "_get_conversation_by_name", return_value=None):
+            service._import_conversations(
+                tmp_path,
+                manifest,
+                [conv_id],
+                ConflictResolution.SKIP,
+                prefix_imported=False,
+                status=status,
+            )
+
+        conv_payload = mock_db.add_conversation.call_args[0][0]
+        assert conv_payload["title"] == "Legacy Conversation Title"
+        msg_payload = mock_db.add_message.call_args[0][0]
+        assert msg_payload["sender"] == "user"
+        assert msg_payload["content"] == "Hello from legacy export"
+
     def test_import_conversation_skips_outside_attachments(self, service, mock_db, tmp_path):
         """Attachment paths that escape extraction boundaries must be ignored."""
         conv_id = "conv-path"
@@ -440,6 +496,61 @@ class TestChatbookService:
         assert "images" not in message_payload
         assert any("Failed to read attachment" in warning for warning in status.warnings)
         assert status.successful_items == 1
+
+    def test_collect_conversations_exports_citations(self, service, mock_db, tmp_path):
+        """Exported conversations should include RAG citations when available."""
+        conv_id = "conv-citations"
+        msg_id = "msg-1"
+        now = datetime(2024, 1, 1, 0, 0, 0)
+
+        mock_db.get_conversation_by_id.return_value = {
+            "id": conv_id,
+            "title": "Conversation With Citations",
+            "created_at": now,
+            "character_id": 1,
+        }
+        mock_db.get_messages_for_conversation.return_value = [
+            {
+                "id": msg_id,
+                "sender": "assistant",
+                "content": "Answer",
+                "timestamp": now,
+            }
+        ]
+        mock_db.get_message_rag_context.return_value = {
+            "retrieved_documents": [
+                {
+                    "id": "doc-1",
+                    "source_type": "file",
+                    "title": "Doc Title",
+                    "score": 0.95,
+                    "excerpt": "Excerpt",
+                    "url": "https://example.com",
+                    "page_number": 2,
+                    "chunk_id": "chunk-1",
+                }
+            ],
+            "citations": [{"id": "cite-1"}],
+            "settings_snapshot": {"top_k": 5},
+            "generated_answer": {"id": "answer-1"},
+            "search_query": "example query",
+        }
+
+        manifest = ChatbookManifest(
+            version=ChatbookVersion.V1,
+            name="Test",
+            description="Desc",
+        )
+        content = ChatbookContent()
+
+        service._collect_conversations([conv_id], tmp_path, manifest, content)
+
+        exported = content.conversations[conv_id]
+        message_payload = exported["messages"][0]
+        assert message_payload["citations"]
+        assert message_payload["citations"][0]["id"] == "doc-1"
+        assert message_payload.get("formal_citations") == [{"id": "cite-1"}]
+        assert message_payload.get("rag_settings") == {"top_k": 5}
 
     def test_import_conversation_skips_oversized_attachment(self, service, mock_db, tmp_path):
         """Oversized attachments should be skipped with a warning, not fail the conversation."""
@@ -645,6 +756,69 @@ class TestChatbookService:
             ok = service.delete_export_job(job.job_id)
 
         assert ok is False
+
+    def test_resolve_import_archive_path_rejects_outside_paths(self, service):
+        """Path resolution should raise SecurityError with a stable violation type."""
+        with pytest.raises(SecurityError) as exc_info:
+            service._resolve_import_archive_path("../../outside.chatbook")
+
+        assert exc_info.value.context.get("violation_type") == "import_path_outside_allowed_directories"
+
+    def test_cleanup_expired_exports_breaks_on_repeated_no_progress(self, service, mock_db):
+        """Cleanup should stop after repeated batches that cannot mark rows expired."""
+        expired_rows = [{"job_id": "job-stuck", "output_path": None}]
+        call_counts = {"select": 0, "update": 0}
+
+        def _execute_query(sql, params=None, commit=False):
+            if sql.startswith("SELECT * FROM export_jobs"):
+                call_counts["select"] += 1
+                return expired_rows
+            if sql.startswith("UPDATE export_jobs"):
+                call_counts["update"] += 1
+                raise RuntimeError("update failed")
+            return []
+
+        mock_db.execute_query.side_effect = _execute_query
+
+        deleted = service.cleanup_expired_exports(batch_size=1)
+
+        assert deleted == 0
+        assert call_counts["select"] == 2
+        assert call_counts["update"] == 2
+
+    def test_cleanup_expired_exports_mixed_progress_exits_cleanly(self, service, mock_db):
+        """Cleanup should preserve successful updates and still terminate with mixed outcomes."""
+        select_batches = [
+            [
+                {"job_id": "job-ok", "output_path": None},
+                {"job_id": "job-fail", "output_path": None},
+            ],
+            [
+                {"job_id": "job-fail", "output_path": None},
+            ],
+        ]
+        update_attempts: list[str] = []
+
+        def _execute_query(sql, params=None, commit=False):
+            if sql.startswith("SELECT * FROM export_jobs"):
+                if select_batches:
+                    return select_batches.pop(0)
+                return []
+            if sql.startswith("UPDATE export_jobs"):
+                job_id = params[1]
+                update_attempts.append(job_id)
+                if job_id == "job-fail":
+                    raise RuntimeError("update failed")
+                return None
+            return []
+
+        mock_db.execute_query.side_effect = _execute_query
+
+        deleted = service.cleanup_expired_exports(batch_size=2)
+
+        assert deleted == 0
+        assert update_attempts.count("job-ok") == 1
+        assert update_attempts.count("job-fail") == 2
 
     def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
         """Temporary extraction directories should not linger after import errors."""
@@ -1139,18 +1313,24 @@ class TestChatbookService:
 
     def test_clean_old_exports(self, service, mock_db):
         """Test cleaning old export files."""
+        export_dir = service.export_dir
+        export_dir.mkdir(parents=True, exist_ok=True)
+        file_one = export_dir / "old1.chatbook"
+        file_two = export_dir / "old2.chatbook"
+        file_one.write_text("old")
+        file_two.write_text("old")
+
         # Return tuples with job_id and output_path
         mock_db.execute_query.return_value = [
-            ("old1", "/tmp/old1.chatbook"),
-            ("old2", "/tmp/old2.chatbook")
+            ("old1", str(file_one)),
+            ("old2", str(file_two))
         ]
 
-        with patch('os.path.exists', return_value=True):
-            with patch('os.unlink') as mock_unlink:
-                count = service.clean_old_exports(days_old=7)
+        count = service.clean_old_exports(days_old=7)
 
         assert count == 2
-        assert mock_unlink.call_count == 2
+        assert not file_one.exists()
+        assert not file_two.exists()
 
     def test_validate_chatbook_file(self, service, sample_manifest):
         """Test validating a chatbook file structure."""

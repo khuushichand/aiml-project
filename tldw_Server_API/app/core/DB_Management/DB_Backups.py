@@ -7,18 +7,32 @@ import sqlite3
 import subprocess
 import urllib.parse
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Optional
 
 from loguru import logger
+
+from tldw_Server_API.app.core.DB_Management.backends.base import BackendType, DatabaseBackend
 
 # Local Imports:
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import InvalidStoragePathError
-from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
-from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseBackend, BackendType
+from tldw_Server_API.app.core.Utils.Utils import get_project_relative_path
+
 #
 # End of Imports
+
+DB_BACKUP_RUNTIME_EXCEPTIONS = (
+    sqlite3.Error,
+    OSError,
+    shutil.Error,
+    subprocess.SubprocessError,
+    ValueError,
+    TypeError,
+    AttributeError,
+    RuntimeError,
+    InvalidStoragePathError,
+)
 
 
 def _safe_join(base_dir: str, name: str) -> Optional[str]:
@@ -69,11 +83,11 @@ def _get_allowed_db_roots() -> list[str]:
     roots: list[str] = []
     try:
         roots.append(str(DatabasePaths.get_user_db_base_dir(allow_legacy_alias=True)))
-    except Exception as exc:
+    except (InvalidStoragePathError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Failed to resolve user DB base dir: {}", exc)
     try:
         roots.append(get_project_relative_path("Databases"))
-    except Exception as exc:
+    except (InvalidStoragePathError, OSError, RuntimeError, ValueError, TypeError) as exc:
         logger.debug("Failed to resolve project Databases path: {}", exc)
 
     extra = os.environ.get("TLDW_DB_ALLOWED_BASE_DIRS")
@@ -84,7 +98,7 @@ def _get_allowed_db_roots() -> list[str]:
                 continue
             try:
                 expanded = os.path.expanduser(candidate)
-            except Exception as exc:
+            except (OSError, ValueError, TypeError) as exc:
                 logger.debug("Failed to expand DB base dir {!r}: {}", candidate, exc)
                 expanded = candidate
             if os.path.isabs(expanded):
@@ -106,7 +120,7 @@ def _sqlite_uri_to_path(raw: str) -> Optional[str]:
         return None
     try:
         parsed = urllib.parse.urlparse(raw)
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         return None
     if parsed.scheme != "file":
         return None
@@ -246,7 +260,7 @@ def create_backup(db_path: str, backup_dir: str, db_name: str) -> str:
 
         logger.info(f"Backup created successfully: {backup_file}")
         return f"Backup created: {backup_file}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to create backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -299,7 +313,7 @@ def create_incremental_backup(db_path: str, backup_dir: str, db_name: str) -> st
 
         logger.info(f"Incremental backup created: {backup_file}")
         return f"Incremental backup created: {backup_file}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to create incremental backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -318,7 +332,7 @@ def list_backups(backup_dir: str) -> str:
                    if f.endswith(('.db', '.sqlib'))]
         backups.sort(reverse=True)  # Most recent first
         return "\n".join(backups) if backups else "No backups found"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to list backups: {str(e)}"
         logger.error(error_msg)
         return error_msg
@@ -396,13 +410,13 @@ def restore_single_db_backup(db_path: str, backup_dir: str, db_name: str, backup
 
         logger.info(f"Database restored from {backup_name}")
         return f"Database restored from {backup_name}"
-    except Exception as e:
+    except DB_BACKUP_RUNTIME_EXCEPTIONS as e:
         error_msg = f"Failed to restore backup: {str(e)}"
         logger.error(error_msg)
         return error_msg
 
 
-def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, str]]:
+def setup_backup_config(user_id: Optional[int] = None) -> dict[str, dict[str, str]]:
     """Setup configuration for database backups using centralized path utils.
 
     Returns a mapping of logical database names to their backup configuration.
@@ -426,7 +440,7 @@ def setup_backup_config(user_id: Optional[int] = None) -> Dict[str, Dict[str, st
         'audit': str(DatabasePaths.get_audit_db_path(uid)),
     }
 
-    configs: Dict[str, Dict[str, str]] = {}
+    configs: dict[str, dict[str, str]] = {}
     for name, path in db_paths.items():
         subdir = os.path.join(backup_base_dir, name)
         os.makedirs(subdir, exist_ok=True)
@@ -577,7 +591,7 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    # Treat dump_file as a logical backup identifier/filename, not as a full path.
+    # Accept either a backup basename or an explicit dump path.
     backup_id = str(dump_file or "").strip()
     backup_name = _validate_backup_name(os.path.basename(backup_id), _POSTGRES_BACKUP_EXTS)
     if not backup_name:
@@ -591,16 +605,42 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    backup_dir = _get_postgres_backup_base_dir(config)
-    safe_dump_path = _safe_join(backup_dir, backup_name)
+    # Support both:
+    # - explicit dump paths returned by create_postgres_backup/admin flows
+    # - legacy basename-only lookup under the default postgres backup directory
+    backup_base_dir = _get_backup_base_dir()
+    candidate_paths: list[str] = []
+
+    has_separator = (
+        os.path.sep in backup_id
+        or (os.altsep is not None and os.altsep in backup_id)
+        or os.path.isabs(backup_id)
+    )
+    if backup_id and has_separator:
+        resolved_input = _ensure_within_base(backup_base_dir, backup_id)
+        if resolved_input:
+            candidate_paths.append(resolved_input)
+
+    legacy_backup_dir = _get_postgres_backup_base_dir(config)
+    legacy_path = _safe_join(legacy_backup_dir, backup_name)
+    if legacy_path:
+        candidate_paths.append(legacy_path)
+
+    if backup_id == backup_name:
+        base_path = _safe_join(backup_base_dir, backup_name)
+        if base_path:
+            candidate_paths.append(base_path)
+
+    deduped_candidates: list[str] = []
+    for candidate in candidate_paths:
+        if candidate not in deduped_candidates:
+            deduped_candidates.append(candidate)
+
+    safe_dump_path = next((path for path in deduped_candidates if os.path.exists(path)), None)
     if not safe_dump_path:
-        msg = "Invalid dump file path"
-        logger.error(f"{msg}: {dump_file}")
-        return msg
-    if not os.path.exists(safe_dump_path):
-        msg = f"dump not found: {safe_dump_path}"
-        logger.error(msg)
-        return msg
+        msg = "dump not found"
+        logger.error(f"{msg}: {backup_id} (searched={deduped_candidates})")
+        return f"{msg}: {backup_id}"
 
     host = config.pg_host or "localhost"
     port = str(config.pg_port or 5432)

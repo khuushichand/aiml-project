@@ -23,9 +23,10 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -35,13 +36,12 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
-from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerSDK, WorkerConfig
+from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_processor import JobProcessor
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.quota_config import (
-    apply_prompt_studio_quota_policy,
     apply_prompt_studio_quota_defaults,
+    apply_prompt_studio_quota_policy,
 )
-
 
 _PROMPT_STUDIO_DOMAIN = "prompt_studio"
 
@@ -51,15 +51,15 @@ if os.getenv("PROMPT_STUDIO_JOBS_BACKEND") not in {"", "core"}:
 
 
 class PromptStudioJobError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: Optional[int] = None) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, backoff_seconds: int | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
         if backoff_seconds is not None:
             self.backoff_seconds = backoff_seconds
 
 
-_DB_CACHE: Dict[str, Any] = {}
-_PROCESSOR_CACHE: Dict[str, JobProcessor] = {}
+_DB_CACHE: dict[str, Any] = {}
+_PROCESSOR_CACHE: dict[str, JobProcessor] = {}
 
 
 def _jobs_manager() -> JobManager:
@@ -84,7 +84,7 @@ def _normalize_user_id(value: Any) -> str:
     return str(value)
 
 
-def _normalize_payload(value: Any) -> Dict[str, Any]:
+def _normalize_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     if isinstance(value, str):
@@ -149,7 +149,7 @@ def _get_processor(user_id: str) -> JobProcessor:
     return processor
 
 
-def _resolve_entity_id(job_type: str, payload: Dict[str, Any]) -> int:
+def _resolve_entity_id(job_type: str, payload: dict[str, Any]) -> int:
     if job_type == "optimization":
         value = payload.get("optimization_id") or payload.get("entity_id")
     elif job_type == "evaluation":
@@ -163,7 +163,7 @@ def _resolve_entity_id(job_type: str, payload: Dict[str, Any]) -> int:
     return _coerce_int(value, 0)
 
 
-async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
+async def _handle_job(job: dict[str, Any]) -> dict[str, Any]:
     job_type = str(job.get("job_type") or "").strip().lower()
     if job_type not in {"optimization", "evaluation", "generation"}:
         raise PromptStudioJobError(f"Unsupported prompt studio job type: {job_type}", retryable=False)
@@ -190,7 +190,7 @@ async def _handle_job(job: Dict[str, Any]) -> Dict[str, Any]:
     return await processor.process_generation_job(payload, entity_id)
 
 
-async def _inflight_quota_guard(job: Dict[str, Any], jm: JobManager) -> bool:
+async def _inflight_quota_guard(job: dict[str, Any], jm: JobManager) -> bool:
     owner = job.get("owner_user_id")
     if owner is None or str(owner).strip() == "":
         return True
@@ -212,14 +212,14 @@ async def _inflight_quota_guard(job: Dict[str, Any], jm: JobManager) -> bool:
     return True
 
 
-async def run_prompt_studio_jobs_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+async def run_prompt_studio_jobs_worker(stop_event: asyncio.Event | None = None) -> None:
     worker_id = (os.getenv("PROMPT_STUDIO_JOBS_WORKER_ID") or f"prompt-studio-jobs-{os.getpid()}").strip()
     queue = (os.getenv("PROMPT_STUDIO_JOBS_QUEUE") or "default").strip() or "default"
     cfg = _build_worker_config(worker_id=worker_id, queue=queue)
 
     jm = _jobs_manager()
     sdk = WorkerSDK(jm, cfg)
-    stop_task: Optional[asyncio.Task[None]] = None
+    stop_task: asyncio.Task[None] | None = None
     if stop_event is not None:
         async def _watch_stop() -> None:
             await stop_event.wait()
@@ -232,10 +232,8 @@ async def run_prompt_studio_jobs_worker(stop_event: Optional[asyncio.Event] = No
     finally:
         if stop_task is not None and not stop_task.done():
             stop_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await stop_task
-            except asyncio.CancelledError:
-                pass
 
 
 async def main() -> None:

@@ -1,17 +1,15 @@
 # monitoring.py
 # Monitoring and metrics integration for Prompt Studio
 
-from typing import Dict, Any, Optional, List
-from contextlib import contextmanager
 import os
 import time
+from contextlib import contextmanager
 from datetime import datetime
+from typing import Any
+
 from loguru import logger
 
-from tldw_Server_API.app.core.Metrics.metrics_manager import (
-    MetricsRegistry, MetricDefinition, MetricType
-)
-from tldw_Server_API.app.core.Metrics.decorators import track_metrics, monitor_resource
+from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricsRegistry, MetricType
 from tldw_Server_API.app.core.Metrics.traces import trace_operation
 
 ########################################################################################################################
@@ -408,7 +406,7 @@ class PromptStudioMetrics:
                 "prompt_studio.executions.total",
                 labels={**labels, "status": "success"}
             )
-        except Exception as e:
+        except Exception:
             # Failure
             self.metrics_manager.increment(
                 "prompt_studio.executions.total",
@@ -452,7 +450,7 @@ class PromptStudioMetrics:
         Args:
             strategy: Optimization strategy
         """
-        start_time = time.time()
+        time.time()
 
         try:
             yield
@@ -713,37 +711,33 @@ def monitor_optimization(strategy: str):
     def decorator(func):
         async def async_wrapper(*args, **kwargs):
             metrics = PromptStudioMetrics()
-            with metrics.track_optimization(strategy):
-                with trace_operation(f"optimization_{strategy}"):
-                    result = await func(*args, **kwargs)
+            with metrics.track_optimization(strategy), trace_operation(f"optimization_{strategy}"):
+                result = await func(*args, **kwargs)
 
-                    # Record improvement if available
-                    if isinstance(result, dict):
-                        if "improvement" in result and "iterations" in result:
-                            metrics.record_optimization_improvement(
-                                strategy,
-                                result["improvement"],
-                                result["iterations"]
-                            )
+                # Record improvement if available
+                if isinstance(result, dict) and "improvement" in result and "iterations" in result:
+                    metrics.record_optimization_improvement(
+                        strategy,
+                        result["improvement"],
+                        result["iterations"]
+                    )
 
-                    return result
+                return result
 
         def sync_wrapper(*args, **kwargs):
             metrics = PromptStudioMetrics()
-            with metrics.track_optimization(strategy):
-                with trace_operation(f"optimization_{strategy}"):
-                    result = func(*args, **kwargs)
+            with metrics.track_optimization(strategy), trace_operation(f"optimization_{strategy}"):
+                result = func(*args, **kwargs)
 
-                    # Record improvement if available
-                    if isinstance(result, dict):
-                        if "improvement" in result and "iterations" in result:
-                            metrics.record_optimization_improvement(
-                                strategy,
-                                result["improvement"],
-                                result["iterations"]
-                            )
+                # Record improvement if available
+                if isinstance(result, dict) and "improvement" in result and "iterations" in result:
+                    metrics.record_optimization_improvement(
+                        strategy,
+                        result["improvement"],
+                        result["iterations"]
+                    )
 
-                    return result
+                return result
 
         # Return appropriate wrapper based on function type
         import asyncio
@@ -774,7 +768,7 @@ class PromptStudioHealthCheck:
         self.websocket_manager = websocket_manager
         self.metrics = PromptStudioMetrics()
 
-    def check_health(self) -> Dict[str, Any]:
+    def check_health(self) -> dict[str, Any]:
         """
         Check health of Prompt Studio components.
 
@@ -865,7 +859,7 @@ class PromptStudioHealthCheck:
 
         return health
 
-    def get_metrics_summary(self) -> Dict[str, Any]:
+    def get_metrics_summary(self) -> dict[str, Any]:
         """
         Get summary of current metrics.
 

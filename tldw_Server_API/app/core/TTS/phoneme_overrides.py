@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any
 
 from loguru import logger
 
@@ -43,14 +44,14 @@ class PhonemeOverrideEntry:
 
     term: str
     phonemes: str
-    lang: Optional[str] = None
+    lang: str | None = None
     boundary: bool = True
-    provider: Optional[str] = None
+    provider: str | None = None
 
 
-def _resolve_config_path(path_hint: Optional[str]) -> Optional[Path]:
+def _resolve_config_path(path_hint: str | None) -> Path | None:
     """Resolve an optional path hint to an existing config file."""
-    candidates: List[str] = []
+    candidates: list[str] = []
     # Explicit override (arg, env)
     if path_hint:
         candidates.append(path_hint)
@@ -76,7 +77,7 @@ def _resolve_config_path(path_hint: Optional[str]) -> Optional[Path]:
     return None
 
 
-def _coerce_entry(raw: Any, provider_hint: Optional[str]) -> Optional[PhonemeOverrideEntry]:
+def _coerce_entry(raw: Any, provider_hint: str | None) -> PhonemeOverrideEntry | None:
     """Coerce a raw object into a PhonemeOverrideEntry."""
     try:
         if isinstance(raw, PhonemeOverrideEntry):
@@ -101,7 +102,7 @@ def _coerce_entry(raw: Any, provider_hint: Optional[str]) -> Optional[PhonemeOve
     return None
 
 
-def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> List[PhonemeOverrideEntry]:
+def parse_override_entries(raw: Any, provider_hint: str | None = None) -> list[PhonemeOverrideEntry]:
     """
     Parse user-supplied overrides into normalized entries.
 
@@ -110,7 +111,7 @@ def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> Lis
       - dict mapping term -> phoneme string
       - list of (term, phoneme) tuples
     """
-    entries: List[PhonemeOverrideEntry] = []
+    entries: list[PhonemeOverrideEntry] = []
     if raw is None:
         return entries
 
@@ -136,7 +137,7 @@ def parse_override_entries(raw: Any, provider_hint: Optional[str] = None) -> Lis
     return entries[:_MAX_OVERRIDE_ENTRIES]
 
 
-def load_override_entries(path_hint: Optional[str] = None) -> List[PhonemeOverrideEntry]:
+def load_override_entries(path_hint: str | None = None) -> list[PhonemeOverrideEntry]:
     """
     Load phoneme overrides from YAML or JSON.
 
@@ -151,7 +152,7 @@ def load_override_entries(path_hint: Optional[str] = None) -> List[PhonemeOverri
 
 
 @lru_cache(maxsize=4)
-def _load_override_entries_cached(path_str: str) -> List[PhonemeOverrideEntry]:
+def _load_override_entries_cached(path_str: str) -> list[PhonemeOverrideEntry]:
     """Internal cached loader keyed by resolved path string."""
     path = Path(path_str)
 
@@ -181,8 +182,8 @@ def _load_override_entries_cached(path_str: str) -> List[PhonemeOverrideEntry]:
 
 def filter_overrides_for_provider(
     entries: Sequence[PhonemeOverrideEntry],
-    provider: Optional[str],
-) -> List[PhonemeOverrideEntry]:
+    provider: str | None,
+) -> list[PhonemeOverrideEntry]:
     """Return entries applicable to a given provider (None or case-insensitive match)."""
     if not provider:
         return list(entries)
@@ -190,7 +191,7 @@ def filter_overrides_for_provider(
     return [e for e in entries if not e.provider or str(e.provider).lower() == pl]
 
 
-def merge_override_entries(*entry_sets: Iterable[PhonemeOverrideEntry]) -> List[PhonemeOverrideEntry]:
+def merge_override_entries(*entry_sets: Iterable[PhonemeOverrideEntry]) -> list[PhonemeOverrideEntry]:
     """
     Merge multiple override sources with later sets taking precedence.
 
@@ -210,7 +211,7 @@ def apply_overrides_to_text(
     text: str,
     entries: Sequence[PhonemeOverrideEntry],
     *,
-    lang_hint: Optional[str] = None,
+    lang_hint: str | None = None,
 ) -> str:
     """
     Apply override entries to text by replacing matches with [[phoneme]] tokens.
@@ -224,9 +225,8 @@ def apply_overrides_to_text(
     lang_prefix = (lang_hint or "").split("-")[0].lower() if lang_hint else None
     updated = text
     for ent in entries:
-        if ent.lang and lang_prefix:
-            if not ent.lang.lower().startswith(lang_prefix):
-                continue
+        if ent.lang and lang_prefix and not ent.lang.lower().startswith(lang_prefix):
+            continue
         pattern = re.compile(
             rf"\b{re.escape(ent.term)}\b" if ent.boundary else re.escape(ent.term),
             flags=re.IGNORECASE,

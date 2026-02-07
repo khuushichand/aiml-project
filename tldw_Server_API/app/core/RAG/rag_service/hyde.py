@@ -4,7 +4,8 @@ HyDE (Hypothetical Document Embeddings) utilities.
 This module provides helpers to generate a hypothetical answer for a query
 using a lightweight LLM and to compute its embedding for use in retrieval.
 """
-from typing import Optional, Any
+from typing import Optional
+
 from loguru import logger
 
 
@@ -15,7 +16,7 @@ def _generate_with_llm(prompt: str, provider: Optional[str], model: Optional[str
     """
     try:
         # Lazy import to avoid startup overhead
-        import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl  # type: ignore
+        import tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib as sgl
 
         class _LLMClient:
             def __init__(self, provider: Optional[str], model: Optional[str]):
@@ -76,11 +77,12 @@ async def embed_text(text: str) -> Optional[list]:
     Returns a Python list (not numpy) for portability.
     """
     try:
+        import asyncio
+
         from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import (
             create_embeddings_batch,
             get_embedding_config,
         )
-        import asyncio
 
         cfg = get_embedding_config()
         embeddings = await asyncio.get_event_loop().run_in_executor(
@@ -93,7 +95,12 @@ async def embed_text(text: str) -> Optional[list]:
         if embeddings and embeddings[0] is not None:
             vec = embeddings[0]
             if hasattr(vec, "tolist"):
-                return vec.tolist()
+                maybe_list = vec.tolist()
+                if isinstance(maybe_list, list):
+                    return maybe_list
+                if isinstance(maybe_list, tuple):
+                    return list(maybe_list)
+                return None
             if isinstance(vec, (list, tuple)):
                 return list(vec)
         return None

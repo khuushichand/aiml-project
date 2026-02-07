@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class PlanTier(str, Enum):
@@ -41,7 +41,7 @@ class PlanLimits:
 
 
 # Default limits for each tier
-DEFAULT_LIMITS: Dict[PlanTier, PlanLimits] = {
+DEFAULT_LIMITS: dict[PlanTier, PlanLimits] = {
     PlanTier.FREE: PlanLimits(
         storage_mb=1024,
         api_calls_day=100,
@@ -90,7 +90,7 @@ DEFAULT_LIMITS: Dict[PlanTier, PlanLimits] = {
 }
 
 
-def get_plan_limits(plan_name: str) -> Dict[str, Any]:
+def get_plan_limits(plan_name: str) -> dict[str, Any]:
     """
     Get limits for a plan by name.
 
@@ -154,7 +154,7 @@ def check_limit(
     current_value: int,
     limit_value: int,
     limit_name: str,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Check a usage value against its limit.
 
