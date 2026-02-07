@@ -187,6 +187,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           ? (t("playground:composer.contextKnowledgeClose", "Close Search & Context") as string)
           : (t("playground:composer.contextKnowledge", "Search & Context") as string)
       }
+      data-testid="knowledge-search-toggle"
       className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
         contextToolsOpen
           ? "bg-primary/10 text-primaryStrong"
@@ -213,6 +214,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           : (t("playground:actions.webSearchOff", "Web search off") as string)
       }
       title={t("playground:actions.webSearchOff", "Web search") as string}
+      data-testid="web-search-toggle"
       className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition hover:bg-surface2 hover:text-text ${
         webSearch
           ? "bg-primary/10 text-primaryStrong"
@@ -250,6 +252,7 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
         type="button"
         onClick={onDictationToggle}
         disabled={!speechAvailable || voiceChatEnabled}
+        data-testid="dictation-button"
         className={`inline-flex items-center justify-center rounded-md text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
           speechAvailable &&
           ((speechUsesServer && isServerDictating) ||

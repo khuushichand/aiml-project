@@ -447,8 +447,21 @@ async def execute_skill(
         executor = SkillExecutor()
         ctx = None
         if current_user and getattr(current_user, "id", None) is not None:
+            # Populate full RequestContext for fork mode support
+            try:
+                from tldw_Server_API.app.api.v1.schemas.chat_request_schemas import DEFAULT_LLM_PROVIDER
+                default_provider = DEFAULT_LLM_PROVIDER
+            except Exception:
+                default_provider = "openai"
+            try:
+                from tldw_Server_API.app.core.config import load_and_log_configs
+                app_config = load_and_log_configs()
+            except Exception:
+                app_config = None
             ctx = RequestContext(
                 user_id=current_user.id,
+                default_provider=default_provider,
+                app_config=app_config,
                 client_id=getattr(service.db, "client_id", None) if getattr(service, "db", None) else None,
             )
         result = await executor.execute(

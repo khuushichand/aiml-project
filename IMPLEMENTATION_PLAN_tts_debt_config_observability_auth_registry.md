@@ -26,13 +26,13 @@
 **Goal**: Move voice operations from coarse `audio.speech` gating to explicit voice-route privilege/rate-limit semantics.
 **Success Criteria**: New privilege IDs exist for voice actions, `audio_voices.py` uses route-specific `endpoint_id` values, per-API-key counters are isolated for voice operations, and audit events include endpoint/action context.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS_NEW/integration/test_voice_routes_rate_limit.py tldw_Server_API/tests/AuthNZ`
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 6: Persistent Voice Registry Backing Store
 **Goal**: Replace runtime-only registry dependency with persistent registry records suitable for multi-node consistency.
 **Success Criteria**: Voice records persist in DB with migration support, CRUD/read paths use DB as source of truth with safe filesystem reconciliation, and multi-instance behavior is deterministic under concurrent operations.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS_NEW/unit/test_voice_manager.py tldw_Server_API/tests/Storage/test_voice_storage_integration.py`
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 7: Rollout, Backward Compatibility, and Completion
 **Goal**: Ship safely with migration controls, feature flags where needed, and updated product/developer documentation.
@@ -110,3 +110,30 @@
 - Regression verification after privilege-catalog update:
   - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_audio_usage_events.py -k tts_usage_event_logged`
   - Result: `1 passed`.
+- Completed Stage 6 persistent voice registry backing store:
+  - Added `app/core/DB_Management/Voice_Registry_DB.py` with:
+    - SQLite-backed voice registry records per user (`voice_registry.db`)
+    - schema version tracking (`voice_registry_schema_version`)
+    - compatibility migrations for legacy table shapes
+    - CRUD and atomic `replace_user_voices` reconciliation helper
+  - Added centralized DB path constant/helper in `app/core/DB_Management/db_path_utils.py`:
+    - `DatabasePaths.VOICE_REGISTRY_DB_NAME`
+    - `DatabasePaths.get_user_voice_registry_db_path(...)`
+  - Refactored `app/core/TTS/voice_manager.py`:
+    - persistent registry store cache + async wrappers (`_list/_get/_upsert/_replace/_delete_persisted_voice`)
+    - `_sync_registry_from_filesystem` now reconciles persistent DB + filesystem and refreshes runtime cache
+    - upload/default/delete paths now persist/remove voice rows in DB
+    - filesystem scan no longer mutates runtime registry directly
+    - reconciliation preserves persisted metadata (name/description/provider/sample_rate/file_hash) when files remain
+  - Added tests:
+    - `tests/TTS_NEW/unit/test_voice_registry_db.py`
+      - CRUD/replace semantics
+      - legacy-schema migration compatibility
+    - `tests/TTS_NEW/unit/test_voice_manager.py`
+      - cross-instance resolution from persistent DB without filesystem scan
+      - stale persisted record pruning when files are missing
+- Verified Stage 6 test commands:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/unit/test_voice_registry_db.py tldw_Server_API/tests/TTS_NEW/unit/test_voice_manager.py tldw_Server_API/tests/Storage/test_voice_storage_integration.py`
+  - Result: `16 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/unit/test_voice_manager.py tldw_Server_API/tests/Storage/test_voice_storage_integration.py`
+  - Result: `14 passed`.

@@ -196,9 +196,12 @@ test.describe("Collections Stage 3 Skeleton", () => {
 
     await openCollectionsPage(authedPage)
     await openReadingItemByTitle(authedPage, seed.title)
+    await expect(authedPage.locator(".reading-item-detail-drawer .prose")).toContainText(seed.quote, {
+      timeout: 15_000
+    })
 
     const selectionOk = await selectPhraseInContent(authedPage, seed.quote)
-    test.skip(!selectionOk, "Could not create text selection from seeded content")
+    expect(selectionOk).toBeTruthy()
 
     await expect(
       authedPage.getByText(/Selected text captured|Selected text matches an existing highlight/i)

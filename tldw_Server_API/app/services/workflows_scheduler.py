@@ -38,6 +38,7 @@ from tldw_Server_API.app.core.Scheduler.handlers import (
 from tldw_Server_API.app.core.Scheduler.handlers import (
     workflows as _ensure_handlers,  # noqa: F401  # register workflow_run
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _WORKFLOWS_SCHED_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -352,7 +353,7 @@ class _WFRecurringScheduler:
             logger.debug(f"Presence gating check failed for schedule {schedule_id}: {_e}")
         # Optionally mint a short-lived, scoped bearer token and inject into run secrets
         try:
-            use_vk = os.getenv("WORKFLOWS_MINT_VIRTUAL_KEYS", "").strip().lower() in {"1", "true", "yes", "on"}
+            use_vk = env_flag_enabled("WORKFLOWS_MINT_VIRTUAL_KEYS")
             if use_vk:
                 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
                 from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
@@ -501,7 +502,7 @@ def get_workflows_scheduler() -> _WFRecurringScheduler:
 
 
 async def start_workflows_scheduler() -> asyncio.Task | None:
-    enabled = os.getenv("WORKFLOWS_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("WORKFLOWS_SCHEDULER_ENABLED")
     if not enabled:
         return None
     svc = get_workflows_scheduler()

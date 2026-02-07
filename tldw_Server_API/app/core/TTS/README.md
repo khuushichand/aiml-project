@@ -53,6 +53,7 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
     - Removal target for aliases: after 2026-06-30
   - Environment:
     - `TTS_STREAM_ERRORS_AS_AUDIO` — override streaming error behavior
+    - `TTS_VOICE_REGISTRY_ENABLED` — toggle persistent voice registry backing store (`true` default). Set `false` for compatibility-mode runtime/filesystem registry only; compatibility mode is deprecated and targeted for removal after 2026-12-31.
     - Secrets via `${ENV_VAR}` in YAML
 - Concurrency & Performance:
   - Global semaphore `performance.max_concurrent_generations` (default 4); provider-specific limits may apply inside adapters.
@@ -135,6 +136,7 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - adapter_registry.py — registry/factory and provider enum
   - tts_config.py — unified configuration manager (env/config.txt/YAML)
   - voice_manager.py — user voice storage/validation/quotas + preview
+  - app/core/DB_Management/Voice_Registry_DB.py — persistent per-user voice registry (`voice_registry.db`)
   - audio_converter.py, streaming_audio_writer.py — format conversion and stream shaping
 - Extension Points:
   - Add a provider by creating `adapters/<name>_adapter.py` implementing `TTSAdapter` methods, register in `adapter_registry.py` (enum + DEFAULT_ADAPTERS), and add defaults to YAML.

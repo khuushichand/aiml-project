@@ -371,6 +371,7 @@ Environment overrides:
   ```
   The API returns a `voice_id`; reuse it via `"voice": "custom:<voice_id>"`.
 - Inline references: set `"voice_reference": "<base64 audio>"` directly on the TTS request.
+- Registry persistence: custom voice records are stored in `<USER_DB_BASE_DIR>/<user_id>/voices/voice_registry.db` to support cross-instance consistency.
 - Duration & quality (see `tldw_Server_API/app/core/TTS/TTS-VOICE-CLONING.md`):
   - Higgs: 3–10 s @ 24 kHz, mono.
   - Chatterbox: 5–20 s @ 24 kHz, mono.
@@ -388,6 +389,7 @@ Environment overrides:
 | `TTS_DEFAULT_PROVIDER` / `TTS_DEFAULT_VOICE` | Overrides the provider/voice when the client omits them. |
 | `TTS_DEVICE` | Forces a device hint (e.g., `cuda`, `cpu`) across adapters that respect it. |
 | `TTS_STREAM_ERRORS_AS_AUDIO` | When `1`, embed adapter errors into the stream (OpenAI compatibility); default `0` for normal HTTP errors. |
+| `TTS_VOICE_REGISTRY_ENABLED` | When `0/false`, disables persistent voice registry DB and uses compatibility-mode runtime/filesystem synchronization only. This mode is deprecated and targeted for removal after 2026-12-31. |
 
 All env vars above are documented in `Env_Vars.md`.
 

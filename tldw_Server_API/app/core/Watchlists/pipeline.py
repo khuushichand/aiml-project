@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.Watchlists.fetchers import (
     fetch_site_items_with_rules,
 )
 from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters, normalize_filters
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -83,7 +84,7 @@ def _utcnow_iso() -> str:
 
 
 def _forums_enabled() -> bool:
-    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("WATCHLIST_FORUMS_ENABLED")
 
 
 def _forum_delay_seconds() -> float:
@@ -470,7 +471,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
             return []
 
     # TEST_MODE short-circuit for offline tests: do not perform network
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = is_test_mode()
 
     # Load job-level filters + gating toggle (bridge from SUBS Import Rules)
     job_filters: list[dict[str, Any]] = []
@@ -520,7 +521,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             pass
         try:
-            return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
+            return env_flag_enabled("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT")
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             return False
 

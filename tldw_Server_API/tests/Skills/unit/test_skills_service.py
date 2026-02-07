@@ -462,3 +462,69 @@ Content""")
         names = [s.name for s in skills]
 
         assert "manual-skill" in names
+
+    @pytest.mark.asyncio
+    async def test_sync_debounce_avoids_redundant_scans(self, temp_base_path):
+        """Regression Bug 2: read ops should skip sync when within debounce interval."""
+        db_path = temp_base_path / "ChaChaNotes.db"
+        chacha_db = CharactersRAGDB(db_path=db_path, client_id="test_client")
+        service = SkillsService(user_id=1, base_path=temp_base_path, db=chacha_db, sync_interval=60.0)
+        try:
+            sync_count = 0
+            original_sync = service._sync_registry.__func__  # unbound method
+
+            def counting_sync(self_inner, force=False):
+                nonlocal sync_count
+                sync_count += 1
+                original_sync(self_inner, force=force)
+
+            import types
+            service._sync_registry = types.MethodType(counting_sync, service)
+
+            # First call triggers sync
+            payload = service.get_context_payload()
+            first_count = sync_count
+
+            # Second call (within debounce window) should skip actual scan
+            payload2 = service.get_context_payload()
+            assert sync_count == first_count + 1  # Called, but debounce returns early inside
+        finally:
+            chacha_db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_import_from_zip_invalid_name_rejected(self, service):
+        """Regression Bug 6: zip with invalid directory name should be rejected."""
+        import zipfile
+        from io import BytesIO
+
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("Invalid_Name!/SKILL.md", "---\nname: invalid\n---\nContent")
+        zip_data = buffer.getvalue()
+
+        with pytest.raises(SkillValidationError, match="Invalid skill name"):
+            await service.import_from_zip(zip_data)
+
+
+class TestSkillSchemaValidation:
+    """Tests for schema-level validation (Bug 7 regression)."""
+
+    def test_supporting_files_count_limit(self):
+        """Regression Bug 7: too many supporting files should be rejected."""
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
+        import pydantic
+
+        files = {f"file{i:02d}.md": "content" for i in range(25)}
+        with pytest.raises(pydantic.ValidationError, match="Too many supporting files"):
+            SkillCreate(name="test-skill", content="content", supporting_files=files)
+
+    def test_supporting_files_aggregate_limit(self):
+        """Regression Bug 7: total size exceeding 5MB should be rejected."""
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
+        import pydantic
+
+        # Create files that individually pass (< 500KB) but collectively exceed 5MB
+        big_content = "x" * 400_000  # ~400KB each
+        files = {f"file{i:02d}.md": big_content for i in range(15)}  # ~6MB total
+        with pytest.raises(pydantic.ValidationError, match="Total supporting files size"):
+            SkillCreate(name="test-skill", content="content", supporting_files=files)

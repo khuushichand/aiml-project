@@ -40,8 +40,8 @@ class TestSkillExecutor:
             assert result == "Do something with  please."
 
         def test_substitute_arguments_indexed(self, executor):
-            """Test $0, $1, $2 substitution."""
-            content = "First: $0, Second: $1, Third: $2"
+            """Test ${0}, ${1}, ${2} substitution."""
+            content = "First: ${0}, Second: ${1}, Third: ${2}"
             result = executor.substitute_arguments(content, "apple banana cherry")
 
             assert result == "First: apple, Second: banana, Third: cherry"
@@ -55,21 +55,21 @@ class TestSkillExecutor:
 
         def test_substitute_arguments_out_of_range(self, executor):
             """Test out-of-range indexed arguments return empty string."""
-            content = "Has: $0, Missing: $1"
+            content = "Has: ${0}, Missing: ${1}"
             result = executor.substitute_arguments(content, "only-one")
 
             assert result == "Has: only-one, Missing: "
 
         def test_substitute_arguments_quoted(self, executor):
             """Test arguments with quotes are handled correctly."""
-            content = "Process: $0"
+            content = "Process: ${0}"
             result = executor.substitute_arguments(content, '"multi word arg"')
 
             assert result == "Process: multi word arg"
 
         def test_substitute_arguments_mixed(self, executor):
             """Test mixed argument styles."""
-            content = "All: $ARGUMENTS, First: $0, Second: $ARGUMENTS[1]"
+            content = "All: $ARGUMENTS, First: ${0}, Second: $ARGUMENTS[1]"
             result = executor.substitute_arguments(content, "one two three")
 
             assert result == "All: one two three, First: one, Second: two"
@@ -85,6 +85,20 @@ class TestSkillExecutor:
             """Test empty content returns empty string."""
             result = executor.substitute_arguments("", "args")
             assert result == ""
+
+        def test_substitute_dollar_amount_not_replaced(self, executor):
+            """Regression: bare $100, $50 etc. must NOT be treated as indexed args."""
+            content = "The cost is $100 and the fee is $50."
+            result = executor.substitute_arguments(content, "ignored")
+
+            assert result == "The cost is $100 and the fee is $50."
+
+        def test_substitute_braces_indexed(self, executor):
+            """Test that ${N} brace-delimited syntax works correctly."""
+            content = "Arg0=${0}, Arg1=${1}, literal $99"
+            result = executor.substitute_arguments(content, "hello world")
+
+            assert result == "Arg0=hello, Arg1=world, literal $99"
 
     class TestToolResolution:
         """Tests for allowed-tools resolution."""
@@ -288,6 +302,85 @@ class TestSkillExecution:
         result = await executor.execute(skill_data, "")
 
         assert result.model_override == "claude-3-opus"
+
+
+class TestForkExceptionLogging:
+    """Regression tests for fork mode exception handling (Bug 4)."""
+
+    @pytest.fixture
+    def executor(self):
+        return SkillExecutor()
+
+    @pytest.mark.asyncio
+    async def test_fork_unexpected_tool_error_logged(self, executor, monkeypatch):
+        """Test that unexpected exceptions in fork tool execution are logged with traceback."""
+        import json
+        from io import StringIO
+        from loguru import logger
+
+        skill_data = {
+            "name": "fork-error-skill",
+            "content": "Do something",
+            "context": "fork",
+            "allowed_tools": [],
+            "model": None,
+        }
+
+        call_count = 0
+
+        async def _fake_chat_call(**_kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call returns a tool call
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": None,
+                            "tool_calls": [{
+                                "id": "call_1",
+                                "function": {
+                                    "name": "SomeTool",
+                                    "arguments": json.dumps({"key": "value"}),
+                                },
+                            }],
+                        }
+                    }]
+                }
+            # Second call returns final text
+            return {"choices": [{"message": {"content": "done"}}]}
+
+        from tldw_Server_API.app.core.Chat import chat_service as chat_service_mod
+        monkeypatch.setattr(chat_service_mod, "perform_chat_api_call_async", _fake_chat_call)
+
+        class _BrokenToolExecutor:
+            async def list_tools(self, **_kw):
+                return {"tools": []}
+
+            async def execute(self, **_kw):
+                raise RuntimeError("Unexpected kaboom!")
+
+        ctx = RequestContext(
+            user_id=1,
+            default_provider="openai",
+            tool_executor=_BrokenToolExecutor(),
+            tool_definitions=[],
+        )
+
+        # Capture loguru output
+        log_output = StringIO()
+        handler_id = logger.add(log_output, format="{message}", level="WARNING")
+        try:
+            result = await executor.execute(skill_data, "", context=ctx)
+        finally:
+            logger.remove(handler_id)
+
+        # Fork should complete (error is returned to LLM, not raised)
+        assert result.execution_mode == "fork"
+        assert result.fork_output == "done"
+        # The warning should have been logged
+        captured = log_output.getvalue()
+        assert "kaboom" in captured or "Unexpected" in captured
 
 
 class TestSkillToolDefinition:

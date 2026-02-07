@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     DatabasePaths,
     _normalize_user_db_base_dir,
 )
+from tldw_Server_API.app.core.DB_Management.Voice_Registry_DB import VoiceRegistryDB
 from tldw_Server_API.app.core.Storage.generated_file_helpers import AUDIO_MIME_TYPES
 from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
@@ -106,6 +107,7 @@ VOICE_RATE_LIMITS = {
     "concurrent_processing": 2,
     "max_voices_per_user": 50
 }
+VOICE_REGISTRY_COMPAT_MODE_REMOVAL_DATE = "2026-12-31"
 
 DEFAULT_NEUTTS_VOICE_ID = "default"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -338,6 +340,8 @@ class VoiceManager:
         self.processing_queue = asyncio.Queue()
         self.cleanup_interval = 3600  # 1 hour
         self.user_upload_counts: dict[int, list[datetime]] = {}
+        self._registry_store_cache: dict[str, VoiceRegistryDB] = {}
+        self._voice_registry_disable_warning_emitted = False
         self._processing_tasks: dict[str, asyncio.Task] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
         self._cleanup_stop_event: Optional[asyncio.Event] = None
@@ -372,17 +376,212 @@ class VoiceManager:
 
         return (count, newest_mtime_ns)
 
+    def _is_persistent_registry_enabled(self) -> bool:
+        """Return True when persistent voice registry storage is enabled."""
+        raw_override = os.getenv("TTS_VOICE_REGISTRY_ENABLED")
+        if raw_override is None:
+            raw_override = settings.get("TTS_VOICE_REGISTRY_ENABLED")
+        enabled = parse_bool(raw_override, default=True)
+        if not enabled and not self._voice_registry_disable_warning_emitted:
+            logger.warning(
+                "Persistent voice registry disabled via TTS_VOICE_REGISTRY_ENABLED. "
+                "Compatibility mode is deprecated and scheduled for removal after {}.",
+                VOICE_REGISTRY_COMPAT_MODE_REMOVAL_DATE,
+            )
+            self._voice_registry_disable_warning_emitted = True
+        return enabled
+
+    def get_user_voice_registry_db_path(self, user_id: int) -> Path:
+        """Get the SQLite path for persistent voice registry records."""
+        voices_path = self.get_user_voices_path(user_id)
+        return voices_path / DatabasePaths.VOICE_REGISTRY_DB_NAME
+
+    def _get_registry_store(self, user_id: int) -> VoiceRegistryDB:
+        if not self._is_persistent_registry_enabled():
+            raise RuntimeError("Persistent voice registry disabled")
+        db_path = str(self.get_user_voice_registry_db_path(user_id).resolve())
+        store = self._registry_store_cache.get(db_path)
+        if store is None:
+            store = VoiceRegistryDB(db_path)
+            self._registry_store_cache[db_path] = store
+        return store
+
+    @staticmethod
+    def _to_registry_record(voice: VoiceInfo) -> dict[str, Any]:
+        return {
+            "voice_id": voice.voice_id,
+            "name": voice.name,
+            "description": voice.description,
+            "file_path": voice.file_path,
+            "format": voice.format,
+            "duration": voice.duration,
+            "sample_rate": voice.sample_rate,
+            "size_bytes": voice.size_bytes,
+            "provider": voice.provider,
+            "created_at": voice.created_at.isoformat(),
+            "file_hash": voice.file_hash,
+        }
+
+    @staticmethod
+    def _from_registry_record(record: dict[str, Any]) -> VoiceInfo:
+        created_at_raw = record.get("created_at")
+        try:
+            created_at = datetime.fromisoformat(str(created_at_raw))
+        except (ValueError, TypeError):
+            created_at = datetime.utcnow()
+        return VoiceInfo(
+            voice_id=str(record.get("voice_id") or ""),
+            name=str(record.get("name") or ""),
+            description=record.get("description"),
+            file_path=str(record.get("file_path") or ""),
+            format=str(record.get("format") or "wav"),
+            duration=float(record.get("duration") or 0.0),
+            sample_rate=record.get("sample_rate"),
+            size_bytes=int(record.get("size_bytes") or 0),
+            provider=str(record.get("provider") or "vibevoice"),
+            created_at=created_at,
+            file_hash=str(record.get("file_hash") or ""),
+        )
+
+    async def _list_persisted_voices(self, user_id: int) -> list[VoiceInfo]:
+        if not self._is_persistent_registry_enabled():
+            return []
+        store = self._get_registry_store(user_id)
+        try:
+            rows = await asyncio.to_thread(store.list_voices, user_id)
+            return [self._from_registry_record(row) for row in rows]
+        except Exception as e:
+            logger.warning("Failed to list persisted voices for user {}: {}", user_id, e)
+            return []
+
+    async def _get_persisted_voice(self, user_id: int, voice_id: str) -> Optional[VoiceInfo]:
+        if not self._is_persistent_registry_enabled():
+            return None
+        store = self._get_registry_store(user_id)
+        try:
+            row = await asyncio.to_thread(store.get_voice, user_id, voice_id)
+            if row is None:
+                return None
+            return self._from_registry_record(row)
+        except Exception as e:
+            logger.warning(
+                "Failed to read persisted voice {} for user {}: {}",
+                voice_id,
+                user_id,
+                e,
+            )
+            return None
+
+    async def _upsert_persisted_voice(self, user_id: int, voice: VoiceInfo) -> None:
+        if not self._is_persistent_registry_enabled():
+            return
+        store = self._get_registry_store(user_id)
+        try:
+            await asyncio.to_thread(store.upsert_voice, user_id, self._to_registry_record(voice))
+        except Exception as e:
+            logger.warning("Failed to upsert persisted voice {} for user {}: {}", voice.voice_id, user_id, e)
+
+    async def _replace_persisted_voices(self, user_id: int, voices: list[VoiceInfo]) -> None:
+        if not self._is_persistent_registry_enabled():
+            return
+        store = self._get_registry_store(user_id)
+        records = [self._to_registry_record(voice) for voice in voices]
+        try:
+            await asyncio.to_thread(store.replace_user_voices, user_id, records)
+        except Exception as e:
+            logger.warning("Failed to replace persisted voices for user {}: {}", user_id, e)
+
+    async def _delete_persisted_voice(self, user_id: int, voice_id: str) -> bool:
+        if not self._is_persistent_registry_enabled():
+            return False
+        store = self._get_registry_store(user_id)
+        try:
+            return await asyncio.to_thread(store.delete_voice, user_id, voice_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to delete persisted voice {} for user {}: {}",
+                voice_id,
+                user_id,
+                e,
+            )
+            return False
+
+    async def _refresh_runtime_registry(self, user_id: int, voices: list[VoiceInfo]) -> None:
+        await self.registry.clear_user_voices(user_id)
+        for voice in voices:
+            await self.registry.register_voice(user_id, voice)
+
+    def _merge_with_persisted_metadata(
+        self,
+        scanned_voices: list[VoiceInfo],
+        persisted_voices: list[VoiceInfo],
+    ) -> list[VoiceInfo]:
+        persisted_by_id = {voice.voice_id: voice for voice in persisted_voices}
+        merged: list[VoiceInfo] = []
+        for scanned in scanned_voices:
+            persisted = persisted_by_id.get(scanned.voice_id)
+            if persisted is None:
+                merged.append(scanned)
+                continue
+            merged.append(
+                scanned.model_copy(
+                    update={
+                        "name": persisted.name or scanned.name,
+                        "description": (
+                            persisted.description
+                            if persisted.description is not None
+                            else scanned.description
+                        ),
+                        "provider": persisted.provider or scanned.provider,
+                        "sample_rate": (
+                            persisted.sample_rate
+                            if persisted.sample_rate is not None
+                            else scanned.sample_rate
+                        ),
+                        "created_at": persisted.created_at,
+                        "file_hash": persisted.file_hash or scanned.file_hash,
+                    }
+                )
+            )
+        return merged
+
     async def _sync_registry_from_filesystem(self, user_id: int, *, force: bool = False) -> list[VoiceInfo]:
-        """Refresh in-memory registry when filesystem state changed or refresh is forced."""
+        """Refresh runtime and persistent registries when filesystem state changes."""
         current_snapshot = self._get_processed_snapshot(user_id)
         cached_snapshot = self._registry_snapshots.get(user_id)
-        current_registry = await self.registry.list_voices(user_id)
+        if not self._is_persistent_registry_enabled():
+            current_registry = await self.registry.list_voices(user_id)
+            if not force and cached_snapshot == current_snapshot and current_registry:
+                return current_registry
+            voices = await self._scan_user_voices(user_id)
+            await self._refresh_runtime_registry(user_id, voices)
+            self._registry_snapshots[user_id] = self._get_processed_snapshot(user_id)
+            return voices
 
-        if not force and cached_snapshot == current_snapshot and current_registry:
-            return current_registry
+        persisted_voices = await self._list_persisted_voices(user_id)
+        should_reconcile = force or cached_snapshot != current_snapshot or not persisted_voices
 
-        await self.registry.clear_user_voices(user_id)
-        voices = await self._scan_user_voices(user_id)
+        if should_reconcile:
+            scanned_voices = await self._scan_user_voices(user_id)
+            voices = self._merge_with_persisted_metadata(scanned_voices, persisted_voices)
+            await self._replace_persisted_voices(user_id, voices)
+        else:
+            stale_ids = [
+                voice.voice_id
+                for voice in persisted_voices
+                if not self._voice_file_exists(user_id, voice)
+            ]
+            if stale_ids:
+                for stale_id in stale_ids:
+                    await self._delete_persisted_voice(user_id, stale_id)
+                stale_set = set(stale_ids)
+                voices = [
+                    voice for voice in persisted_voices if voice.voice_id not in stale_set
+                ]
+            else:
+                voices = persisted_voices
+
+        await self._refresh_runtime_registry(user_id, voices)
         self._registry_snapshots[user_id] = self._get_processed_snapshot(user_id)
         return voices
 
@@ -528,10 +727,15 @@ class VoiceManager:
     async def ensure_default_voice(self, user_id: int) -> Optional[VoiceInfo]:
         """Ensure the bundled default NeuTTS voice exists for a user."""
         existing = await self.registry.get_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
+        if existing is None:
+            existing = await self._get_persisted_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
+            if existing is not None:
+                await self.registry.register_voice(user_id, existing)
         if existing and self._voice_file_exists(user_id, existing):
             return existing
         if existing:
             await self.registry.remove_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
+            await self._delete_persisted_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
 
         voices_path = self.get_user_voices_path(user_id)
         processed_path = voices_path / "processed"
@@ -547,6 +751,7 @@ class VoiceManager:
                     audio_path=candidate,
                 )
                 await self.registry.register_voice(user_id, voice_info)
+                await self._upsert_persisted_voice(user_id, voice_info)
                 self._invalidate_registry_snapshot(user_id)
                 return voice_info
 
@@ -571,6 +776,7 @@ class VoiceManager:
                 audio_path=processed_file,
             )
             await self.registry.register_voice(user_id, voice_info)
+            await self._upsert_persisted_voice(user_id, voice_info)
             self._invalidate_registry_snapshot(user_id)
 
             reference_text = None
@@ -841,6 +1047,7 @@ class VoiceManager:
 
             # Register voice
             await self.registry.register_voice(user_id, voice_info)
+            await self._upsert_persisted_voice(user_id, voice_info)
             self._invalidate_registry_snapshot(user_id)
 
             # Store optional reference metadata
@@ -1115,9 +1322,6 @@ class VoiceManager:
 
                         voices.append(voice_info)
 
-                        # Register in memory
-                        await self.registry.register_voice(user_id, voice_info)
-
                     except _VOICE_NONCRITICAL_EXCEPTIONS as e:
                         logger.error(f"Error scanning voice file {voice_file}: {e}")
 
@@ -1173,6 +1377,7 @@ class VoiceManager:
 
         # Remove from registry
         await self.registry.remove_voice(user_id, voice_id)
+        await self._delete_persisted_voice(user_id, voice_id)
         self._invalidate_registry_snapshot(user_id)
 
         logger.info(f"Deleted voice {voice_id} for user {user_id}")

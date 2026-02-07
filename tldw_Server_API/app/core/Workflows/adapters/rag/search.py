@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import unified_rag_pipeline
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
     RAGSearchConfig,
@@ -256,7 +257,7 @@ async def run_web_search_adapter(config: dict[str, Any], context: dict[str, Any]
         if isinstance(value, (int, float)):
             return bool(value)
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(value)
         return bool(value)
 
     def _render(value: Any) -> Any:
@@ -347,7 +348,7 @@ async def run_web_search_adapter(config: dict[str, Any], context: dict[str, Any]
             }
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         mock_results = [
             {"title": f"Result 1 for {query}", "link": "https://example.com/1", "snippet": f"Snippet about {query}"},
             {"title": f"Result 2 for {query}", "link": "https://example.com/2", "snippet": f"More info about {query}"},
@@ -533,7 +534,7 @@ async def run_rss_fetch_adapter(config: dict[str, Any], context: dict[str, Any])
     include_content = bool(config.get("include_content", True))
 
     # Test-friendly behavior without network
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if is_test_mode():
         fake = [{"title": "Test Item", "link": "https://example.com/x", "summary": "Test", "published": None}]
         return {"results": fake[:limit], "count": min(limit, len(fake)), "text": fake[0]["summary"]}
 

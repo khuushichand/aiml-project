@@ -92,7 +92,6 @@ import { TokenProgressBar } from "./TokenProgressBar"
 import { AttachmentsSummary } from "./AttachmentsSummary"
 import { VoiceChatIndicator } from "./VoiceChatIndicator"
 import { VoiceModeSelector } from "./VoiceModeSelector"
-import { PlaygroundTour, usePlaygroundTour } from "./PlaygroundTour"
 import {
   ParameterPresets,
   SystemPromptTemplatesButton,
@@ -338,7 +337,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
   const serverSaveInFlightRef = React.useRef(false)
   const uiMode = useUiModeStore((state) => state.mode)
   const isProMode = uiMode === "pro"
-  const { runTour, completeTour } = usePlaygroundTour()
   const [contextToolsOpen, setContextToolsOpen] = useStorage(
     "playgroundKnowledgeSearchOpen",
     false
@@ -3289,6 +3287,7 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
       ariaLabel={mcpCtrl.mcpAriaLabel}
       title={mcpCtrl.mcpAriaLabel}
       disabled={!hasMcp || mcpHealthState === "unhealthy"}
+      data-testid="mcp-tools-toggle"
       className="gap-1.5 min-h-[44px]"
     >
       <span className="inline-flex items-center gap-1.5">
@@ -4331,7 +4330,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
         dictationAvailable={speechAvailable}
         conversationAvailable={voiceChatAvailable}
       />
-      <PlaygroundTour run={runTour} onComplete={completeTour} />
     </div>
   )
 }

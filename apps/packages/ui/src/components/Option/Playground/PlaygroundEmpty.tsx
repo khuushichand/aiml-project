@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next"
 import { MessageSquarePlus, HelpCircle } from "lucide-react"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import { useDemoMode } from "@/context/demo-mode"
-import { usePlaygroundTour } from "./PlaygroundTour"
+import { useHelpModal } from "@/store/tutorials"
 
 /** Clickable example prompts that populate the composer */
 const ExamplePromptChips: React.FC<{
@@ -36,7 +36,7 @@ const ExamplePromptChips: React.FC<{
 export const PlaygroundEmpty = () => {
   const { t } = useTranslation(["playground", "common"])
   const { demoEnabled } = useDemoMode()
-  const { resetTour } = usePlaygroundTour()
+  const { open: openHelpModal } = useHelpModal()
 
   const handleStartChat = React.useCallback(() => {
     window.dispatchEvent(new CustomEvent("tldw:focus-composer"))
@@ -99,7 +99,7 @@ export const PlaygroundEmpty = () => {
         <div className="mt-5 text-center">
           <button
             type="button"
-            onClick={resetTour}
+            onClick={openHelpModal}
             className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline transition"
           >
             <HelpCircle className="h-3.5 w-3.5" />

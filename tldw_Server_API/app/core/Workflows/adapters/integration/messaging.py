@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.DB_Management.Kanban_DB import (
     NotFoundError,
 )
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.integration._config import (
@@ -79,7 +80,7 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
         if isinstance(value, bool):
             return value
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(value)
         return bool(value)
 
     def _coerce_optional_bool(value: Any) -> bool | None:
@@ -89,9 +90,9 @@ async def run_kanban_adapter(config: dict[str, Any], context: dict[str, Any]) ->
             return value
         if isinstance(value, str):
             raw = value.strip().lower()
-            if raw in {"1", "true", "yes", "on"}:
+            if is_truthy(raw):
                 return True
-            if raw in {"0", "false", "no", "off"}:
+            if raw in {"0", "false", "no", "off", "n"}:
                 return False
         return bool(value)
 
@@ -567,7 +568,7 @@ async def run_chatbooks_adapter(config: dict[str, Any], context: dict[str, Any])
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "export":
             return {
                 "job_id": "test-job-123",
@@ -712,7 +713,7 @@ async def run_character_chat_adapter(config: dict[str, Any], context: dict[str, 
     user_name = _render(config.get("user_name") or "User")
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "start":
             return {
                 "conversation_id": "test-conv-123",

@@ -209,6 +209,7 @@ class DatabasePaths:
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     KANBAN_DB_NAME = "Kanban.db"
     SLIDES_DB_NAME = "Slides.db"
+    VOICE_REGISTRY_DB_NAME = "voice_registry.db"
 
     # Subdirectories
     PROMPTS_SUBDIR = "prompts_user_dbs"
@@ -475,6 +476,19 @@ class DatabasePaths:
         _ensure_dir(voices_dir / "temp", label="voice temp")
         _ensure_dir(voices_dir / "metadata", label="voice metadata")
         return voices_dir
+
+    @staticmethod
+    def get_user_voice_registry_db_path(
+        user_id: Optional[UserId],
+        *,
+        base_dir_override: Optional[Union[str, Path]] = None,
+    ) -> Path:
+        """Get the path to the user's persistent voice registry database."""
+        voices_dir = DatabasePaths.get_user_voices_dir(
+            user_id,
+            base_dir_override=base_dir_override,
+        )
+        return voices_dir / DatabasePaths.VOICE_REGISTRY_DB_NAME
 
     @staticmethod
     def get_user_chatbooks_dir(user_id: Optional[UserId]) -> Path:

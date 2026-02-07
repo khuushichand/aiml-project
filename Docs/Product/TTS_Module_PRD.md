@@ -5,7 +5,7 @@
 - `TTSServiceV2` orchestrates provider selection, validation, generation, fallback, and metrics while adapters encapsulate individual providers (`tldw_Server_API/app/core/TTS/tts_service_v2.py`).
 - A unified configuration layer merges YAML, `config.txt`, and environment overrides to enable/disable providers and tune performance (`tldw_Server_API/app/core/TTS/tts_config.py`, `tldw_Server_API/Config_Files/tts_providers_config.yaml`).
 - Voice management supports upload, encode, list, get, delete, and preview of custom voices for cloning-capable engines (`tldw_Server_API/app/api/v1/endpoints/audio/audio_voices.py`, `tldw_Server_API/app/core/TTS/voice_manager.py`).
-- Refactor phases 1-2 completed (exceptions, validation, resource manager, circuit breaker); phases 3-5 (testing, observability, hardening) remain open (`Docs/Development/TTS-Refactor-3.md`).
+- Refactor phases 1-6 are implemented across testing, observability, auth/rate-limit granularity, and persistent registry hardening; remaining effort is rollout completion and broad CI regression confidence (`IMPLEMENTATION_PLAN_tts_debt_config_observability_auth_registry.md`).
 
 ## 2. Objectives & Success Criteria
 - Deliver a production-ready, extensible TTS layer with pluggable providers, real-time streaming, and voice cloning.
@@ -82,7 +82,7 @@
 
 ### 6.3 Voice Management & Cloning
 - Upload pipeline validates filename, size, duration, format, and provider-specific constraints; converts audio into provider-compatible form.
-- Registry keeps in-memory mapping per user; filesystem persists originals and processed artifacts using the generated UUID prefixed to the sanitized filename (for example, `voice_id_filename.ext`).
+- Registry persists per-user voice records in `voice_registry.db` with runtime in-memory caching; filesystem persists originals and processed artifacts using the generated UUID prefixed to the sanitized filename (for example, `voice_id_filename.ext`).
 - Preview endpoint uses requested provider and stored voice reference to synthesize sample audio via `TTSServiceV2`.
 
 ### 6.4 Validation & Security
@@ -112,13 +112,14 @@
 ## 8. Configuration & Deployment
 - YAML (`tts_providers_config.yaml`) defines provider priority, enablement, model paths, auto-download flags, fallback + logging settings.
 - `Config_Files/config.txt` `[TTS-Settings]` supplies defaults for legacy paths (OpenAI voice, ElevenLabs params, local device).
-- Environment overrides (`TTS_AUTO_DOWNLOAD`, `KOKORO_AUTO_DOWNLOAD`, etc.) prevail at runtime (`Docs/STT-TTS/TTS-SETUP-GUIDE.md`).
+- Environment overrides (`TTS_AUTO_DOWNLOAD`, `KOKORO_AUTO_DOWNLOAD`, `TTS_VOICE_REGISTRY_ENABLED`, etc.) prevail at runtime (`Docs/STT-TTS/TTS-SETUP-GUIDE.md`).
 - System dependencies: `ffmpeg`, `espeak-ng` for normalization, optional GPU toolchains (CUDA, flash-attn) per provider doc.
 - Python extras: `pyproject.toml` defines `TTS_All`, `TTS_kokoro`, etc. for selective installs.
 
 ## 9. Data & Storage
 - Voice uploads stored under `<USER_DB_BASE_DIR>/<user_id>/voices/{uploads,processed,temp,metadata}` with per-voice metadata JSON files (`voice_manager.py`).
-- Runtime voice registry remains in-memory, but it is synchronized from shared filesystem snapshots for list/get/delete/rate-limit paths to keep multi-instance views consistent.
+- Persistent registry records are stored in `<USER_DB_BASE_DIR>/<user_id>/voices/voice_registry.db`; runtime cache is synchronized against filesystem snapshots for list/get/delete/rate-limit paths.
+- Backward-compatibility switch: `TTS_VOICE_REGISTRY_ENABLED=false` disables persistent registry and reverts to runtime/filesystem-only mode (deprecated; removal target after 2026-12-31).
 - Voice delete lifecycle removes processed/upload files, removes metadata JSON, and best-effort unregisters `generated_files` voice_clone entries to keep storage accounting aligned.
 - Provider runtime artifacts (models, caches) follow paths in YAML/config; respect auto-download toggles to avoid surprise network calls.
 
@@ -150,6 +151,7 @@
 - Provider auto-download may still trigger unintended network calls if toggles misconfigured.
 - Adapter TODOs: AllTalk stub, provider-specific features (emotion control, SSML) not fully exposed.
 - Observability gaps: no structured tracing, fallback successes not correlated with upstream error categories yet.
+- Voice registry compatibility mode (`TTS_VOICE_REGISTRY_ENABLED=false`) remains supported for rollout safety but is slated for removal after 2026-12-31.
 
 ## 14. Roadmap
 - **Near Term (Phase 3)**:
@@ -165,5 +167,5 @@
   - Add rate limiting per API key + audit logging for voice operations.
 - **Long Term (Phase 5)**:
   - Load testing across providers with failover scenarios.
-  - Persistent voice registry backing store (SQLite/DB) for multi-node deployments.
+  - Voice registry HA enhancements (cross-region replication/backup automation) for large multi-node deployments.
   - Remove legacy `OLD_*` TTS files, finalize documentation, and certify production readiness checklist.

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -117,3 +118,50 @@ async def test_include_only_gating_enabled_by_org_default():
         assert all(i.status == "filtered" for i in items)
     finally:
         reset_scope(scope_token)
+
+
+@pytest.mark.asyncio
+async def test_include_only_gating_enabled_by_env_default_y(monkeypatch):
+    monkeypatch.setenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "y")
+
+    user_id = 905
+    db = WatchlistsDatabase.for_user(user_id)
+    feed_url = f"https://example.com/feed-{uuid4().hex}.xml"
+
+    src = db.create_source(
+        name="Feed",
+        url=feed_url,
+        source_type="rss",
+        active=True,
+        settings_json=json.dumps({"limit": 1}),
+        tags=["gated"],
+        group_ids=[],
+    )
+
+    job = db.create_job(
+        name="IncludeOnlyByEnv",
+        description=None,
+        scope_json=json.dumps({"sources": [src.id]}),
+        schedule_expr=None,
+        schedule_timezone="UTC",
+        active=True,
+        max_concurrency=None,
+        per_host_delay_ms=None,
+        retry_policy_json=None,
+        output_prefs_json=None,
+        job_filters_json=json.dumps(
+            {
+                "filters": [
+                    {
+                        "type": "keyword",
+                        "action": "include",
+                        "value": {"keywords": ["NoMatch"], "match": "any"},
+                    },
+                ]
+            }
+        ),
+    )
+
+    res = await run_watchlist_job(user_id, job.id)
+    assert res.get("items_found", 0) >= 1
+    assert res.get("items_ingested", 0) == 0

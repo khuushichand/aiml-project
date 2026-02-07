@@ -17,6 +17,7 @@ Provides:
 
 import asyncio
 import contextlib
+import re
 import shutil
 import time
 import zipfile
@@ -41,6 +42,9 @@ from tldw_Server_API.app.core.Skills.exceptions import (
     SkillValidationError,
 )
 from tldw_Server_API.app.core.Skills.skill_parser import SkillFrontmatter, SkillParser
+
+# Skill name validation pattern (same as in schemas)
+SKILL_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
 
 
 class SkillMetadata:
@@ -217,8 +221,17 @@ class SkillsService:
             version=int(row.get("version") or 1),
         )
 
-    def _sync_registry(self) -> None:
-        """Synchronize skill_registry with filesystem contents."""
+    def _sync_registry(self, force: bool = False) -> None:
+        """Synchronize skill_registry with filesystem contents.
+
+        Args:
+            force: If True, skip debounce and always sync. Write operations
+                   should pass force=True.
+        """
+        now = time.monotonic()
+        if not force and (now - self._last_sync_time) < self._sync_interval:
+            return
+        self._last_sync_time = now
         db = self._get_db()
         try:
             registry_rows = db.list_skill_registry(
@@ -322,6 +335,13 @@ class SkillsService:
                 except CharactersRAGDBError as e:
                     logger.warning(f"Failed to mark skill '{name}' deleted: {e}")
 
+    async def _sync_registry_async(self, force: bool = False) -> None:
+        """Async wrapper for _sync_registry that offloads filesystem I/O to a thread."""
+        now = time.monotonic()
+        if not force and (now - self._last_sync_time) < self._sync_interval:
+            return
+        await asyncio.to_thread(self._sync_registry, force=force)
+
     async def list_skills(
         self,
         include_hidden: bool = False,
@@ -339,7 +359,7 @@ class SkillsService:
         Returns:
             List of skill metadata
         """
-        self._sync_registry()
+        await self._sync_registry_async()
         db = self._get_db()
         rows = db.list_skill_registry(
             include_hidden=include_hidden,
@@ -363,7 +383,7 @@ class SkillsService:
             SkillNotFoundError: If skill doesn't exist
         """
         name = name.strip().lower()
-        self._sync_registry()
+        await self._sync_registry_async()
         db = self._get_db()
 
         row = db.get_skill_registry(name, include_deleted=False)
@@ -422,7 +442,7 @@ class SkillsService:
             SkillValidationError: If content is invalid
         """
         name = name.strip().lower()
-        self._sync_registry()
+        await self._sync_registry_async(force=True)
         db = self._get_db()
 
         existing = db.get_skill_registry(name, include_deleted=True)
@@ -477,7 +497,15 @@ class SkillsService:
 
         try:
             if existing and existing.get("deleted"):
-                db.update_skill_registry(name, {**registry_payload, "deleted": 0}, expected_version=existing.get("version", 1))
+                # Hard-delete the soft-deleted row first, then fresh insert.
+                # update_skill_registry rejects soft-deleted records (WHERE deleted=0),
+                # so we purge and re-insert instead.
+                db.execute_query(
+                    "DELETE FROM skill_registry WHERE name = ? AND deleted = 1",
+                    (name,),
+                    commit=True,
+                )
+                db.insert_skill_registry(registry_payload)
             else:
                 db.insert_skill_registry(registry_payload)
         except ConflictError as e:
@@ -515,7 +543,7 @@ class SkillsService:
             SkillConflictError: If version mismatch
         """
         name = name.strip().lower()
-        self._sync_registry()
+        await self._sync_registry_async(force=True)
         db = self._get_db()
 
         row = db.get_skill_registry(name, include_deleted=False)
@@ -605,7 +633,7 @@ class SkillsService:
             SkillConflictError: If version mismatch
         """
         name = name.strip().lower()
-        self._sync_registry()
+        await self._sync_registry_async(force=True)
         db = self._get_db()
 
         row = db.get_skill_registry(name, include_deleted=True)
@@ -670,7 +698,7 @@ class SkillsService:
 
         skill_name = skill_name.strip().lower()
 
-        self._sync_registry()
+        await self._sync_registry_async(force=True)
         db = self._get_db()
         existing = db.get_skill_registry(skill_name, include_deleted=True)
 
@@ -736,6 +764,10 @@ class SkillsService:
                 skill_name = None
                 if base_dir:
                     skill_name = base_dir.rstrip("/").split("/")[-1]
+
+                # Validate extracted skill name
+                if skill_name and not SKILL_NAME_PATTERN.match(skill_name):
+                    raise SkillValidationError(f"Invalid skill name from zip: '{skill_name}'")
 
                 return await self.import_skill(
                     content=content,
@@ -842,7 +874,7 @@ class SkillsService:
 
     async def get_total_count(self, include_hidden: bool = False) -> int:
         """Get total count of skills."""
-        self._sync_registry()
+        await self._sync_registry_async()
         db = self._get_db()
         return db.count_skill_registry(
             include_hidden=include_hidden,

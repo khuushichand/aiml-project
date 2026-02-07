@@ -149,6 +149,7 @@ export function ChatHeader({
               aria-label={t("common:newChat", "New chat") as string}
               className="inline-flex items-center justify-center rounded-md p-2 text-text-muted hover:bg-surface2 hover:text-text"
               title={t("common:newChat", "New chat")}
+              data-testid="new-chat-button"
             >
               <SquarePen className="size-4" aria-hidden="true" />
             </button>

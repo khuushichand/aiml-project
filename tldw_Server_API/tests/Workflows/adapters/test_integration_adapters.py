@@ -44,6 +44,22 @@ async def test_webhook_adapter_test_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_webhook_adapter_test_mode_y(monkeypatch):
+    """Test webhook adapter treats TEST_MODE=y as test mode."""
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_webhook_adapter
+
+    config = {"url": "https://example.com/hook", "method": "POST", "body": {"key": "value"}}
+    context = {"user_id": "test_user_123"}
+
+    result = await run_webhook_adapter(config, context)
+    assert result.get("test_mode") is True
+    assert result.get("dispatched") is False
+
+
+@pytest.mark.asyncio
 async def test_webhook_adapter_missing_user_id_with_url(monkeypatch):
     """Test webhook adapter requires user_id when using HTTP URL mode (no user_id in context)."""
     # Ensure TEST_MODE is not set
@@ -132,6 +148,22 @@ async def test_webhook_adapter_http_request(monkeypatch):
 async def test_notify_adapter_test_mode(monkeypatch):
     """Test notify adapter in test mode."""
     monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_notify_adapter
+
+    config = {"url": "https://hooks.slack.com/services/test", "message": "Hello, world!"}
+    context = {}
+
+    result = await run_notify_adapter(config, context)
+    assert result.get("test_mode") is True
+    assert result.get("dispatched") is False
+
+
+@pytest.mark.asyncio
+async def test_notify_adapter_test_mode_y(monkeypatch):
+    """Test notify adapter treats TEST_MODE=y as test mode."""
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
 
     from tldw_Server_API.app.core.Workflows.adapters.integration import run_notify_adapter
 
@@ -731,6 +763,32 @@ async def test_kanban_adapter_board_list(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_kanban_adapter_board_list_accepts_y_flag(monkeypatch):
+    """Test Kanban adapter boolean coercion accepts include_archived='y'."""
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_kanban_adapter
+
+    mock_db = MagicMock()
+    mock_db.list_boards.return_value = ([{"id": 1, "name": "Board 1"}], 1)
+    mock_db.close = MagicMock()
+
+    with patch(
+        "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.KanbanDB",
+        return_value=mock_db,
+    ):
+        with patch(
+            "tldw_Server_API.app.core.Workflows.adapters.integration.messaging.DatabasePaths.get_kanban_db_path",
+            return_value=Path("/tmp/kanban.db"),
+        ):
+            config = {"action": "board.list", "include_archived": "y"}
+            context = {"user_id": "1"}
+
+            result = await run_kanban_adapter(config, context)
+            assert "boards" in result
+            mock_db.list_boards.assert_called_once()
+            assert mock_db.list_boards.call_args.kwargs.get("include_archived") is True
+
+
+@pytest.mark.asyncio
 async def test_kanban_adapter_board_create(monkeypatch):
     """Test Kanban adapter create board action."""
     from tldw_Server_API.app.core.Workflows.adapters.integration import run_kanban_adapter
@@ -862,6 +920,22 @@ async def test_chatbooks_adapter_export_test_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chatbooks_adapter_export_test_mode_y(monkeypatch):
+    """Test Chatbooks adapter export in TEST_MODE=y."""
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_chatbooks_adapter
+
+    config = {"action": "export", "name": "My Export", "content_types": ["conversations", "notes"]}
+    context = {"user_id": "1"}
+
+    result = await run_chatbooks_adapter(config, context)
+    assert result.get("simulated") is True
+    assert result.get("job_id") == "test-job-123"
+
+
+@pytest.mark.asyncio
 async def test_chatbooks_adapter_import_test_mode(monkeypatch):
     """Test Chatbooks adapter import in test mode."""
     monkeypatch.setenv("TEST_MODE", "1")
@@ -958,6 +1032,23 @@ async def test_character_chat_adapter_start_test_mode(monkeypatch):
 async def test_character_chat_adapter_message_test_mode(monkeypatch):
     """Test Character chat adapter message in test mode."""
     monkeypatch.setenv("TEST_MODE", "1")
+
+    from tldw_Server_API.app.core.Workflows.adapters.integration import run_character_chat_adapter
+
+    config = {"action": "message", "conversation_id": "conv-123", "message": "Hello!"}
+    context = {"user_id": "1"}
+
+    result = await run_character_chat_adapter(config, context)
+    assert result.get("simulated") is True
+    assert "response" in result
+    assert "Hello!" in result.get("response", "")
+
+
+@pytest.mark.asyncio
+async def test_character_chat_adapter_message_test_mode_y(monkeypatch):
+    """Test Character chat adapter message in TEST_MODE=y."""
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
 
     from tldw_Server_API.app.core.Workflows.adapters.integration import run_character_chat_adapter
 

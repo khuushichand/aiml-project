@@ -5,13 +5,14 @@ These tests exercise VoiceManager without relying on external ffmpeg/ffprobe
 executables by patching the internal duration/processing helpers.
 """
 
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import List
+from unittest.mock import AsyncMock
 
 import pytest
 
+from tldw_Server_API.app.core.TTS import voice_manager as voice_manager_module
 from tldw_Server_API.app.core.TTS.voice_manager import (
     VoiceManager,
     VoiceUploadRequest,
@@ -450,3 +451,162 @@ async def test_background_task_lifecycle_idempotent():
 
     # Second stop should be a no-op
     await manager.stop_background_tasks()
+
+
+@pytest.mark.asyncio
+async def test_persistent_registry_shared_across_manager_instances(tmp_path, monkeypatch):
+    """Voices uploaded by one manager should resolve from DB in another manager instance."""
+    manager_a = VoiceManager()
+    manager_b = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        (voices_root / "metadata").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    async def _fake_duration(path: Path) -> float:  # type: ignore[override]
+        return 4.2
+
+    async def _fake_process_for_provider(input_path: Path, output_path: Path, provider: str) -> Path:  # type: ignore[override]
+        output_path = output_path.with_suffix(".wav")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(input_path.read_bytes())
+        return output_path
+
+    monkeypatch.setattr(manager_a, "_get_audio_duration", _fake_duration, raising=False)
+    monkeypatch.setattr(manager_a, "_process_for_provider", _fake_process_for_provider, raising=False)
+    monkeypatch.setattr(manager_b, "_get_audio_duration", _fake_duration, raising=False)
+
+    mock_storage = AsyncMock()
+    mock_storage.register_generated_file = AsyncMock(return_value={"id": 1})
+
+    async def _get_storage_service():
+        return mock_storage
+
+    monkeypatch.setattr(voice_manager_module, "get_storage_service", _get_storage_service)
+
+    request = VoiceUploadRequest(name="persistent-voice", description="db-backed", provider="vibevoice")
+    upload = await manager_a.upload_voice(
+        user_id=77,
+        file_content=b"RIFF" + b"\x00" * 1024,
+        filename="persistent.wav",
+        request=request,
+    )
+
+    # Simulate warm snapshot state so manager_b should read from the persistent DB
+    # without forcing a filesystem scan.
+    manager_b._registry_snapshots[77] = manager_b._get_processed_snapshot(77)
+
+    async def _fail_scan(_user_id: int):
+        raise AssertionError("filesystem scan should not run")
+
+    monkeypatch.setattr(manager_b, "_scan_user_voices", _fail_scan, raising=False)
+
+    resolved = await manager_b.get_voice(user_id=77, voice_id=upload.voice_id)
+    assert resolved is not None
+    assert resolved.voice_id == upload.voice_id
+    assert resolved.name == "persistent-voice"
+
+
+@pytest.mark.asyncio
+async def test_sync_prunes_stale_persisted_voice_records(tmp_path, monkeypatch):
+    """A persisted entry whose file disappears should be removed during sync."""
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        (voices_root / "metadata").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    async def _no_default_voice(user_id: int):
+        return None
+
+    monkeypatch.setattr(manager, "ensure_default_voice", _no_default_voice, raising=False)
+
+    stale_voice = VoiceInfo(
+        voice_id="stale",
+        name="stale",
+        description=None,
+        file_path="processed/stale.wav",
+        format="wav",
+        duration=2.0,
+        sample_rate=22050,
+        size_bytes=128,
+        provider="vibevoice",
+        created_at=datetime.utcnow(),
+        file_hash="hash",
+    )
+    await manager._upsert_persisted_voice(user_id=55, voice=stale_voice)
+    manager._registry_snapshots[55] = manager._get_processed_snapshot(55)
+
+    voices = await manager.list_user_voices(user_id=55)
+    assert voices == []
+    assert await manager._get_persisted_voice(55, "stale") is None
+
+
+@pytest.mark.asyncio
+async def test_voice_registry_persistence_can_be_disabled(tmp_path, monkeypatch):
+    """When TTS_VOICE_REGISTRY_ENABLED=false, voice listing should stay runtime/filesystem only."""
+    monkeypatch.setenv("TTS_VOICE_REGISTRY_ENABLED", "false")
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        (voices_root / "metadata").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    async def _no_default_voice(user_id: int):
+        return None
+
+    async def _fake_duration(path: Path) -> float:  # type: ignore[override]
+        return 1.0
+
+    monkeypatch.setattr(manager, "ensure_default_voice", _no_default_voice, raising=False)
+    monkeypatch.setattr(manager, "_get_audio_duration", _fake_duration, raising=False)
+
+    processed = voices_root / "processed" / "runtime-only.wav"
+    processed.parent.mkdir(parents=True, exist_ok=True)
+    processed.write_bytes(b"RIFF" + b"\x00" * 64)
+
+    listed = await manager.list_user_voices(user_id=99)
+    assert any(v.voice_id == "runtime-only" for v in listed)
+    assert manager.get_user_voice_registry_db_path(99).exists() is False

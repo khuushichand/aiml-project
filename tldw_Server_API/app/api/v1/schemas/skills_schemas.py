@@ -22,6 +22,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Skill name validation: lowercase letters, numbers, and hyphens only
 SKILL_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9-]{0,63}$')
 
+# Aggregate limits for supporting files
+MAX_SUPPORTING_FILES_COUNT = 20
+MAX_SUPPORTING_FILES_TOTAL_BYTES = 5 * 1024 * 1024  # 5MB
+
 
 #######################################################################################################################
 #
@@ -89,6 +93,11 @@ class SkillCreate(BaseModel):
     def validate_supporting_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         if value is None:
             return None
+        if len(value) > MAX_SUPPORTING_FILES_COUNT:
+            raise ValueError(
+                f"Too many supporting files ({len(value)}); maximum is {MAX_SUPPORTING_FILES_COUNT}"
+            )
+        total_bytes = 0
         for filename, content in value.items():
             # Validate filename format
             if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$', filename):
@@ -96,9 +105,15 @@ class SkillCreate(BaseModel):
             # Don't allow SKILL.md as supporting file
             if filename.lower() == "skill.md":
                 raise ValueError("SKILL.md cannot be a supporting file")
-            # Limit content size
+            # Limit individual content size
             if len(content) > 500000:
                 raise ValueError(f"Supporting file {filename} exceeds 500KB limit")
+            total_bytes += len(content.encode("utf-8"))
+        if total_bytes > MAX_SUPPORTING_FILES_TOTAL_BYTES:
+            raise ValueError(
+                f"Total supporting files size ({total_bytes} bytes) exceeds "
+                f"{MAX_SUPPORTING_FILES_TOTAL_BYTES // (1024 * 1024)}MB limit"
+            )
         return value
 
 
@@ -115,6 +130,12 @@ class SkillUpdate(BaseModel):
     def validate_supporting_files(cls, value: dict[str, str] | None) -> dict[str, str] | None:
         if value is None:
             return None
+        non_null_count = sum(1 for v in value.values() if v is not None)
+        if non_null_count > MAX_SUPPORTING_FILES_COUNT:
+            raise ValueError(
+                f"Too many supporting files ({non_null_count}); maximum is {MAX_SUPPORTING_FILES_COUNT}"
+            )
+        total_bytes = 0
         for filename, content in value.items():
             if content is None:
                 continue  # None means delete the file
@@ -124,6 +145,12 @@ class SkillUpdate(BaseModel):
                 raise ValueError("SKILL.md cannot be a supporting file")
             if len(content) > 500000:
                 raise ValueError(f"Supporting file {filename} exceeds 500KB limit")
+            total_bytes += len(content.encode("utf-8"))
+        if total_bytes > MAX_SUPPORTING_FILES_TOTAL_BYTES:
+            raise ValueError(
+                f"Total supporting files size ({total_bytes} bytes) exceeds "
+                f"{MAX_SUPPORTING_FILES_TOTAL_BYTES // (1024 * 1024)}MB limit"
+            )
         return value
 
 

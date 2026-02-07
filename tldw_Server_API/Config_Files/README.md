@@ -268,6 +268,7 @@ General and provider-specific:
 - Canonical keys:
   - `local_device` (str): `cpu|cuda|auto`.
   - `default_provider` (str), `default_voice` (str), `default_speed` (float)
+  - `TTS_VOICE_REGISTRY_ENABLED` (bool-like via env/settings): when `false`, disables persistent `voice_registry.db` and uses runtime/filesystem-only compatibility mode for custom voices (deprecated; planned removal after 2026-12-31).
 - Compatibility aliases (deprecated; scheduled for removal after 2026-06-30):
   - `local_tts_device`/`tts_device` -> `local_device`
   - `default_tts_provider` -> `default_provider`

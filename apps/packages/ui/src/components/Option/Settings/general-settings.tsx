@@ -13,6 +13,7 @@ import { useServerOnline } from "@/hooks/useServerOnline"
 import { useConnectionActions } from "@/hooks/useConnectionState"
 import FeatureEmptyState from "@/components/Common/FeatureEmptyState"
 import ConnectFeatureBanner from "@/components/Common/ConnectFeatureBanner"
+import { useTutorialCompletion } from "@/store/tutorials"
 
 export const GeneralSettings = () => {
   // Persisted preference: auto-finish onboarding when connection & RAG are healthy
@@ -50,6 +51,7 @@ export const GeneralSettings = () => {
   const isOnline = useServerOnline()
   const navigate = useNavigate()
   const { beginOnboarding } = useConnectionActions()
+  const { completedTutorials, resetProgress: resetTutorialProgress } = useTutorialCompletion()
 
   return (
     <dl className="flex flex-col space-y-6 text-sm">
@@ -231,6 +233,59 @@ export const GeneralSettings = () => {
           {t(
             "generalSettings.settings.restartOnboarding.button",
             "Restart onboarding"
+          )}
+        </button>
+      </div>
+
+      <div className="flex flex-row justify-between">
+        <div className="inline-flex items-center gap-2">
+          <span className="text-text">
+            {t(
+              "generalSettings.settings.resetTutorials.label",
+              "Reset tutorial progress"
+            )}
+          </span>
+          {completedTutorials.length > 0 && (
+            <span className="text-xs text-text-muted">
+              ({completedTutorials.length}{" "}
+              {t(
+                "generalSettings.settings.resetTutorials.completed",
+                "completed"
+              )}
+              )
+            </span>
+          )}
+        </div>
+
+        <button
+          type="button"
+          className="text-xs text-primary hover:text-primaryStrong disabled:opacity-50 disabled:cursor-not-allowed"
+          disabled={completedTutorials.length === 0}
+          onClick={() => {
+            Modal.confirm({
+              title: t(
+                "generalSettings.settings.resetTutorials.confirmTitle",
+                "Reset tutorial progress?"
+              ),
+              content: t(
+                "generalSettings.settings.resetTutorials.confirmMessage",
+                "This will mark all tutorials as incomplete so you can replay them."
+              ),
+              onOk: () => {
+                resetTutorialProgress()
+                notification.success({
+                  message: t(
+                    "generalSettings.settings.resetTutorials.toast",
+                    "Tutorial progress has been reset"
+                  )
+                })
+              }
+            })
+          }}
+        >
+          {t(
+            "generalSettings.settings.resetTutorials.button",
+            "Reset tutorials"
           )}
         </button>
       </div>

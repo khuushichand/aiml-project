@@ -129,3 +129,33 @@ async def test_webhooks_signed_and_cursor_resume(monkeypatch, tmp_path):
     # Cursor should advance
     second_after = int(cursor_path.read_text().strip() or "0")
     assert second_after > first_after
+
+
+@pytest.mark.asyncio
+async def test_webhooks_tldw_test_mode_y_skips_egress_policy_check(monkeypatch, tmp_path):
+    _set_base_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+
+    egress_calls = {"count": 0}
+
+    from tldw_Server_API.app.core.Security import egress as egress_mod
+
+    def _fake_eval_policy(url):  # noqa: ANN001
+        egress_calls["count"] += 1
+
+        class _Denied:
+            allowed = False
+            reason = "blocked-by-test"
+
+        return _Denied()
+
+    monkeypatch.setattr(egress_mod, "evaluate_url_policy", _fake_eval_policy)
+
+    from tldw_Server_API.app.services import jobs_webhooks_service as svc
+
+    stop_event = asyncio.Event()
+    stop_event.set()
+    await svc.run_jobs_webhooks_worker(stop_event=stop_event)
+
+    assert egress_calls["count"] == 0

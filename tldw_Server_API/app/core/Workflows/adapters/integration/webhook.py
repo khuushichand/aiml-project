@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from tldw_Server_API.app.core.http_client import create_client as _wf_create_client
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
     resolve_context_user_id,
@@ -75,7 +76,7 @@ async def run_notify_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     if not (url.startswith("http://") or url.startswith("https://")):
         return {"error": "invalid_url"}
 
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if is_test_mode():
         return {"dispatched": False, "test_mode": True}
 
     try:
@@ -286,7 +287,7 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
     payload = config.get("data") or {"context": list(context.keys())}
     url = str(config.get("url") or "").strip()
 
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if is_test_mode():
         # Skip outbound work in tests
         return {"dispatched": False, "test_mode": True}
 
@@ -359,7 +360,7 @@ async def run_webhook_adapter(config: dict[str, Any], context: dict[str, Any]) -
                         used_fallback = True
                 # Optional sanity check for fallback auth (once per run)
                 try:
-                    if used_fallback and str(os.getenv("WORKFLOWS_VALIDATE_DEFAULT_AUTH", "")).lower() in {"1", "true", "yes", "on"} and not context.get("_wf_default_auth_checked"):
+                    if used_fallback and env_flag_enabled("WORKFLOWS_VALIDATE_DEFAULT_AUTH") and not context.get("_wf_default_auth_checked"):
                         base = os.getenv("WORKFLOWS_INTERNAL_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
                         _url = f"{base}/api/v1/workflows/auth/check"
                         with _wf_create_client(timeout=5.0, trust_env=False) as _client:
