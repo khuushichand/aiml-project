@@ -174,32 +174,41 @@ Key models in `guardian_schemas.py`:
 
 ## Testing
 
-224 tests across 3 test files:
+Coverage is concentrated in three dedicated test modules:
 
-| File | Tests | Coverage |
-|------|-------|----------|
-| `test_guardian_db.py` | 97 | All CRUD for 7 tables, validation, cascade deletion |
-| `test_supervised_policy.py` | 64 | Pattern matching, actions, phases, cache, overlay building |
-| `test_self_monitoring.py` | 63 | Matching, dedup, escalation, cooldown, crisis resources |
+| File | Focus |
+|------|-------|
+| `test_guardian_db.py` | All CRUD for 7 tables, validation, cascade deletion |
+| `test_supervised_policy.py` | Pattern matching, actions, phases, cache, overlay building |
+| `test_self_monitoring.py` | Matching, dedup, escalation, cooldown, crisis resources |
 
 All tests use real SQLite databases (tmp_path fixtures) — no mocks.
+
+To check the current collected test count for these modules:
+
+```bash
+python3 -m pytest --collect-only -q \
+  tldw_Server_API/tests/Guardian/test_guardian_db.py \
+  tldw_Server_API/tests/Guardian/test_supervised_policy.py \
+  tldw_Server_API/tests/Guardian/test_self_monitoring.py
+```
 
 ---
 
 ## Files
 
-| File | Lines | Role |
-|------|-------|------|
-| `tldw_Server_API/app/core/DB_Management/Guardian_DB.py` | ~1708 | Database layer |
-| `tldw_Server_API/app/core/Moderation/supervised_policy.py` | ~280 | Supervised policy engine |
-| `tldw_Server_API/app/core/Monitoring/self_monitoring_service.py` | ~496 | Self-monitoring service |
-| `tldw_Server_API/app/api/v1/schemas/guardian_schemas.py` | ~343 | Pydantic schemas |
-| `tldw_Server_API/app/api/v1/endpoints/guardian_controls.py` | ~476 | Guardian REST API |
-| `tldw_Server_API/app/api/v1/endpoints/self_monitoring.py` | ~417 | Self-monitoring REST API |
-| `tldw_Server_API/app/api/v1/API_Deps/guardian_deps.py` | ~22 | FastAPI DI |
-| `tldw_Server_API/tests/Guardian/test_guardian_db.py` | ~819 | DB tests |
-| `tldw_Server_API/tests/Guardian/test_supervised_policy.py` | ~1116 | Policy engine tests |
-| `tldw_Server_API/tests/Guardian/test_self_monitoring.py` | ~546 | Service tests |
+| File | Role |
+|------|------|
+| `tldw_Server_API/app/core/DB_Management/Guardian_DB.py` | Database layer |
+| `tldw_Server_API/app/core/Moderation/supervised_policy.py` | Supervised policy engine |
+| `tldw_Server_API/app/core/Monitoring/self_monitoring_service.py` | Self-monitoring service |
+| `tldw_Server_API/app/api/v1/schemas/guardian_schemas.py` | Pydantic schemas |
+| `tldw_Server_API/app/api/v1/endpoints/guardian_controls.py` | Guardian REST API |
+| `tldw_Server_API/app/api/v1/endpoints/self_monitoring.py` | Self-monitoring REST API |
+| `tldw_Server_API/app/api/v1/API_Deps/guardian_deps.py` | FastAPI DI |
+| `tldw_Server_API/tests/Guardian/test_guardian_db.py` | DB tests |
+| `tldw_Server_API/tests/Guardian/test_supervised_policy.py` | Policy engine tests |
+| `tldw_Server_API/tests/Guardian/test_self_monitoring.py` | Service tests |
 
 ---
 

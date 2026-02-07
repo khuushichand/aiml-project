@@ -50,6 +50,12 @@ type CharacterLite = {
   name?: string | null
 }
 
+export const CONVERSATION_TAB_QUERY_KEYS = {
+  listCharacters: ["tldw:listCharacters", "conversation-tab"] as const,
+  pinnedMessages: (serverChatId: string | null) =>
+    ["conversation-tab:pinned-messages", serverChatId] as const
+}
+
 function isErrorWithMessage(error: unknown): error is { message: string } {
   return (
     typeof error === "object" &&
@@ -447,7 +453,7 @@ export function ConversationTab({
     data: availableCharacters = [],
     isError: isAvailableCharactersError
   } = useQuery<CharacterLite[]>({
-    queryKey: ["tldw:listCharacters", "conversation-tab"],
+    queryKey: CONVERSATION_TAB_QUERY_KEYS.listCharacters,
     queryFn: async () => {
       await tldwClient.initialize()
       const list = await tldwClient.listCharacters({ limit: 200 })
@@ -461,7 +467,7 @@ export function ConversationTab({
   } = useQuery<
     Array<{ id: string; role: string; content: string }>
   >({
-    queryKey: ["conversation-tab:pinned-messages", serverChatId],
+    queryKey: CONVERSATION_TAB_QUERY_KEYS.pinnedMessages(serverChatId),
     enabled: Boolean(serverChatId),
     queryFn: async () => {
       if (!serverChatId) return []

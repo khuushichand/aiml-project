@@ -2,7 +2,10 @@ import React from "react"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { useQuery } from "@tanstack/react-query"
-import { ConversationTab } from "../Settings/tabs/ConversationTab"
+import {
+  CONVERSATION_TAB_QUERY_KEYS,
+  ConversationTab
+} from "../Settings/tabs/ConversationTab"
 import { useChatSettingsRecord } from "@/hooks/chat/useChatSettingsRecord"
 
 vi.mock("react-i18next", () => ({
@@ -128,6 +131,7 @@ vi.mock("antd", () => {
 })
 
 describe("ConversationTab generation override controls", () => {
+  const TEST_SERVER_CHAT_ID = "chat-1"
   const updateSettings = vi.fn().mockResolvedValue(undefined)
   const buildQueryResult = (overrides: Record<string, unknown> = {}) =>
     ({
@@ -139,13 +143,13 @@ describe("ConversationTab generation override controls", () => {
       refetch: vi.fn(),
       ...overrides
     }) as any
-  const getPrimaryQueryKey = (queryKey: unknown): string | null => {
-    if (!Array.isArray(queryKey) || queryKey.length === 0) {
-      return null
-    }
-    const [primaryKey] = queryKey
-    return typeof primaryKey === "string" ? primaryKey : null
-  }
+  const queryKeyEquals = (
+    actualQueryKey: unknown,
+    expectedQueryKey: readonly unknown[]
+  ): boolean =>
+    Array.isArray(actualQueryKey) &&
+    actualQueryKey.length === expectedQueryKey.length &&
+    actualQueryKey.every((value, index) => value === expectedQueryKey[index])
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -169,7 +173,7 @@ describe("ConversationTab generation override controls", () => {
         onSystemPromptChange={() => {}}
         uploadedFiles={[]}
         onRemoveFile={() => {}}
-        serverChatId="chat-1"
+        serverChatId={TEST_SERVER_CHAT_ID}
         serverChatState="in-progress"
         onStateChange={() => {}}
         serverChatTopic={null}
@@ -227,7 +231,12 @@ describe("ConversationTab generation override controls", () => {
 
   it("shows an inline warning when characters fail to load", async () => {
     vi.mocked(useQuery).mockImplementation((options: any) => {
-      if (getPrimaryQueryKey(options?.queryKey) === "tldw:listCharacters") {
+      if (
+        queryKeyEquals(
+          options?.queryKey,
+          CONVERSATION_TAB_QUERY_KEYS.listCharacters
+        )
+      ) {
         return buildQueryResult({ isError: true })
       }
       return buildQueryResult()
@@ -245,8 +254,10 @@ describe("ConversationTab generation override controls", () => {
   it("shows an inline warning when pinned messages fail to load", async () => {
     vi.mocked(useQuery).mockImplementation((options: any) => {
       if (
-        getPrimaryQueryKey(options?.queryKey) ===
-        "conversation-tab:pinned-messages"
+        queryKeyEquals(
+          options?.queryKey,
+          CONVERSATION_TAB_QUERY_KEYS.pinnedMessages(TEST_SERVER_CHAT_ID)
+        )
       ) {
         return buildQueryResult({ isError: true })
       }
