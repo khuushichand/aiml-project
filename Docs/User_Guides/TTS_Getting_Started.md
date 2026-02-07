@@ -70,7 +70,7 @@ Installer flags:
 - `TLDW_SETUP_SKIP_DOWNLOADS=1` to skip model downloads
 
 ## Key Files & Paths
-- `tldw_Server_API/app/core/TTS/tts_providers_config.yaml` — canonical provider settings + priority list.
+- `tldw_Server_API/Config_Files/tts_providers_config.yaml` — canonical provider settings + priority list.
 - `Config_Files/config.txt` — optional INI overrides (e.g., `[TTS-Settings]` block).
 - `tldw_Server_API/app/core/TTS/adapters/` — implementation for each backend.
 - `tldw_Server_API/app/core/TTS/TTS-README.md` — deep dive on architecture + adapter matrix.
@@ -121,6 +121,8 @@ Installer flags:
    - Adjust `provider_priority` so preferred backends run first.
    - Note: Local providers will not download models unless you explicitly set `auto_download: true` per provider (or export `TTS_AUTO_DOWNLOAD=1`).
 4. **Optional overrides** in `Config_Files/config.txt` (`[TTS-Settings]`) if you need environment-specific toggles.
+   - Canonical keys: `default_provider`, `default_voice`, `default_speed`, `local_device`.
+   - Legacy aliases (`default_tts_provider`, `default_tts_voice`, `default_tts_speed`, `local_tts_device`, `tts_device`) are deprecated and scheduled for removal after 2026-06-30.
 5. **Set secrets/env vars** (API keys, `TTS_AUTO_DOWNLOAD`, device hints).
 6. **Restart the server** and watch logs for `adapter initialized`.
 7. **Verify** with `curl` (samples below) or via the WebUI ➜ Audio ➜ TTS tab.

@@ -42,8 +42,15 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - tldw_Server_API/app/core/TTS/tts_validation.py:1 — Input validation utilities
   - tldw_Server_API/app/core/TTS/voice_manager.py:1 — Upload, registry, quotas for voices
 - Configuration:
-  - YAML: tldw_Server_API/app/core/TTS/tts_providers_config.yaml:1 (providers, priority, performance, fallback, logging)
-  - Config file: `Config_Files/config.txt` → [TTS-Settings] (default provider/voice/speed/device)
+  - Canonical YAML: `tldw_Server_API/Config_Files/tts_providers_config.yaml` (providers, priority, performance, fallback, logging)
+  - Config file: `Config_Files/config.txt` -> `[TTS-Settings]` (canonical defaults: `default_provider`, `default_voice`, `default_speed`, `local_device`)
+  - Loader precedence: environment variables > `config.txt` > YAML > defaults
+  - Deprecated aliases in `[TTS-Settings]`:
+    - `default_tts_provider` -> `default_provider`
+    - `default_tts_voice` -> `default_voice`
+    - `default_tts_speed` -> `default_speed`
+    - `local_tts_device`/`tts_device` -> `local_device`
+    - Removal target for aliases: after 2026-06-30
   - Environment:
     - `TTS_STREAM_ERRORS_AS_AUDIO` — override streaming error behavior
     - Secrets via `${ENV_VAR}` in YAML

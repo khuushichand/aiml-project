@@ -761,7 +761,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         if not link:
                             continue
                         # Item-level dedup check
-                        item_key = (it.get("guid") or link or (it.get("title") or ""))
+                        item_key = (it.get("guid") or _normalize_url(link) or (it.get("title") or ""))
                         # Skip dedup on the very first run (TEST_MODE only) to stabilize offline tests
                         skip_dedup = test_mode and is_first_run
                         if not skip_dedup:
@@ -1044,7 +1044,7 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                     items_found += len(urls_to_fetch)
                     for page_url in urls_to_fetch:
                         prefetch = prefetched_by_url.get(page_url)
-                        item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else page_url)
+                        item_key = (prefetch.get("guid") if prefetch and prefetch.get("guid") else _normalize_url(page_url))
                         skip_dedup = test_mode and is_first_run
                         if not skip_dedup:
                             try:

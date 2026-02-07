@@ -122,7 +122,8 @@ const listHighlights = async (itemId: string): Promise<Array<{ id: number; quote
 }
 
 const openCollectionsPage = async (page: Page) => {
-  await page.goto("/collections", { waitUntil: "domcontentloaded" })
+  const collectionsUrl = `${TEST_CONFIG.webUrl.replace(/\/$/, "")}/collections`
+  await page.goto(collectionsUrl, { waitUntil: "domcontentloaded" })
   await expect(page.getByRole("heading", { name: /Collections/i })).toBeVisible({ timeout: 25_000 })
 }
 

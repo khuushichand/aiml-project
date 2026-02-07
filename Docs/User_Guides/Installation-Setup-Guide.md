@@ -232,7 +232,7 @@ More detail on local backends and llama.cpp flags: [Setting up a local LLM](Sett
 
 ## 6) Optional: Text-to-Speech (TTS)
 
-TTS providers and priority live in `tldw_Server_API/app/core/TTS/tts_providers_config.yaml`. You can also override some settings in `Config_Files/config.txt` under `[TTS-Settings]`.
+TTS providers and priority live in `tldw_Server_API/Config_Files/tts_providers_config.yaml`. You can also override some settings in `Config_Files/config.txt` under `[TTS-Settings]` using canonical keys (`default_provider`, `default_voice`, `default_speed`, `local_device`).
 
 Quick paths:
 - Hosted OpenAI TTS: set `OPENAI_API_KEY` and keep the `openai` provider enabled.

@@ -22,7 +22,7 @@ import os
 import sqlite3
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -1692,6 +1692,32 @@ class GuardianDB:
                 query += " LIMIT 1"
                 row = conn.execute(query, params).fetchone()
                 return row is not None
+            finally:
+                conn.close()
+
+    def count_alerts_in_window(
+        self,
+        user_id: str,
+        rule_id: str,
+        window_days: int,
+    ) -> int:
+        """Count alerts for a rule within the last *window_days* days.
+
+        Used by escalation logic to compute a rolling-window trigger count
+        instead of a monotonically increasing counter.
+        """
+        if window_days <= 0:
+            return 0
+        since = (datetime.now(timezone.utc) - timedelta(days=window_days)).isoformat()
+        with self._lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM self_monitoring_alerts "
+                    "WHERE user_id = ? AND rule_id = ? AND created_at >= ?",
+                    (str(user_id), rule_id, since),
+                ).fetchone()
+                return row["cnt"] if row else 0
             finally:
                 conn.close()
 

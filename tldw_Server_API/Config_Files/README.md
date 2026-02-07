@@ -265,8 +265,15 @@ Common: `max_tokens`, `local_api_timeout`, `local_api_retries`, `local_api_retry
 
 ## [TTS-Settings]
 General and provider-specific:
-- `local_tts_device` (str): `cpu|cuda|auto`.
-- `default_tts_provider` (str), `default_tts_voice` (str), `default_tts_speed` (float)
+- Canonical keys:
+  - `local_device` (str): `cpu|cuda|auto`.
+  - `default_provider` (str), `default_voice` (str), `default_speed` (float)
+- Compatibility aliases (deprecated; scheduled for removal after 2026-06-30):
+  - `local_tts_device`/`tts_device` -> `local_device`
+  - `default_tts_provider` -> `default_provider`
+  - `default_tts_voice` -> `default_voice`
+  - `default_tts_speed` -> `default_speed`
+- Precedence for effective values: environment variables > `config.txt` `[TTS-Settings]` > `tts_providers_config.yaml` > defaults.
 OpenAI TTS:
 - `default_openai_tts_voice|_speed|_model|_output_format|_streaming`
 ElevenLabs TTS (placeholders if not used):

@@ -157,6 +157,15 @@ class TTSConfigManager:
     Priority order: Environment variables > config.txt > YAML > defaults
     """
 
+    LEGACY_TTS_SETTINGS_ALIASES: dict[str, str] = {
+        "default_tts_provider": "default_provider",
+        "default_tts_voice": "default_voice",
+        "default_tts_speed": "default_speed",
+        "local_tts_device": "local_device",
+        "tts_device": "local_device",
+    }
+    LEGACY_TTS_SETTINGS_REMOVAL_DATE = "2026-06-30"
+
     def __init__(self,
                  yaml_path: Optional[Path] = None,
                  config_txt_path: Optional[Path] = None):
@@ -211,6 +220,23 @@ class TTSConfigManager:
                 return section[key]
         return None
 
+    def _warn_legacy_tts_setting_keys(self, section: Any) -> None:
+        """Emit deprecation warnings for legacy [TTS-Settings] keys."""
+        for legacy_key, canonical_key in self.LEGACY_TTS_SETTINGS_ALIASES.items():
+            if legacy_key not in section:
+                continue
+            if canonical_key in section:
+                logger.warning(
+                    f"[TTS-Settings] '{legacy_key}' is deprecated and ignored when '{canonical_key}' is also set. "
+                    f"Use '{canonical_key}'. Legacy aliases are scheduled for removal after "
+                    f"{self.LEGACY_TTS_SETTINGS_REMOVAL_DATE}."
+                )
+                continue
+            logger.warning(
+                f"[TTS-Settings] '{legacy_key}' is deprecated; use '{canonical_key}'. "
+                f"Legacy aliases are scheduled for removal after {self.LEGACY_TTS_SETTINGS_REMOVAL_DATE}."
+            )
+
     def _load_config_txt(self) -> dict[str, Any]:
         """Load settings from config.txt"""
         config_dict = {}
@@ -235,6 +261,7 @@ class TTSConfigManager:
                 tts_section = config.get("TTS-Settings")
 
             if tts_section:
+                self._warn_legacy_tts_setting_keys(tts_section)
                 # Map config.txt settings to our schema
                 # Deterministic alias precedence: canonical key first, then legacy key.
                 provider_value = self._get_first_present(

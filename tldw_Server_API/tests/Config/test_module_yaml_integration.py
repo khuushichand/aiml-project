@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -128,6 +129,61 @@ def test_tts_config_txt_canonical_keys_override_legacy_aliases(tmp_path):
     assert cfg.default_voice == "canonical_voice"
     assert cfg.default_speed == 1.1
     assert cfg.local_device == "cpu"
+
+
+def test_tts_config_txt_legacy_keys_emit_deprecation_warnings(tmp_path):
+
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text("providers: {}\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[TTS-Settings]",
+                "default_tts_provider = legacy_provider",
+                "local_tts_device = cuda",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with patch("tldw_Server_API.app.core.TTS.tts_config.logger.warning") as mock_warning:
+        manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+        _ = manager.get_config()
+
+    warning_messages = [str(call.args[0]) for call in mock_warning.call_args_list]
+    assert any("default_tts_provider" in msg for msg in warning_messages)
+    assert any("local_tts_device" in msg for msg in warning_messages)
+    assert any("2026-06-30" in msg for msg in warning_messages)
+
+
+def test_tts_config_txt_legacy_key_ignored_when_canonical_present(tmp_path):
+
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text("providers: {}\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[TTS-Settings]",
+                "default_provider = canonical_provider",
+                "default_tts_provider = legacy_provider",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with patch("tldw_Server_API.app.core.TTS.tts_config.logger.warning") as mock_warning:
+        manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+        cfg = manager.get_config()
+
+    assert cfg.default_provider == "canonical_provider"
+    warning_messages = [str(call.args[0]) for call in mock_warning.call_args_list]
+    assert any("ignored when 'default_provider' is also set" in msg for msg in warning_messages)
 
 
 def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):

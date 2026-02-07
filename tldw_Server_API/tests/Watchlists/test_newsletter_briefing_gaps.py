@@ -687,3 +687,120 @@ class TestFullPipelineIntegration:
         # The filter should have excluded the test item
         filters_matched = result.get("filters_matched", 0)
         assert filters_matched >= 1
+
+
+# ---------------------------------------------------------------------------
+# URL Normalization for dedup
+# ---------------------------------------------------------------------------
+
+
+class TestURLNormalization:
+    """Tests for _normalize_url() in pipeline.py."""
+
+    def test_strips_trailing_slash(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        assert _normalize_url("https://example.com/article/") == "https://example.com/article"
+
+    def test_removes_www_prefix(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        result = _normalize_url("https://www.example.com/page")
+        assert "www." not in result
+        assert "example.com/page" in result
+
+    def test_lowercases_scheme_and_host(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        result = _normalize_url("HTTPS://Example.COM/Path")
+        assert result.startswith("https://example.com/")
+        # Path case is preserved
+        assert "/Path" in result
+
+    def test_removes_utm_params(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/article?utm_source=twitter&utm_medium=social&id=123"
+        result = _normalize_url(url)
+        assert "utm_source" not in result
+        assert "utm_medium" not in result
+        assert "id=123" in result
+
+    def test_removes_fbclid(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/page?fbclid=abc123&real_param=value"
+        result = _normalize_url(url)
+        assert "fbclid" not in result
+        assert "real_param=value" in result
+
+    def test_removes_gclid(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/page?gclid=xyz&page=1"
+        result = _normalize_url(url)
+        assert "gclid" not in result
+        assert "page=1" in result
+
+    def test_preserves_non_tracking_params(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/search?q=test&page=2&sort=date"
+        result = _normalize_url(url)
+        assert "q=test" in result
+        assert "page=2" in result
+        assert "sort=date" in result
+
+    def test_empty_query_after_stripping(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/page?utm_source=newsletter"
+        result = _normalize_url(url)
+        assert result == "https://example.com/page"
+
+    def test_no_query_string(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url = "https://example.com/article"
+        assert _normalize_url(url) == "https://example.com/article"
+
+    def test_root_path_preserved(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        assert _normalize_url("https://example.com/") == "https://example.com/"
+        assert _normalize_url("https://example.com") == "https://example.com/"
+
+    def test_strips_default_ports(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        result = _normalize_url("https://example.com:443/page")
+        assert ":443" not in result
+        result_http = _normalize_url("http://example.com:80/page")
+        assert ":80" not in result_http
+
+    def test_preserves_non_default_ports(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        result = _normalize_url("https://example.com:8080/page")
+        assert ":8080" in result
+
+    def test_equivalent_urls_normalize_equal(self):
+        """URLs that differ only by tracking params / www / trailing slash should normalize identically."""
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        url_a = "https://www.example.com/article/?utm_source=twitter&utm_campaign=foo"
+        url_b = "https://example.com/article"
+        assert _normalize_url(url_a) == _normalize_url(url_b)
+
+    def test_handles_malformed_url_gracefully(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        # Should not raise, returns input as-is or best-effort
+        result = _normalize_url("")
+        assert isinstance(result, str)
+
+    def test_fragment_stripped(self):
+        from tldw_Server_API.app.core.Watchlists.pipeline import _normalize_url
+
+        result = _normalize_url("https://example.com/page#section1")
+        assert "#" not in result

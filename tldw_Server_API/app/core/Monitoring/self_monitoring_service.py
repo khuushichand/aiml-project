@@ -386,8 +386,9 @@ class SelfMonitoringService:
 
         try:
             state = self._db.get_escalation_state(rule.id, user_id)
+            now = datetime.now(timezone.utc)
+            now_iso = now.isoformat()
             session_count = 0
-            window_count = 0
 
             if state:
                 # Reset session counter if session changed
@@ -395,10 +396,41 @@ class SelfMonitoringService:
                     session_count = 1
                 else:
                     session_count = (state.session_trigger_count or 0) + 1
-                window_count = (state.window_trigger_count or 0) + 1
             else:
                 session_count = 1
+
+            # Rolling-window count: query actual alerts within the window
+            # instead of monotonically incrementing a counter.
+            # +1 because the current trigger's alert hasn't been recorded yet.
+            if rule.escalation_window_days > 0 and rule.escalation_window_threshold > 0:
+                window_count = self._db.count_alerts_in_window(
+                    user_id, rule.id, rule.escalation_window_days,
+                ) + 1  # include the current (not-yet-persisted) trigger
+            elif state:
+                window_count = (state.window_trigger_count or 0) + 1
+            else:
                 window_count = 1
+
+            # Check cooldown-based auto de-escalation: if a previous
+            # escalation has a cooldown_until in the past, clear it.
+            if state and state.cooldown_until:
+                try:
+                    cooldown_dt = datetime.fromisoformat(state.cooldown_until)
+                    if now >= cooldown_dt:
+                        # Cooldown expired — reset escalation state
+                        self._db.upsert_escalation_state(
+                            rule_id=rule.id,
+                            user_id=user_id,
+                            session_id=session_id,
+                            session_trigger_count=session_count,
+                            window_trigger_count=window_count,
+                            current_escalated_action=None,
+                            escalated_at=None,
+                            cooldown_until=None,
+                        )
+                        return info
+                except (ValueError, TypeError):
+                    pass  # malformed cooldown_until — ignore
 
             escalated = False
             escalated_action = None
@@ -421,7 +453,11 @@ class SelfMonitoringService:
                 escalated = True
                 escalated_action = rule.escalation_window_action
 
-            now_iso = datetime.now(timezone.utc).isoformat()
+            # Compute cooldown_until when escalation triggers
+            cooldown_until_iso = None
+            if escalated and rule.cooldown_minutes > 0:
+                cooldown_until_iso = (now + timedelta(minutes=rule.cooldown_minutes)).isoformat()
+
             self._db.upsert_escalation_state(
                 rule_id=rule.id,
                 user_id=user_id,
@@ -430,6 +466,7 @@ class SelfMonitoringService:
                 window_trigger_count=window_count,
                 current_escalated_action=escalated_action if escalated else None,
                 escalated_at=now_iso if escalated else None,
+                cooldown_until=cooldown_until_iso,
             )
 
             if escalated and escalated_action:
