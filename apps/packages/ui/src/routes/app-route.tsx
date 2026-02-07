@@ -256,10 +256,9 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
   const routesContent = (
     <Routes>
       {visibleRoutes.map((route) => {
-        const capabilitiesReady = !capabilitiesLoading && capabilities
         const routeEnabled =
           kind !== "options" ||
-          !capabilitiesReady ||
+          capabilitiesLoading ||
           isRouteEnabledForCapabilities(route.path, capabilities)
 
         return (

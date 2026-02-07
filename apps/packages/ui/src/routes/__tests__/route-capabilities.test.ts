@@ -17,6 +17,10 @@ const makeCapabilities = (
   } as ServerCapabilities)
 
 describe("route capability gating", () => {
+  it("hides guardian route when capabilities are missing", () => {
+    expect(isRouteEnabledForCapabilities(GUARDIAN_SETTINGS_PATH, null)).toBe(false)
+  })
+
   it("hides guardian route when guardian capability is missing", () => {
     const caps = makeCapabilities({
       hasGuardian: false,

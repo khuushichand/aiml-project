@@ -472,6 +472,7 @@ async def create_speech(
             voice_to_voice_start=voice_to_voice_start,
             voice_to_voice_route="audio.speech",
             user_id=user_id_int,
+            request_id=request_id,
         )
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)
@@ -738,6 +739,7 @@ async def create_speech_metadata(
             voice_to_voice_route="audio.speech.metadata",
             user_id=user_id_int,
             metadata_only=True,
+            request_id=request_id,
         )
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
         _raise_for_tts_error(exc, request_id)

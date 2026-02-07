@@ -16,6 +16,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Metrics import start_async_span as _start_span
+from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_artifacts_dir,
 )
@@ -116,7 +117,7 @@ async def run_prompt_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     # Force-error handling (test-friendly)
     fe = config.get("force_error")
     if isinstance(fe, str):
-        fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+        fe = _is_truthy(fe.strip())
     if fe or str(config.get("template", "")).strip().lower() == "bad":
         raise AdapterError("forced_error")
 
@@ -213,7 +214,7 @@ async def run_log_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     # Optional PII redaction in logs
     try:
         import os as _os
-        redact = str(_os.getenv("WORKFLOWS_REDACT_LOGS", "true")).lower() in {"1", "true", "yes", "on"}
+        redact = _is_truthy(_os.getenv("WORKFLOWS_REDACT_LOGS", "true"))
         if redact:
             try:
                 from tldw_Server_API.app.core.Audit.unified_audit_service import PIIDetector
@@ -245,7 +246,7 @@ async def run_branch_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     """Evaluate a simple boolean condition and select the next step.
 
     Config:
-      - condition: str (templated). Treated as true iff rendered lower() in {"1","true","yes","on"}.
+      - condition: str (templated). Treated as true by the shared truthy parser.
       - true_next: str (step id)
       - false_next: str (step id)
     Output: { "__next__": step_id, "branch": "true"|"false" }
@@ -253,7 +254,7 @@ async def run_branch_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string as _tmpl
     cond_t = str(config.get("condition", "")).strip()
     rendered = (_tmpl(cond_t, context) or cond_t).strip().lower()
-    is_true = rendered in {"1", "true", "yes", "on"}
+    is_true = _is_truthy(rendered)
     next_id = str(config.get("true_next") if is_true else config.get("false_next") or "").strip()
     # Do not force if not provided; engine will fall back to natural order
     out: dict[str, Any] = {"branch": "true" if is_true else "false"}

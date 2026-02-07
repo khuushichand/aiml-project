@@ -22,6 +22,12 @@ export const useServerCapabilities = (): UseServerCapabilitiesResult => {
         if (!cancelled) {
           setCapabilities(caps)
         }
+      } catch {
+        if (!cancelled) {
+          // Keep null as a safe "unknown/unavailable" state; guardian routes
+          // are treated as unavailable once loading has completed.
+          setCapabilities(null)
+        }
       } finally {
         if (!cancelled) {
           setLoading(false)
@@ -35,4 +41,3 @@ export const useServerCapabilities = (): UseServerCapabilitiesResult => {
 
   return { capabilities, loading }
 }
-

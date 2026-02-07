@@ -27,6 +27,8 @@ class _FakeTTSService:
         voice_to_voice_start=None,
         voice_to_voice_route="audio.speech",
         user_id=None,
+        metadata_only=False,
+        request_id=None,
     ):
         yield b"audio-bytes"
 

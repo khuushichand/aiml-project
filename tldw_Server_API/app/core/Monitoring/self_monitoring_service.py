@@ -494,24 +494,41 @@ class SelfMonitoringService:
         return text[:max_len] + "..."
 
     def can_disable_rule(self, rule: SelfMonitoringRule) -> bool:
-        """Check if a rule can be disabled (cooldown protection)."""
+        """Check if a rule can be disabled (cooldown protection).
+
+        The cooldown timer starts from when deactivation was requested
+        (``deactivation_requested_at``), NOT from when the rule was created.
+        If no deactivation has been requested yet, the rule cannot be
+        disabled until a request is made and the cooldown elapses.
+        """
         if rule.cooldown_minutes <= 0:
             return True
         if rule.bypass_protection == "none":
             return True
-        try:
-            created = datetime.fromisoformat(rule.created_at)
-            cooldown_end = created + timedelta(minutes=rule.cooldown_minutes)
-            return datetime.now(timezone.utc) >= cooldown_end
-        except _SELFMON_NONCRITICAL_EXCEPTIONS:
-            return True
+        # If a pending_deactivation_at is set, check if it has elapsed
+        if rule.pending_deactivation_at:
+            try:
+                deactivation_at = datetime.fromisoformat(rule.pending_deactivation_at)
+                return datetime.now(timezone.utc) >= deactivation_at
+            except _SELFMON_NONCRITICAL_EXCEPTIONS:
+                return True
+        # If deactivation was requested, check requested_at + cooldown
+        if rule.deactivation_requested_at:
+            try:
+                requested = datetime.fromisoformat(rule.deactivation_requested_at)
+                cooldown_end = requested + timedelta(minutes=rule.cooldown_minutes)
+                return datetime.now(timezone.utc) >= cooldown_end
+            except _SELFMON_NONCRITICAL_EXCEPTIONS:
+                return True
+        # No deactivation requested yet — cannot disable
+        return False
 
     def request_deactivation(self, rule_id: str, user_id: str) -> dict[str, Any]:
         """Request deactivation of a rule with bypass protection.
 
         Handles all bypass modes:
         - "none": disable immediately
-        - "cooldown": existing cooldown logic
+        - "cooldown": start cooldown from *now*, disable after cooldown_minutes
         - "confirmation": generate token, require confirm_deactivation()
         - "partner_approval": generate token, require approve_deactivation()
         """
@@ -529,18 +546,26 @@ class SelfMonitoringService:
             self.invalidate_cache(str(user_id))
             return {"ok": True, "status": "disabled_immediately"}
 
-        # "cooldown" — existing logic: check cooldown timer
+        # "cooldown" — cooldown timer starts from the deactivation request
         if bypass == "cooldown":
+            # If a previous request is pending and cooldown has elapsed, disable
             if self.can_disable_rule(rule):
-                self._db.update_self_monitoring_rule(rule_id, enabled=False)
+                self._db.update_self_monitoring_rule(
+                    rule_id,
+                    enabled=False,
+                    pending_deactivation_at=None,
+                    deactivation_requested_at=None,
+                )
                 self.invalidate_cache(str(user_id))
                 return {"ok": True, "status": "disabled_immediately"}
             try:
-                created = datetime.fromisoformat(rule.created_at)
-                deactivation_at = created + timedelta(minutes=rule.cooldown_minutes)
+                now = datetime.now(timezone.utc)
+                now_iso = now.isoformat()
+                deactivation_at = now + timedelta(minutes=rule.cooldown_minutes)
                 self._db.update_self_monitoring_rule(
                     rule_id,
                     pending_deactivation_at=deactivation_at.isoformat(),
+                    deactivation_requested_at=now_iso,
                 )
                 return {
                     "ok": True,

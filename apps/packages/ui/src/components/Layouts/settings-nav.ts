@@ -30,8 +30,9 @@ const buildNavItemsByGroup = (
 ) =>
   optionRoutes.reduce((acc, route) => {
     if (!route.nav) return acc
+    const capabilitiesResolved = capabilities !== undefined
     if (
-      capabilities &&
+      capabilitiesResolved &&
       !isRouteEnabledForCapabilities(route.path, capabilities)
     ) {
       return acc

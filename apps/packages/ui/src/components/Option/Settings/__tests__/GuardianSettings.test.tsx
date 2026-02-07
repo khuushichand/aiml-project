@@ -23,7 +23,7 @@ const {
     },
     loading: false
   } as {
-    capabilities: { hasGuardian: boolean; hasSelfMonitoring: boolean }
+    capabilities: { hasGuardian: boolean; hasSelfMonitoring: boolean } | null
     loading: boolean
   }
 }))
@@ -220,6 +220,14 @@ describe("GuardianSettings", () => {
     expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
   })
 
+  it("shows unavailable state when capabilities fail to resolve", () => {
+    serverCapabilitiesState.capabilities = null
+    render(<GuardianSettings />)
+
+    expect(screen.getByText("Guardian settings unavailable")).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
+  })
+
   it("does not offer warn as a self-monitoring rule action", async () => {
     render(<GuardianSettings />)
 
@@ -250,6 +258,27 @@ describe("GuardianSettings", () => {
 
     expect(screen.queryByRole("button", { name: /Accept/i })).not.toBeInTheDocument()
 
+    fireEvent.click(screen.getByRole("radio", { name: /Dependent View/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Accept/i })).toBeInTheDocument()
+    })
+  }, 15000)
+
+  it("shows Accept action for pending_consent relationships in dependent view", async () => {
+    guardianRelationships = [
+      {
+        ...baseRelationship,
+        status: "pending_consent",
+        consent_given_by_dependent: false,
+        consent_given_at: null
+      }
+    ]
+    dependentRelationships = [...guardianRelationships]
+
+    render(<GuardianSettings />)
+
+    fireEvent.click(screen.getByRole("tab", { name: /Guardian Controls/i }))
     fireEvent.click(screen.getByRole("radio", { name: /Dependent View/i }))
 
     await waitFor(() => {

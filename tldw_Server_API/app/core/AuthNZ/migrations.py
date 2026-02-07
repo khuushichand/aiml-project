@@ -15,6 +15,8 @@ from loguru import logger
 #
 # Local imports
 from tldw_Server_API.app.core.DB_Management.migrations import Migration, MigrationManager
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 
 _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -597,8 +599,8 @@ def migration_013_create_rbac_limits_and_usage(conn: sqlite3.Connection) -> None
     try:
         import os as _os
         _relax_fk = (
-            _os.getenv("DISABLE_USAGE_FOREIGN_KEYS", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            _is_truthy(_os.getenv("DISABLE_USAGE_FOREIGN_KEYS", ""))
+            or _is_test_mode()
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:
@@ -791,8 +793,8 @@ def migration_015_create_llm_usage_tables(conn: sqlite3.Connection) -> None:
     try:
         import os as _os
         _relax_fk = (
-            _os.getenv("DISABLE_USAGE_FOREIGN_KEYS", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            _is_truthy(_os.getenv("DISABLE_USAGE_FOREIGN_KEYS", ""))
+            or _is_test_mode()
             or _os.getenv("PYTEST_CURRENT_TEST") is not None
         )
     except _AUTHNZ_MIGRATIONS_NONCRITICAL_EXCEPTIONS:

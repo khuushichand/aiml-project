@@ -101,9 +101,11 @@ Provider support snapshot (indicative): OpenAI (cloud), ElevenLabs (cloud, cloni
   - Wraps adapter errors into the unified TTS exception taxonomy and records metrics:
     - `tts_requests_total{provider,model,voice,format,status}` for success/failure.
     - `tts_request_duration_seconds`, `tts_text_length_characters`, and `tts_audio_size_bytes` (on success).
+    - `tts_ttfb_seconds{provider,voice,format}` and `voice_to_voice_seconds{provider,route}` for latency slicing.
   - Fallback:
     - For retryable errors (`TTSNetworkError`, `TTSTimeoutError`, `TTSRateLimitError`, selected `TTSProviderError`), the service can attempt a fallback provider and increments `tts_fallback_attempts{from_provider,to_provider,success}`.
-    - For non-retryable errors (validation, auth, configuration), no fallback is attempted by default.
+    - Categorized fallback outcomes are emitted via `tts_fallback_outcomes_total{from_provider,to_provider,outcome,category}`.
+  - For non-retryable errors (validation, auth, configuration), no fallback is attempted by default.
   - Streaming vs. HTTP errors:
     - Default: `_stream_errors_as_audio == False` → errors propagate as structured HTTP responses / raised exceptions; streaming generators raise on failure.
     - Legacy/compat mode (`TTS_STREAM_ERRORS_AS_AUDIO=1` or `performance.stream_errors_as_audio=true`): streaming paths emit `"ERROR: ..."` chunks instead of raising, which is useful when mirroring OpenAI’s error-as-audio behavior.

@@ -64,6 +64,12 @@ from tldw_Server_API.app.core.Metrics import (  # noqa: E402
     get_metrics_registry,
 )
 from tldw_Server_API.app.core.Metrics.traces import get_tracing_manager  # noqa: E402
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 
 _HTTPCLIENT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -124,7 +130,7 @@ DEFAULT_ATTEMPTS = int(os.getenv("HTTP_RETRY_ATTEMPTS", "3"))
 DEFAULT_BACKOFF_BASE_MS = int(os.getenv("HTTP_BACKOFF_BASE_MS", "250"))
 DEFAULT_BACKOFF_CAP_S = int(os.getenv("HTTP_BACKOFF_CAP_S", "30"))
 DEFAULT_MAX_REDIRECTS = int(os.getenv("HTTP_MAX_REDIRECTS", "5"))
-DEFAULT_TRUST_ENV = (os.getenv("HTTP_TRUST_ENV", "false").lower() in {"1", "true", "yes", "on"})
+DEFAULT_TRUST_ENV = is_truthy(os.getenv("HTTP_TRUST_ENV", "false"))
 DEFAULT_USER_AGENT = os.getenv("HTTP_DEFAULT_USER_AGENT", "tldw_server httpx")
 PROXY_ALLOWLIST = {h.strip().lower() for h in (os.getenv("PROXY_ALLOWLIST", "").split(",")) if h.strip()}
 ENFORCE_TLS_MIN = (
@@ -132,7 +138,7 @@ ENFORCE_TLS_MIN = (
     or os.getenv("TLS_ENFORCE_MIN_VERSION")
     or "false"
 )
-ENFORCE_TLS_MIN = (str(ENFORCE_TLS_MIN).lower() in {"1", "true", "yes", "on"})
+ENFORCE_TLS_MIN = is_truthy(str(ENFORCE_TLS_MIN))
 TLS_MIN_VERSION = (os.getenv("HTTP_TLS_MIN_VERSION") or os.getenv("TLS_MIN_VERSION") or "1.2").strip()
 
 
@@ -903,7 +909,7 @@ def _validate_egress_or_raise(url: str) -> None:
     # enforce the default private IP policy so security-focused tests remain
     # accurate.
     block_override: bool | None = None
-    if os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING"):
+    if is_explicit_pytest_runtime() or env_flag_enabled("TESTING") or is_test_mode():
         try:
             parsed = _urlparse(url)
             host = (parsed.hostname or "").strip()
@@ -2981,24 +2987,14 @@ def fetch(*args, **kwargs):
     if follow_redirects_cfg is None:
         env_allow_redirects = os.getenv("HTTP_ALLOW_REDIRECTS")
         if env_allow_redirects is not None:
-            follow_redirects = str(env_allow_redirects).strip().lower() in {"1", "true", "yes", "on"}
+            follow_redirects = is_truthy(str(env_allow_redirects).strip())
         else:
             follow_redirects = True
     else:
         follow_redirects = bool(follow_redirects_cfg)
 
-    allow_cross_host = str(os.getenv("HTTP_ALLOW_CROSS_HOST_REDIRECTS", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    allow_downgrade = str(os.getenv("HTTP_ALLOW_SCHEME_DOWNGRADE", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    allow_cross_host = is_truthy(os.getenv("HTTP_ALLOW_CROSS_HOST_REDIRECTS", ""))
+    allow_downgrade = is_truthy(os.getenv("HTTP_ALLOW_SCHEME_DOWNGRADE", ""))
 
     def _redirect_allowed(prev: str, nxt: str) -> bool:
         try:

@@ -1,0 +1,1454 @@
+{
+  "navigation": {
+    "serverAndAuth": "서버 및 인증",
+    "knowledgeTools": "지식 도구",
+    "workspace": "작업 공간",
+    "about": "정보"
+  },
+  "healthNav": "상태",
+  "worldBooksNav": "월드북",
+  "chatDictionariesNav": "채팅 사전",
+  "charactersNav": "캐릭터",
+  "mediaNav": "미디어",
+  "guardianNav": "Guardian & Monitoring",
+  "guardian": {
+    "unavailableTitle": "Guardian settings unavailable",
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+  },
+  "chatAppearance": {
+    "title": "채팅 모양",
+    "description": "채팅 메시지의 색상, 글꼴, 글자 크기를 사용자 지정합니다.",
+    "behaviorNote": "채팅 동작 설정(와이드 모드, 추론, 복사 옵션)을 찾고 계신가요?",
+    "goToGeneral": "일반 설정으로 이동",
+    "userHeading": "사용자 메시지",
+    "assistantHeading": "어시스턴트 메시지",
+    "userColor": "사용자 텍스트 색상",
+    "assistantColor": "어시스턴트 텍스트 색상",
+    "userFont": "사용자 글꼴",
+    "assistantFont": "어시스턴트 글꼴",
+    "userSize": "사용자 텍스트 크기",
+    "assistantSize": "어시스턴트 텍스트 크기",
+    "color": {
+      "default": "기본값",
+      "blue": "파랑",
+      "green": "초록",
+      "purple": "보라",
+      "orange": "주황",
+      "red": "빨강"
+    },
+    "font": {
+      "default": "기본값",
+      "sans": "고딕체 (Sans serif)",
+      "serif": "명조체 (Serif)",
+      "mono": "고정폭 글꼴 (Monospace)"
+    },
+    "size": {
+      "sm": "작게",
+      "md": "보통",
+      "lg": "크게"
+    }
+  },
+  "generalSettings": {
+    "title": "일반 설정",
+    "settings": {
+      "heading": "웹 UI 설정",
+      "speechRecognitionLang": {
+        "label": "음성 인식 언어",
+        "placeholder": "언어 선택"
+      },
+      "language": {
+        "label": "언어",
+        "placeholder": "언어 선택"
+      },
+      "darkMode": {
+        "label": "테마 변경",
+        "options": {
+          "light": "라이트",
+          "dark": "다크"
+        }
+      },
+      "searchMode": {
+        "label": "간편 인터넷 검색 실행"
+      },
+      "copilotResumeLastChat": {
+        "label": "사이드 패널을 열 때 마지막 채팅 재개 (Copilot)"
+      },
+      "turnOnChatWithWebsite": {
+        "label": "웹사이트와의 채팅 기본 활성화 (Copilot)"
+      },
+      "webUIResumeLastChat": {
+        "label": "웹 UI를 열 때 마지막 채팅 재개"
+      },
+      "hideCurrentChatModelSettings": {
+        "label": "현재 채팅 모델 설정 숨기기"
+      },
+      "restoreLastChatModel": {
+        "label": "이전 채팅에서 마지막 사용한 모델 복원"
+      },
+      "sendNotificationAfterIndexing": {
+        "label": "지식 베이스 처리 완료 후 알림 전송"
+      },
+      "generateTitle": {
+        "label": "AI로 제목 생성"
+      },
+      "ollamaStatus": {
+        "label": "서버 연결 상태 확인 활성화 또는 비활성화"
+      },
+      "wideMode": {
+        "label": "와이드 스크린 모드 활성화"
+      },
+      "openReasoning": {
+        "label": "추론 섹션을 기본적으로 열기"
+      },
+      "userChatBubble": {
+        "label": "사용자 메시지에 채팅 버블 사용"
+      },
+      "autoCopyResponseToClipboard": {
+        "label": "응답 자동 클립보드 복사"
+      },
+      "useMarkdownForUserMessage": {
+        "label": "사용자 메시지에 마크다운 형식 사용"
+      },
+      "copyAsFormattedText": {
+        "label": "서식이 있는 텍스트로 복사"
+      },
+      "tabMentionsEnabled": {
+        "label": "탭 멘션 (@tab) 활성화"
+      },
+      "pasteLargeTextAsFile": {
+        "label": "큰 텍스트를 파일로 붙여넣기"
+      },
+      "sidepanelTemporaryChat": {
+        "label": "사이드 패널에서 임시 채팅 기본 활성화"
+      },
+      "enableOcrAssets": {
+        "label": "OCR 활성화 (처음 사용할 때 약 5MB 다운로드)",
+        "downloadNotice": "OCR을 활성화하면 처음 사용할 때 약 5MB의 언어 데이터가 다운로드됩니다.",
+        "assetsEnabled": "OCR 리소스가 활성화되어 준비되었습니다"
+      },
+      "ocrLanguage": {
+        "label": "기본 OCR 언어",
+        "placeholder": "OCR 언어 선택"
+      },
+      "removeReasoningTagFromCopy": {
+        "label": "복사한 텍스트에서 추론 태그 제거"
+      },
+      "promptSearchIncludeServer": {
+        "label": "프롬프트 검색에 서버 프롬프트 포함"
+      },
+      "restartOnboarding": {
+        "label": "온보딩을 처음부터 다시 시작",
+        "button": "온보딩 다시 시작",
+        "confirmTitle": "온보딩을 다시 시작할까요?",
+        "confirmMessage": "온보딩 상태가 초기화되고 설정 흐름의 처음으로 돌아갑니다.",
+        "toast": "온보딩이 초기화되었습니다",
+        "toastBody": "서버 URL과 API 키를 다시 확인할 수 있도록 환영 단계로 돌아갑니다."
+      }
+    },
+    "sidepanelRag": {
+      "heading": "검색 설정",
+      "ragEnabled": {
+        "label": "임베딩 및 검색 활성화"
+      },
+      "maxWebsiteContext": {
+        "label": "전체 컨텍스트 모드의 최대 콘텐츠 크기",
+        "placeholder": "콘텐츠 크기 (기본값 4028)"
+      }
+    },
+    "webSearch": {
+      "heading": "웹 검색 관리",
+      "searchMode": {
+        "label": "간편한 인터넷 검색 실행"
+      },
+      "provider": {
+        "label": "검색 엔진",
+        "placeholder": "검색 엔진 선택"
+      },
+      "totalSearchResults": {
+        "label": "총 검색 결과",
+        "placeholder": "총 검색 결과 입력"
+      },
+      "visitSpecificWebsite": {
+        "label": "메시지에 언급된 웹사이트 방문"
+      },
+      "searxng": {
+        "url": {
+          "label": "SearXNG URL 주소"
+        }
+      },
+      "braveApi": {
+        "label": "Brave API 키",
+        "placeholder": "Brave API 키를 입력하세요"
+      },
+      "searchOnByDefault": {
+        "label": "기본적으로 인터넷 검색 켜기"
+      },
+      "tavilyApi": {
+        "label": "Tavily API 키",
+        "placeholder": "Tavily API 키를 입력하세요"
+      },
+      "exa": {
+        "label": "Exa API 키",
+        "placeholder": "Exa API 키를 입력하세요"
+      },
+      "googleDomain": {
+        "label": "Google 도메인"
+      },
+      "firecrawlAPIKey": {
+        "label": "Firecrawl API 키",
+        "placeholder": "Firecrawl API 키를 입력하세요"
+      }
+    },
+    "system": {
+      "heading": "시스템 설정",
+      "uiMode": {
+        "label": "기본 UI 모드",
+        "options": {
+          "webui": "전체 화면 (Web UI)",
+          "sidePanel": "사이드바"
+        }
+      },
+      "deleteChatHistory": {
+        "label": "시스템 초기화",
+        "button": "전체 초기화",
+        "confirm": "시스템을 초기화하시겠습니까? 모든 데이터가 삭제되며 되돌릴 수 없습니다."
+      },
+      "export": {
+        "label": "채팅 기록, 지식 베이스, 프롬프트 내보내기",
+        "button": "데이터 내보내기",
+        "success": "내보내기 성공"
+      },
+      "import": {
+        "label": "채팅 기록, 지식 베이스, 프롬프트 가져오기",
+        "button": "데이터 가져오기",
+        "success": "가져오기 성공",
+        "error": "가져오기 오류"
+      }
+    },
+    "tts": {
+      "heading": "텍스트 음성 변환 설정",
+      "ttsEnabled": {
+        "label": "텍스트 음성 변환 활성화"
+      },
+      "ttsAutoPlay": {
+        "label": "응답 완료 후 자동 음성 재생"
+      },
+      "ttsProvider": {
+        "label": "텍스트 음성 변환 제공자",
+        "placeholder": "제공자 선택"
+      },
+      "ttsVoice": {
+        "label": "텍스트 음성 변환 음성",
+        "placeholder": "음성 선택"
+      },
+      "ssmlEnabled": {
+        "label": "SSML (Speech Synthesis Markup Language) 활성화"
+      },
+      "removeReasoningTagTTS": {
+        "label": "TTS에서 추론 태그 제거"
+      },
+      "responseSplitting": {
+        "label": "응답 분할"
+      }
+    },
+    "stt": {
+      "heading": "음성 인식 설정",
+      "autoStopTimeout": {
+        "label": "자동 중지 시간 (ms)",
+        "placeholder": "자동 중지 시간을 밀리초 단위로 입력하세요"
+      },
+      "autoSubmitVoiceMessage": {
+        "label": "음성 메시지 자동 전송"
+      },
+      "usedByChat": "이 음성-텍스트 기본값은 플레이그라운드와 사이드바의 채팅 음성 입력 버튼에서 사용됩니다.",
+      "model": {
+        "label": "전사 모델 (tldw_server)"
+      },
+      "useSegmentation": {
+        "label": "전사에 세그먼트 분할 실행 (TreeSeg)"
+      },
+      "timestampGranularities": {
+        "label": "타임스탬프 세분화",
+        "segment": "세그먼트당",
+        "word": "단어당",
+        "segmentWord": "세그먼트 + 단어"
+      },
+      "task": {
+        "label": "전사 작업",
+        "transcribe": "전사(같은 언어)",
+        "translate": "영어로 번역"
+      },
+      "responseFormat": {
+        "label": "응답 형식",
+        "json": "JSON (텍스트 + 세그먼트)",
+        "verboseJson": "자세한 JSON",
+        "text": "일반 텍스트",
+        "srt": "SRT 자막",
+        "vtt": "VTT 자막"
+      },
+      "temperature": {
+        "label": "샘플링 온도"
+      },
+      "prompt": {
+        "label": "기본 전사 프롬프트",
+        "placeholder": "스타일을 안내할 선택적 텍스트"
+      },
+      "segK": {
+        "label": "최대 세그먼트 수 (TreeSeg K)"
+      },
+      "segMinSegmentSize": {
+        "label": "세그먼트당 최소 항목 수"
+      },
+      "segLambdaBalance": {
+        "label": "균형 페널티 (TreeSeg λ)"
+      },
+      "segUtteranceExpansionWidth": {
+        "label": "발화 확장 폭"
+      },
+      "segEmbeddingsProvider": {
+        "label": "세그먼트 임베딩 제공자"
+      },
+      "segEmbeddingsModel": {
+        "label": "세그먼트 임베딩 모델"
+      }
+    },
+    "systemBasics": {
+      "heading": "시스템",
+      "uiMode": {
+        "label": "기본 UI 모드",
+        "options": {
+          "webui": "전체 화면 (웹 UI)",
+          "sidePanel": "사이드바"
+        }
+      },
+      "actionIcon": {
+        "label": "브라우저 액션 버튼"
+      },
+      "contextMenu": {
+        "label": "컨텍스트 메뉴 동작"
+      },
+      "webuiBtnSidePanel": {
+        "label": "사이드바에 웹 UI 버튼 표시"
+      },
+      "chatBackgroundImage": {
+        "label": "채팅 배경 이미지"
+      },
+      "fontSize": {
+        "label": "글꼴 크기"
+      }
+    },
+    "systemData": {
+      "heading": "데이터",
+      "firefoxPrivateModeSync": {
+        "label": "Firefox 사생활 모드 동기화",
+        "button": "데이터 동기화"
+      },
+      "deleteChatHistory": {
+        "label": "시스템 초기화",
+        "button": "모두 초기화",
+        "confirm": "시스템을 초기화하시겠습니까? 모든 데이터가 삭제되며 되돌릴 수 없습니다."
+      },
+      "export": {
+        "label": "채팅 기록, 지식 베이스, 프롬프트 내보내기",
+        "button": "데이터 내보내기",
+        "success": "내보내기 성공"
+      },
+      "import": {
+        "label": "채팅 기록, 지식 베이스, 프롬프트 가져오기",
+        "button": "데이터 가져오기",
+        "success": "가져오기 성공",
+        "error": "가져오기 오류"
+      }
+    },
+    "empty": {
+      "connectTitle": "tldw Assistant를 서버에 연결",
+      "connectDescription": "일부 설정은 tldw 서버에 연결되어야 적용됩니다. 서버를 연결해 전체 기능을 사용하세요.",
+      "connectExample1": "설정 → tldw 서버에서 서버 URL과 API 키를 추가하세요.",
+      "connectExample2": "고급 도구를 사용하기 전에 Diagnostics로 서버 상태를 확인하세요.",
+      "title": "tldw Assistant 동작 설정",
+      "description": "웹 UI, 사이드패널, 음성, 검색, 데이터 처리를 한 곳에서 조정하세요.",
+      "example1": "기본 언어, 테마, 채팅 재개 동작을 선택하세요.",
+      "example2": "임시 채팅 여부, 큰 붙여넣기 처리, 추론 표시 방식을 제어하세요.",
+      "primaryCta": "서버 및 인증 설정",
+      "secondaryCta": "닫기"
+    }
+  },
+  "manageModels": {
+    "title": "모델 관리",
+    "addBtn": "새 모델 추가",
+    "columns": {
+      "name": "이름",
+      "digest": "다이제스트",
+      "modifiedAt": "수정 일시",
+      "size": "크기",
+      "actions": "동작",
+      "nickname": "별칭"
+    },
+    "expandedColumns": {
+      "parentModel": "상위 모델",
+      "format": "형식",
+      "family": "패밀리",
+      "parameterSize": "파라미터 크기",
+      "quantizationLevel": "양자화 수준"
+    },
+    "tooltip": {
+      "delete": "모델 삭제",
+      "repull": "모델 다시 가져오기",
+      "editNickname": "별칭 편집"
+    },
+    "confirm": {
+      "delete": "이 모델을 정말 삭제하시겠습니까?",
+      "repull": "이 모델을 정말 다시 가져오시겠습니까?"
+    },
+    "modal": {
+      "title": "새 모델 추가",
+      "placeholder": "모델 이름 입력",
+      "pull": "모델 가져오기"
+    },
+    "notification": {
+      "pullModel": "모델 가져오는 중",
+      "pullModelDescription": "{{modelName}} 모델을 가져오는 중입니다. 자세한 내용은 확장 기능 아이콘을 확인하세요.",
+      "success": "성공",
+      "error": "오류",
+      "successDescription": "모델 가져오기가 완료되었습니다",
+      "successDeleteDescription": "모델 삭제가 완료되었습니다",
+      "someError": "문제가 발생했습니다. 나중에 다시 시도해 주세요.",
+      "cancellingDownload": "다운로드 취소 중",
+      "cancellingDownloadDescription": "모델 다운로드를 취소하는 중입니다..."
+    }
+  },
+  "managePrompts": {
+    "title": "프롬프트 관리",
+    "addBtn": "새 프롬프트 추가",
+    "option1": "일반",
+    "option2": "RAG (검색 증강)",
+    "questionPrompt": "질문 프롬프트",
+    "columns": {
+      "title": "제목",
+      "prompt": "프롬프트",
+      "type": "프롬프트 유형",
+      "actions": "동작"
+    },
+    "systemPrompt": "시스템 프롬프트",
+    "quickPrompt": "퀵 프롬프트",
+    "tooltip": {
+      "delete": "프롬프트 삭제",
+      "edit": "프롬프트 수정",
+      "duplicate": "프롬프트 복제"
+    },
+    "confirm": {
+      "delete": "이 프롬프트를 정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다."
+    },
+    "modal": {
+      "addTitle": "새 프롬프트 추가",
+      "editTitle": "프롬프트 수정"
+    },
+    "segmented": {
+      "custom": "커스텀 프롬프트",
+      "copilot": "Copilot 프롬프트",
+      "helpCustom": "채팅에 삽입할 수 있는 재사용 프롬프트를 만들고 관리합니다.",
+      "helpCopilot": "서버에서 제공하는 Copilot 기본 프롬프트를 확인하고 조정합니다."
+    },
+    "form": {
+      "title": {
+        "label": "제목",
+        "placeholder": "훌륭한 프롬프트",
+        "required": "제목을 입력하세요"
+      },
+      "prompt": {
+        "label": "프롬프트",
+        "placeholder": "프롬프트 입력",
+        "required": "프롬프트를 입력하세요",
+        "help": "프롬프트 내에서 {key}를 변수로 사용할 수 있습니다.",
+        "missingTextPlaceholder": "프롬프트에 {text} 변수가 없습니다. 추가해 주세요."
+      },
+      "isSystem": {
+        "label": "시스템 프롬프트"
+      },
+      "btnSave": {
+        "saving": "프롬프트 추가 중...",
+        "save": "프롬프트 추가"
+      },
+      "btnEdit": {
+        "saving": "프롬프트 업데이트 중...",
+        "save": "프롬프트 업데이트"
+      }
+    },
+    "notification": {
+      "addSuccess": "프롬프트가 추가되었습니다",
+      "addSuccessDesc": "프롬프트가 정상적으로 추가되었습니다",
+      "error": "오류",
+      "someError": "문제가 발생했습니다. 나중에 다시 시도해 주세요.",
+      "updatedSuccess": "프롬프트가 업데이트되었습니다",
+      "updatedSuccessDesc": "프롬프트가 정상적으로 업데이트되었습니다",
+      "deletedSuccess": "프롬프트가 삭제되었습니다",
+      "deletedSuccessDesc": "프롬프트가 정상적으로 삭제되었습니다"
+    },
+    "workspaceTitle": "프롬프트 작업 공간",
+    "workspaceDescription": "재사용 프롬프트는 프롬프트 작업 공간에서 관리됩니다. 아래 버튼을 눌러 열 수 있습니다.",
+    "openWorkspace": "프롬프트 작업 공간 열기",
+    "search": "제목과 내용 검색",
+    "filter": {
+      "all": "전체",
+      "system": "시스템",
+      "quick": "퀵"
+    },
+    "tags": {
+      "label": "태그",
+      "placeholder": "태그 추가"
+    },
+    "import": "가져오기",
+    "export": "내보내기",
+    "importMode": {
+      "merge": "병합",
+      "replace": "덮어쓰기",
+      "replaceConfirm": "덮어쓰기는 현재의 모든 프롬프트를 가져온 파일로 덮어씁니다. 계속하시겠습니까?"
+    },
+    "favorite": "즐겨찾기",
+    "unfavorite": "즐겨찾기 해제",
+    "partialLoad": "일부 프롬프트 데이터를 사용할 수 없습니다",
+    "loadErrorHelp": "서버 연결을 확인하고 새로고침해 다시 시도하세요.",
+    "emptyConnectTitle": "프롬프트를 사용하려면 연결하세요",
+    "emptyConnectDescription": "재사용 프롬프트를 관리하려면 먼저 tldw 서버에 연결하세요.",
+    "emptyConnectExample1": "설정 → tldw 서버에서 서버 URL을 추가하세요.",
+    "emptyConnectExample2": "연결 후에는 채팅에서 재사용할 커스텀 프롬프트를 만들 수 있습니다.",
+    "emptyTitle": "커스텀 프롬프트가 없습니다",
+    "emptyDescription": "반복 작업, 워크플로, 팀 규칙을 위한 재사용 프롬프트를 만들어 보세요.",
+    "emptyExample1": "요약, 설명, 번역에 사용할 시스템 프롬프트를 저장하세요.",
+    "emptyExample2": "이메일 작성이나 노트 다듬기 같은 작업을 위한 퀵 프롬프트를 만드세요.",
+    "emptyPrimaryCta": "프롬프트 만들기",
+    "filterHelp": "제목과 프롬프트 내용에서 검색합니다. 유형과 태그로 목록을 좁히세요.",
+    "copilotEmptyTitle": "Copilot 프롬프트가 없습니다",
+    "copilotEmptyDescription": "Copilot 프롬프트는 tldw 서버에서 제공하는 미리 정의된 템플릿입니다.",
+    "copilotEmptyExample1": "Copilot 프롬프트가 있어야 한다면 서버 버전 또는 구성을 확인하세요.",
+    "copilotEmptyExample2": "서버를 업데이트한 뒤 확장 프로그램을 새로고침하고 이 탭으로 돌아오세요.",
+    "copilotEmptyCta": "진단 열기"
+  },
+  "manageShare": {
+    "title": "공유 관리",
+    "heading": "페이지 공유 URL 설정",
+    "form": {
+      "url": {
+        "label": "페이지 공유 URL",
+        "placeholder": "페이지 공유 URL 입력",
+        "required": "페이지 공유 URL을 입력해 주세요!",
+        "help": "개인정보 보호를 위해 페이지 공유를 자체 호스팅하고, 해당 URL을 여기에 입력할 수 있습니다. <anchor>자세히 보기</anchor>"
+      }
+    },
+    "webshare": {
+      "heading": "웹 공유",
+      "columns": {
+        "title": "제목",
+        "url": "URL 주소",
+        "actions": "동작"
+      },
+      "tooltip": {
+        "delete": "공유 삭제"
+      },
+      "confirm": {
+        "delete": "이 공유를 정말 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다."
+      },
+      "label": "페이지 공유 관리",
+      "description": "페이지 공유 기능을 활성화 또는 비활성화"
+    },
+    "notification": {
+      "pageShareSuccess": "페이지 공유 URL이 정상적으로 업데이트되었습니다",
+      "someError": "문제가 발생했습니다. 나중에 다시 시도해 주세요.",
+      "webShareDeleteSuccess": "웹 공유가 정상적으로 삭제되었습니다"
+    }
+  },
+  "ollamaSettings": {
+    "title": "서버 설정",
+    "heading": "서버 설정하기",
+    "settings": {
+      "ollamaUrl": {
+        "label": "서버 URL",
+        "placeholder": "서버 URL 입력"
+      },
+      "globalEnable": {
+        "label": "서버 통합 기능 전역 활성화 또는 비활성화",
+        "warning": "서버 통합을 전역적으로 비활성화하면 tldw Assistant가 서버에서 모델을 가져오지 않습니다. <anchor>OpenAI 호환 API</anchor> 섹션에서 공급자를 추가할 수 있습니다."
+      },
+      "advanced": {
+        "label": "서버 URL 고급 설정",
+        "urlRewriteEnabled": {
+          "label": "사용자 지정 Origin URL 활성화 또는 비활성화"
+        },
+        "rewriteUrl": {
+          "label": "사용자 지정 Origin URL",
+          "placeholder": "사용자 지정 Origin URL 입력"
+        },
+        "autoCORSFix": {
+          "label": "자동 CORS 수정 활성화 또는 비활성화"
+        },
+        "headers": {
+          "label": "사용자 지정 헤더",
+          "add": "헤더 추가",
+          "key": {
+            "label": "헤더 키",
+            "placeholder": "인증"
+          },
+          "value": {
+            "label": "헤더 값",
+            "placeholder": "베어러 토큰"
+          }
+        },
+        "help": "서버 연결에 문제가 있는 경우 사용자 지정 Origin URL을 설정할 수 있습니다. 자세한 내용은 <anchor>여기를 클릭</anchor>하세요."
+      }
+    }
+  },
+  "manageSearch": {
+    "title": "웹 검색 관리",
+    "heading": "웹 검색 설정하기"
+  },
+  "about": {
+    "title": "소개",
+    "heading": "소개",
+    "chromeVersion": "tldw Assistant 버전",
+    "ollamaVersion": "서버 버전",
+    "support": "tldw Assistant 프로젝트는 다음 플랫폼에서 기부나 후원을 통해 지원할 수 있습니다:",
+    "koFi": "Ko-fi로 후원하기",
+    "githubSponsor": "GitHub에서 후원하기",
+    "githubRepo": "GitHub 저장소"
+  },
+  "switchToSidebar": "사이드바로 전환",
+  "healthPage": {
+    "title": "상태",
+    "subtitle": "서버에서 제공하는 하위 시스템 상태 엔드포인트의 빠른 개요입니다.",
+    "backToChat": "채팅으로 돌아가기",
+    "openSettings": "tldw 설정 열기",
+    "recheckAll": "전체 다시 확인",
+    "copyDiagnostics": "진단 복사",
+    "serverNotConfigured": "서버가 설정되지 않았습니다.",
+    "unableToReachCore": "서버 코어 상태 엔드포인트에 접근할 수 없습니다.",
+    "triedGet": "GET {{url}} 시도함",
+    "configureHint": "tldw 설정에서 서버 URL을 설정하세요.",
+    "configureCta": "설정",
+    "connectedTo": "{{host}}에 연결됨",
+    "autoRefresh": "자동 새로고침",
+    "intervalLabel": "간격(초):",
+    "checking": "확인 중…",
+    "recheck": "다시 확인",
+    "healthy": "정상",
+    "unhealthy": "비정상",
+    "unknown": "알 수 없음",
+    "checks": {
+      "core": "코어 API",
+      "rag": "RAG (검색 증강)",
+      "audio": "오디오",
+      "embeddings": "임베딩",
+      "metrics": "메트릭 상태",
+      "chatMetrics": "채팅 메트릭",
+      "mcp": "MCP (모델 컨텍스트 프로토콜)",
+      "coreDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "ragDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "audioDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "embeddingsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "metricsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "chatMetricsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "mcpDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant"
+    },
+    "copyDiagnosticsHelp": "JSON 진단 정보를 클립보드에 복사합니다",
+    "statusHealthy": "정상",
+    "statusUnhealthy": "비정상",
+    "statusUnknown": "알 수 없음",
+    "updatedJustNow": "방금 업데이트됨",
+    "updatedSecondsAgo": "{{seconds}}초 전 업데이트됨"
+  },
+  "savedSuccessfully": "설정이 저장되었습니다",
+  "saveFailed": "설정을 저장하지 못했습니다",
+  "siteAccessGranted": "{{origin}}에 대한 호스트 권한이 허용되었습니다",
+  "tldw": {
+    "advancedTimeouts": "고급 타임아웃",
+    "requestTimeout": "요청 타임아웃(초)",
+    "streamingIdle": "스트리밍 유휴 타임아웃(초)",
+    "chatRequest": "채팅 요청 타임아웃",
+    "chatStreamIdle": "채팅 스트림 유휴",
+    "ragRequest": "RAG 요청 타임아웃",
+    "mediaRequest": "미디어 요청 타임아웃",
+    "uploadRequest": "업로드 요청 타임아웃",
+    "timeoutPresetLabel": "타임아웃 프로필",
+    "timeoutPresetBalanced": "균형",
+    "timeoutPresetExtended": "확장",
+    "timeoutPresetCustom": "사용자 정의",
+    "timeoutPresetHint": "균형 모드는 대부분의 설정에서 잘 작동합니다. 확장 모드는 느린 네트워크나 장기 작업을 위한 여유를 더 제공합니다.",
+    "reset": "권장값으로 재설정",
+    "resetDone": "권장 기본값으로 재설정됨",
+    "serverNav": "tldw 서버",
+    "serverConfigTitle": "tldw 서버 설정",
+    "serverLabel": "서버:",
+    "notConfigured": "구성되지 않음",
+    "buttons": {
+      "health": "상태",
+      "recheck": "다시 확인",
+      "testConnection": "연결 테스트",
+      "grantSiteAccess": "사이트 접근 허용",
+      "login": "로그인",
+      "logout": "로그아웃"
+    },
+    "loginRequired": {
+      "title": "로그인이 필요합니다",
+      "description": "tldw_server 자격 증명으로 로그인하세요"
+    },
+    "loggedIn": {
+      "title": "로그인됨",
+      "description": "현재 tldw_server에 로그인되어 있습니다"
+    },
+    "connection": {
+      "success": "연결에 성공했습니다!",
+      "failed": "연결에 실패했습니다. 설정을 확인하세요.",
+      "failedDetailed": "연결에 실패했습니다. 서버 URL과 API 키를 확인하세요."
+    },
+    "authMode": {
+      "label": "인증 모드",
+      "single": "단일 사용자(API 키)",
+      "multi": "다중 사용자(로그인)"
+    },
+    "hints": {
+      "requestTimeout": "이 시간 안에 응답이 없으면 초기 요청을 중단합니다. 기본값: {{seconds}}s.",
+      "streamingIdle": "이 시간 동안 업데이트가 없으면 스트리밍을 중단합니다. 기본값: {{seconds}}s."
+    },
+    "login": {
+      "success": "로그인 성공!",
+      "failed": "로그인 실패"
+    },
+    "logout": {
+      "success": "성공적으로 로그아웃했습니다",
+      "failed": "로그아웃 실패"
+    },
+    "setupLink": "서버 설정",
+    "loadError": "tldw 서버 설정을 불러올 수 없습니다. 연결을 확인하고 다시 시도하세요.",
+    "fields": {
+      "apiKey": {
+        "label": "API 키",
+        "placeholder": "API 키를 입력하세요",
+        "required": "API 키를 입력하세요",
+        "extra": "인증을 위한 tldw_server API 키"
+      },
+      "username": {
+        "label": "사용자 이름",
+        "placeholder": "사용자 이름을 입력하세요",
+        "required": "사용자 이름을 입력하세요"
+      },
+      "password": {
+        "label": "비밀번호",
+        "placeholder": "비밀번호를 입력하세요",
+        "required": "비밀번호를 입력하세요"
+      },
+      "serverUrl": {
+        "label": "서버 URL",
+        "placeholder": "http://localhost:8000",
+        "required": "서버 URL을 입력하세요",
+        "invalid": "유효한 URL을 입력하세요",
+        "extra": "tldw_server 인스턴스의 URL (예: http://localhost:8000)"
+      }
+    },
+    "errors": {
+      "invalidApiKey": "잘못된 API 키",
+      "forbidden": "금지됨(권한을 확인하세요)",
+      "apiKeyValidationFailed": "API 키 검증 실패",
+      "serverUnreachable": "서버에 연결할 수 없습니다"
+    },
+    "about": {
+      "title": "tldw_server 통합 정보",
+      "description": "이 확장 프로그램은 tldw_server 인스턴스에 연결하여 다음에 접근할 수 있게 합니다:",
+      "points": {
+        "providers": "단일 API로 여러 LLM 제공자",
+        "rag": "RAG 검색(검색 증강 생성)",
+        "media": "미디어 수집 및 처리",
+        "notes": "노트 및 프롬프트 관리",
+        "stt": "음성-텍스트 변환"
+      }
+    }
+  },
+  "manageKnowledge": {
+    "title": "지식 QA",
+    "heading": "지식 QA",
+    "worldBooksSettingsTitle": "월드북 작업 공간",
+    "worldBooksSettingsDescription": "월드북은 월드북 작업 공간에서 관리됩니다. 아래 버튼으로 열 수 있습니다.",
+    "worldBooksOpenWorkspace": "월드북 작업 공간 열기",
+    "dictionariesSettingsTitle": "채팅 사전 작업 공간",
+    "dictionariesSettingsDescription": "채팅 사전은 채팅 사전 작업 공간에서 관리됩니다. 아래 버튼으로 열 수 있습니다.",
+    "dictionariesOpenWorkspace": "채팅 사전 작업 공간 열기"
+  },
+  "rag": {
+    "title": "RAG 설정",
+    "ragSettings": {
+      "label": "RAG 설정",
+      "model": {
+        "label": "임베딩 모델",
+        "required": "모델을 선택해주세요",
+        "help": "`nomic-embed-text`와 같은 임베딩 모델 사용을 강력히 권장합니다.",
+        "placeholder": "모델 선택",
+        "helpRecommended": "추천: {{model}} (서버 설정 기준)",
+        "helpMissing": "이전에 저장된 임베딩 모델이 서버에 더 이상 없습니다. 다른 모델을 선택하세요."
+      },
+      "chunkSize": {
+        "label": "청크 크기",
+        "placeholder": "청크 크기 입력",
+        "required": "청크 크기를 입력해주세요"
+      },
+      "chunkOverlap": {
+        "label": "청크 오버랩",
+        "placeholder": "청크 오버랩 입력",
+        "required": "청크 오버랩을 입력해주세요"
+      },
+      "totalFilePerKB": {
+        "label": "지식 베이스 기본 파일 업로드 제한",
+        "placeholder": "기본 파일 업로드 제한 입력 (예: 10)",
+        "required": "기본 파일 업로드 제한을 입력해주세요"
+      },
+      "noOfRetrievedDocs": {
+        "label": "검색 문서 수",
+        "placeholder": "검색 문서 수 입력",
+        "required": "검색 문서 수를 입력해주세요"
+      },
+      "splittingSeparator": {
+        "label": "구분자",
+        "placeholder": "구분자 입력 (예: \\n\\n)",
+        "required": "구분자를 입력해주세요"
+      },
+      "splittingStrategy": {
+        "label": "텍스트 분할기"
+      }
+    },
+    "prompt": {
+      "label": "RAG 프롬프트 설정",
+      "option1": "일반",
+      "option2": "웹",
+      "alert": "여기서 시스템 프롬프트를 설정하는 것은 더 이상 권장되지 않습니다. 프롬프트 추가 및 편집은 '프롬프트 관리' 섹션을 이용해주세요. 이 섹션은 향후 릴리스에서 제거될 예정입니다.",
+      "systemPrompt": "시스템 프롬프트",
+      "systemPromptPlaceholder": "시스템 프롬프트 입력",
+      "webSearchPrompt": "웹 검색 프롬프트",
+      "webSearchPromptHelp": "프롬프트에서 `{search_results}`를 제거하지 마세요.",
+      "webSearchPromptError": "웹 검색 프롬프트를 입력해주세요",
+      "webSearchPromptPlaceholder": "웹 검색 프롬프트 입력",
+      "webSearchFollowUpPrompt": "웹 검색 후속 프롬프트",
+      "webSearchFollowUpPromptHelp": "프롬프트에서 `{chat_history}`와 `{question}`를 제거하지 마세요.",
+      "webSearchFollowUpPromptError": "웹 검색 후속 프롬프트를 입력해주세요!",
+      "webSearchFollowUpPromptPlaceholder": "웹 검색 후속 프롬프트"
+    }
+  },
+  "onboarding": {
+    "title": "환영합니다 — 연결을 시작해볼까요",
+    "description": "서버와 인증을 설정합니다. 연결과 RAG 상태를 바로 확인합니다.",
+    "learnMoreTldw": "tldw 서버가 어떻게 작동하는지 알아보기",
+    "serverDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+    "serverUrl": {
+      "placeholder": "예: http://127.0.0.1:8000",
+      "help": "예: http://127.0.0.1:8000",
+      "invalid": "http://127.0.0.1:8000 과 같은 전체 URL을 입력하세요.",
+      "invalidProtocol": "http 또는 https URL을 사용하세요(예: http://127.0.0.1:8000).",
+      "label": "서버 URL",
+      "emptyHint": "다음으로 진행하려면 tldw 서버 URL을 입력하세요.",
+      "ready": "이 주소에 접속할 수 있으면 다음을 활성화합니다.",
+      "checking": "연결 확인 중…",
+      "reachable": "서버가 응답했습니다. 계속할 수 있습니다.",
+      "unreachable": "아직 이 주소에 접속할 수 없습니다. URL을 확인하거나 다시 시도하세요."
+    },
+    "buttons": {
+      "next": "다음",
+      "back": "뒤로",
+      "continue": "계속",
+      "recheck": "다시 확인",
+      "finish": "완료",
+      "finishAnyway": "연결 없이 완료",
+      "skip": "지금은 건너뛰기"
+    },
+    "authMode": {
+      "label": "인증 모드",
+      "single": "단일 사용자(API 키)",
+      "multi": "다중 사용자(로그인)"
+    },
+    "apiKey": {
+      "label": "API 키",
+      "placeholder": "API 키를 입력하세요 (또는 로컬 단일 사용자용 기본 데모 키 THIS-IS-A-SECURE-KEY-123-REPLACE-ME 사용)"
+    },
+    "username": {
+      "label": "사용자 이름",
+      "placeholder": "사용자 이름"
+    },
+    "password": {
+      "label": "비밀번호",
+      "placeholder": "비밀번호"
+    },
+    "connection": {
+      "label": "연결:",
+      "unknown": "알 수 없음",
+      "connected": "연결됨",
+      "failed": "실패",
+      "continueAnyway": "지금 계속해서 설정을 마칠 수 있습니다. 나중에 설정에서 연결을 확인할 수 있습니다."
+    },
+    "rag": {
+      "label": "RAG:",
+      "healthy": "정상",
+      "unhealthy": "비정상",
+      "unknown": "알 수 없음"
+    },
+    "connectionFailed": "연결 실패",
+    "footerHelp": "연결이 완료되면 확장 프로그램 메뉴에서 언제든지 이 설정으로 다시 돌아올 수 있습니다.",
+    "progressAria": "온보딩 진행 상황",
+    "stepLabel": {
+      "welcome": "환영합니다",
+      "url": "tldw 서버에 연결",
+      "auth": "로그인 방법 선택",
+      "health": "연결 및 Knowledge 확인"
+    },
+    "startServer": {
+      "title": "시작하기 전에 — tldw 서버를 시작하세요",
+      "body": "아직 서버를 시작하지 않았다면 tldw_server 저장소에서 다음 명령 중 하나를 실행한 뒤 이 화면으로 돌아오세요.",
+      "copy": "명령 복사",
+      "optionLocal": "Python으로 로컬에서 실행",
+      "optionLocalHint": "서버 저장소 루트에서 tldw_server 가상환경 안에서 실행하세요.",
+      "optionDocker": "Docker Compose로 실행(단일 사용자)",
+      "optionDockerHint": "API와 데이터베이스를 시작하기 위해 tldw_server 저장소 루트에서 실행하세요."
+    },
+    "path": {
+      "heading": "어떻게 시작하시겠어요?",
+      "hasServer": "이미 tldw_server를 운영하고 있습니다",
+      "hasServerHelp": "이미 운영 중인 tldw_server에 연결합니다.",
+      "noServer": "아직 서버가 없습니다",
+      "noServerHelp": "tldw_server 설정 가이드를 따라 진행하거나, 데모 모드로 시작하세요.",
+      "demo": "로컬 데모로만 살펴보기",
+      "demoHelp": "샘플 데이터를 사용해 워크스페이스를 먼저 사용해 보고, 나중에 자신의 서버를 연결하세요.",
+      "noServerTitle": "아직 서버가 없나요? 그래도 둘러볼 수 있습니다.",
+      "noServerBody": "tldw_server는 별도로 실행하는 자체 호스팅 앱입니다. 지금 설정 가이드를 따라 진행하거나, 나중에 다시 돌아와 데모 모드로 계속할 수 있습니다.",
+      "noServerOptionLocal": "내 컴퓨터에서 Docker 또는 Python으로 로컬 실행합니다.",
+      "noServerOptionRemote": "tldw_server를 원격 VPS나 관리형 호스팅에 배포합니다.",
+      "noServerOptionManaged": "가능한 경우 관리형 상용 tldw_server 배포를 사용합니다.",
+      "openSetupGuide": "설정 가이드 열기",
+      "useDemoFromNoServer": "로컬 데모 모드 사용",
+      "remindMeLater": "나중에 다시 알려주기",
+      "demoTitle": "데모 모드에서 확장 프로그램 살펴보기",
+      "demoBody": "데모 모드에서는 샘플 데이터를 사용해 채팅, 노트 및 미디어를 시험해 볼 수 있습니다. Knowledge 검색처럼 서버에 의존하는 기능은, 직접 운영하는 tldw_server를 연결할 때까지 제한된 상태로 유지됩니다.",
+      "demoCta": "로컬 데모 모드 사용"
+    },
+    "authModeHelp": "Single User(API 키)는 개인 또는 소규모 팀 서버에 권장됩니다. Multi User(로그인)는 사람들이 사용자 이름이나 SSO로 로그인하는 공유 배포 환경에 적합합니다. tldw_server 설정 방식에 맞는 모드를 선택하세요.",
+    "apiKeyHelp": "tldw_server → Settings → API Keys에서 API 키를 찾을 수 있습니다. 그곳에서 키를 생성한 뒤 여기에 붙여넣으세요.",
+    "authStepAria": "{{total}}단계 중 {{current}}단계 — 로그인 방법 선택",
+    "confirmStepAria": "{{total}}단계 중 {{current}}단계 — 연결 요약 및 다음 단계",
+    "nextSteps": {
+      "title": "준비가 완료되었습니다",
+      "subtitle": "이제 사이드패널을 열거나, 페이지를 수집하거나, 미디어와 노트를 둘러볼 수 있습니다.",
+      "chatTitle": "채팅 시작하기",
+      "chatBody": "사이드패널을 열고 첫 질문을 해보세요.",
+      "chatCta": "사이드패널 열기",
+      "ingestTitle": "첫 페이지 수집하기",
+      "ingestBody": "헤더의 Quick ingest를 사용해 현재 탭을 서버에 저장하세요.",
+      "mediaTitle": "미디어 및 노트 둘러보기",
+      "mediaBody": "옵션에서 미디어와 노트를 열어 저장된 내용과 검색 가능한 항목을 확인하세요."
+    },
+    "headerShortcuts": "헤더에 빠른 바로가기를 표시하기"
+  },
+  "manageCharacters": {
+    "title": "캐릭터 관리",
+    "addBtn": "새 캐릭터",
+    "columns": {
+      "name": "이름",
+      "description": "설명",
+      "actions": "동작",
+      "avatar": "아바타"
+    },
+    "actions": {
+      "chat": "채팅",
+      "edit": "편집",
+      "delete": "삭제",
+      "viewConversations": "대화 목록 보기",
+      "duplicate": "복제"
+    },
+    "tags": {
+      "label": "태그",
+      "placeholder": "태그 추가",
+      "help": "태그로 캐릭터를 용도별로 묶을 수 있습니다(예: “글쓰기”, “교육”)."
+    },
+    "tooltip": {
+      "edit": "캐릭터 편집",
+      "delete": "캐릭터 삭제"
+    },
+    "aria": {
+      "chatWith": "{{name}}로 채팅하기",
+      "edit": "캐릭터 {{name}} 편집",
+      "delete": "캐릭터 {{name}} 삭제",
+      "viewConversations": "{{name}}의 대화 목록 보기",
+      "searchResults": "{{count}}개의 캐릭터를 찾았습니다",
+      "duplicate": "{{name}} 캐릭터 복제"
+    },
+    "confirm": {
+      "delete": "이 캐릭터를 삭제할까요? 이 작업은 되돌릴 수 없습니다."
+    },
+    "form": {
+      "name": {
+        "label": "이름",
+        "placeholder": "예: 글쓰기 코치",
+        "required": "이름을 입력하세요"
+      },
+      "description": "사이드바에서 대화할 수 있는 재사용 캐릭터를 정의하세요.",
+      "systemPrompt": {
+        "label": "행동 / 지침",
+        "placeholder": "예: 단계별로 개념을 설명하고 짧은 예시로 이해도를 확인하는 인내심 있는 수학 교사입니다.",
+        "help": "캐릭터의 역할, 톤, 제약을 설명하세요. 예: \"단계별로 개념을 설명하는 인내심 있는 수학 튜터입니다.\"",
+        "min": "캐릭터가 적절히 응답할 수 있도록 짧은 설명을 추가하세요.",
+        "required": "응답을 안내할 지침을 추가해 주세요.",
+        "max": "시스템 프롬프트는 2000자 이하여야 합니다."
+      },
+      "avatarUrl": {
+        "label": "아바타 URL(선택)",
+        "placeholder": "예: https://example.com/avatar.png"
+      },
+      "greeting": {
+        "label": "인사말(선택)",
+        "placeholder": "안녕하세요! 저는 글쓰기 코치예요. 초안을 붙여 넣으면 다듬어 드릴게요.",
+        "help": "채팅을 시작할 때 캐릭터가 보내는 선택적 첫 메시지입니다."
+      },
+      "btnSave": {
+        "saving": "캐릭터 생성 중...",
+        "save": "캐릭터 생성"
+      },
+      "btnEdit": {
+        "saving": "변경 사항 저장 중...",
+        "save": "변경 사항 저장"
+      }
+    },
+    "notification": {
+      "addSuccess": "캐릭터가 생성되었습니다",
+      "error": "오류",
+      "someError": "문제가 발생했습니다. 나중에 다시 시도하세요.",
+      "updatedSuccess": "캐릭터가 업데이트되었습니다",
+      "deletedSuccess": "캐릭터가 삭제되었습니다"
+    },
+    "loadError": {
+      "title": "캐릭터를 불러올 수 없습니다",
+      "description": "연결을 확인하고 다시 시도하세요."
+    },
+    "emptyTitle": "캐릭터가 없습니다",
+    "emptyDescription": "이름, 설명, 시스템 프롬프트가 있는 재사용 캐릭터를 만들어 보세요.",
+    "emptyExample1": "글쓰기 코치, 세계관 전문가, 코딩 도우미 등 재사용할 캐릭터를 정의하세요.",
+    "emptyExample2": "각 캐릭터에 명확한 설명과 행동을 추가해 응답이 일관되게 유지되도록 하세요.",
+    "emptyPrimaryCta": "캐릭터 만들기",
+    "avatarAltWithName": "{{name}}의 아바타",
+    "avatarAlt": "사용자 아바타",
+    "conversations": {
+      "title": "{{name}}의 대화 목록",
+      "titleGeneric": "캐릭터 대화",
+      "subtitle": "이 캐릭터로 계속할 대화를 선택하세요.",
+      "empty": "이 캐릭터의 대화가 아직 없습니다.",
+      "error": "이 캐릭터의 대화를 불러올 수 없습니다.",
+      "updated": "{{time}}에 업데이트됨",
+      "unknownTime": "알 수 없음",
+      "resume": "대화 이어서",
+      "untitled": "제목 없음",
+      "mostRecent": "최근",
+      "resumeTooltip": "채팅 기록을 불러와 이 대화를 이어서 진행합니다"
+    },
+    "preview": {
+      "title": "미리보기",
+      "show": "미리보기 표시",
+      "hide": "미리보기 숨기기",
+      "untitled": "제목 없는 캐릭터",
+      "greeting": "인사말",
+      "behavior": "행동",
+      "empty": "양식을 입력하면 미리보기를 볼 수 있습니다"
+    },
+    "advanced": {
+      "show": "고급 필드 표시",
+      "hide": "고급 필드 숨기기"
+    },
+    "table": {
+      "noDescription": "설명 없음"
+    },
+    "filter": {
+      "matchAll": "모든 태그 일치"
+    },
+    "avatar": {
+      "label": "아바타(선택 사항)",
+      "tabUrl": "URL 주소",
+      "tabUpload": "업로드",
+      "selectImageError": "이미지 파일을 선택해 주세요",
+      "formatError": "PNG, JPEG, GIF 이미지만 지원됩니다",
+      "invalidError": "유효하지 않은 이미지 파일",
+      "processError": "이미지 처리 실패",
+      "dropzone": "클릭하거나 드래그하여 이미지를 업로드",
+      "formats": "PNG, JPEG 또는 GIF",
+      "preview": "미리보기"
+    }
+  },
+  "systemNotifications": {
+    "importSuccess": "데이터를 성공적으로 가져왔습니다",
+    "importError": "가져오기 오류",
+    "syncSuccess": "Firefox 데이터가 동기화되었습니다. 다시 실행할 필요 없습니다",
+    "syncError": "Firefox 데이터 동기화 실패",
+    "invalidImage": "유효한 이미지 파일을 선택하세요"
+  },
+  "prompts": {
+    "enterPrompt": "프롬프트를 입력하세요.",
+    "enterPromptPlaceholder": "프롬프트를 입력하세요.",
+    "enterFollowUpPrompt": "후속 프롬프트를 입력하세요.",
+    "enterFollowUpPromptPlaceholder": "후속 프롬프트를 입력하세요.",
+    "privateModeDescription": "Firefox 사생활 모드는 IndexedDB 저장을 지원하지 않습니다. 일반 창에서 프롬프트를 추가하세요."
+  },
+  "models": {
+    "privateModeDescription": "Firefox 사생활 모드는 IndexedDB 저장을 지원하지 않습니다. 일반 창에서 사용자 지정 모델을 추가하세요."
+  },
+  "evaluationsSettingsNav": "평가",
+  "promptStudioNav": "프롬프트 스튜디오",
+  "promptStudio": {
+    "nav": "프롬프트 스튜디오",
+    "title": "프롬프트 스튜디오",
+    "subtitle": "기본값을 설정하고 프롬프트 스튜디오 상태를 모니터링합니다. 연결과 인증은 메인 서버 설정을 재사용합니다.",
+    "probeError": "프롬프트 스튜디오에 연결할 수 없습니다",
+    "statusCard": "상태",
+    "statusHint": "버튼은 warn_seconds를 포함한 /prompt-studio/status를 호출합니다.",
+    "statusError": "상태 엔드포인트를 사용할 수 없습니다",
+    "warnSeconds": "경고 시간(초)",
+    "testButton": "프롬프트 스튜디오 테스트",
+    "defaultsCard": "기본값",
+    "defaultsHint": "기본 프로젝트, 모델 구성, 목록 페이지 크기를 저장합니다.",
+    "defaultsPlaceholder": "초기 프로젝트 선택, 실행/평가 모델 프리셋, 페이지네이션을 위해 기존 설정 저장소(TBD)에 기본값을 저장합니다.",
+    "defaultProject": "기본 프로젝트 ID",
+    "pageSize": "페이지 크기",
+    "executeDefaults": "실행 기본값",
+    "executeProvider": "공급자",
+    "executeModel": "모델",
+    "executeTemperature": "온도",
+    "executeMaxTokens": "최대 토큰",
+    "evalDefaults": "평가 기본값",
+    "evalModel": "모델",
+    "evalTemperature": "온도",
+    "evalMaxTokens": "최대 토큰",
+    "unavailable": "서버에서 아직 프롬프트 스튜디오를 사용할 수 없습니다.",
+    "unavailableBody": "활성화되면 큐 상태를 모니터링하고 여기서 기본값을 설정할 수 있습니다."
+  },
+  "charactersSettingsTitle": "캐릭터 작업 공간",
+  "charactersSettingsDescription": "캐릭터는 캐릭터 작업 공간에서 관리됩니다. 아래 버튼을 눌러 열 수 있습니다.",
+  "charactersOpenWorkspace": "캐릭터 작업 공간 열기",
+  "mermaid": "Mermaid 다이어그램",
+  "healthSummary": {
+    "diagnostics": "진단",
+    "diagnosticsTooltip": "상세 진단을 열어 상태 점검을 확인하거나 문제를 해결합니다.",
+    "core": "서버",
+    "rag": "지식",
+    "coreAria": "서버: 서버/API 상태",
+    "ragAria": "지식: 지식 인덱스 상태",
+    "coreOnline": "서버: 온라인",
+    "coreOffline": "서버: 오프라인",
+    "coreChecking": "서버: 확인 중…",
+    "ragReady": "지식: 준비됨",
+    "ragOffline": "지식: 오프라인",
+    "ragChecking": "지식: 확인 중…",
+    "footerInfo": "이 점검은 tldw 서버와 지식 인덱스에 대한 마지막 성공 핑을 요약합니다."
+  },
+  "storage": {
+    "quotaFriendlyMessage": "짧은 시간에 설정 저장을 너무 많이 요청했습니다. 몇 초 기다린 후 다시 시도하세요.",
+    "quotaTitle": "저장소 한도 도달",
+    "writeError": "설정을 저장할 수 없습니다",
+    "writeErrorDescription": "설정을 저장하지 못했습니다. 잠시 후 다시 시도하세요."
+  },
+  "evaluations": {
+    "title": "평가 플레이그라운드",
+    "subtitle": "tldw 서버에 대한 평가를 정의하고 최근 실행을 확인합니다.",
+    "listTitle": "최근 평가",
+    "newEvaluationCta": "새 평가",
+    "startRunCta": "실행 시작",
+    "loadErrorTitle": "평가를 불러올 수 없습니다",
+    "loadErrorDescription": "tldw 서버 연결과 API 자격 증명을 확인한 뒤 다시 시도하세요.",
+    "emptyList": "아직 평가가 없습니다. 생성하면 여기에 표시됩니다.",
+    "selectedTag": "선택됨",
+    "rateLimitsTitle": "평가 제한",
+    "rateLimitsErrorTitle": "제한 정보를 가져올 수 없습니다",
+    "rateLimitsErrorDescription": "서버에서 평가 할당량을 가져오지 못했습니다.",
+    "rateLimitsNoData": "이 서버에는 제한 정보가 없습니다.",
+    "tierLabel": "티어",
+    "dailyLimitLabel": "일일 평가",
+    "tokensTodayLabel": "오늘 토큰",
+    "perMinuteLabel": "분당 제한",
+    "resetAtLabel": "리셋 시간",
+    "runsTitle": "실행",
+    "noEvalSelectedRuns": "최근 실행을 보려면 평가를 선택하세요.",
+    "runsErrorTitle": "실행을 불러올 수 없습니다",
+    "runsEmpty": "이 평가의 실행 기록이 없습니다.",
+    "runDetailTitle": "실행 상세",
+    "noRunSelected": "상세를 보려면 실행을 선택하세요.",
+    "runDetailErrorTitle": "실행 상세를 불러올 수 없습니다",
+    "runStatusLabel": "상태",
+    "runModelLabelShort": "대상 모델",
+    "runEvalIdLabel": "평가",
+    "runErrorLabel": "오류",
+    "runResultsLabel": "결과(일부)",
+    "runProgressLabel": "진행",
+    "runUsageLabel": "사용량",
+    "datasetsTitle": "데이터셋",
+    "newDatasetCta": "새 데이터셋",
+    "datasetsErrorTitle": "데이터셋을 불러올 수 없습니다",
+    "datasetsEmpty": "아직 데이터셋이 없습니다. 평가에 연결할 데이터셋을 만들어 보세요.",
+    "datasetSampleCount": "{{count}}개 샘플",
+    "datasetNameLabel": "이름",
+    "datasetNamePlaceholder": "예: my_dataset",
+    "datasetDescriptionLabel": "설명",
+    "datasetMetadataLabel": "메타데이터(JSON, 선택)",
+    "sampleInputLabel": "샘플 입력",
+    "sampleExpectedLabel": "예상 출력(선택)",
+    "samplesJsonLabel": "샘플 JSON(선택, 필드 재정의)",
+    "datasetLabel": "데이터셋(선택)",
+    "datasetPlaceholder": "데이터셋 선택",
+    "datasetCreateSuccessTitle": "데이터셋이 생성되었습니다",
+    "datasetCreateSuccessDescription": "데이터셋을 평가에 사용할 수 있습니다.",
+    "datasetCreateErrorTitle": "데이터셋 생성 실패",
+    "datasetCreateErrorDescription": "서버가 이 데이터셋을 거부했습니다. 필드를 확인하고 다시 시도하세요.",
+    "datasetDeleteSuccessTitle": "데이터셋이 삭제되었습니다",
+    "datasetDeleteErrorTitle": "데이터셋 삭제 실패",
+    "datasetLoadErrorTitle": "데이터셋 로드 실패",
+    "datasetDetailTitle": "데이터셋 상세",
+    "datasetParseErrorTitle": "샘플 JSON이 올바르지 않습니다",
+    "createEvalModalTitle": "새 평가",
+    "editEvalModalTitle": "평가 편집",
+    "evalNameLabel": "이름",
+    "evalNamePlaceholder": "예: my_eval_run",
+    "evalNameValidation": "문자, 숫자, 하이픈, 밑줄만 사용할 수 있습니다.",
+    "evalTypeLabel": "평가 유형",
+    "evalSpecLabel": "평가 스펙(JSON)",
+    "evalSpecParseError": "평가 스펙은 유효한 JSON이어야 합니다.",
+    "evalMetadataLabel": "메타데이터(JSON, 선택)",
+    "inlineDatasetCheckbox": "dataset_id 대신 인라인 데이터셋 첨부",
+    "inlineDatasetErrorTitle": "인라인 데이터셋이 올바르지 않습니다",
+    "runModelLabel": "실행 모델(퀵 런에 사용)",
+    "createSuccessTitle": "평가가 생성되었습니다",
+    "createErrorTitle": "평가 생성 실패",
+    "createErrorDescription": "서버가 이 평가를 거부했습니다. 이름, 유형, 스펙을 확인하세요.",
+    "updateSuccessTitle": "평가가 업데이트되었습니다",
+    "updateErrorTitle": "평가 업데이트 실패",
+    "deleteErrorTitle": "평가 삭제 실패",
+    "deleteConfirmTitle": "이 평가를 삭제할까요?",
+    "deleteConfirmDescription": "평가 정의가 삭제됩니다. 이미 생성된 실행 기록은 유지됩니다.",
+    "detailTitle": "평가 상세",
+    "detailErrorTitle": "평가 상세를 불러올 수 없습니다",
+    "descriptionLabel": "설명",
+    "noEvalSelectedDetails": "스펙을 보려면 평가를 선택하세요.",
+    "runCreateSuccessTitle": "실행이 시작되었습니다",
+    "runCreateSuccessDescription": "평가 실행이 시작되었습니다. 서버 UI에서 모니터링할 수 있습니다.",
+    "runCreateErrorTitle": "실행 시작 실패",
+    "runCreateErrorDescription": "서버가 이 실행 요청을 거부했습니다. 모델을 확인하고 다시 시도하세요.",
+    "runConfigLabel": "구성(JSON)",
+    "datasetOverrideLabel": "데이터셋 오버라이드(JSON 샘플 배열)",
+    "runConfigParseError": "구성 JSON이 올바르지 않습니다",
+    "runCancelSuccessTitle": "실행 취소 요청됨",
+    "runCancelErrorTitle": "실행 취소 실패",
+    "cancelRunCta": "실행 취소",
+    "historyTitle": "히스토리",
+    "historyTypeLabel": "유형",
+    "historyUserLabel": "사용자 ID",
+    "historyStartLabel": "시작 날짜(ISO)",
+    "historyEndLabel": "종료 날짜(ISO)",
+    "historyFetchCta": "히스토리 가져오기",
+    "historyEmpty": "쿼리를 실행하면 최근 활동이 표시됩니다.",
+    "historyErrorTitle": "히스토리를 가져오지 못했습니다",
+    "webhooksTitle": "웹훅",
+    "webhookUrlLabel": "URL 주소",
+    "webhookEventsLabel": "이벤트",
+    "webhookCreateCta": "웹훅 등록",
+    "webhookCreateSuccessTitle": "웹훅이 등록되었습니다",
+    "webhookCreateErrorTitle": "웹훅 등록 실패",
+    "webhookDeleteErrorTitle": "웹훅 삭제 실패",
+    "webhookListErrorTitle": "웹훅을 불러올 수 없습니다",
+    "webhooksEmpty": "등록된 웹훅이 없습니다.",
+    "webhookSecretTitle": "시크릿",
+    "idempotencyKeyLabel": "멱등성 키",
+    "emptyConnectTitle": "평가를 사용하려면 연결하세요",
+    "emptyConnectDescription": "평가를 만들고 실행하려면 먼저 tldw 서버에 연결하세요.",
+    "emptyConnectExample1": "설정 → tldw 서버에서 서버 URL과 API 키를 추가하세요.",
+    "emptyConnectExample2": "연결 후에는 여기에서 평가를 정의하고 메트릭을 확인할 수 있습니다.",
+    "datasetSamplesLabel": "샘플",
+    "datasetSamplesEmpty": "이 페이지에 대한 샘플이 없습니다.",
+    "metricsLabel": "메트릭"
+  },
+  "evaluationsSettings": {
+    "title": "평가",
+    "subtitle": "평가 플레이그라운드에서 사용할 기본값을 설정합니다.",
+    "offline": "평가를 테스트하려면 tldw 서버에 연결하세요.",
+    "defaultType": "기본 평가 유형",
+    "defaultModel": "기본 대상 모델",
+    "defaultRunConfig": "기본 실행 구성(JSON)",
+    "defaultDataset": "기본 데이터셋 ID(선택)",
+    "specForType": "선택한 유형의 스펙 프리셋",
+    "testCta": "평가 API 테스트",
+    "testOk": "평가 API에 연결되었습니다",
+    "testFail": "평가 API에 연결할 수 없습니다"
+  },
+  "chunkingPlayground": {
+    "nav": "청킹 플레이그라운드",
+    "title": "청킹 플레이그라운드",
+    "description": "다양한 청킹 설정을 실험하여 텍스트가 처리용으로 작은 조각으로 분할되는 방식을 확인하세요.",
+    "inputLabel": "분할할 텍스트",
+    "inputPlaceholder": "여기에 텍스트를 붙여넣거나 샘플을 선택하세요...",
+    "uploadButton": "파일 업로드",
+    "chunkButton": "텍스트 분할",
+    "methodLabel": "청킹 방법",
+    "maxSizeLabel": "최대 청크 크기",
+    "overlapLabel": "겹침",
+    "languageLabel": "언어",
+    "languages": {
+      "auto": "자동 감지",
+      "en": "영어",
+      "es": "스페인어",
+      "fr": "프랑스어",
+      "de": "독일어",
+      "it": "이탈리아어",
+      "pt": "포르투갈어",
+      "zh": "중국어",
+      "ja": "일본어",
+      "ko": "한국어"
+    },
+    "viewCards": "카드",
+    "viewInline": "인라인",
+    "stats": "{{count}}개 청크 · 평균 {{avgSize}}자",
+    "textLoaded": "텍스트를 불러왔습니다",
+    "characters": "자",
+    "tabSingle": "단일",
+    "tabCompare": "비교",
+    "chunkIndex": "청크 {{index}}",
+    "chunkInfo": "청크 {{index}}: {{words}}단어",
+    "position": "위치: {{start}} - {{end}}",
+    "additionalChunks": "+{{count}}개 더",
+    "charCount": "{{count}}자",
+    "wordCount": "{{count}}단어",
+    "noInput": "분할할 텍스트를 입력하세요",
+    "sharedInput": "공유 입력 텍스트",
+    "compareButton": "둘 다 비교",
+    "comparison": "비교",
+    "fewerChunks": "구성 A는 {{diff}}개 적은 청크를 생성합니다",
+    "moreChunks": "구성 A는 {{diff}}개 더 많은 청크를 생성합니다",
+    "sameChunks": "두 구성 모두 동일한 수의 청크를 생성합니다",
+    "clickToChunk": "\"비교\"를 클릭하여 결과를 확인하세요",
+    "overlapRegion": "겹침 영역",
+    "clickHint": "강조 표시된 영역을 클릭하여 해당 청크에 집중하세요",
+    "noContentFound": "이 미디어 항목에서 텍스트 콘텐츠를 찾을 수 없습니다",
+    "loadContentError": "미디어 콘텐츠를 불러오지 못했습니다",
+    "loadMediaListError": "미디어 라이브러리를 불러오지 못했습니다",
+    "selectMedia": "미디어 항목 선택...",
+    "loadingMedia": "콘텐츠를 불러오는 중...",
+    "noMediaFound": "미디어가 없습니다",
+    "mediaCount": "{{count}}개의 미디어 항목 사용 가능",
+    "inputSource": {
+      "paste": "텍스트 붙여넣기",
+      "upload": "파일 업로드",
+      "sample": "샘플 텍스트",
+      "media": "미디어 라이브러리에서"
+    },
+    "samples": {
+      "article": "뉴스 기사",
+      "articleDesc": "헤더가 있는 여러 단락의 기사",
+      "code": "소스 코드",
+      "codeDesc": "클래스와 함수가 있는 파이썬 코드",
+      "transcript": "전사",
+      "transcriptDesc": "타임스탬프가 포함된 팟캐스트 전사",
+      "academic": "학술 논문",
+      "academicDesc": "인용이 포함된 기술 문서"
+    },
+    "compare": {
+      "title": "설정 비교",
+      "configA": "구성 A",
+      "configB": "구성 B"
+    },
+    "mode": {
+      "single": "단일",
+      "compare": "비교"
+    },
+    "settingsTitle": "설정",
+    "tabTemplates": "템플릿",
+    "tabCapabilities": "기능",
+    "appliedOptionsTitle": "적용된 옵션",
+    "responseMetaTitle": "응답 메타데이터",
+    "inlineUnavailable": "인라인 보기에는 문자 오프셋이 필요합니다. 청크를 확인하려면 카드로 전환하세요.",
+    "metadataLabel": "메타데이터",
+    "advanced": {
+      "title": "고급 옵션",
+      "methodRequiresLlm": "이 방법에는 서버의 LLM 제공자가 필요합니다.",
+      "templateNameLabel": "템플릿 이름",
+      "templateNamePlaceholder": "템플릿 이름을 선택하거나 입력하세요",
+      "templateOverridesHint": "템플릿 기본값이 먼저 적용되며, 폼 값이 이를 덮어씁니다.",
+      "requestModeLabel": "요청 엔드포인트",
+      "requestModeJson": "JSON (/chunk_text)",
+      "requestModeFile": "Multipart (/chunk_file)",
+      "requestModeHint": "전체 옵션 지원을 위해 JSON을 사용하세요. multipart는 /chunk_file과 동일합니다.",
+      "tokenizerLabel": "토크나이저",
+      "tokenizerPlaceholder": "토크나이저 이름 또는 경로 (예: gpt2)",
+      "adaptiveLabel": "적응형 청킹",
+      "multiLevelLabel": "다단계 청킹",
+      "codeModeLabel": "코드 모드",
+      "codeModeHint": "메서드가 'code'일 때 코드가 어떻게 파싱되는지 제어합니다.",
+      "semanticSimilarityLabel": "의미 유사도 임계값",
+      "semanticOverlapLabel": "의미적 겹침 문장 수",
+      "jsonKeyLabel": "JSON 청킹 키",
+      "frontmatterLabel": "frontmatter 파싱 활성화",
+      "frontmatterSentinelLabel": "frontmatter 센티널 키",
+      "customChapterPatternLabel": "사용자 정의 챕터 패턴",
+      "summarizationDetailLabel": "요약 상세도",
+      "llmOptionsTitle": "LLM 옵션(내부 단계)",
+      "llmTemperatureLabel": "LLM 온도",
+      "llmSystemPromptLabel": "LLM 시스템 프롬프트",
+      "llmMaxTokensLabel": "LLM 최대 토큰",
+      "propositionEngineLabel": "명제 엔진",
+      "propositionAggressivenessLabel": "명제 강도",
+      "propositionMinLengthLabel": "최소 명제 길이",
+      "propositionPromptProfileLabel": "명제 프롬프트 프로필",
+      "resetDefaults": "기본값으로 재설정"
+    },
+    "templates": {
+      "title": "청킹 템플릿",
+      "description": "청킹 템플릿을 관리, 검증, 적용합니다.",
+      "tabBrowse": "찾아보기",
+      "tabEditor": "에디터",
+      "tabApply": "적용",
+      "tabValidate": "검증",
+      "tabMatch": "일치",
+      "tabLearn": "학습",
+      "tabDiagnostics": "진단",
+      "filtersTitle": "필터",
+      "includeBuiltin": "기본 포함",
+      "includeCustom": "사용자 정의 포함",
+      "tagsLabel": "태그",
+      "tagsPlaceholder": "태그 추가",
+      "userIdLabel": "사용자 ID",
+      "selectLabel": "템플릿",
+      "selectPlaceholder": "템플릿 선택",
+      "detailsTitle": "템플릿 세부 정보",
+      "isBuiltin": "기본 제공",
+      "version": "버전",
+      "updatedAt": "업데이트됨",
+      "loadIntoEditor": "에디터에 불러오기",
+      "deleteConfirm": "이 템플릿을 삭제할까요?",
+      "hardDeleteLabel": "완전 삭제",
+      "noSelection": "세부 정보를 보려면 템플릿을 선택하세요.",
+      "templateJsonLabel": "템플릿 JSON",
+      "overrideOptionsLabel": "옵션 재정의 (JSON)",
+      "includeMetadataLabel": "메타데이터 포함",
+      "applyTextLabel": "템플릿을 적용할 텍스트",
+      "applyTextPlaceholder": "이 템플릿으로 청킹할 텍스트를 붙여넣으세요",
+      "validateLabel": "검증할 템플릿 JSON",
+      "matchMediaTypeLabel": "미디어 유형",
+      "matchTitleLabel": "제목",
+      "matchUrlLabel": "URL",
+      "matchFilenameLabel": "파일 이름",
+      "learnNameLabel": "템플릿 이름",
+      "learnExampleLabel": "예시 텍스트",
+      "learnDescriptionLabel": "설명",
+      "learnSaveLabel": "템플릿 저장",
+      "learnClassifierLabel": "분류기 (JSON)",
+      "jsonError": "잘못된 JSON입니다. 수정 후 다시 시도하세요.",
+      "nameRequired": "템플릿 이름은 필수입니다.",
+      "updateAction": "업데이트",
+      "applyAction": "적용",
+      "validateAction": "검증",
+      "matchAction": "일치",
+      "learnAction": "학습",
+      "diagnosticsAction": "진단 실행"
+    },
+    "capabilities": {
+      "title": "청킹 기능",
+      "methodsLabel": "방법",
+      "llmLabel": "LLM이 필요한 방법",
+      "defaultsLabel": "기본 옵션",
+      "methodOptionsLabel": "방법별 옵션",
+      "notesLabel": "메모"
+    }
+  }
+}

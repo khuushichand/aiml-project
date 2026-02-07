@@ -62,6 +62,8 @@ from tldw_Server_API.app.core.DB_Management.scope_context import get_scope as _g
 from tldw_Server_API.app.core.DB_Management.Watchlists_DB import WatchlistsDatabase
 from tldw_Server_API.app.core.exceptions import TemplateValidationError
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
+from tldw_Server_API.app.core.testing import is_truthy as _is_truthy
 from tldw_Server_API.app.core.Watchlists import template_store
 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_rss_feed, fetch_site_items_with_rules
 from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters as _evaluate_filters
@@ -295,7 +297,7 @@ def _get_group_ids(db, source_id: int) -> list[int]:
 def _is_truthy_env(raw: str | None) -> bool:
     if raw is None:
         return False
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _is_truthy(raw.strip())
 
 
 def _watchlists_runs_require_admin() -> bool:
@@ -778,7 +780,7 @@ def _validate_youtube_feed_or_raise(url: str, source_type: str) -> None:
 
 
 def _forums_enabled() -> bool:
-    return str(os.getenv("WATCHLIST_FORUMS_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+    return _is_truthy(os.getenv("WATCHLIST_FORUMS_ENABLED", ""))
 
 
 def _raise_if_forum_disabled(source_type: str) -> None:
@@ -1297,7 +1299,7 @@ async def test_source(
         settings = {}
 
     items: list[dict[str, Any]] = []
-    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    test_mode = _is_test_mode()
 
     if source_type.lower() == "rss":
         try:
@@ -1916,7 +1918,7 @@ async def preview_job(
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
             pass
         try:
-            return str(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", "")).strip().lower() in {"1", "true", "yes", "on"}
+            return _is_truthy(os.getenv("WATCHLISTS_REQUIRE_INCLUDE_DEFAULT", ""))
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
             return False
 
@@ -1935,7 +1937,7 @@ async def preview_job(
     items: list[PreviewItem] = []
     total_ingestable = 0
     total_filtered = 0
-    test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+    test_mode = _is_test_mode()
 
     for src in sources:
         if len(items) >= limit:

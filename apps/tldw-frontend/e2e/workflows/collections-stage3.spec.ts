@@ -231,13 +231,18 @@ test.describe("Collections Stage 3 Skeleton", () => {
     const highlightsTab = authedPage.locator(".collections-tabs").getByRole("tab", { name: /Highlights/i })
     await expect(highlightsTab).toBeVisible({ timeout: 20_000 })
     await highlightsTab.click()
+    const highlightsPanel = authedPage.getByRole("tabpanel", { name: /Highlights/i })
 
     const searchInput = authedPage.getByPlaceholder(/Search highlights/i)
     await expect(searchInput).toBeVisible({ timeout: 15_000 })
     await searchInput.fill(seed.quote)
 
-    await expect(authedPage.getByText("Stale")).toBeVisible({ timeout: 15_000 })
-    await expect(authedPage.getByText(seed.quote)).toBeVisible({ timeout: 15_000 })
+    await expect(highlightsPanel.getByText("Stale", { exact: true })).toBeVisible({
+      timeout: 15_000
+    })
+    await expect(highlightsPanel.locator("blockquote", { hasText: seed.quote })).toBeVisible({
+      timeout: 15_000
+    })
 
     await assertNoCriticalErrors(diagnostics)
   })

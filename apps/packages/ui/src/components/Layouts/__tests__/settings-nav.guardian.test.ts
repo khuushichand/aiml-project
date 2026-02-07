@@ -50,6 +50,11 @@ describe("settings nav guardian gating", () => {
     expect(paths).toContain(GUARDIAN_SETTINGS_PATH)
   })
 
+  it("hides guardian route when capabilities resolve to unavailable", () => {
+    const paths = flattenPaths(null)
+    expect(paths).not.toContain(GUARDIAN_SETTINGS_PATH)
+  })
+
   it("hides guardian route when guardian/self-monitoring endpoints are unavailable", () => {
     const paths = flattenPaths(
       makeCapabilities({

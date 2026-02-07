@@ -368,7 +368,7 @@ class TestBranchAdapter:
     @pytest.mark.asyncio
     async def test_condition_truthy_values(self):
         """Test branch adapter recognizes truthy values."""
-        truthy_values = ["1", "true", "yes", "on", "TRUE", "Yes", "ON"]
+        truthy_values = ["1", "true", "yes", "y", "on", "TRUE", "Yes", "Y", "ON"]
         context = {"inputs": {}}
 
         for val in truthy_values:

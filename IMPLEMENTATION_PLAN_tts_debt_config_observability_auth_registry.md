@@ -20,7 +20,7 @@
 **Goal**: Close TTS observability debt with structured tracing and provider/fallback diagnostics.
 **Success Criteria**: Request-level correlation IDs propagate through TTS/voice flows, fallback outcomes are categorized, high-value metrics and logs are emitted consistently, and dashboards/alerts are documented.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS/test_tts_service_v2.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 5: Auth/Rate-Limit Granularity
 **Goal**: Move voice operations from coarse `audio.speech` gating to explicit voice-route privilege/rate-limit semantics.
@@ -54,4 +54,29 @@
   - Added tests to validate legacy alias mapping and deterministic precedence in `tests/Config/test_module_yaml_integration.py`.
 - Verified Stage 3 slice:
   - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Config/test_module_yaml_integration.py tldw_Server_API/tests/Config/test_effective_config_api.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
-  - Result: `38 passed`.
+  - Result: `40 passed`.
+- Added runtime deprecation warnings for legacy `[TTS-Settings]` aliases in `app/core/TTS/tts_config.py` with explicit removal target date (`2026-06-30`).
+- Added config compatibility warning tests for:
+  - legacy alias usage
+  - canonical-over-legacy precedence when both keys are present
+- Updated docs with canonical path/key guidance and migration notice:
+  - `tldw_Server_API/Config_Files/README.md`
+  - `tldw_Server_API/app/core/TTS/README.md`
+  - `Docs/User_Guides/TTS_Getting_Started.md`
+  - `Docs/User_Guides/Installation-Setup-Guide.md`
+- Started Stage 4 observability hardening:
+  - Added request/correlation ID propagation in `app/core/TTS/tts_service_v2.py` and wired `request_id` pass-through from `audio_tts.py` speech endpoints.
+  - Added categorized fallback telemetry metric: `tts_fallback_outcomes_total{from_provider,to_provider,outcome,category}` while retaining existing `tts_fallback_attempts`.
+  - Registered/normalized high-value latency metrics in TTS service metric registration (`tts_ttfb_seconds`, `voice_to_voice_seconds`) for consistent runtime usage.
+  - Added tests for request/correlation metadata propagation and fallback outcome telemetry:
+    - `tests/TTS/test_tts_service_v2.py`
+    - `tests/TTS_NEW/unit/test_tts_service.py`
+  - Updated TTS observability docs:
+    - `Docs/API-related/TTS_API.md`
+    - `tldw_Server_API/app/core/TTS/README.md`
+- Verified Stage 4 test command:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS/test_tts_service_v2.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
+  - Result: `58 passed`.
+- Regression check for endpoint stub compatibility:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_audio_usage_events.py`
+  - Result: `1 passed`.

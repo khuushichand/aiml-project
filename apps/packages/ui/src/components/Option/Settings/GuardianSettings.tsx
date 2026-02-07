@@ -106,6 +106,11 @@ const STATUS_COLORS: Record<string, string> = {
   dissolved: "default"
 }
 
+const normalizeRelationshipStatus = (status: string): string => {
+  if (status === "pending_consent") return "pending"
+  return status
+}
+
 // ---------------------------------------------------------------------------
 // Self-Monitoring Tab
 // ---------------------------------------------------------------------------
@@ -1113,9 +1118,14 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       dataIndex: "status",
       key: "status",
       width: 120,
-      render: (status: string) => (
-        <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
-      )
+      render: (status: string) => {
+        const normalizedStatus = normalizeRelationshipStatus(status)
+        return (
+          <Tag color={STATUS_COLORS[normalizedStatus] ?? "default"}>
+            {normalizedStatus}
+          </Tag>
+        )
+      }
     },
     {
       title: t("guardian.relationships.columns.created", "Created"),
@@ -1128,50 +1138,53 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       title: t("guardian.common.actions", "Actions"),
       key: "actions",
       width: 200,
-      render: (_, record) => (
-        <Space size="small" wrap>
-          {relationshipRole === "dependent" && record.status === "pending" && (
-            <Button
-              size="small"
-              type="link"
-              onClick={() => acceptMutation.mutate(record.id)}
-            >
-              {t("guardian.relationships.accept", "Accept")}
-            </Button>
-          )}
-          {relationshipRole === "guardian" && record.status === "active" && (
-            <Button
-              size="small"
-              type="link"
-              icon={<PauseCircleOutlined />}
-              onClick={() => suspendMutation.mutate(record.id)}
-            >
-              {t("guardian.relationships.suspend", "Suspend")}
-            </Button>
-          )}
-          {relationshipRole === "guardian" && record.status === "suspended" && (
-            <Button
-              size="small"
-              type="link"
-              icon={<PlayCircleOutlined />}
-              onClick={() => reactivateMutation.mutate(record.id)}
-            >
-              {t("guardian.relationships.reactivate", "Reactivate")}
-            </Button>
-          )}
-          {record.status !== "dissolved" && (
-            <Button
-              size="small"
-              type="link"
-              danger
-              icon={<StopOutlined />}
-              onClick={() => confirmDissolve(record.id)}
-            >
-              {t("guardian.common.dissolve", "Dissolve")}
-            </Button>
-          )}
-        </Space>
-      )
+      render: (_, record) => {
+        const normalizedStatus = normalizeRelationshipStatus(record.status)
+        return (
+          <Space size="small" wrap>
+            {relationshipRole === "dependent" && normalizedStatus === "pending" && (
+              <Button
+                size="small"
+                type="link"
+                onClick={() => acceptMutation.mutate(record.id)}
+              >
+                {t("guardian.relationships.accept", "Accept")}
+              </Button>
+            )}
+            {relationshipRole === "guardian" && normalizedStatus === "active" && (
+              <Button
+                size="small"
+                type="link"
+                icon={<PauseCircleOutlined />}
+                onClick={() => suspendMutation.mutate(record.id)}
+              >
+                {t("guardian.relationships.suspend", "Suspend")}
+              </Button>
+            )}
+            {relationshipRole === "guardian" && normalizedStatus === "suspended" && (
+              <Button
+                size="small"
+                type="link"
+                icon={<PlayCircleOutlined />}
+                onClick={() => reactivateMutation.mutate(record.id)}
+              >
+                {t("guardian.relationships.reactivate", "Reactivate")}
+              </Button>
+            )}
+            {normalizedStatus !== "dissolved" && (
+              <Button
+                size="small"
+                type="link"
+                danger
+                icon={<StopOutlined />}
+                onClick={() => confirmDissolve(record.id)}
+              >
+                {t("guardian.common.dissolve", "Dissolve")}
+              </Button>
+            )}
+          </Space>
+        )
+      }
     }
   ]
 
@@ -1390,7 +1403,10 @@ function GuardianControlsTab({ online }: { online: boolean }) {
                 size="small"
                 icon={<PlusOutlined />}
                 onClick={openCreatePolicy}
-                disabled={selectedRelationship.status !== "active"}
+                disabled={
+                  normalizeRelationshipStatus(selectedRelationship.status) !==
+                  "active"
+                }
               >
                 {t("guardian.policies.create", "Add Policy")}
               </Button>
@@ -1590,9 +1606,9 @@ export function GuardianSettings() {
   const { t } = useTranslation("settings")
   const online = useServerOnline()
   const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
-  const guardianRoutesAvailable =
-    !capabilities ||
-    (capabilities.hasGuardian && capabilities.hasSelfMonitoring)
+  const guardianRoutesAvailable = Boolean(
+    capabilities?.hasGuardian && capabilities?.hasSelfMonitoring
+  )
 
   if (!capabilitiesLoading && !guardianRoutesAvailable) {
     return (

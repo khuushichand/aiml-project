@@ -312,7 +312,11 @@ class TestCooldownProtection:
             cooldown_minutes=99999,
             bypass_protection="cooldown",
         )
-        assert svc.can_disable_rule(rule) is False
+        # Request deactivation to set pending_deactivation_at far in the future
+        result = svc.request_deactivation(rule.id, "user1")
+        assert result["status"] == "pending_deactivation"
+        updated_rule = db.get_self_monitoring_rule(rule.id)
+        assert svc.can_disable_rule(updated_rule) is False
 
     def test_can_disable_after_cooldown(self, db, svc):
         rule = _create_rule(
@@ -320,18 +324,26 @@ class TestCooldownProtection:
             cooldown_minutes=60,
             bypass_protection="cooldown",
         )
+        # Simulate a deactivation that was requested 2 hours ago
         two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
-        with db._lock:
-            conn = db._connect()
-            try:
-                conn.execute(
-                    "UPDATE self_monitoring_rules SET created_at = ? WHERE id = ?",
-                    (two_hours_ago, rule.id),
-                )
-            finally:
-                conn.close()
+        one_hour_ago = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        db.update_self_monitoring_rule(
+            rule.id,
+            deactivation_requested_at=two_hours_ago,
+            pending_deactivation_at=one_hour_ago,
+        )
         updated_rule = db.get_self_monitoring_rule(rule.id)
         assert svc.can_disable_rule(updated_rule) is True
+
+    def test_cannot_disable_without_request(self, db, svc):
+        """A rule with cooldown bypass but no deactivation request cannot be disabled."""
+        rule = _create_rule(
+            db, patterns=["word"],
+            cooldown_minutes=60,
+            bypass_protection="cooldown",
+        )
+        # No deactivation requested — should not be disableable
+        assert svc.can_disable_rule(rule) is False
 
     def test_request_deactivation_immediate(self, db, svc):
         rule = _create_rule(db, patterns=["word"], cooldown_minutes=0)
@@ -747,3 +759,249 @@ class TestPartnerApprovalBypass:
         result = svc.approve_deactivation(rule.id, "partner1", "wrong_token")
         assert result["ok"] is False
         assert "Invalid" in result["error"]
+
+
+# ── Escalation Window Rolling Reset ──────────────────────────
+
+
+class TestEscalationWindowRollingReset:
+    """Tests for Bug 2 fix: window_trigger_count should use a rolling window
+    based on actual alert timestamps, not a monotonically increasing counter."""
+
+    def test_window_count_uses_alert_history(self, db, svc):
+        """Window escalation should count alerts within the window_days period."""
+        _create_rule(
+            db, patterns=["trigger"],
+            action="notify",
+            escalation_window_days=7,
+            escalation_window_threshold=5,
+            escalation_window_action="block",
+            notification_frequency="every_message",
+        )
+        # Fire 4 triggers — should NOT escalate (threshold is 5)
+        for i in range(4):
+            r = svc.check_text("trigger", "user1", session_id=f"s{i}")
+            assert r.action == "notify", f"iteration {i} should be notify"
+
+        # 5th trigger should escalate
+        r5 = svc.check_text("trigger", "user1", session_id="s5")
+        assert r5.action == "block"
+        assert r5.escalation_triggered is True
+
+    def test_old_alerts_outside_window_not_counted(self, db, svc):
+        """Alerts older than window_days should not contribute to the count."""
+        rule = _create_rule(
+            db, patterns=["trigger"],
+            action="notify",
+            escalation_window_days=1,
+            escalation_window_threshold=3,
+            escalation_window_action="block",
+            notification_frequency="every_message",
+        )
+        # Manually insert 2 alerts and backdate them outside the 1-day window
+        two_days_ago = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        for _ in range(2):
+            db.create_self_monitoring_alert(
+                user_id="user1",
+                rule_id=rule.id,
+                rule_name=rule.name,
+                matched_pattern="trigger",
+            )
+        # Backdate the alerts to be outside the window
+        with db._lock:
+            conn = db._connect()
+            try:
+                conn.execute(
+                    "UPDATE self_monitoring_alerts SET created_at = ? WHERE user_id = ? AND rule_id = ?",
+                    (two_days_ago, "user1", rule.id),
+                )
+            finally:
+                conn.close()
+
+        # Trigger twice — old alerts should NOT count, so 2 triggers < threshold 3
+        svc.check_text("trigger", "user1", session_id="s1")
+        r2 = svc.check_text("trigger", "user1", session_id="s2")
+        assert r2.action == "notify"
+        assert r2.escalation_triggered is False
+
+
+# ── Escalation Cooldown Enforcement ──────────────────────────
+
+
+class TestEscalationCooldownEnforcement:
+    """Tests for Bug 3 fix: cooldown_until should be set on escalation and
+    checked on subsequent triggers to auto de-escalate."""
+
+    def test_escalation_sets_cooldown(self, db, svc):
+        """After escalation triggers, cooldown_until should be stored in the DB."""
+        _create_rule(
+            db, patterns=["trigger"],
+            action="notify",
+            escalation_session_threshold=2,
+            escalation_session_action="block",
+            cooldown_minutes=30,
+            notification_frequency="every_message",
+        )
+        svc.check_text("trigger", "user1", session_id="s1")
+        r2 = svc.check_text("trigger", "user1", session_id="s1")
+        assert r2.escalation_triggered is True
+        assert r2.action == "block"
+
+        # Check that cooldown_until is stored
+        state = db.get_escalation_state(
+            db.list_self_monitoring_rules("user1")[0].id, "user1",
+        )
+        assert state is not None
+        assert state.cooldown_until is not None
+
+    def test_escalation_de_escalates_after_cooldown(self, db, svc):
+        """After cooldown_until passes, escalation should reset."""
+        rule = _create_rule(
+            db, patterns=["trigger"],
+            action="notify",
+            escalation_session_threshold=2,
+            escalation_session_action="block",
+            cooldown_minutes=30,
+            notification_frequency="every_message",
+        )
+        # Trigger escalation
+        svc.check_text("trigger", "user1", session_id="s1")
+        r2 = svc.check_text("trigger", "user1", session_id="s1")
+        assert r2.action == "block"
+
+        # Set cooldown_until to the past to simulate elapsed cooldown
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        db.upsert_escalation_state(
+            rule_id=rule.id,
+            user_id="user1",
+            session_id="s1",
+            session_trigger_count=2,
+            window_trigger_count=2,
+            current_escalated_action="block",
+            escalated_at=datetime.now(timezone.utc).isoformat(),
+            cooldown_until=past,
+        )
+
+        # Next trigger should de-escalate back to base action
+        r3 = svc.check_text("trigger", "user1", session_id="s1")
+        assert r3.action == "notify"
+        assert r3.escalation_triggered is False
+
+
+# ── Bypass Cooldown Timing Fix ───────────────────────────────
+
+
+class TestBypassCooldownTimingFix:
+    """Tests for Bug 4 fix: cooldown should be from request time, not created_at."""
+
+    def test_cooldown_starts_from_request_time(self, db, svc):
+        """Deactivation request should set pending_deactivation_at based on now + cooldown,
+        not rule.created_at + cooldown."""
+        rule = _create_rule(
+            db, patterns=["word"],
+            cooldown_minutes=60,
+            bypass_protection="cooldown",
+        )
+        result = svc.request_deactivation(rule.id, "user1")
+        assert result["ok"] is True
+        assert result["status"] == "pending_deactivation"
+
+        # The deactivation_at should be ~60 minutes from now, not from created_at
+        deactivation_at = datetime.fromisoformat(result["deactivation_at"])
+        now = datetime.now(timezone.utc)
+        delta = deactivation_at - now
+        # Should be roughly 60 minutes (±2 for test execution time)
+        assert 58 <= delta.total_seconds() / 60 <= 62
+
+    def test_old_rule_not_immediately_disableable(self, db, svc):
+        """A rule created long ago should NOT be immediately disableable
+        without first requesting deactivation."""
+        rule = _create_rule(
+            db, patterns=["word"],
+            cooldown_minutes=60,
+            bypass_protection="cooldown",
+        )
+        # Simulate rule created a week ago
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        with db._lock:
+            conn = db._connect()
+            try:
+                conn.execute(
+                    "UPDATE self_monitoring_rules SET created_at = ? WHERE id = ?",
+                    (week_ago, rule.id),
+                )
+            finally:
+                conn.close()
+        updated_rule = db.get_self_monitoring_rule(rule.id)
+        # Without a deactivation request, should NOT be disableable
+        assert svc.can_disable_rule(updated_rule) is False
+
+    def test_deactivation_request_then_wait_then_disable(self, db, svc):
+        """Full flow: request deactivation, simulate wait, then disable."""
+        rule = _create_rule(
+            db, patterns=["word"],
+            cooldown_minutes=60,
+            bypass_protection="cooldown",
+        )
+        # First request - should be pending
+        result1 = svc.request_deactivation(rule.id, "user1")
+        assert result1["status"] == "pending_deactivation"
+
+        # Set pending_deactivation_at to the past to simulate waiting
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        db.update_self_monitoring_rule(rule.id, pending_deactivation_at=past)
+
+        # Second request - should now disable immediately
+        result2 = svc.request_deactivation(rule.id, "user1")
+        assert result2["status"] == "disabled_immediately"
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.enabled is False
+
+
+# ── DB count_alerts_in_window ────────────────────────────────
+
+
+class TestCountAlertsInWindow:
+    """Tests for the new GuardianDB.count_alerts_in_window() method."""
+
+    def test_counts_recent_alerts(self, db):
+        rule = _create_rule(db, patterns=["word"])
+        for _ in range(3):
+            db.create_self_monitoring_alert(
+                user_id="user1",
+                rule_id=rule.id,
+                rule_name=rule.name,
+                matched_pattern="word",
+            )
+        count = db.count_alerts_in_window("user1", rule.id, window_days=7)
+        assert count == 3
+
+    def test_excludes_old_alerts(self, db):
+        rule = _create_rule(db, patterns=["word"])
+        # Create an alert and backdate it
+        db.create_self_monitoring_alert(
+            user_id="user1",
+            rule_id=rule.id,
+            rule_name=rule.name,
+            matched_pattern="word",
+        )
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        with db._lock:
+            conn = db._connect()
+            try:
+                conn.execute(
+                    "UPDATE self_monitoring_alerts SET created_at = ? WHERE user_id = ? AND rule_id = ?",
+                    (old_date, "user1", rule.id),
+                )
+            finally:
+                conn.close()
+        count = db.count_alerts_in_window("user1", rule.id, window_days=7)
+        assert count == 0
+
+    def test_zero_window_returns_zero(self, db):
+        rule = _create_rule(db, patterns=["word"])
+        db.create_self_monitoring_alert(
+            user_id="user1", rule_id=rule.id, matched_pattern="word",
+        )
+        count = db.count_alerts_in_window("user1", rule.id, window_days=0)
+        assert count == 0

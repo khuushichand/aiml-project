@@ -21,6 +21,7 @@ from loguru import logger
 #
 # Local Imports
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import OpenAISpeechRequest
+from tldw_Server_API.app.core.Logging.log_context import new_request_id
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
 from tldw_Server_API.app.core.Metrics.metrics_manager import MetricDefinition, MetricType
 
@@ -214,6 +215,54 @@ class TTSServiceV2:
                 return base
         return normalized
 
+    @staticmethod
+    def _extract_observability_value(extras: Any, keys: tuple[str, ...]) -> Optional[str]:
+        if not isinstance(extras, dict):
+            return None
+        for key in keys:
+            value = extras.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = str(value).strip()
+            except _TTS_NONCRITICAL_EXCEPTIONS:
+                continue
+            if parsed:
+                return parsed
+        return None
+
+    def _resolve_observability_context(
+        self,
+        request: OpenAISpeechRequest,
+        explicit_request_id: Optional[str] = None,
+    ) -> tuple[str, Optional[str]]:
+        extras = getattr(request, "extra_params", None)
+        request_id = None
+        if explicit_request_id is not None:
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                request_id = str(explicit_request_id).strip()
+        if not request_id:
+            request_id = self._extract_observability_value(
+                extras,
+                ("request_id", "x_request_id", "x-request-id"),
+            )
+        if not request_id:
+            request_id = new_request_id()
+        correlation_id = self._extract_observability_value(
+            extras,
+            ("correlation_id", "x_correlation_id", "x-correlation-id"),
+        )
+        return request_id, correlation_id
+
+    def _get_tts_request_observability(
+        self,
+        request: TTSRequest,
+    ) -> tuple[Optional[str], Optional[str]]:
+        extras = request.extra_params if isinstance(request.extra_params, dict) else {}
+        request_id = self._extract_observability_value(extras, ("request_id",))
+        correlation_id = self._extract_observability_value(extras, ("correlation_id",))
+        return request_id, correlation_id
+
     def _attach_response_metadata(
         self,
         target: Any,
@@ -224,6 +273,7 @@ class TTSServiceV2:
         metadata: dict[str, Any] = {}
         if isinstance(response.metadata, dict):
             metadata.update(response.metadata)
+        request_id, correlation_id = self._get_tts_request_observability(request_for_provider)
 
         if metadata.get("provider") is None:
             metadata["provider"] = response.provider or provider_key
@@ -254,6 +304,10 @@ class TTSServiceV2:
                     metadata["duration_seconds"] = float(duration)
         if metadata.get("sample_rate") is None and response.sample_rate:
             metadata["sample_rate"] = response.sample_rate
+        if metadata.get("request_id") is None and request_id:
+            metadata["request_id"] = request_id
+        if metadata.get("correlation_id") is None and correlation_id:
+            metadata["correlation_id"] = correlation_id
 
         with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
             target._tts_metadata = metadata
@@ -1293,6 +1347,37 @@ class TTSServiceV2:
             )
         )
 
+        self.metrics.register_metric(
+            MetricDefinition(
+                name="tts_fallback_outcomes_total",
+                type=MetricType.COUNTER,
+                description="Categorized fallback outcomes",
+                labels=["from_provider", "to_provider", "outcome", "category"],
+            )
+        )
+
+        self.metrics.register_metric(
+            MetricDefinition(
+                name="tts_ttfb_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Time to first byte for TTS responses",
+                unit="s",
+                labels=["provider", "voice", "format"],
+                buckets=[0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
+            )
+        )
+
+        self.metrics.register_metric(
+            MetricDefinition(
+                name="voice_to_voice_seconds",
+                type=MetricType.HISTOGRAM,
+                description="Voice-to-voice latency from microphone start to first synthesized audio",
+                unit="s",
+                labels=["provider", "route"],
+                buckets=[0.1, 0.25, 0.5, 1, 2, 5, 10, 20],
+            )
+        )
+
     async def generate_speech(
         self,
         request: OpenAISpeechRequest,
@@ -1303,6 +1388,7 @@ class TTSServiceV2:
         voice_to_voice_route: str = "audio.speech",
         user_id: Optional[int] = None,
         metadata_only: bool = False,
+        request_id: Optional[str] = None,
     ) -> AsyncGenerator[bytes, None]:
         """
         Generate speech from text using the best available provider.
@@ -1318,6 +1404,24 @@ class TTSServiceV2:
         """
         # Convert OpenAI request to unified TTSRequest
         tts_request = self._convert_request(request)
+        request_id_ctx, correlation_id_ctx = self._resolve_observability_context(
+            request,
+            explicit_request_id=request_id,
+        )
+        if not isinstance(tts_request.extra_params, dict):
+            tts_request.extra_params = {}
+        tts_request.extra_params.setdefault("request_id", request_id_ctx)
+        if correlation_id_ctx:
+            tts_request.extra_params.setdefault("correlation_id", correlation_id_ctx)
+        logger.info(
+            "tts_request_start request_id={} correlation_id={} model={} provider_hint={} stream={} metadata_only={}",
+            request_id_ctx,
+            correlation_id_ctx or "none",
+            request.model,
+            provider or "auto",
+            bool(getattr(request, "stream", False)),
+            metadata_only,
+        )
         factory = await self._ensure_factory()
 
         provider_hint: Optional[str] = None
@@ -1470,10 +1574,13 @@ class TTSServiceV2:
                         except CircuitOpenError as e:
                             logger.warning(f"Circuit open for {provider_key}: {e}")
                             if fallback:
-                                # Record fallback attempt
-                                self.metrics.increment(
-                                    "tts_fallback_attempts",
-                                    labels={"from_provider": provider_key, "to_provider": "any", "success": "pending"}
+                                self._record_fallback_event(
+                                    from_provider=provider_key,
+                                    to_provider="any",
+                                    success="pending",
+                                    outcome="initiated",
+                                    error=e,
+                                    request_id=request_id_ctx,
                                 )
                                 await self._decrement_active_requests(provider_key)
                                 released_active_slot = True
@@ -1616,9 +1723,13 @@ class TTSServiceV2:
             # Check if error is retryable and fallback is enabled
             if fallback and is_retryable_error(e):
                 logger.info(f"Attempting fallback due to retryable error: {type(e).__name__}")
-                self.metrics.increment(
-                    "tts_fallback_attempts",
-                    labels={"from_provider": provider_key, "to_provider": "any", "success": "pending"}
+                self._record_fallback_event(
+                    from_provider=provider_key,
+                    to_provider="any",
+                    success="pending",
+                    outcome="initiated",
+                    error=e,
+                    request_id=request_id_ctx,
                 )
                 await self._decrement_active_requests(provider_key)
                 released_active_slot = True
@@ -1656,6 +1767,14 @@ class TTSServiceV2:
 
             if fallback:
                 logger.info("Attempting fallback due to unexpected error")
+                self._record_fallback_event(
+                    from_provider=provider_key,
+                    to_provider="any",
+                    success="pending",
+                    outcome="initiated",
+                    error=tts_error,
+                    request_id=request_id_ctx,
+                )
                 await self._decrement_active_requests(provider_key)
                 released_active_slot = True
                 fallback_plan = (self._build_exclude_tokens(adapter), provider_key)
@@ -1973,9 +2092,21 @@ class TTSServiceV2:
 
             request.extra_params = extras
         except VoiceProcessingError as e:
-            logger.warning(f"Custom voice resolution failed for {raw_id}: {e}")
+            request_id, _ = self._get_tts_request_observability(request)
+            logger.warning(
+                "Custom voice resolution failed for {} (request_id={}): {}",
+                raw_id,
+                request_id or "unknown",
+                e,
+            )
         except _TTS_NONCRITICAL_EXCEPTIONS as e:
-            logger.warning(f"Custom voice resolution error for {raw_id}: {e}")
+            request_id, _ = self._get_tts_request_observability(request)
+            logger.warning(
+                "Custom voice resolution error for {} (request_id={}): {}",
+                raw_id,
+                request_id or "unknown",
+                e,
+            )
 
     async def _maybe_store_qwen3_voice_prompt(
         self,
@@ -2015,7 +2146,13 @@ class TTSServiceV2:
             metadata.voice_clone_prompt_format = fmt
             await voice_manager.save_reference_metadata(user_id, metadata)
         except _TTS_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug(f"Failed to persist Qwen3 voice_clone_prompt for {raw_id}: {exc}")
+            request_id, _ = self._get_tts_request_observability(request)
+            logger.debug(
+                "Failed to persist Qwen3 voice_clone_prompt for {} (request_id={}): {}",
+                raw_id,
+                request_id or "unknown",
+                exc,
+            )
 
     async def _get_adapter(
         self,
@@ -2295,6 +2432,45 @@ class TTSServiceV2:
                 f"error={error}"
             )
 
+    def _record_fallback_event(
+        self,
+        *,
+        from_provider: str,
+        to_provider: str,
+        success: str,
+        outcome: str,
+        error: Optional[Exception] = None,
+        request_id: Optional[str] = None,
+    ) -> None:
+        category = "none"
+        if error is not None:
+            with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+                category = self._categorize_error(error)
+        labels_attempt = {
+            "from_provider": from_provider or "unknown",
+            "to_provider": to_provider or "unknown",
+            "success": success or "pending",
+        }
+        labels_outcome = {
+            "from_provider": from_provider or "unknown",
+            "to_provider": to_provider or "unknown",
+            "outcome": outcome or "unknown",
+            "category": category,
+        }
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+            self.metrics.increment("tts_fallback_attempts", labels=labels_attempt)
+        with suppress(_TTS_NONCRITICAL_EXCEPTIONS):
+            self.metrics.increment("tts_fallback_outcomes_total", labels=labels_outcome)
+        logger.info(
+            "tts_fallback_event request_id={} from_provider={} to_provider={} success={} outcome={} category={}",
+            request_id or "unknown",
+            labels_attempt["from_provider"],
+            labels_attempt["to_provider"],
+            labels_attempt["success"],
+            labels_outcome["outcome"],
+            labels_outcome["category"],
+        )
+
     def _categorize_error(self, error: Exception) -> str:
         """
         Categorize error types for better error handling decisions.
@@ -2349,6 +2525,7 @@ class TTSServiceV2:
             Audio chunks from successful provider
         """
         origin_provider = failed_provider or "unknown"
+        request_id, _correlation_id = self._get_tts_request_observability(request)
         fallback_adapter = await self._get_fallback_adapter(request, exclude_providers)
 
         if fallback_adapter:
@@ -2365,31 +2542,28 @@ class TTSServiceV2:
                         fallback_adapter,
                         request,
                         metadata_only=metadata_only,
-                        metadata_target=metadata_target,
-                    ):
-                        yield chunk
+                            metadata_target=metadata_target,
+                        ):
+                            yield chunk
                 finally:
                     request.model = original_model
                 logger.info(f"Successfully fell back to {fallback_provider_key}")
-                # Record successful fallback
-                self.metrics.increment(
-                    "tts_fallback_attempts",
-                    labels={
-                        "from_provider": origin_provider,
-                        "to_provider": fallback_provider_key,
-                        "success": "true"
-                    }
+                self._record_fallback_event(
+                    from_provider=origin_provider,
+                    to_provider=fallback_provider_key,
+                    success="true",
+                    outcome="success",
+                    request_id=request_id,
                 )
             except TTSError as e:
                 logger.error(f"Fallback provider {fallback_provider_key} also failed: {e}")
-                # Record failed fallback
-                self.metrics.increment(
-                    "tts_fallback_attempts",
-                    labels={
-                        "from_provider": origin_provider,
-                        "to_provider": fallback_provider_key,
-                        "success": "false"
-                    }
+                self._record_fallback_event(
+                    from_provider=origin_provider,
+                    to_provider=fallback_provider_key,
+                    success="false",
+                    outcome="failed",
+                    error=e,
+                    request_id=request_id,
                 )
 
                 # Try one more fallback if available and error is retryable
@@ -2421,14 +2595,12 @@ class TTSServiceV2:
                             finally:
                                 request.model = secondary_original_model
                             logger.info(f"Final fallback to {final_provider_key} succeeded")
-                            # Record successful final fallback
-                            self.metrics.increment(
-                                "tts_fallback_attempts",
-                                labels={
-                                    "from_provider": next_failed_provider,
-                                    "to_provider": final_provider_key,
-                                    "success": "true"
-                                }
+                            self._record_fallback_event(
+                                from_provider=next_failed_provider,
+                                to_provider=final_provider_key,
+                                success="true",
+                                outcome="success",
+                                request_id=request_id,
                             )
                         except _TTS_NONCRITICAL_EXCEPTIONS as final_e:
                             # Wrap non-TTS errors
@@ -2438,13 +2610,13 @@ class TTSServiceV2:
                                     provider=final_provider_key,
                                     details={"error": str(final_e)}
                                 )
-                            self.metrics.increment(
-                                "tts_fallback_attempts",
-                                labels={
-                                    "from_provider": next_failed_provider,
-                                    "to_provider": final_provider_key,
-                                    "success": "false"
-                                }
+                            self._record_fallback_event(
+                                from_provider=next_failed_provider,
+                                to_provider=final_provider_key,
+                                success="false",
+                                outcome="failed",
+                                error=final_e,
+                                request_id=request_id,
                             )
                             error_msg = f"All providers failed. Last error: {str(final_e)}"
                             logger.error(error_msg)
@@ -2454,12 +2626,28 @@ class TTSServiceV2:
                                 raise
                     else:
                         origin_provider = next_failed_provider
+                        self._record_fallback_event(
+                            from_provider=origin_provider,
+                            to_provider="none",
+                            success="false",
+                            outcome="exhausted",
+                            error=e,
+                            request_id=request_id,
+                        )
                         if self._stream_errors_as_audio:
                             yield b"ERROR: All fallback providers exhausted"
                         else:
                             raise TTSFallbackExhaustedError("All fallback providers exhausted") from e
                 else:
                     # Non-retryable error, don't attempt more fallbacks
+                    self._record_fallback_event(
+                        from_provider=origin_provider,
+                        to_provider=fallback_provider_key,
+                        success="false",
+                        outcome="failed_non_retryable",
+                        error=e,
+                        request_id=request_id,
+                    )
                     if self._stream_errors_as_audio:
                         yield f"ERROR: {str(e)} (non-retryable)".encode()
                     else:
@@ -2467,11 +2655,27 @@ class TTSServiceV2:
             except _TTS_NONCRITICAL_EXCEPTIONS as e:
                 # Handle unexpected errors
                 logger.error(f"Unexpected error in fallback: {e}", exc_info=True)
+                self._record_fallback_event(
+                    from_provider=origin_provider,
+                    to_provider="unknown",
+                    success="false",
+                    outcome="error",
+                    error=e if isinstance(e, Exception) else None,
+                    request_id=request_id,
+                )
                 if self._stream_errors_as_audio:
                     yield f"ERROR: Unexpected error during fallback: {str(e)}".encode()
                 else:
                     raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}") from e
         else:
+            self._record_fallback_event(
+                from_provider=origin_provider,
+                to_provider="none",
+                success="false",
+                outcome="unavailable",
+                error=TTSFallbackExhaustedError("No fallback providers available"),
+                request_id=request_id,
+            )
             if self._stream_errors_as_audio:
                 yield b"ERROR: No fallback providers available"
             else:

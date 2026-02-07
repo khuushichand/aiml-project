@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest"
 import { render, screen, fireEvent, cleanup } from "@testing-library/react"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ReferencesTab } from "../ReferencesTab"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useConnectionStore } from "@/store/connection"
@@ -25,7 +26,10 @@ vi.mock("react-i18next", () => ({
 }))
 
 describe("ReferencesTab", () => {
+  let queryClient: QueryClient
+
   beforeEach(() => {
+    queryClient = new QueryClient()
     useDocumentWorkspaceStore.setState({ activeDocumentId: 1 })
     const prev = useConnectionStore.getState().state
     useConnectionStore.setState({
@@ -70,7 +74,11 @@ describe("ReferencesTab", () => {
       enrichment_source: "semantic_scholar",
     }
 
-    render(<ReferencesTab />)
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ReferencesTab />
+      </QueryClientProvider>
+    )
 
     expect(screen.getByText("With DOI")).toBeInTheDocument()
     expect(screen.getByText("No DOI")).toBeInTheDocument()

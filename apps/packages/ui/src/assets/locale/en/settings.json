@@ -1,0 +1,2233 @@
+{
+  "navigation": {
+    "serverAndAuth": "Server & Auth",
+    "knowledgeTools": "Knowledge Tools",
+    "workspace": "Workspace",
+    "about": "About"
+  },
+  "healthNav": "Health",
+  "worldBooksNav": "World Books",
+  "chatDictionariesNav": "Chat Dictionaries",
+  "chatbooksNav": "Chatbooks",
+  "charactersNav": "Characters",
+  "mediaNav": "Media",
+  "mediaTrashNav": "Media Trash",
+  "evaluationsSettingsNav": "Evaluations",
+  "promptStudioNav": "Prompt Studio",
+  "chatSettingsNav": "Chat",
+  "quickIngestSettingsNav": "Quick Ingest",
+  "speechSettingsNav": "Speech",
+  "imageGenerationSettingsNav": "Image Generation",
+  "uiCustomizationNav": "UI customization",
+  "guardianNav": "Guardian & Monitoring",
+  "guardian": {
+    "title": "Guardian & Self-Monitoring",
+    "subtitle": "Configure personal content monitoring rules, guardian supervision relationships, and access crisis resources.",
+    "serverOffline": "Connect to your tldw server to manage guardian and monitoring settings.",
+    "serverOfflineTitle": "Server offline",
+    "unavailableTitle": "Guardian settings unavailable",
+    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints.",
+    "common": {
+      "actions": "Actions",
+      "edit": "Edit",
+      "delete": "Delete",
+      "create": "Create",
+      "update": "Update",
+      "deactivate": "Deactivate",
+      "dissolve": "Dissolve",
+      "yes": "Yes",
+      "no": "No",
+      "new": "New",
+      "literal": "Literal",
+      "regex": "Regex"
+    },
+    "tabs": {
+      "selfMonitoring": "Self-Monitoring",
+      "guardianControls": "Guardian Controls",
+      "crisisResources": "Crisis Resources"
+    },
+    "rules": {
+      "title": "Monitoring Rules",
+      "create": "Create Rule",
+      "edit": "Edit Rule",
+      "refresh": "Refresh",
+      "empty": "No monitoring rules yet",
+      "created": "Rule created",
+      "updated": "Rule updated",
+      "deleted": "Rule deleted",
+      "deactivated": "Deactivation requested",
+      "createFailed": "Failed to create rule",
+      "updateFailed": "Failed to update rule",
+      "deleteFailed": "Failed to delete rule",
+      "deactivateFailed": "Failed to deactivate rule",
+      "toggleFailed": "Failed to toggle rule",
+      "deleteConfirm": "Delete rule?",
+      "deleteConfirmContent": "This action cannot be undone.",
+      "deactivateConfirm": "Deactivate rule?",
+      "deactivateConfirmContent": "Deactivation may be subject to a cooldown period before taking effect.",
+      "fields": {
+        "name": "Name",
+        "category": "Category",
+        "patterns": "Patterns (one per line)",
+        "patternType": "Pattern type",
+        "exceptPatterns": "Exception patterns (one per line)",
+        "action": "Action",
+        "phase": "Phase",
+        "severity": "Severity",
+        "displayMode": "Display mode",
+        "notificationFrequency": "Notification frequency",
+        "notificationChannels": "Notification channels",
+        "webhookUrl": "Webhook URL",
+        "trustedContactEmail": "Trusted contact email",
+        "crisisResourcesEnabled": "Show crisis resources",
+        "cooldownMinutes": "Cooldown (minutes)",
+        "bypassProtection": "Bypass protection",
+        "enabled": "Enabled",
+        "escalation": "Escalation settings",
+        "escalationSessionThreshold": "Session threshold",
+        "escalationSessionAction": "Session escalation action",
+        "escalationWindowDays": "Window (days)",
+        "escalationWindowThreshold": "Window threshold",
+        "escalationWindowAction": "Window escalation action",
+        "patternsRequired": "At least one pattern required",
+        "governancePolicy": "Governance policy",
+        "governancePolicyPlaceholder": "Optional policy assignment",
+        "namePlaceholder": "e.g. Harmful content filter",
+        "categoryPlaceholder": "e.g. self-harm, addiction, anxiety",
+        "patternsPlaceholder": "pattern one\npattern two",
+        "exceptPatternsPlaceholder": "Patterns to exclude",
+        "trustedContactEmailPlaceholder": "contact@example.com",
+        "escalationActionPlaceholder": "e.g. block, notify_contact"
+      },
+      "options": {
+        "action": {
+          "notify": "Notify",
+          "redact": "Redact",
+          "block": "Block"
+        },
+        "phase": {
+          "input": "Input",
+          "output": "Output",
+          "both": "Both"
+        },
+        "severity": {
+          "info": "Info",
+          "warning": "Warning",
+          "critical": "Critical"
+        },
+        "displayMode": {
+          "inlineBanner": "Inline banner",
+          "sidebarNote": "Sidebar note",
+          "postSessionSummary": "Post-session summary",
+          "silentLog": "Silent log"
+        },
+        "notificationFrequency": {
+          "everyMessage": "Every message",
+          "oncePerConversation": "Once per conversation",
+          "oncePerDay": "Once per day",
+          "oncePerSession": "Once per session"
+        },
+        "notificationChannels": {
+          "inApp": "In-app",
+          "email": "Email",
+          "webhook": "Webhook"
+        },
+        "bypassProtection": {
+          "none": "None",
+          "cooldown": "Cooldown",
+          "confirmation": "Confirmation",
+          "partnerApproval": "Partner approval"
+        }
+      }
+    },
+    "alerts": {
+      "title": "Alerts",
+      "empty": "No alerts yet",
+      "markRead": "Mark selected read",
+      "marked": "Alerts marked as read",
+      "markFailed": "Failed to mark alerts",
+      "columns": {
+        "rule": "Rule",
+        "severity": "Severity",
+        "matchedPattern": "Matched pattern",
+        "time": "Time",
+        "read": "Read"
+      }
+    },
+    "governance": {
+      "title": "Governance Policies",
+      "refresh": "Refresh",
+      "create": "Create Policy",
+      "empty": "No governance policies yet",
+      "created": "Governance policy created",
+      "deleted": "Governance policy deleted",
+      "createFailed": "Failed to create governance policy",
+      "deleteFailed": "Failed to delete governance policy",
+      "deleteConfirm": "Delete governance policy?",
+      "deleteConfirmContent": "This action cannot be undone and may affect linked rules.",
+      "modes": {
+        "self": "Self",
+        "guardian": "Guardian"
+      },
+      "fields": {
+        "name": "Name",
+        "nameRequired": "Name is required",
+        "namePlaceholder": "e.g. Evening usage policy",
+        "description": "Description",
+        "descriptionPlaceholder": "Optional policy description",
+        "policyMode": "Mode",
+        "scopeChatTypes": "Scope",
+        "scopePlaceholder": "all",
+        "scheduleTimezone": "Timezone",
+        "scheduleTimezonePlaceholder": "UTC",
+        "transparent": "Transparent to dependent",
+        "enabled": "Enabled",
+        "updatedAt": "Updated"
+      }
+    },
+    "relationships": {
+      "title": "Guardian Relationships",
+      "create": "Create Relationship",
+      "refresh": "Refresh",
+      "empty": "No guardian relationships",
+      "created": "Relationship created",
+      "accepted": "Relationship accepted",
+      "suspended": "Relationship suspended",
+      "reactivated": "Relationship reactivated",
+      "dissolved": "Relationship dissolved",
+      "createFailed": "Failed to create relationship",
+      "acceptFailed": "Failed to accept",
+      "suspendFailed": "Failed to suspend",
+      "reactivateFailed": "Failed to reactivate",
+      "dissolveFailed": "Failed to dissolve",
+      "dissolveConfirm": "Dissolve relationship?",
+      "dissolveConfirmContent": "This action cannot be undone. All associated policies will be removed.",
+      "accept": "Accept",
+      "suspend": "Suspend",
+      "reactivate": "Reactivate",
+      "roleGuardian": "Guardian View",
+      "roleDependent": "Dependent View",
+      "columns": {
+        "id": "ID",
+        "guardian": "Guardian",
+        "dependent": "Dependent",
+        "type": "Type",
+        "status": "Status",
+        "created": "Created"
+      },
+      "fields": {
+        "dependentUserId": "Dependent user ID",
+        "dependentUserIdRequired": "User ID is required",
+        "dependentUserIdPlaceholder": "Enter dependent user ID",
+        "relationshipType": "Relationship type",
+        "dependentVisible": "Visible to dependent"
+      },
+      "options": {
+        "relationshipType": {
+          "parent": "Parent",
+          "legalGuardian": "Legal guardian",
+          "institutional": "Institutional"
+        }
+      }
+    },
+    "policies": {
+      "title": "Supervised Policies",
+      "create": "Add Policy",
+      "edit": "Edit Supervised Policy",
+      "empty": "No policies for this relationship",
+      "created": "Policy created",
+      "updated": "Policy updated",
+      "deleted": "Policy deleted",
+      "createFailed": "Failed to create policy",
+      "updateFailed": "Failed to update policy",
+      "deleteFailed": "Failed to delete policy",
+      "deleteConfirm": "Delete policy?",
+      "deleteConfirmContent": "This action cannot be undone.",
+      "fields": {
+        "relationshipId": "Relationship ID",
+        "category": "Category",
+        "pattern": "Pattern",
+        "patternType": "Pattern type",
+        "action": "Action",
+        "phase": "Phase",
+        "severity": "Severity",
+        "notifyGuardian": "Notify guardian",
+        "notifyContext": "Notification context",
+        "messageToDependent": "Message to dependent",
+        "enabled": "Enabled",
+        "categoryPlaceholder": "e.g. violence, self-harm",
+        "patternPlaceholder": "Pattern to match",
+        "messageToDependentPlaceholder": "Optional message shown to dependent"
+      },
+      "options": {
+        "action": {
+          "notify": "Notify",
+          "warn": "Warn",
+          "redact": "Redact",
+          "block": "Block"
+        },
+        "phase": {
+          "input": "Input",
+          "output": "Output",
+          "both": "Both"
+        },
+        "severity": {
+          "info": "Info",
+          "warning": "Warning",
+          "critical": "Critical"
+        },
+        "notifyContext": {
+          "topicOnly": "Topic only",
+          "snippet": "Snippet",
+          "fullMessage": "Full message"
+        }
+      }
+    },
+    "auditLog": {
+      "title": "Audit Log",
+      "empty": "No audit entries",
+      "columns": {
+        "action": "Action",
+        "actor": "Actor",
+        "details": "Details",
+        "time": "Time"
+      }
+    },
+    "crisis": {
+      "disclaimer": "Disclaimer",
+      "empty": "No crisis resources available",
+      "available247": "Available 24/7",
+      "contact": "Contact"
+    }
+  },
+  "admin": {
+    "adminGuardForbiddenTitle": "Admin access required for these controls",
+    "adminGuardNotFoundTitle": "Admin APIs are not available on this server",
+    "adminGuardForbiddenBody": "Sign in as an admin user on your tldw server to view and manage users, roles, and system statistics.",
+    "adminGuardNotFoundBody": "This tldw server does not expose the /admin endpoints, or they are disabled. Upgrade or reconfigure the server to enable these views.",
+    "adminGuardLearnMore": "Learn more in the tldw server documentation.",
+    "adminGuardLimitedInfo": "Admin-level details and controls are hidden until admin APIs are available.",
+    "adminGuardConnectionHint": "Only basic connection details are shown; admin dashboards are disabled until admin APIs are available.",
+    "llamacppIntro": "Manage the Llama.cpp inference server: start/stop with custom configuration and inspect available models.",
+    "llamacppLoadTitle": "Load Model",
+    "llamacppSelectModel": "Select model",
+    "llamacppSelectModelPlaceholder": "Choose a GGUF model...",
+    "llamacppBasicSettings": "Basic Settings",
+    "llamacppContextSize": "Context size",
+    "llamacppGpuLayers": "GPU layers",
+    "llamacppGpuLayersHint": "0 = CPU only, -1 = all layers",
+    "llamacppPerformanceSettings": "Performance Settings",
+    "llamacppPerformanceSettingsDesc": "Thread count, batch size, memory options",
+    "llamacppThreads": "Threads",
+    "llamacppThreadsHint": "Leave empty for auto-detect",
+    "llamacppBatchSize": "Batch size",
+    "llamacppMlock": "Memory lock",
+    "llamacppMlockHint": "Lock model in RAM (requires permissions)",
+    "llamacppCustomArgs": "Custom Arguments",
+    "llamacppCustomArgsDesc": "Pass additional server arguments",
+    "llamacppCustomArgsPlaceholder": "No custom arguments. Click 'Add argument' to add one.",
+    "llamacppStart": "Start Server",
+    "llamacppStartDefaults": "Start with Defaults",
+    "llamacppStop": "Stop",
+    "llamacppAlreadyRunning": "Server is already running. Stop it first to start with new settings.",
+    "llamacppActiveModel": "Model",
+    "llamacppPort": "Port",
+    "llamacppModelsTitle": "Available Models",
+    "llamacppModelsDesc": "GGUF model(s) detected",
+    "llamacppModelsEmpty": "No local GGUF models detected. Configure your Llama.cpp models directory on the server.",
+    "mlxIntro": "Manage MLX language models: load models with custom configuration and monitor status.",
+    "mlxLoadTitle": "Load Model",
+    "mlxModelPathLabel": "Model path or HuggingFace repo",
+    "mlxModelPathPlaceholder": "e.g., mlx-community/Meta-Llama-3.1-8B-Instruct-4bit",
+    "mlxModelPathHint": "Enter a HuggingFace repo ID or local path to an MLX model",
+    "mlxBasicSettings": "Basic Settings",
+    "mlxDeviceLabel": "Device",
+    "mlxCompileLabel": "Compile at load",
+    "mlxCompileHint": "Compile model for faster inference",
+    "mlxMaxConcurrentLabel": "Max concurrent",
+    "mlxPerformanceSettings": "Performance Settings",
+    "mlxPerformanceSettingsDesc": "Sequence length, batch size, data type, cache",
+    "mlxMaxSeqLen": "Max sequence length",
+    "mlxMaxBatchSize": "Max batch size",
+    "mlxDtype": "Data type",
+    "mlxKvCacheSize": "KV cache size",
+    "mlxKvCacheSizeHint": "Max KV cache entries (0 = unlimited)",
+    "mlxAdvancedSettings": "Advanced Settings",
+    "mlxAdvancedSettingsDesc": "Quantization, tokenizer, prompt template",
+    "mlxQuantization": "Quantization",
+    "mlxWarmupLabel": "Warmup after load",
+    "mlxTrustRemoteCode": "Trust remote code",
+    "mlxTrustRemoteCodeWarning": "Security risk",
+    "mlxRevision": "HF revision",
+    "mlxTokenizer": "Custom tokenizer",
+    "mlxTokenizerPlaceholder": "Path or repo ID",
+    "mlxPromptTemplate": "Prompt template",
+    "mlxPromptTemplatePlaceholder": "Custom prompt template (optional)",
+    "mlxLoraSettings": "LoRA / Adapter Settings",
+    "mlxLoraSettingsDesc": "Load fine-tuned adapters",
+    "mlxAdapter": "Adapter path",
+    "mlxAdapterPlaceholder": "Path to LoRA adapter",
+    "mlxAdapterWeights": "Adapter weights",
+    "mlxAdapterWeightsPlaceholder": "Path to adapter weights",
+    "mlxLoadCta": "Load Model",
+    "mlxUnloadCta": "Unload Model",
+    "mlxAlreadyLoaded": "A model is currently loaded. Unload it first or load a different model to replace it.",
+    "mlxCurrentModel": "Model",
+    "mlxConcurrency": "Concurrent",
+    "mlxActive": "Active",
+    "mlxInactive": "Inactive",
+    "mlxProviderTitle": "Available Provider Models",
+    "mlxProviderDesc": "model(s) configured",
+    "mlxNoModels": "No MLX models configured. Enable MLX provider on the server to see models here.",
+    "mlxVision": "Vision",
+    "mlxTools": "Tools",
+    "mlxAudio": "Audio"
+  },
+  "promptStudio": {
+    "nav": "Prompt Studio",
+    "title": "Prompt Studio",
+    "subtitle": "Configure defaults and monitor Prompt Studio health. Connection and auth reuse the main server settings.",
+    "probeError": "Unable to reach Prompt Studio",
+    "statusCard": "Status",
+    "statusHint": "Button calls /prompt-studio/status with warn_seconds.",
+    "statusError": "Status endpoint unavailable",
+    "warnSeconds": "Warn seconds",
+    "testButton": "Test Prompt Studio",
+    "defaultsCard": "Defaults",
+    "defaultsHint": "Store default project, model configs, and list page size.",
+    "defaultsPlaceholder": "Persist defaults using existing settings storage (TBD) for initial project selection, execute/evaluation model presets, and pagination.",
+    "defaultProject": "Default project ID",
+    "pageSize": "Page size",
+    "executeDefaults": "Execute defaults",
+    "executeProvider": "Provider",
+    "executeModel": "Model",
+    "executeTemperature": "Temperature",
+    "executeMaxTokens": "Max tokens",
+    "evalDefaults": "Evaluation defaults",
+    "evalModel": "Model",
+    "evalTemperature": "Temperature",
+    "evalMaxTokens": "Max tokens",
+    "unavailable": "Prompt Studio isn’t available on the server yet.",
+    "unavailableBody": "Once enabled, you can monitor queue health and set defaults here."
+  },
+  "chatAppearance": {
+    "title": "Chat appearance",
+    "description": "Customize colors, fonts, and text sizes for chat messages.",
+    "behaviorNote": "Looking for chat behavior settings (wide mode, reasoning, copy options)?",
+    "goToGeneral": "Go to General Settings",
+    "userHeading": "User messages",
+    "assistantHeading": "Assistant messages",
+    "userColor": "User text color",
+    "assistantColor": "Assistant text color",
+    "userFont": "User font",
+    "assistantFont": "Assistant font",
+    "userSize": "User text size",
+    "assistantSize": "Assistant text size",
+    "color": {
+      "default": "Default",
+      "blue": "Blue",
+      "green": "Green",
+      "purple": "Purple",
+      "orange": "Orange",
+      "red": "Red"
+    },
+    "font": {
+      "default": "Default",
+      "sans": "Sans serif",
+      "serif": "Serif",
+      "mono": "Monospace"
+    },
+    "size": {
+      "sm": "Small",
+      "md": "Medium",
+      "lg": "Large"
+    }
+  },
+  "speechSettings": {
+    "title": "Speech settings",
+    "subtitle": "Manage Speech-to-Text and Text-to-Speech defaults for dictation and playback."
+  },
+  "uiCustomization": {
+    "title": "UI customization",
+    "subtitle": "Personalize the navigation shortcuts and layout defaults.",
+    "shortcuts": {
+      "title": "Sidebar shortcuts",
+      "description": "Choose up to 10 items for the sidebar icons and shortcuts list.",
+      "countLabel": "{{count}} / {{max}} selected",
+      "maxReached": "You can select up to {{max}} shortcuts.",
+      "reset": "Reset to default",
+      "empty": "No shortcuts selected"
+    },
+    "headerShortcuts": {
+      "title": "Playground shortcuts",
+      "description": "Choose which shortcuts appear in the header shortcuts panel.",
+      "countLabel": "{{count}} of {{total}} selected",
+      "reset": "Reset to default"
+    }
+  },
+  "imageGenerationSettings": {
+    "title": "Image generation",
+    "subtitle": "Configure image generation defaults for each backend and set your slash-command default.",
+    "noneOption": "None",
+    "defaultBackendLabel": "Default image backend",
+    "defaultBackendHint": "Used when you run /generate-image without a provider override.",
+    "defaultBackendPlaceholder": "Select a backend",
+    "backendSectionTitle": "Backend presets",
+    "backendSectionHint": "These settings are sent with your prompt. Leave fields blank to use server defaults.",
+    "noBackends": "No image backends detected from the server yet.",
+    "formatLabel": "Output format",
+    "formatHint": "PNG is safest for most models.",
+    "format": {
+      "png": "PNG",
+      "jpg": "JPEG",
+      "webp": "WebP"
+    },
+    "negativePromptLabel": "Negative prompt",
+    "negativePromptHint": "Optional text to steer the model away from elements.",
+    "negativePromptPlaceholder": "e.g., blurry, low-res",
+    "widthLabel": "Width",
+    "heightLabel": "Height",
+    "stepsLabel": "Steps",
+    "cfgScaleLabel": "CFG scale",
+    "seedLabel": "Seed",
+    "seedHint": "Set to -1 or leave blank for random.",
+    "samplerLabel": "Sampler",
+    "samplerPlaceholder": "e.g., euler_a",
+    "modelLabel": "Model override",
+    "modelHint": "Optional model identifier/path supported by the backend.",
+    "modelPlaceholder": "Leave blank to use server default",
+    "extraParamsLabel": "Extra params (JSON)",
+    "extraParamsHint": "Optional backend-specific parameters. Invalid JSON will be ignored; keys must be allowlisted on the server.",
+    "resetBackend": "Reset backend defaults",
+    "resetBackendHint": "Clear all saved defaults for this backend."
+  },
+  "quickIngestSettings": {
+    "title": "Quick Ingest settings",
+    "subtitle": "Customize the presets used in the Quick Ingest Options tab.",
+    "presetHint": "Changes apply the next time you open Quick Ingest.",
+    "resetAll": "Reset all presets",
+    "advancedHeading": "Advanced options",
+    "advancedHint": "Configure advanced ingest fields for this preset."
+  },
+  "generalSettings": {
+    "title": "General Settings",
+    "settings": {
+      "heading": "Web UI Settings",
+      "speechRecognitionLang": {
+        "label": "Speech Recognition Language",
+        "placeholder": "Select a language"
+      },
+      "language": {
+        "label": "Language",
+        "placeholder": "Select a language"
+      },
+      "darkMode": {
+        "label": "Change Theme",
+        "options": {
+          "light": "Light",
+          "dark": "Dark"
+        }
+      },
+      "copilotResumeLastChat": {
+        "label": "Resume the last chat when opening the Sidebar (Copilot)"
+      },
+      "turnOnChatWithWebsite": {
+        "label": "Enable Chat with Website by default (Copilot)"
+      },
+      "webUIResumeLastChat": {
+        "label": "Resume the last chat when opening the Web UI"
+      },
+      "hideCurrentChatModelSettings": {
+        "label": "Hide the current Chat Model Settings"
+      },
+      "hideQuickChatHelper": {
+        "label": "Hide Quick Chat Helper button",
+        "showLabel": "Show Quick Chat Helper button"
+      },
+      "restoreLastChatModel": {
+        "label": "Restore last used model for previous chats"
+      },
+      "sendNotificationAfterIndexing": {
+        "label": "Send Notification After Finishing Processing the Knowledge Base"
+      },
+      "generateTitle": {
+        "label": "Generate Title using AI"
+      },
+      "ollamaStatus": {
+        "label": "Enable or disable server connection status check"
+      },
+      "wideMode": {
+        "label": "Enable wide screen mode"
+      },
+      "stickyChatInput": {
+        "label": "Keep chat input visible while scrolling"
+      },
+      "openReasoning": {
+        "label": "Open Reasoning Collapse by default"
+      },
+      "userChatBubble": {
+        "label": "Use Chat Bubble for User Messages"
+      },
+      "autoCopyResponseToClipboard": {
+        "label": "Automatically Copy Response to Clipboard"
+      },
+      "useMarkdownForUserMessage": {
+        "label": "Enable Markdown formatting for User messages"
+      },
+      "copyAsFormattedText": {
+        "label": "Copy as Formatted Text"
+      },
+      "tabMentionsEnabled": {
+        "label": "Enable Tab Mentions (@tab)"
+      },
+      "pasteLargeTextAsFile": {
+        "label": "Paste Large Text as File"
+      },
+      "enableOcrAssets": {
+        "label": "Enable OCR (downloads ~5MB on first use)",
+        "downloadNotice": "Enabling OCR will download ~5MB of language data on first use",
+        "assetsEnabled": "OCR assets enabled and ready"
+      },
+      "ocrLanguage": {
+        "label": "Default OCR Language",
+        "placeholder": "Select an OCR language"
+      },
+      "sidepanelTemporaryChat": {
+        "label": "Enable Temporary Chat in Sidebar by default"
+      },
+      "removeReasoningTagFromCopy": {
+        "label": "Remove Reasoning Tag from Copied Text"
+      },
+      "promptSearchIncludeServer": {
+        "label": "Include server prompts in prompt search"
+      },
+      "restartOnboarding": {
+        "label": "Restart onboarding from the beginning",
+        "button": "Restart onboarding",
+        "confirmTitle": "Restart onboarding?",
+        "confirmMessage": "This will reset your onboarding state and take you back to the setup flow.",
+        "toast": "Onboarding has been reset",
+        "toastBody": "We’ll take you back to the welcome step so you can review your server URL and API key."
+      }
+    },
+    "systemBasics": {
+      "heading": "System",
+      "uiMode": {
+        "label": "Default UI Mode",
+        "options": {
+          "webui": "Full Screen (Web UI)",
+          "sidePanel": "Sidebar"
+        }
+      },
+      "actionIcon": {
+        "label": "Browser Action Button"
+      },
+      "contextMenu": {
+        "label": "Context Menu Action"
+      },
+      "webuiBtnSidePanel": {
+        "label": "Show Web UI button in Sidebar"
+      },
+      "chatBackgroundImage": {
+        "label": "Chat Background Image"
+      },
+      "fontSize": {
+        "label": "Font Size"
+      }
+    },
+    "systemData": {
+      "heading": "Data",
+      "firefoxPrivateModeSync": {
+        "label": "Firefox Private Mode Sync",
+        "button": "Sync Data"
+      },
+      "deleteChatHistory": {
+        "label": "System Reset",
+        "button": "Reset All",
+        "confirm": "Are you sure you want to perform a system reset? This will clear all data and cannot be undone."
+      },
+      "export": {
+        "label": "Export Chat History, Knowledge Base, and Prompts",
+        "button": "Export Data",
+        "success": "Export Success"
+      },
+      "import": {
+        "label": "Import Chat History, Knowledge Base, and Prompts",
+        "button": "Import Data",
+        "success": "Import Success",
+        "error": "Import Error"
+      }
+    },
+    "chatbooks": {
+      "heading": "Chatbooks",
+      "subheading": "Export conversations into portable archives, or import them later.",
+      "unavailable": "Chatbooks are not available on this server.",
+      "exportTitle": "Export chatbook",
+      "exportName": "Chatbook name",
+      "exportDescription": "Short description",
+      "exportConversationIds": "Conversation IDs (comma-separated)",
+      "includeMedia": "Include media",
+      "includeEmbeddings": "Include embeddings",
+      "includeGenerated": "Include generated docs",
+      "runAsync": "Run as background job",
+      "exportButton": "Export chatbook",
+      "noExportJobs": "No export jobs yet.",
+      "download": "Download",
+      "importTitle": "Import chatbook",
+      "conflictSkip": "Skip conflicts",
+      "conflictOverwrite": "Overwrite existing",
+      "conflictRename": "Rename imported",
+      "conflictMerge": "Merge when possible",
+      "prefixImported": "Prefix imported",
+      "importMedia": "Import media",
+      "importEmbeddings": "Import embeddings",
+      "importButton": "Import chatbook",
+      "noImportJobs": "No import jobs yet.",
+      "importedCount": "{{count}} items imported",
+      "jobsError": "Unable to load chatbook jobs",
+      "exportMissingIds": "Add at least one conversation ID.",
+      "exportDescriptionFallback": "Chatbook export",
+      "exportQueued": "Export job created",
+      "exportComplete": "Chatbook export complete",
+      "exportError": "Chatbook export failed",
+      "downloadError": "Download failed",
+      "importQueued": "Import job created",
+      "importComplete": "Chatbook import complete",
+      "importError": "Chatbook import failed",
+      "defaultName": "Chatbook {{date}}"
+    },
+    "sidepanelRag": {
+      "heading": "Retrieval Settings",
+      "ragEnabled": {
+        "label": "Enable Embedding and Retrieval"
+      },
+      "maxWebsiteContext": {
+        "label": "Maximum Content Size for Full Context Mode",
+        "placeholder": "Content size (default 4028)"
+      }
+    },
+    "webSearch": {
+      "heading": "Manage Web Search",
+      "searchMode": {
+        "label": "Perform Simple Internet Search"
+      },
+      "provider": {
+        "label": "Search Engine",
+        "placeholder": "Select a search engine"
+      },
+      "totalSearchResults": {
+        "label": "Total Search Results",
+        "placeholder": "Enter Total Search Results"
+      },
+      "visitSpecificWebsite": {
+        "label": "Visit the website mentioned in the message"
+      },
+      "searxng": {
+        "url": {
+          "label": "SearXNG URL"
+        }
+      },
+      "braveApi": {
+        "label": "Brave API Key",
+        "placeholder": "Enter your Brave API key"
+      },
+      "tavilyApi": {
+        "label": "Tavily API Key ",
+        "placeholder": "Enter your Tavily API key"
+      },
+      "exa": {
+        "label": "Exa API Key",
+        "placeholder": "Enter your Exa API key"
+      },
+      "googleDomain": {
+        "label": "Google Domain"
+      },
+      "searchOnByDefault": {
+        "label": "Internet Search ON by default"
+      },
+      "firecrawlAPIKey": {
+        "label": "Firecrawl API Key",
+        "placeholder": "Enter your Firecrawl API key"
+      }
+    },
+    "tts": {
+      "heading": "Text-to-Speech Settings",
+      "ttsEnabled": {
+        "label": "Enable Text-to-Speech"
+      },
+      "ttsAutoPlay": {
+        "label": "Auto play voice response after completion"
+      },
+      "ttsProvider": {
+        "label": "Text-to-Speech Provider",
+        "placeholder": "Select a provider"
+      },
+      "ttsVoice": {
+        "label": "Text-to-Speech Voice",
+        "placeholder": "Select a voice"
+      },
+      "ssmlEnabled": {
+        "label": "Enable SSML (Speech Synthesis Markup Language)"
+      },
+      "responseSplitting": {
+        "label": "Response Splitting"
+      },
+      "removeReasoningTagTTS": {
+        "label": "Remove Reasoning Tag from TTS",
+        "description": "Strip <think>...</think> reasoning blocks before speaking. Keeps audio focused on the final answer."
+      },
+      "playbackSpeed": {
+        "label": "Playback Speed",
+        "description": "Controls how fast audio plays back (does not affect generation).",
+        "range": "0.25-2x"
+      }
+    },
+    "stt": {
+      "heading": "Speech-to-Text Settings",
+      "usedByChat": "These Speech-to-Text defaults are used by the chat dictation button in the Playground and Sidebar.",
+      "autoStopTimeout": {
+        "label": "Auto Stop Timeout (ms)",
+        "placeholder": "Enter auto-stop timeout in milliseconds"
+      },
+      "autoSubmitVoiceMessage": {
+        "label": "Auto Submit Voice Message"
+      },
+      "model": {
+        "label": "Transcription model (tldw_server)"
+      },
+      "useSegmentation": {
+        "label": "Run segmentation for transcripts (TreeSeg)"
+      },
+      "timestampGranularities": {
+        "label": "Timestamp granularity",
+        "segment": "Per segment",
+        "word": "Per word",
+        "segmentWord": "Segment + word"
+      },
+      "task": {
+        "label": "Transcription task",
+        "transcribe": "Transcribe (same language)",
+        "translate": "Translate to English"
+      },
+      "responseFormat": {
+        "label": "Response format",
+        "json": "JSON (text + segments)",
+        "verboseJson": "Verbose JSON",
+        "text": "Plain text",
+        "srt": "SRT subtitles",
+        "vtt": "VTT subtitles"
+      },
+      "temperature": {
+        "label": "Sampling temperature"
+      },
+      "prompt": {
+        "label": "Default transcription prompt",
+        "placeholder": "Optional text to guide style"
+      },
+      "segK": {
+        "label": "Max segments (TreeSeg K)"
+      },
+      "segMinSegmentSize": {
+        "label": "Minimum items per segment"
+      },
+      "segLambdaBalance": {
+        "label": "Balance penalty (TreeSeg λ)"
+      },
+      "segUtteranceExpansionWidth": {
+        "label": "Utterance expansion width"
+      },
+      "segEmbeddingsProvider": {
+        "label": "Segmentation embeddings provider"
+      },
+      "segEmbeddingsModel": {
+        "label": "Segmentation embeddings model"
+      }
+    },
+    "empty": {
+      "connectTitle": "Connect tldw Assistant to your server",
+      "connectDescription": "Some settings only take effect when your tldw server is reachable. Connect your server to get the full experience.",
+      "connectExample1": "Open Settings → tldw server to add your server URL and API key.",
+      "connectExample2": "Use Diagnostics to confirm your server is healthy before trying advanced tools.",
+      "title": "Tune how tldw Assistant behaves",
+      "description": "Adjust defaults for the Web UI, sidepanel, speech, search, and data handling from one place.",
+      "example1": "Choose your default language, theme, and chat resume behavior.",
+      "example2": "Control whether chats are temporary, how large pastes are handled, and how reasoning is displayed.",
+      "primaryCta": "Configure server & auth",
+      "secondaryCta": "Dismiss"
+    }
+  },
+  "manageModels": {
+    "title": "Manage Models",
+    "addBtn": "Add New Model",
+    "columns": {
+      "name": "Name",
+      "digest": "Digest",
+      "nickname": "Nickname",
+      "modifiedAt": "Modified At",
+      "size": "Size",
+      "actions": "Actions"
+    },
+    "expandedColumns": {
+      "parentModel": "Parent Model",
+      "format": "Format",
+      "family": "Family",
+      "parameterSize": "Parameter Size",
+      "quantizationLevel": "Quantization Level"
+    },
+    "tooltip": {
+      "delete": "Delete Model",
+      "repull": "Re-Pull Model",
+      "editNickname": "Edit Nickname"
+    },
+    "confirm": {
+      "delete": "Are you sure you want to delete this model?",
+      "repull": "Are you sure you want to re-pull this model?"
+    },
+    "modal": {
+      "title": "Add New Model",
+      "placeholder": "Enter Model Name",
+      "pull": "Pull Model"
+    },
+    "notification": {
+      "pullModel": "Pulling Model",
+      "pullModelDescription": "Pulling {{modelName}} model. For more details, check the extension icon.",
+      "cancellingDownload": "Cancelling Download",
+      "cancellingDownloadDescription": "Model download is being cancelled...",
+      "success": "Success",
+      "error": "Error",
+      "successDescription": "Successfully pulled the model",
+      "successDeleteDescription": "Successfully deleted the model",
+      "someError": "Something went wrong. Please try again later"
+    }
+  },
+  "managePrompts": {
+    "title": "Manage Prompts",
+    "workspaceTitle": "Prompts workspace",
+    "workspaceDescription": "Reusable prompts are managed from the Prompts workspace. Use the button below to open it.",
+    "openWorkspace": "Open Prompts workspace",
+    "addBtn": "Add New Prompt",
+    "option1": "Normal",
+    "option2": "RAG",
+    "questionPrompt": "Question Prompt",
+    "search": "Search titles and contents",
+    "filter": {
+      "all": "All",
+      "system": "System",
+      "quick": "Quick"
+    },
+    "tags": {
+      "label": "Tags",
+      "placeholder": "Add tags"
+    },
+    "import": "Import",
+    "export": "Export",
+    "importMode": {
+      "merge": "Merge",
+      "replace": "Replace",
+      "replaceConfirm": "Replace will overwrite all current prompts with the imported file. Continue?"
+    },
+    "segmented": {
+      "custom": "Custom prompts",
+      "copilot": "Copilot prompts",
+      "helpCustom": "Create and manage reusable prompts you can insert into chat.",
+      "helpCopilot": "View and tweak predefined Copilot prompts provided by your server."
+    },
+    "columns": {
+      "title": "Title",
+      "prompt": "Prompt",
+      "type": "Prompt Type",
+      "actions": "Actions"
+    },
+    "systemPrompt": "System Prompt",
+    "quickPrompt": "Quick Prompt",
+    "tooltip": {
+      "delete": "Delete Prompt",
+      "edit": "Edit Prompt",
+      "duplicate": "Duplicate Prompt"
+    },
+    "confirm": {
+      "delete": "Are you sure you want to delete this prompt? This action cannot be undone."
+    },
+    "favorite": "Favorite",
+    "unfavorite": "Unfavorite",
+    "modal": {
+      "addTitle": "Add New Prompt",
+      "editTitle": "Edit Prompt"
+    },
+    "form": {
+      "title": {
+        "label": "Title",
+        "placeholder": "My Awesome Prompt",
+        "required": "Please enter a title"
+      },
+      "prompt": {
+        "label": "Prompt",
+        "placeholder": "Enter Prompt",
+        "required": "Please enter a prompt",
+        "help": "You can use {key} as variable in your prompt.",
+        "missingTextPlaceholder": "The {text} variable is missing in the prompt. Please add it."
+      },
+      "isSystem": {
+        "label": "Use as system prompt"
+      },
+      "btnSave": {
+        "saving": "Adding Prompt...",
+        "save": "Add Prompt"
+      },
+      "btnEdit": {
+        "saving": "Updating Prompt...",
+        "save": "Update Prompt"
+      }
+    },
+    "notification": {
+      "addSuccess": "Prompt Added",
+      "addSuccessDesc": "Prompt has been added successfully",
+      "error": "Error",
+      "someError": "Something went wrong. Please try again later",
+      "updatedSuccess": "Prompt Updated",
+      "updatedSuccessDesc": "Prompt has been updated successfully",
+      "deletedSuccess": "Prompt Deleted",
+      "deletedSuccessDesc": "Prompt has been deleted successfully"
+    },
+    "partialLoad": "Some prompt data isn’t available",
+    "loadErrorHelp": "Check your server connection and refresh to try again.",
+    "emptyConnectTitle": "Connect to use Prompts",
+    "emptyConnectDescription": "To manage reusable prompts, first connect to your tldw server.",
+    "emptyConnectExample1": "Open Settings → tldw server to add your server URL.",
+    "emptyConnectExample2": "Once connected, create custom prompts you can reuse across chats.",
+    "emptyTitle": "No custom prompts yet",
+    "emptyDescription": "Create reusable prompts for recurring tasks, workflows, and team conventions.",
+    "emptyExample1": "Save your favorite system prompt for summaries, explanations, or translations.",
+    "emptyExample2": "Create quick prompts for common actions like drafting emails or refining notes.",
+    "emptyPrimaryCta": "Create prompt",
+    "filterHelp": "Search matches title and prompt content. Use type and tags to narrow the list.",
+    "copilotEmptyTitle": "No Copilot prompts available",
+    "copilotEmptyDescription": "Copilot prompts are predefined templates provided by your tldw server.",
+    "copilotEmptyExample1": "Check your server version or configuration if you expect Copilot prompts to be available.",
+    "copilotEmptyExample2": "After updating your server, reload the extension and return to this tab.",
+    "copilotEmptyCta": "Open Diagnostics",
+    "studio": {
+      "connectTitle": "Connect to use Prompt Studio",
+      "connectDescription": "To access full Prompt Studio features, connect to your tldw server first.",
+      "unavailableTitle": "Prompt Studio not available",
+      "unavailableDescription": "Your server doesn't have Prompt Studio enabled.",
+      "tabs": {
+        "projects": "Projects",
+        "prompts": "Prompts",
+        "testCases": "Test Cases",
+        "evaluations": "Evaluations",
+        "optimizations": "Optimizations"
+      },
+      "projects": {
+        "title": "Projects",
+        "create": "Create Project",
+        "edit": "Edit Project",
+        "archive": "Archive",
+        "unarchive": "Unarchive",
+        "delete": "Delete Project",
+        "deleteConfirm": "Are you sure you want to delete this project? This action cannot be undone.",
+        "noProjects": "No projects yet",
+        "noProjectsDesc": "Create your first project to start organizing prompts.",
+        "name": "Name",
+        "description": "Description",
+        "status": "Status",
+        "createSuccess": "Project created",
+        "updateSuccess": "Project updated",
+        "archiveSuccess": "Project archived",
+        "unarchiveSuccess": "Project unarchived",
+        "deleteSuccess": "Project deleted"
+      },
+      "prompts": {
+        "title": "Prompts",
+        "create": "Create Prompt",
+        "edit": "Edit Prompt",
+        "execute": "Execute",
+        "history": "Version History",
+        "revert": "Revert to Version",
+        "revertConfirm": "Are you sure you want to revert to this version?",
+        "noPrompts": "No prompts in this project",
+        "selectProject": "Select a project first",
+        "systemPrompt": "System Prompt",
+        "userPrompt": "User Prompt",
+        "version": "Version",
+        "changeDescription": "Change Description",
+        "createSuccess": "Prompt created",
+        "updateSuccess": "Prompt updated",
+        "revertSuccess": "Prompt reverted",
+        "deleteSuccess": "Prompt deleted",
+        "executeSuccess": "Prompt executed",
+        "executeError": "Execution failed"
+      },
+      "testCases": {
+        "title": "Test Cases",
+        "create": "Create Test Case",
+        "edit": "Edit Test Case",
+        "import": "Import",
+        "export": "Export",
+        "generate": "Generate",
+        "run": "Run Tests",
+        "golden": "Golden",
+        "markGolden": "Mark as Golden",
+        "unmarkGolden": "Unmark as Golden",
+        "noTestCases": "No test cases yet",
+        "noTestCasesDesc": "Create test cases to evaluate your prompts.",
+        "name": "Name",
+        "inputs": "Inputs",
+        "expectedOutputs": "Expected Outputs",
+        "tags": "Tags",
+        "createSuccess": "Test case created",
+        "updateSuccess": "Test case updated",
+        "deleteSuccess": "Test case deleted",
+        "importSuccess": "Test cases imported",
+        "exportSuccess": "Test cases exported",
+        "generateSuccess": "Test cases generated",
+        "runSuccess": "Tests completed",
+        "bulkPanel": {
+          "title": "Bulk Import/Export",
+          "importTab": "Import",
+          "exportTab": "Export",
+          "format": "Format",
+          "goldenOnly": "Golden only",
+          "importData": "Paste or upload data",
+          "importBtn": "Import",
+          "exportBtn": "Export"
+        },
+        "generateModal": {
+          "title": "Generate Test Cases",
+          "count": "Number of test cases",
+          "seedExamples": "Seed examples (optional)",
+          "generateBtn": "Generate"
+        },
+        "runModal": {
+          "title": "Run Test Cases",
+          "selectTestCases": "Select test cases to run",
+          "runBtn": "Run Tests"
+        }
+      },
+      "evaluations": {
+        "title": "Evaluations",
+        "create": "Create Evaluation",
+        "delete": "Delete",
+        "deleteConfirm": "Are you sure you want to delete this evaluation?",
+        "noEvaluations": "No evaluations yet",
+        "noEvaluationsDesc": "Create an evaluation to test your prompts against test cases.",
+        "status": {
+          "pending": "Pending",
+          "running": "Running",
+          "completed": "Completed",
+          "failed": "Failed"
+        },
+        "metrics": "Metrics",
+        "testCases": "Test Cases",
+        "prompt": "Prompt",
+        "createSuccess": "Evaluation created",
+        "deleteSuccess": "Evaluation deleted",
+        "wizard": {
+          "title": "Create Evaluation",
+          "selectPrompt": "Select Prompt",
+          "selectTestCases": "Select Test Cases",
+          "configure": "Configure",
+          "review": "Review",
+          "startBtn": "Start Evaluation"
+        },
+        "detail": {
+          "title": "Evaluation Details",
+          "results": "Results",
+          "aggregateMetrics": "Aggregate Metrics",
+          "testRunResults": "Test Run Results"
+        }
+      },
+      "optimizations": {
+        "title": "Optimizations",
+        "create": "Create Optimization",
+        "cancel": "Cancel",
+        "cancelConfirm": "Are you sure you want to cancel this optimization?",
+        "delete": "Delete",
+        "deleteConfirm": "Are you sure you want to delete this optimization?",
+        "compareStrategies": "Compare Strategies",
+        "noOptimizations": "No optimizations yet",
+        "noOptimizationsDesc": "Create an optimization to automatically improve your prompts.",
+        "status": {
+          "pending": "Pending",
+          "running": "Running",
+          "completed": "Completed",
+          "failed": "Failed",
+          "cancelled": "Cancelled"
+        },
+        "strategies": {
+          "iterative": "Iterative",
+          "mipro": "MIPRO",
+          "bootstrap": "Bootstrap",
+          "genetic": "Genetic Algorithm",
+          "beam_search": "Beam Search",
+          "random_search": "Random Search"
+        },
+        "createSuccess": "Optimization started",
+        "createSuccessDesc": "The optimization job is now running.",
+        "cancelSuccess": "Optimization cancelled",
+        "deleteSuccess": "Optimization deleted",
+        "wizard": {
+          "title": "Start Optimization",
+          "selectPrompt": "Select Prompt",
+          "selectPromptInfo": "Select the prompt you want to optimize. The optimization will create improved versions of this prompt.",
+          "selectTestCases": "Select Test Cases",
+          "selectTestCasesInfo": "Test cases are used to evaluate each prompt iteration. More test cases = better optimization but slower.",
+          "selectAll": "Use all test cases ({{count}})",
+          "selectStrategy": "Select Strategy",
+          "configure": "Configure",
+          "review": "Review",
+          "reviewInfo": "Review your optimization settings before starting.",
+          "optName": "Name (optional)",
+          "optNamePlaceholder": "e.g., Iterative optimization run 1",
+          "maxIterations": "Max Iterations",
+          "model": "Model (optional)",
+          "temperature": "Temperature",
+          "startBtn": "Start Optimization"
+        },
+        "progress": {
+          "title": "Optimization Progress",
+          "currentIteration": "Current Iteration",
+          "bestScore": "Best Score",
+          "iterations": "Iterations",
+          "timeline": "Timeline"
+        },
+        "compare": {
+          "title": "Compare Optimization Strategies",
+          "info": "Compare different optimization strategies to find the best fit for your use case. Each strategy has different strengths depending on your prompt complexity and test case availability.",
+          "strategy": "Strategy",
+          "description": "Description",
+          "parameters": "Parameters",
+          "testCases": "Test Cases",
+          "earlyStopping": "Early Stop",
+          "action": "Action",
+          "requiresTestCases": "Requires test cases",
+          "noTestCasesRequired": "No test cases required",
+          "supportsEarlyStopping": "Supports early stopping",
+          "noEarlyStopping": "No early stopping",
+          "legend": "Legend: Test Cases = strategy requires test cases for optimization. Early Stop = strategy can stop early if no improvement is detected."
+        }
+      },
+      "common": {
+        "save": "Save",
+        "cancel": "Cancel",
+        "close": "Close",
+        "search": "Search",
+        "loading": "Loading...",
+        "error": "Error",
+        "success": "Success",
+        "delete": "Delete",
+        "edit": "Edit",
+        "create": "Create",
+        "name": "Name",
+        "description": "Description",
+        "status": "Status",
+        "actions": "Actions",
+        "noData": "No data",
+        "refresh": "Refresh"
+      },
+      "queueHealth": {
+        "title": "Queue Health",
+        "depth": "Queue Depth",
+        "processing": "Processing",
+        "healthy": "Healthy",
+        "warning": "Warning",
+        "error": "Error"
+      }
+    }
+  },
+  "manageShare": {
+    "title": "Manage Share",
+    "heading": "Configure Page Share URL",
+    "form": {
+      "url": {
+        "label": "Page Share URL",
+        "placeholder": "Enter Page Share URL",
+        "required": "Please input your Page Share URL!",
+        "help": "For privacy reasons, you can self-host the page share and provide the URL here. <anchor>Learn More</anchor>."
+      }
+    },
+    "webshare": {
+      "heading": "Web Share",
+      "columns": {
+        "title": "Title",
+        "url": "URL",
+        "actions": "Actions"
+      },
+      "tooltip": {
+        "delete": "Delete Share"
+      },
+      "confirm": {
+        "delete": "Are you sure you want to delete this share? This action cannot be undone."
+      },
+      "label": "Manage Page Share",
+      "description": "Enable or disable the page share feature"
+    },
+    "notification": {
+      "pageShareSuccess": "Page Share URL updated successfully",
+      "someError": "Something went wrong. Please try again later",
+      "webShareDeleteSuccess": "Web Share deleted successfully"
+    }
+  },
+  "ollamaSettings": {
+    "title": "Server Integration",
+    "heading": "Configure Server Integration",
+    "settings": {
+      "ollamaUrl": {
+        "label": "Server URL",
+        "placeholder": "Enter Server URL"
+      },
+      "globalEnable": {
+        "label": "Enable or Disable Server Integration Globally",
+        "warning": "By disabling the server integration globally, tldw Browser_Assistant won't fetch models from the server. You can still add providers from the <anchor>OpenAI compatible API</anchor> section if needed."
+      },
+      "advanced": {
+        "label": "Advanced Server URL Configuration",
+        "urlRewriteEnabled": {
+          "label": "Enable or Disable Custom Origin URL"
+        },
+        "rewriteUrl": {
+          "label": "Custom Origin URL",
+          "placeholder": "Enter Custom Origin URL"
+        },
+        "autoCORSFix": {
+          "label": "Enable or Disable Automatic CORS Fix"
+        },
+        "headers": {
+          "label": "Custom Headers",
+          "add": "Add Header",
+          "key": {
+            "label": "Header Key",
+            "placeholder": "Authorization"
+          },
+          "value": {
+            "label": "Header Value",
+            "placeholder": "Bearer token"
+          }
+        },
+        "help": "If you have connection issues with the server, you can configure a custom origin URL. To learn more about the configuration, <anchor>click here</anchor>."
+      }
+    }
+  },
+  "manageSearch": {
+    "title": "Manage Web Search",
+    "heading": "Configure Web Search"
+  },
+  "about": {
+    "title": "About",
+    "heading": "About",
+    "chromeVersion": "tldw Browser_Assistant Version",
+    "ollamaVersion": "Server Version",
+    "support": "You can support the tldw Browser_Assistant project by donating or sponsoring through the following platforms:",
+    "koFi": "Support on Ko-fi",
+    "githubSponsor": "Sponsor on GitHub",
+    "githubRepo": "GitHub Repository"
+  },
+  "manageKnowledge": {
+    "title": "Knowledge QA",
+    "heading": "Knowledge QA",
+    "worldBooksSettingsTitle": "World Books workspace",
+    "worldBooksSettingsDescription": "World Books are managed from the World Books workspace. Use the button below to open it.",
+    "worldBooksOpenWorkspace": "Open World Books workspace",
+    "dictionariesSettingsTitle": "Chat dictionaries workspace",
+    "dictionariesSettingsDescription": "Chat dictionaries are managed from the Chat dictionaries workspace. Use the button below to open it.",
+    "dictionariesOpenWorkspace": "Open Chat dictionaries workspace"
+  },
+  "charactersSettingsTitle": "Characters workspace",
+  "charactersSettingsDescription": "Characters are managed from the Characters workspace. Use the button below to open it.",
+  "charactersOpenWorkspace": "Open Characters workspace",
+  "manageCharacters": {
+    "title": "Manage Characters",
+    "addBtn": "New character",
+    "columns": {
+      "name": "Name",
+      "description": "Description",
+      "actions": "Actions",
+      "avatar": "Avatar"
+    },
+    "actions": {
+      "chat": "Chat",
+      "edit": "Edit",
+      "delete": "Delete",
+      "duplicate": "Duplicate",
+      "viewConversations": "View conversations"
+    },
+    "table": {
+      "noDescription": "—"
+    },
+    "filter": {
+      "matchAll": "Match all tags"
+    },
+    "tags": {
+      "label": "Tags",
+      "placeholder": "Add tags",
+      "help": "Use tags to group characters by use case (e.g., “writing”, “teaching”)."
+    },
+    "tooltip": {
+      "edit": "Edit character",
+      "delete": "Delete character"
+    },
+    "aria": {
+      "chatWith": "Chat as {{name}}",
+      "edit": "Edit character {{name}}",
+      "delete": "Delete character {{name}}",
+      "duplicate": "Duplicate character {{name}}",
+      "viewConversations": "View conversations for {{name}}",
+      "searchResults": "{{count}} characters found"
+    },
+    "confirm": {
+      "delete": "Are you sure you want to delete this character? This action cannot be undone."
+    },
+    "conversations": {
+      "title": "Conversations for {{name}}",
+      "titleGeneric": "Character conversations",
+      "subtitle": "Select a conversation to continue as this character.",
+      "empty": "No conversations found for this character yet.",
+      "error": "Unable to load conversations for this character.",
+      "updated": "Updated {{time}}",
+      "unknownTime": "Unknown",
+      "resume": "Continue chat",
+      "untitled": "Untitled",
+      "mostRecent": "Most recent",
+      "resumeTooltip": "Load chat history and continue this conversation"
+    },
+    "preview": {
+      "title": "Preview",
+      "show": "Show preview",
+      "hide": "Hide preview",
+      "untitled": "Untitled character",
+      "greeting": "Greeting",
+      "behavior": "Behavior",
+      "empty": "Fill in the form to see a preview"
+    },
+    "avatar": {
+      "label": "Avatar (optional)",
+      "tabUrl": "URL",
+      "tabUpload": "Upload",
+      "selectImageError": "Please select an image file",
+      "formatError": "Only PNG, JPEG, and GIF images are supported",
+      "invalidError": "Invalid image file",
+      "processError": "Failed to process image",
+      "dropzone": "Click or drag image to upload",
+      "formats": "PNG, JPEG, or GIF",
+      "preview": "Preview"
+    },
+    "advanced": {
+      "show": "Show advanced fields",
+      "hide": "Hide advanced fields"
+    },
+    "form": {
+      "name": {
+        "label": "Name",
+        "placeholder": "e.g. Writing coach",
+        "required": "Please enter a name"
+      },
+      "description": "Define a reusable character you can chat with in the sidebar.",
+      "systemPrompt": {
+        "label": "Behavior / instructions",
+        "placeholder": "E.g., You are a patient math teacher who explains concepts step by step and checks understanding with short examples.",
+        "help": "Explain the character's role, tone, and constraints. For example: \"You are a patient math tutor who explains concepts step by step.\"",
+        "required": "Please add instructions to guide responses.",
+        "min": "Provide instructions so the character responds appropriately.",
+        "max": "System prompt must be 2000 characters or less."
+      },
+      "avatarUrl": {
+        "label": "Avatar URL (optional)",
+        "placeholder": "https://example.com/avatar.png"
+      },
+      "greeting": {
+        "label": "Greeting message (optional)",
+        "placeholder": "Hi there! I’m your writing coach. Paste your draft and I’ll help you tighten it up.",
+        "help": "Optional first message the character will send when you start a chat."
+      },
+      "btnSave": {
+        "saving": "Creating character...",
+        "save": "Create character"
+      },
+      "btnEdit": {
+        "saving": "Saving changes...",
+        "save": "Save changes"
+      }
+    },
+    "notification": {
+      "addSuccess": "Character created",
+      "error": "Error",
+      "someError": "Something went wrong. Please try again later",
+      "updatedSuccess": "Character updated",
+      "deletedSuccess": "Character deleted"
+    },
+    "loadError": {
+      "title": "Couldn't load characters",
+      "description": "Check your connection and try again."
+    },
+    "emptyTitle": "No characters yet",
+    "emptyDescription": "Create a reusable character with a name, description, and system prompt you can chat with.",
+    "emptyExample1": "Define a writing coach, lore expert, or coding assistant you can reuse across chats.",
+    "emptyExample2": "Give each character a clear description and behavior so their responses stay consistent.",
+    "emptyPrimaryCta": "Create character",
+    "avatarAltWithName": "Avatar of {{name}}",
+    "avatarAlt": "User avatar"
+  },
+  "rag": {
+    "title": "RAG Settings",
+    "ragSettings": {
+      "label": "RAG Settings",
+      "model": {
+        "label": "Embedding Model",
+        "required": "Please select a model",
+        "help": "Highly recommended to use embedding models like `nomic-embed-text`.",
+        "helpRecommended": "Recommended: {{model}} (from server config)",
+        "helpMissing": "Previously saved embedding model is no longer available on the server. Please choose another model.",
+        "placeholder": "Select a model"
+      },
+      "chunkSize": {
+        "label": "Chunk Size",
+        "placeholder": "Enter Chunk Size",
+        "required": "Please enter a chunk size",
+        "range": "Must be between {{min}} and {{max}}"
+      },
+      "chunkOverlap": {
+        "label": "Chunk Overlap",
+        "placeholder": "Enter Chunk Overlap",
+        "required": "Please enter a chunk overlap",
+        "range": "Must be between {{min}} and {{max}}",
+        "mustBeLessThanSize": "Overlap must be less than chunk size"
+      },
+      "totalFilePerKB": {
+        "label": "Knowledge Base Default File Upload Limit",
+        "placeholder": "Enter default file upload limit (e.g., 10)",
+        "required": "Please enter the default file upload limit"
+      },
+      "noOfRetrievedDocs": {
+        "label": "Number of Retrieved Documents",
+        "placeholder": "Enter Number of Retrieved Documents",
+        "required": "Please enter the number of retrieved documents"
+      },
+      "splittingSeparator": {
+        "label": "Separator",
+        "placeholder": "Enter Separator (e.g., \\n\\n)",
+        "required": "Please enter a separator"
+      },
+      "splittingStrategy": {
+        "label": "Text Splitter"
+      }
+    },
+    "prompt": {
+      "label": "Configure RAG Prompt",
+      "option1": "Normal",
+      "option2": "Web",
+      "alert": "Configuring the system prompt here is deprecated. Please use the Manage Prompts section to add or edit prompts. This section will be removed in a future release",
+      "systemPrompt": "System Prompt",
+      "systemPromptPlaceholder": "Enter System Prompt",
+      "webSearchPrompt": "Web Search Prompt",
+      "webSearchPromptHelp": "Do not remove `{search_results}` from the prompt.",
+      "webSearchPromptError": "Please enter a web search prompt",
+      "webSearchPromptPlaceholder": "Enter Web Search Prompt",
+      "webSearchFollowUpPrompt": "Web Search Follow Up Prompt",
+      "webSearchFollowUpPromptHelp": "Do not remove `{chat_history}` and `{question}` from the prompt.",
+      "webSearchFollowUpPromptError": "Please input your Web Search Follow Up Prompt!",
+      "webSearchFollowUpPromptPlaceholder": "Your Web Search Follow Up Prompt"
+    }
+  },
+  "chunkingPlayground": {
+    "nav": "Chunking Playground",
+    "title": "Chunking Playground",
+    "description": "Experiment with different chunking settings to see how text gets split into smaller pieces for processing.",
+    "inputLabel": "Text to chunk",
+    "inputPlaceholder": "Paste text here or select a sample...",
+    "uploadButton": "Upload File",
+    "chunkButton": "Chunk Text",
+    "methodLabel": "Chunking Method",
+    "maxSizeLabel": "Max Chunk Size",
+    "overlapLabel": "Overlap",
+    "languageLabel": "Language",
+    "languages": {
+      "auto": "Auto-detect",
+      "en": "English",
+      "es": "Spanish",
+      "fr": "French",
+      "de": "German",
+      "it": "Italian",
+      "pt": "Portuguese",
+      "zh": "Chinese",
+      "ja": "Japanese",
+      "ko": "Korean"
+    },
+    "viewCards": "Cards",
+    "viewInline": "Inline",
+    "stats": "{{count}} chunks, avg {{avgSize}} chars",
+    "textLoaded": "Text loaded",
+    "characters": "characters",
+    "tabSingle": "Single",
+    "tabCompare": "Compare",
+    "chunkIndex": "Chunk {{index}}",
+    "chunkInfo": "Chunk {{index}}: {{words}} words",
+    "position": "Position: {{start}} - {{end}}",
+    "additionalChunks": "+{{count}} more",
+    "charCount": "{{count}} characters",
+    "wordCount": "{{count}} words",
+    "noInput": "Please provide text to chunk",
+    "sharedInput": "Shared Input Text",
+    "compareButton": "Compare Both",
+    "comparison": "Comparison",
+    "fewerChunks": "Config A produces {{diff}} fewer chunks",
+    "moreChunks": "Config A produces {{diff}} more chunks",
+    "sameChunks": "Both configs produce the same number of chunks",
+    "clickToChunk": "Click 'Compare' to see results",
+    "overlapRegion": "Overlap Region",
+    "clickHint": "Click on a highlighted section to focus on that chunk",
+    "noContentFound": "No text content found for this media item",
+    "loadContentError": "Failed to load media content",
+    "loadMediaListError": "Failed to load media library",
+    "selectMedia": "Select media item...",
+    "loadingMedia": "Loading content...",
+    "noMediaFound": "No media found",
+    "mediaCount": "{{count}} media items available",
+    "inputSource": {
+      "paste": "Paste Text",
+      "upload": "Upload File",
+      "sample": "Sample Text",
+      "media": "From Media Library"
+    },
+    "samples": {
+      "article": "News Article",
+      "articleDesc": "Multi-paragraph article with headers",
+      "code": "Source Code",
+      "codeDesc": "Python code with classes and functions",
+      "transcript": "Transcript",
+      "transcriptDesc": "Timestamped podcast transcript",
+      "academic": "Academic Paper",
+      "academicDesc": "Technical writing with citations"
+    },
+    "compare": {
+      "title": "Compare Settings",
+      "configA": "Configuration A",
+      "configB": "Configuration B"
+    },
+    "mode": {
+      "single": "Single",
+      "compare": "Compare"
+    },
+    "settingsTitle": "Settings",
+    "tabTemplates": "Templates",
+    "tabCapabilities": "Capabilities",
+    "appliedOptionsTitle": "Applied options",
+    "responseMetaTitle": "Response metadata",
+    "inlineUnavailable": "Inline view requires character offsets; switch to Cards to inspect chunks.",
+    "metadataLabel": "Metadata",
+    "advanced": {
+      "title": "Advanced Options",
+      "methodRequiresLlm": "This method requires an LLM provider on the server.",
+      "templateNameLabel": "Template name",
+      "templateNamePlaceholder": "Select or type a template name",
+      "templateOverridesHint": "Template defaults are applied first; form values override them.",
+      "requestModeLabel": "Request Endpoint",
+      "requestModeJson": "JSON (/chunk_text)",
+      "requestModeFile": "Multipart (/chunk_file)",
+      "requestModeHint": "Use JSON for full option support; multipart matches /chunk_file.",
+      "tokenizerLabel": "Tokenizer",
+      "tokenizerPlaceholder": "Tokenizer name or path (e.g., gpt2)",
+      "adaptiveLabel": "Adaptive chunking",
+      "multiLevelLabel": "Multi-level chunking",
+      "codeModeLabel": "Code mode",
+      "codeModeHint": "Controls how code is parsed when method is 'code'.",
+      "semanticSimilarityLabel": "Semantic similarity threshold",
+      "semanticOverlapLabel": "Semantic overlap sentences",
+      "jsonKeyLabel": "JSON chunkable key",
+      "frontmatterLabel": "Enable frontmatter parsing",
+      "frontmatterSentinelLabel": "Frontmatter sentinel key",
+      "customChapterPatternLabel": "Custom chapter pattern",
+      "summarizationDetailLabel": "Summarization detail",
+      "llmOptionsTitle": "LLM Options (internal steps)",
+      "llmTemperatureLabel": "LLM temperature",
+      "llmSystemPromptLabel": "LLM system prompt",
+      "llmMaxTokensLabel": "LLM max tokens",
+      "propositionEngineLabel": "Proposition engine",
+      "propositionAggressivenessLabel": "Proposition aggressiveness",
+      "propositionMinLengthLabel": "Min proposition length",
+      "propositionPromptProfileLabel": "Proposition prompt profile",
+      "resetDefaults": "Reset to defaults"
+    },
+    "templates": {
+      "title": "Chunking Templates",
+      "description": "Manage, validate, and apply chunking templates.",
+      "tabBrowse": "Browse",
+      "tabEditor": "Editor",
+      "tabApply": "Apply",
+      "tabValidate": "Validate",
+      "tabMatch": "Match",
+      "tabLearn": "Learn",
+      "tabDiagnostics": "Diagnostics",
+      "filtersTitle": "Filters",
+      "includeBuiltin": "Include built-in",
+      "includeCustom": "Include custom",
+      "tagsLabel": "Tags",
+      "tagsPlaceholder": "Add tags",
+      "userIdLabel": "User ID",
+      "selectLabel": "Template",
+      "selectPlaceholder": "Select a template",
+      "detailsTitle": "Template details",
+      "isBuiltin": "Built-in",
+      "version": "Version",
+      "updatedAt": "Updated",
+      "loadIntoEditor": "Load into editor",
+      "deleteConfirm": "Delete this template?",
+      "hardDeleteLabel": "Hard delete",
+      "noSelection": "Select a template to view details.",
+      "templateJsonLabel": "Template JSON",
+      "overrideOptionsLabel": "Override options (JSON)",
+      "includeMetadataLabel": "Include metadata",
+      "applyTextLabel": "Text to apply template",
+      "applyTextPlaceholder": "Paste text to chunk with this template",
+      "validateLabel": "Template JSON to validate",
+      "matchMediaTypeLabel": "Media type",
+      "matchTitleLabel": "Title",
+      "matchUrlLabel": "URL",
+      "matchFilenameLabel": "Filename",
+      "learnNameLabel": "Template name",
+      "learnExampleLabel": "Example text",
+      "learnDescriptionLabel": "Description",
+      "learnSaveLabel": "Save template",
+      "learnClassifierLabel": "Classifier (JSON)",
+      "jsonError": "Invalid JSON. Please fix and try again.",
+      "nameRequired": "Template name is required.",
+      "updateAction": "Update",
+      "applyAction": "Apply",
+      "validateAction": "Validate",
+      "matchAction": "Match",
+      "learnAction": "Learn",
+      "diagnosticsAction": "Run diagnostics"
+    },
+    "capabilities": {
+      "title": "Chunking Capabilities",
+      "methodsLabel": "Methods",
+      "llmLabel": "LLM-required methods",
+      "defaultsLabel": "Default options",
+      "methodOptionsLabel": "Method-specific options",
+      "notesLabel": "Notes"
+    }
+  },
+  "mermaid": "Mermaid",
+  "switchToSidebar": "Switch to Sidebar",
+  "healthPage": {
+    "title": "Health Status",
+    "subtitle": "Quick overview of how your tldw server powers chat, Knowledge search, media ingest, and other tools.",
+    "backToChat": "Back to chat",
+    "openSettings": "Open tldw Settings",
+    "noServerBannerTitle": "Don’t have a server yet?",
+    "noServerBannerBody": "You can explore the UI first, then connect a tldw server later to enable chat history, media ingest, and Knowledge search.",
+    "noServerBannerCta": "Learn how tldw server works",
+    "recheckAll": "Recheck All",
+    "copyDiagnostics": "Copy diagnostics",
+    "copyDiagnosticsHelp": "Copies JSON diagnostics (server URL, status codes, and anonymized environment info) to your clipboard. API keys and message content are not included.",
+    "serverNotConfigured": "Server is not configured.",
+    "unableToReachCore": "Unable to reach server core health endpoint.",
+    "triedGet": "Tried GET {{url}}",
+    "configureHint": "Please configure a server URL under tldw settings.",
+    "configureCta": "Configure",
+    "connectedTo": "Connected to {{host}}",
+    "autoRefresh": "Auto-refresh",
+    "intervalLabel": "Interval (s):",
+    "nextRefreshIn": "Next auto-refresh in {{seconds}}s",
+    "intervalWarning": "Short intervals can put load on your server. Consider using at least {{seconds}}s.",
+    "checking": "Checking…",
+    "recheck": "Recheck",
+    "healthy": "Healthy",
+    "unhealthy": "Unhealthy",
+    "unknown": "Unknown",
+    "statusHealthy": "Healthy",
+    "statusUnhealthy": "Unhealthy",
+    "statusUnknown": "Unknown",
+    "statusCodeTag": "HTTP {{code}}",
+    "statusCodeNetwork": "Network/timeout",
+    "updatedJustNow": "Updated just now",
+    "updatedSecondsAgo": "Updated {{seconds}}s ago",
+    "troubleshootLink": "Troubleshooting tips",
+    "errorDetailsLabel": "Technical details (for advanced users)",
+    "copyError": "Copy error",
+    "rawResponseFrom": "Raw response from {{path}}",
+    "queueTitle": "Chat queue diagnostics",
+    "queueError": "Queue diagnostics unavailable",
+    "queueStatusTitle": "Queue status",
+    "queueEnabled": "Enabled",
+    "queueDisabled": "Disabled",
+    "queueDepth": "Queued",
+    "queueProcessing": "Processing",
+    "queueMax": "Max queue",
+    "queueMaxConcurrent": "Max concurrent",
+    "queueTotalProcessed": "Processed",
+    "queueTotalRejected": "Rejected",
+    "queueActivityTitle": "Recent activity",
+    "queueActivityEmpty": "No recent activity.",
+    "queueItem": "Request",
+    "queueItemMeta": "Priority {{priority}} · {{duration}}s",
+    "checks": {
+      "core": "Core API",
+      "rag": "RAG",
+      "audio": "Audio",
+      "embeddings": "Embeddings",
+      "metrics": "Metrics Health",
+      "chatMetrics": "Chat Metrics",
+      "mcp": "MCP",
+      "coreDescription": "Verifies the main chat API. If this is unhealthy, confirm your server URL, API key, and core logs.",
+      "ragDescription": "Powers Knowledge search & retrieval. If this is unhealthy, ensure RAG is enabled and the knowledge index has been built on your server.",
+      "audioDescription": "Covers text-to-speech and speech-to-text APIs. If this is unhealthy, confirm your audio endpoints are enabled and reachable.",
+      "embeddingsDescription": "Checks the embeddings and indexing services used for retrieval. If this is unhealthy, rebuild your embedding index or restart the worker.",
+      "metricsDescription": "Verifies metrics and monitoring endpoints. If this is unhealthy, metrics dashboards or alerting may be unavailable.",
+      "chatMetricsDescription": "Tracks chat analytics such as volume and latency. If this is unhealthy, chat metrics collection or endpoints may be failing.",
+      "mcpDescription": "Checks Model Context Protocol (MCP) tools. If this is unhealthy, external tools and plugins may not be available in chat.",
+      "coreDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "ragDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "audioDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "embeddingsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "metricsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "chatMetricsDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+      "mcpDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant"
+    }
+  },
+  "healthSummary": {
+    "diagnostics": "Health & diagnostics",
+    "diagnosticsTooltip": "Open detailed diagnostics to troubleshoot or inspect health checks.",
+    "fullDiagnosticsAria": "{{label}}. {{status}}. {{help}}",
+    "core": "Server",
+    "rag": "Knowledge",
+    "coreAria": "Server: server/API health",
+    "ragAria": "Knowledge: knowledge index health",
+    "coreOnline": "Server: Online",
+    "coreOffline": "Server: Offline",
+    "coreChecking": "Server: Checking…",
+    "ragReady": "Knowledge: Ready",
+    "ragOffline": "Knowledge: Offline",
+    "ragChecking": "Knowledge: Checking…",
+    "footerInfo": "These checks summarize the last successful ping to your tldw server and knowledge index."
+  },
+  "storage": {
+    "quotaFriendlyMessage": "Too many settings writes in a short period; please wait a few seconds and try again.",
+    "quotaTitle": "Storage limit reached",
+    "writeError": "Could not save settings",
+    "writeErrorDescription": "We couldn't save your settings. Please try again shortly."
+  },
+  "savedSuccessfully": "Settings saved",
+  "saveFailed": "Failed to save settings",
+  "siteAccessGranted": "Host permission granted for {{origin}}",
+  "onboarding": {
+    "title": "Welcome to tldw Browser Assistant— Let’s get you connected",
+    "description": "Connect this extension to your tldw server (a separate app running on your machine or server). We’ll walk through adding the URL, API key, and checking that everything is reachable.",
+    "exploreWithoutServer": "You can explore the UI without a server; some features (chat, media ingest, Knowledge search) will stay disabled until you connect.",
+    "serverDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
+    "serverDocsCta": "Learn how tldw server works",
+    "learnMoreTldw": "Learn how tldw server works",
+    "serverUrl": {
+      "label": "Server URL",
+      "placeholder": "http://127.0.0.1:8000",
+      "help": "Default address for local installs: http://127.0.0.1:8000",
+      "emptyHint": "Enter your tldw server URL to enable Next.",
+      "invalid": "Enter a full URL such as http://127.0.0.1:8000.",
+      "invalidProtocol": "Use http or https URLs, for example http://127.0.0.1:8000.",
+      "ready": "We’ll enable Next once we can reach this address.",
+      "checking": "Checking reachability…",
+      "reachable": "Server responded successfully. You can continue.",
+      "unreachable": "We couldn’t reach this address yet. Double-check the URL or try again."
+    },
+    "authMode": {
+      "label": "Authentication Mode",
+      "single": "Single User (API Key)",
+      "multi": "Multi User (Login)"
+    },
+    "loginMethod": {
+      "label": "Login method",
+      "magic": "Magic link",
+      "password": "Password"
+    },
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "Enter your API key (or use the default demo key THIS-IS-A-SECURE-KEY-123-REPLACE-ME for local single-user setups)"
+    },
+    "magicLink": {
+      "missingEmail": "Enter your email to receive a magic link.",
+      "sent": "Magic link sent. Check your inbox.",
+      "email": {
+        "label": "Email",
+        "placeholder": "you@company.com"
+      },
+      "emailRequired": "Enter an email address to continue.",
+      "token": {
+        "label": "Magic link token",
+        "placeholder": "Paste the token from your email"
+      },
+      "tokenRequired": "Paste the magic link token to continue.",
+      "resend": "Resend magic link",
+      "send": "Send magic link",
+      "help": "We’ll email you a one-time sign-in link. Paste the token here to finish login."
+    },
+    "username": {
+      "label": "Username",
+      "placeholder": "Username"
+    },
+    "password": {
+      "label": "Password",
+      "placeholder": "Password"
+    },
+    "buttons": {
+      "next": "Next",
+      "back": "Back",
+      "continue": "Continue",
+      "recheck": "Recheck",
+      "finish": "Finish",
+      "finishAnyway": "Finish without connecting",
+      "skip": "Skip for now"
+    },
+    "connection": {
+      "label": "Connection:",
+      "unknown": "Unknown",
+      "connected": "Connected",
+      "failed": "Failed",
+      "continueAnyway": "You can finish setup now and explore the UI without a server. Chat, media ingest, and Knowledge search will remain limited until you connect a tldw server from Settings → tldw Server."
+    },
+    "rag": {
+      "label": "Knowledge search & retrieval:",
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "unknown": "Unknown",
+      "help": "Checks whether your server can search your notes, media, and other connected knowledge sources."
+    },
+    "connectionFailed": "Connection failed",
+    "defaults": {
+      "title": "Set your defaults",
+      "subtitle": "Pick a default provider and model for new chats.",
+      "loading": "Loading models...",
+      "empty": "No models are available yet. You can set this later in Settings → Models.",
+      "providerLabel": "Default API provider",
+      "providerAuto": "Auto (from model)",
+      "providerHelp": "Leave on Auto to use the provider attached to each model.",
+      "providerUnknown": "Provider",
+      "modelLabel": "Default model",
+      "modelPlaceholder": "Select a model",
+      "modelHelp": "This becomes the starting model when you open a new chat."
+    },
+    "progressAria": "Onboarding progress",
+    "stepLabel": {
+      "welcome": "Welcome",
+      "url": "Connect to your tldw server",
+      "auth": "Choose how you sign in",
+      "health": "Confirm connection & Knowledge"
+    },
+    "startServer": {
+      "title": "Before you start — Start your tldw server",
+      "body": "If you have not started your server yet, run one of these commands in the tldw_server repository, then return here.",
+      "copy": "Copy command",
+      "optionLocal": "Run locally with Python",
+      "optionLocalHint": "Run inside your tldw_server virtualenv from the server repository root.",
+      "optionDocker": "Run with Docker Compose (single-user)",
+      "optionDockerHint": "Run from the tldw_server repository root to start the API and database."
+    },
+    "path": {
+      "heading": "How would you like to get started?",
+      "hasServer": "I already run tldw_server",
+      "hasServerHelp": "Connect to an existing tldw_server you already run.",
+      "noServer": "I don’t have a server yet",
+      "noServerHelp": "Follow a setup guide for tldw_server, or start in demo mode.",
+      "demo": "Just explore with a local demo",
+      "demoHelp": "Try the workspace with sample data; connect your own server later.",
+      "noServerTitle": "No server yet? You can still explore.",
+      "noServerBody": "tldw_server is a separate, self-hosted app. You can follow the setup guide now, or come back later and continue in demo mode.",
+      "noServerOptionLocal": "Run locally with Docker or Python on your own machine.",
+      "noServerOptionRemote": "Deploy tldw_server to a remote VPS or managed hosting.",
+      "noServerOptionManaged": "Use a managed commercial tldw_server deployment when available.",
+      "openSetupGuide": "Open setup guide",
+      "useDemoFromNoServer": "Use local demo mode",
+      "remindMeLater": "Remind me later",
+      "demoTitle": "Explore the extension in demo mode",
+      "demoBody": "Demo mode lets you try chat, notes, and media with sample data. Server-dependent features like Knowledge search will stay limited until you connect your own tldw_server.",
+      "demoCta": "Use local demo mode"
+    },
+    "authModeHelp": "Single User (API Key) is recommended for personal or small-team servers. Multi User (Login) is for shared deployments where people sign in with usernames or SSO. Choose the mode that matches how your tldw_server is set up.",
+    "auth": {
+      "missingCredentials": "Enter both a username and password to continue.",
+      "missingApiKey": "API key is required."
+    },
+    "apiKeyHelp": "Find your API key in tldw_server → Settings → API Keys. Generate a key there and paste it here.",
+    "apiKeyRequired": "Enter your API key to continue.",
+    "usernameRequired": "Enter your username to continue.",
+    "passwordRequired": "Enter your password to continue.",
+    "authStepAria": "Step 2 of 3 — Choose how you sign in",
+    "confirmStepAria": "Step 3 of 3 — connection summary and next steps",
+    "nextSteps": {
+      "title": "You’re ready to go",
+      "subtitle": "From here you can open the sidepanel, ingest a page, or explore media and notes.",
+      "chatTitle": "Start chatting",
+      "chatBody": "Open the sidepanel and ask your first question.",
+      "chatCta": "Open sidepanel",
+      "ingestTitle": "Ingest your first page",
+      "ingestBody": "Use Quick ingest from the header to save the current tab to your server.",
+      "mediaTitle": "Explore media & notes",
+      "mediaBody": "Visit Media and Notes in Options to see what’s stored and searchable."
+    },
+    "headerShortcuts": "Show quick shortcuts in the header",
+    "footerHelp": "Once connected, you can revisit these settings anytime from the extension menu.",
+    "errors": {
+      "invalidCredentials": "Login failed. Check your username and password or confirm multi-user login is enabled on your tldw server.",
+      "forbidden": "Forbidden. Check that your user account has permission to log in.",
+      "serverUnreachable": "Couldn’t reach your tldw server. Check the server URL or open Health & diagnostics for more details.",
+      "generic": "Login failed. Open Health & diagnostics from the header to inspect server errors."
+    }
+  },
+  "tldw": {
+    "setupLink": "Set up server",
+    "loadError": "Unable to load tldw server settings. Check your connection and try again.",
+    "fields": {
+      "apiKey": {
+        "label": "API Key",
+        "placeholder": "Enter your API key (default demo key: THIS-IS-A-SECURE-KEY-123-REPLACE-ME for local single-user setups)",
+        "required": "Please enter your API key",
+        "extra": "Your tldw_server API key for authentication. For local single-user demos, you can use the default key THIS-IS-A-SECURE-KEY-123-REPLACE-ME unless you have changed it on the server."
+      },
+      "username": {
+        "label": "Username",
+        "placeholder": "Enter username",
+        "required": "Please enter your username"
+      },
+      "password": {
+        "label": "Password",
+        "placeholder": "Enter password",
+        "required": "Please enter your password"
+      },
+      "serverUrl": {
+        "label": "Server URL",
+        "placeholder": "http://127.0.0.1:8000",
+        "required": "Please enter the server URL",
+        "invalid": "Please enter a valid URL",
+        "extra": "The URL of your tldw_server instance. Default address for local installs: http://127.0.0.1:8000"
+      }
+    },
+    "errors": {
+      "invalidApiKey": "Invalid API key",
+      "forbidden": "Forbidden (check permissions)",
+      "apiKeyValidationFailed": "API key validation failed",
+      "serverUnreachable": "Server unreachable",
+      "serverUnreachableDetailed": "Server not reachable. Check that your tldw_server is running and that your browser can reach it, then try again. Health & diagnostics can help debug connectivity issues.",
+      "connectionFailedDetailed": "Connection failed. Please check your server URL and API key, then open Health & diagnostics for more details.",
+      "seeHealth": "Open Health & diagnostics for more details."
+    },
+    "about": {
+      "title": "About tldw server integration",
+      "description": "tldw server turns this extension into a full workspace for chat, Knowledge search, and media."
+    },
+    "advancedTimeouts": "Advanced Timeouts",
+    "requestTimeout": "Request Timeout (seconds)",
+    "streamingIdle": "Streaming Idle Timeout (seconds)",
+    "chatRequest": "Chat Request Timeout",
+    "chatStreamIdle": "Chat Stream Idle",
+    "ragRequest": "RAG Request Timeout",
+    "mediaRequest": "Media Request Timeout",
+    "uploadRequest": "Upload Request Timeout",
+    "timeoutPresetLabel": "Timeout profile",
+    "timeoutPresetBalanced": "Balanced",
+    "timeoutPresetExtended": "Extended",
+    "timeoutPresetCustom": "Custom",
+    "timeoutPresetHint": "Balanced works well for most setups. Extended adds extra headroom for slower networks or long-running jobs.",
+    "reset": "Reset to recommended",
+    "resetDone": "Reset to recommended defaults",
+    "serverNav": "tldw Server",
+    "serverConfigTitle": "tldw Server Configuration",
+    "serverLabel": "Server:",
+    "notConfigured": "Not configured",
+    "buttons": {
+      "health": "Health",
+      "recheck": "Recheck",
+      "testConnection": "Test Connection",
+      "grantSiteAccess": "Grant Site Access",
+      "login": "Login",
+      "logout": "Logout"
+    },
+    "loginRequired": {
+      "title": "Login Required",
+      "description": "Please login with your tldw_server credentials"
+    },
+    "loggedIn": {
+      "title": "Logged In",
+      "description": "You are currently logged in to tldw_server"
+    },
+    "authMode": {
+      "label": "Authentication Mode",
+      "single": "Single User (API Key)",
+      "multi": "Multi User (Login)"
+    },
+    "authModeChangeWarning": {
+      "title": "Change authentication mode?",
+      "content": "Switching authentication modes will clear your current credentials. You will need to re-enter them after saving."
+    },
+    "loginMethod": {
+      "label": "Login Method",
+      "magic": "Magic link",
+      "password": "Password"
+    },
+    "magicLink": {
+      "missingEmail": "Enter your email to receive a magic link.",
+      "sent": "Magic link sent. Check your inbox.",
+      "missingToken": "Paste the magic link token to continue.",
+      "email": {
+        "label": "Email",
+        "required": "Please enter your email",
+        "placeholder": "you@company.com"
+      },
+      "token": {
+        "label": "Magic link token",
+        "required": "Please paste your magic link token",
+        "placeholder": "Paste the token from your email"
+      },
+      "resend": "Resend magic link",
+      "send": "Send magic link",
+      "verify": "Verify & Login"
+    },
+    "hints": {
+      "requestTimeout": "Abort initial requests if no response within this time. Default: {{seconds}}s.",
+      "streamingIdle": "Abort streaming if no updates received within this time. Default: {{seconds}}s."
+    },
+    "login": {
+      "success": "Login successful!",
+      "failed": "Login failed",
+      "invalidCredentials": "Login failed. Check your username/password or confirm multi-user auth is enabled on your tldw server.",
+      "forbidden": "Forbidden. Check that this user has permission to log in.",
+      "serverUnreachable": "Couldn’t reach your tldw server. Check the server URL or open Health & diagnostics for more details.",
+      "generic": "Login failed. See Health & diagnostics for server details."
+    },
+    "logout": {
+      "success": "Logged out successfully",
+      "failed": "Logout failed"
+    },
+    "defaultKeyWarning": {
+      "title": "Default demo API key in use",
+      "body": "You are using the default demo API key for tldw_server. For production or shared deployments, rotate the key on your server and update it here. Continue at your own risk."
+    },
+    "connection": {
+      "success": "Server responded successfully. You can continue.",
+      "failed": "Connection failed. Please check your settings.",
+      "checking": "Checking connection and RAG health…",
+      "checksLabel": "Checks",
+      "coreChecking": "Core: checking…",
+      "coreOk": "Core: reachable",
+      "coreFailed": "Core: unreachable",
+      "coreUnknown": "Core: waiting",
+      "ragChecking": "RAG: checking…",
+      "ragHealthy": "RAG: healthy",
+      "ragUnhealthy": "RAG: needs attention",
+      "ragUnknown": "RAG: waiting"
+    },
+    "billing": {
+      "title": "Billing & usage",
+      "subtitle": "Manage your plan, billing cycle, and usage limits.",
+      "refresh": "Refresh",
+      "portal": "Billing portal",
+      "errorTitle": "Billing unavailable",
+      "plansError": "Unable to load plans",
+      "subscriptionError": "Unable to load subscription",
+      "subscriptionEmpty": "No active subscription yet. Choose a plan to get started.",
+      "currentPlan": "Current plan",
+      "renewal": "Renews",
+      "trialEnds": "Trial ends",
+      "cancelAtPeriodEnd": "Subscription will cancel at period end.",
+      "cancelAction": "Cancel at period end",
+      "resumeAction": "Resume subscription",
+      "missingPlan": "Select a plan to continue.",
+      "checkoutFailed": "Checkout failed.",
+      "portalFailed": "Unable to open billing portal.",
+      "cancelFailed": "Unable to cancel subscription.",
+      "cancelScheduled": "Subscription will cancel at period end.",
+      "cancelled": "Subscription cancelled.",
+      "resumeFailed": "Unable to resume subscription.",
+      "resumed": "Subscription resumed.",
+      "cancelTitle": "Cancel subscription?",
+      "cancelBody": "This will cancel your subscription at the end of the current billing period.",
+      "cancelConfirm": "Cancel at period end",
+      "resumeTitle": "Resume subscription?",
+      "resumeBody": "This will keep your subscription active and remove the scheduled cancellation.",
+      "resumeConfirm": "Resume subscription",
+      "status": {
+        "active": "Active",
+        "trialing": "Trialing",
+        "pastDue": "Past due",
+        "canceling": "Canceling",
+        "canceled": "Canceled",
+        "unknown": "Unknown"
+      },
+      "cycle": {
+        "monthly": "Monthly",
+        "yearly": "Yearly"
+      },
+      "selectPlan": "Select a plan",
+      "choosePlan": "Choose a plan",
+      "billingCycle": "Billing cycle",
+      "price": "Price",
+      "currentPlanCta": "Current plan",
+      "checkout": "Continue to checkout",
+      "noPlans": "No plans available yet.",
+      "usageTitle": "Usage",
+      "usageEmpty": "Usage data will appear after activity.",
+      "usageError": "Unable to load usage data",
+      "usage": {
+        "apiCallsDay": "API calls / day",
+        "llmTokensMonth": "LLM tokens / month",
+        "storageMb": "Storage (MB)",
+        "teamMembers": "Team members",
+        "transcriptionMinutes": "Transcription minutes / month",
+        "ragQueriesDay": "RAG queries / day",
+        "concurrentJobs": "Concurrent jobs"
+      },
+      "limitExceeded": "Usage has exceeded one or more plan limits.",
+      "limitWarning": "Approaching plan limits for some resources.",
+      "unknown": "—",
+      "unlimited": "Unlimited",
+      "customPrice": "Custom",
+      "invoices": {
+        "title": "Invoice history",
+        "total": "Total: {{count}}",
+        "loading": "Loading invoices…",
+        "error": "Unable to load invoices",
+        "empty": "No invoices yet.",
+        "pdf": "PDF",
+        "showing": "Showing {{count}} of {{total}}"
+      },
+      "invoice": {
+        "status": {
+          "paid": "Paid",
+          "failed": "Failed",
+          "pending": "Pending",
+          "unknown": "Unknown"
+        }
+      }
+    }
+  },
+  "evaluationsSettings": {
+    "title": "Evaluations",
+    "subtitle": "Configure defaults used by the Evaluations playground.",
+    "offline": "Connect to your tldw server to test Evaluations.",
+    "defaultType": "Default evaluation type",
+    "defaultModel": "Default target model",
+    "defaultRunConfig": "Default run config (JSON)",
+    "defaultDataset": "Default dataset id (optional)",
+    "specForType": "Spec preset for selected type",
+    "testCta": "Test Evaluations API",
+    "testOk": "Evaluations API reachable",
+    "testFail": "Unable to reach Evaluations API"
+  },
+  "systemNotifications": {
+    "importSuccess": "Imported data successfully",
+    "importError": "Import error",
+    "syncSuccess": "Firefox data synced successfully, You don't need to do this again",
+    "syncError": "Firefox data sync failed",
+    "invalidImage": "Please select a valid image file"
+  },
+  "prompts": {
+    "enterPrompt": "Enter a prompt.",
+    "enterPromptPlaceholder": "Enter a prompt.",
+    "enterFollowUpPrompt": "Enter a follow up prompt.",
+    "enterFollowUpPromptPlaceholder": "Enter a follow up prompt.",
+    "privateModeDescription": "Firefox Private Mode does not support saving data to IndexedDB. Please add prompts from a normal window."
+  },
+  "models": {
+    "privateModeDescription": "Firefox Private Mode does not support saving data to IndexedDB. Please add custom model from a normal window."
+  },
+  "serverOverview": {
+    "docsUrl": "https://github.com/rmusser01/tldw_browser_assistant"
+  }
+}

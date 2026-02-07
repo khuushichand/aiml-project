@@ -263,6 +263,7 @@ errors.log
 # Data files
 *.csv
 *.json
+!apps/packages/ui/src/assets/locale/*/settings.json
 !admin-ui/package.json
 all_summaries.txt
 all_transcriptions.json
