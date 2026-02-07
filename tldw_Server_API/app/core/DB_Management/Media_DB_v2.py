@@ -2821,6 +2821,21 @@ class MediaDatabase:
                                 logger.info(
                                     f"Database migrated from version {result['previous_version']} to {result['current_version']}"
                                 )
+                            elif status == "no_migrations":
+                                migrations_dir_used = (
+                                    (result or {}).get("migrations_dir")
+                                    or getattr(migrator, "migrations_dir", None)
+                                    or migrations_dir
+                                )
+                                available_versions = (result or {}).get("available_versions") or []
+                                missing_versions = (result or {}).get("missing_versions") or []
+                                raise SchemaError(  # noqa: TRY003
+                                    "No migration scripts available to upgrade database schema "
+                                    f"from version {current_db_version} to {target_version}. "
+                                    f"migrations_dir={migrations_dir_used}, "
+                                    f"discovered_versions={available_versions}, "
+                                    f"missing_versions={missing_versions}."
+                                )
                             else:
                                 logger.info(
                                     f"No migration scripts to apply (status={status}); proceeding with FTS/setup checks"

@@ -518,6 +518,7 @@ class DatabaseMigrator:
         """Migrate database to target version"""
         current_version = self.get_current_version()
         migrations = self.load_migrations()
+        available_versions = [migration.version for migration in migrations]
 
         if target_version is None:
             # Migrate to latest
@@ -552,11 +553,22 @@ class DatabaseMigrator:
             }
 
         if not to_apply:
+            missing_versions: list[int] = []
+            if direction == "up":
+                available_set = set(available_versions)
+                missing_versions = [
+                    version
+                    for version in range(current_version + 1, target_version + 1)
+                    if version not in available_set
+                ]
             return {
                 "status": "no_migrations",
                 "current_version": current_version,
                 "target_version": target_version,
-                "migrations_applied": []
+                "migrations_applied": [],
+                "migrations_dir": self.migrations_dir,
+                "available_versions": available_versions,
+                "missing_versions": missing_versions,
             }
 
         # Create backup before migration
