@@ -48,6 +48,7 @@ except _MCTS_IMPORT_EXCEPTIONS:  # pragma: no cover - optional in minimal builds
 import contextlib
 
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import PromptStudioDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 class MCTSOptimizer:
@@ -124,7 +125,7 @@ class MCTSOptimizer:
         trace_top_k = int(params.get("trace_top_k") or 3)
         # Debugging/observability of decisions
         import os as _os
-        debug_decisions = str(_os.getenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "false")).lower() in {"1", "true", "yes", "on"}
+        debug_decisions = is_truthy(_os.getenv("PROMPT_STUDIO_MCTS_DEBUG_DECISIONS", "false"))
 
         # Configure scorer
         if scorer_model:

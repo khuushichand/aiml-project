@@ -5,11 +5,11 @@ This adapter handles text translation using LLM.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatConfigurationError
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import TranslateConfig
@@ -46,7 +46,7 @@ async def run_translate_adapter(config: dict[str, Any], context: dict[str, Any])
         return {"error": "missing_input_text"}
 
     # Test mode no-op
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if is_test_mode():
         return {"text": text, "target_lang": target, "simulated": True}
 
     # Try OpenAI-compatible adapter first; fall back to returning input

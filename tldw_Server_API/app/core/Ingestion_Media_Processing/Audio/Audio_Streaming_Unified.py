@@ -35,6 +35,7 @@ from fastapi import WebSocketDisconnect
 from loguru import logger
 
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .Audio_Streaming_Parakeet import AudioBuffer, StreamingConfig
 
@@ -2218,7 +2219,7 @@ async def handle_unified_websocket(
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=None,  # use env default
-        compat_error_type=str(os.getenv("AUDIO_WS_COMPAT_ERROR_TYPE", "1")).strip().lower() in {"1", "true", "yes", "on"},
+        compat_error_type=is_truthy(os.getenv("AUDIO_WS_COMPAT_ERROR_TYPE", "1")),
         close_on_done=True,
         idle_timeout_s=_idle_timeout,
         labels={"component": "audio", "endpoint": "audio_unified_ws"},
@@ -2272,8 +2273,7 @@ async def handle_unified_websocket(
                 config.enable_partial = config_data.get("enable_partial", True)
                 raw_vad = config_data.get("enable_vad", config.enable_vad)
                 if isinstance(raw_vad, str):
-                    normalized_vad = raw_vad.strip().lower()
-                    raw_vad = normalized_vad in {"1", "true", "yes", "on"}
+                    raw_vad = is_truthy(raw_vad)
                 elif raw_vad is not None and not isinstance(raw_vad, (bool, int)):
                     logger.debug(
                         f"Unexpected type for enable_vad in config: {type(raw_vad).__name__}; "

@@ -114,6 +114,8 @@ def _audio_shim_attr(name: str):
             return False
         mod_name = getattr(value, "__module__", None)
         if isinstance(mod_name, str) and mod_name:
+            if mod_name.startswith("tldw_Server_API.tests."):
+                return True
             return not mod_name.startswith("tldw_Server_API.")
         return True
 

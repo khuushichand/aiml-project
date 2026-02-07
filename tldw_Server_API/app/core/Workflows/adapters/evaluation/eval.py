@@ -6,7 +6,6 @@ text readability, and context window sizes.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -14,6 +13,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_context_user_id,
 )
@@ -72,7 +72,7 @@ async def run_evaluations_adapter(config: dict[str, Any], context: dict[str, Any
         return value
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "geval":
             criteria = config.get("criteria") or config.get("metrics")
             if isinstance(criteria, str):

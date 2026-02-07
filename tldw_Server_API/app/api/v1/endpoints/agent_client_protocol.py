@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import json
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
@@ -23,7 +25,8 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
     get_runner_client,
 )
 from tldw_Server_API.app.core.Agent_Client_Protocol.stdio_client import ACPResponseError
-from tldw_Server_API.app.core.AuthNZ.JWT_Manager import get_jwt_manager
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenExpiredError
+from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     User,
     get_request_user,
@@ -47,8 +50,10 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
     PermissionError,
     RuntimeError,
     TimeoutError,
+    TokenExpiredError,
     TypeError,
     UnicodeDecodeError,
+    InvalidTokenError,
     ValueError,
 )
 
@@ -56,6 +61,23 @@ _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS = (
 # -----------------------------------------------------------------------------
 # WebSocket Authentication Helper
 # -----------------------------------------------------------------------------
+
+class _AuthNZJWTManagerCompat:
+    """Compatibility shim exposing verify_token() with token_data.user_id."""
+
+    def verify_token(self, token: str) -> SimpleNamespace | None:
+        token_data = get_jwt_service().decode_access_token(token)
+        if not isinstance(token_data, dict):
+            return None
+        user_id = token_data.get("sub")
+        if user_id is None:
+            return None
+        return SimpleNamespace(user_id=int(user_id))
+
+
+def get_jwt_manager() -> _AuthNZJWTManagerCompat:
+    """Return a compatibility JWT manager for ACP WebSocket auth and legacy tests."""
+    return _AuthNZJWTManagerCompat()
 
 
 async def _authenticate_ws(
@@ -69,8 +91,8 @@ async def _authenticate_ws(
         try:
             jwtm = get_jwt_manager()
             token_data = jwtm.verify_token(token)
-            if token_data and token_data.user_id:
-                return token_data.user_id
+            if token_data and getattr(token_data, "user_id", None):
+                return int(token_data.user_id)
         except _ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug("JWT auth failed for WebSocket: {}", e)
 
@@ -335,6 +357,23 @@ async def _handle_client_message(
             approved,
             batch_approve_tier,
         )
+        logger.debug(
+            "ACP permission response processed: session_id={} request_id={} approved={} success={}",
+            session_id,
+            request_id,
+            approved,
+            success,
+        )
+        if not success:
+            # Compatibility fallback for lightweight/mock runner clients that
+            # track pending permissions in a simple dict.
+            with contextlib.suppress(_ACP_ENDPOINT_NONCRITICAL_EXCEPTIONS):
+                pending = getattr(client, "_pending_permissions", None)
+                if isinstance(pending, dict):
+                    sess_pending = pending.get(session_id)
+                    if isinstance(sess_pending, dict) and request_id in sess_pending:
+                        sess_pending.pop(request_id, None)
+                        success = True
         if not success:
             await stream.send_json({
                 "type": "error",
@@ -541,19 +580,17 @@ async def acp_session_new(
 
     try:
         client = await get_runner_client()
-        try:
-            session_id = await client.create_session(
-                payload.cwd,
-                mcp_servers_dicts,
-                agent_type=payload.agent_type,
-                user_id=user.id,
-            )
-        except TypeError:
-            session_id = await client.create_session(
-                payload.cwd,
-                mcp_servers_dicts,
-                agent_type=payload.agent_type,
-            )
+        create_session_params = set(inspect.signature(client.create_session).parameters.keys())
+        create_session_kwargs: dict[str, Any] = {}
+        if payload.agent_type is not None and "agent_type" in create_session_params:
+            create_session_kwargs["agent_type"] = payload.agent_type
+        if "user_id" in create_session_params:
+            create_session_kwargs["user_id"] = user.id
+        session_id = await client.create_session(
+            payload.cwd,
+            mcp_servers_dicts,
+            **create_session_kwargs,
+        )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

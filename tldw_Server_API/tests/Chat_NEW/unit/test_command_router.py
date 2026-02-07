@@ -7,6 +7,12 @@ import pytest
 from tldw_Server_API.app.core.Chat import command_router
 
 
+@pytest.mark.unit
+def test_commands_enabled_accepts_single_letter_y(monkeypatch):
+    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "y")
+    assert command_router.commands_enabled() is True
+
+
 @pytest.mark.asyncio
 async def test_parse_and_dispatch_time(monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")

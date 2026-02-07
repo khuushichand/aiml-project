@@ -15,6 +15,8 @@ import socket
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 if TYPE_CHECKING:
     from loguru import Logger
 
@@ -80,7 +82,7 @@ def env_bool(name: str) -> bool | None:
     if v is None:
         return None
     v_lower = str(v).strip().lower()
-    if v_lower in {"1", "true", "yes", "on"}:
+    if is_truthy(v_lower):
         return True
     if v_lower in {"0", "false", "no", "off"}:
         return False

@@ -609,4 +609,4 @@ async def test_voice_registry_persistence_can_be_disabled(tmp_path, monkeypatch)
 
     listed = await manager.list_user_voices(user_id=99)
     assert any(v.voice_id == "runtime-only" for v in listed)
-    assert manager.get_user_voice_registry_db_path(99).exists() is False
+    assert not manager.get_user_voice_registry_db_path(99).exists()

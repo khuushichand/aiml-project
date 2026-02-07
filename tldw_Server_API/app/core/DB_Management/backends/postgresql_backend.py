@@ -21,6 +21,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
 from tldw_Server_API.app.core.DB_Management.sql_utils import split_sql_statements
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import (
     BackendFeatures,
@@ -336,7 +337,7 @@ class PostgreSQLBackend(DatabaseBackend):
         # Default: disabled; rely on set_config GUCs and row-level security predicates.
         # Role switching must be explicitly enabled via env.
         _role_env = os.getenv("TLDW_CONTENT_PG_ROLE_SWITCH", "").strip().lower()
-        allow_role_switch = False if _role_env == "" else _role_env in {"1", "true", "yes", "on"}
+        allow_role_switch = False if _role_env == "" else is_truthy(_role_env)
         allowed_roles_env = os.getenv("TLDW_CONTENT_PG_ROLE_WHITELIST", "").strip()
         allowed_roles = {r.strip() for r in allowed_roles_env.split(',') if r.strip()}
         if not allow_role_switch or not session_role or (allowed_roles and session_role not in allowed_roles):

@@ -2,9 +2,10 @@
 #
 # Integration tests for Skills context_integration module
 #
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Skills.context_integration import (

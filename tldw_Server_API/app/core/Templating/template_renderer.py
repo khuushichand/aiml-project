@@ -13,6 +13,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from loguru import logger
 
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.core.testing import is_truthy
 
 try:  # Python 3.9+
     from zoneinfo import ZoneInfo
@@ -77,7 +78,7 @@ def options_from_env() -> TemplateOptions:
         val = os.getenv(name)
         if val is None:
             return default
-        return str(val).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(str(val))
 
     def _int(name: str, default: int) -> int:
         raw = os.getenv(name)
@@ -107,7 +108,7 @@ def options_from_env() -> TemplateOptions:
         if cp and cp.has_section(section):
             try:
                 raw = cp.get(section, key, fallback=str(default))
-                return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+                return is_truthy(str(raw))
             except _TEMPLATE_NONCRITICAL_EXCEPTIONS:
                 return default
         return default

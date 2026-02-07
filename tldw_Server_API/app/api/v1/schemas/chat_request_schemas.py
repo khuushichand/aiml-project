@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 # 3rd-party imports
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from tldw_Server_API.app.core.testing import is_test_mode
+
 #
 # Local Imports
 
@@ -59,7 +61,7 @@ def _config_default_llm_provider(config_data: Optional[dict[str, Any]]) -> Optio
 
 _cfg_default_provider = _config_default_llm_provider(_config)
 _env_default_provider = os.getenv("DEFAULT_LLM_PROVIDER")
-_test_mode_enabled = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+_test_mode_enabled = is_test_mode()
 
 if _cfg_default_provider:
     DEFAULT_LLM_PROVIDER = _cfg_default_provider

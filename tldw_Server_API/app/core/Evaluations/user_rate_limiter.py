@@ -20,6 +20,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Import configuration management
 from tldw_Server_API.app.core.Evaluations.config_manager import (
@@ -970,7 +971,7 @@ def get_user_rate_limiter_for_user(user_id: int) -> UserRateLimiter:
     # In test environments, fall back to legacy global instance for compatibility with existing tests/mocks
     try:
         import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") or "PYTEST_CURRENT_TEST" in _os.environ:
+        if is_test_mode() or "PYTEST_CURRENT_TEST" in _os.environ:
             return user_rate_limiter
     except _USER_RATE_LIMIT_NONCRITICAL_EXCEPTIONS:
         pass

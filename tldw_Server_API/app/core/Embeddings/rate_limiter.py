@@ -12,6 +12,7 @@ from typing import Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Embeddings.audit_adapter import log_security_violation
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 try:
     # Resource Governor (optional; enabled via RG flags)
@@ -542,9 +543,7 @@ class AsyncRateLimiter:
             self.rate_limiter = get_rate_limiter()
         self.executor = None
         # Shadow-mode flag for comparing legacy vs RG behavior without breaking callers
-        self.shadow_enabled = (
-            os.getenv("RG_SHADOW_EMBEDDINGS", "0").lower() in {"1", "true", "yes", "on"}
-        )
+        self.shadow_enabled = env_flag_enabled("RG_SHADOW_EMBEDDINGS")
 
     async def _legacy_check_rate_limit(
         self,

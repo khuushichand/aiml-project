@@ -10,6 +10,7 @@ from tldw_Server_API.app.api.v1.endpoints import audio as audio_endpoints
 from tldw_Server_API.app.api.v1.endpoints.audio.audiobooks import router as audiobooks_router
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import get_usage_event_logger
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
+from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 
 pytestmark = pytest.mark.integration
 
@@ -39,6 +40,7 @@ def client_audio_audiobooks():
     app.dependency_overrides[get_usage_event_logger] = _usage_logger_override
     try:
         with TestClient(app) as client:
+            client.headers.update({"X-API-KEY": get_settings().SINGLE_USER_API_KEY})
             yield client
     finally:
         app.dependency_overrides.clear()

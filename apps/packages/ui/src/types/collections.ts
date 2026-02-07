@@ -70,6 +70,36 @@ export interface UpdateReadingItemRequest {
   title?: string
 }
 
+export type ReadingBulkAction =
+  | "set_status"
+  | "set_favorite"
+  | "add_tags"
+  | "remove_tags"
+  | "replace_tags"
+  | "delete"
+
+export interface ReadingItemsBulkRequest {
+  item_ids: string[]
+  action: ReadingBulkAction
+  status?: ReadingStatus
+  favorite?: boolean
+  tags?: string[]
+  hard?: boolean
+}
+
+export interface ReadingItemsBulkResult {
+  item_id: string
+  success: boolean
+  error?: string | null
+}
+
+export interface ReadingItemsBulkResponse {
+  total: number
+  succeeded: number
+  failed: number
+  results: ReadingItemsBulkResult[]
+}
+
 export interface ReadingListParams {
   page?: number
   size?: number

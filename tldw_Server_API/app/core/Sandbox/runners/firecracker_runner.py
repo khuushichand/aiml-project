@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from tldw_Server_API.app.core.testing import is_truthy
 from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
@@ -31,7 +32,7 @@ _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS = (
 
 
 def _truthy(v: str | None) -> bool:
-    return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    return is_truthy(v)
 
 
 def _real_enabled() -> bool:
@@ -77,7 +78,7 @@ def firecracker_available() -> bool:
     # Prefer explicit override for CI/tests; otherwise probe for 'firecracker' binary
     env = os.getenv("TLDW_SANDBOX_FIRECRACKER_AVAILABLE")
     if env is not None:
-        return env.lower() in {"1", "true", "yes", "on"}
+        return _truthy(env)
     if _real_enabled():
         return len(_preflight_errors()) == 0
     # When real mode is disabled, do not advertise availability by default.

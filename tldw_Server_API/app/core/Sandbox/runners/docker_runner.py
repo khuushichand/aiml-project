@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..models import RunPhase, RunSpec, RunStatus
 from ..network_policy import (
@@ -46,7 +47,7 @@ def docker_available() -> bool:
     # Prefer explicit override for CI/tests; otherwise probe PATH
     env = os.getenv("TLDW_SANDBOX_DOCKER_AVAILABLE")
     if env is not None:
-        return env.lower() in {"1", "true", "yes", "on"}
+        return is_truthy(env)
     return shutil.which("docker") is not None
 
 
@@ -61,7 +62,7 @@ class DockerRunner:
         pass
 
     def _truthy(self, v: str | None) -> bool:
-        return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(v)
 
     @staticmethod
     def _docker_version() -> str | None:

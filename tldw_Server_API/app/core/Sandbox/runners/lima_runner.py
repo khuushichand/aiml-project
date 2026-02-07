@@ -15,6 +15,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_truthy
 from ..models import RunPhase, RunSpec, RunStatus
 from ..streams import get_hub
 
@@ -39,14 +40,14 @@ _LIMA_RUNNER_NONCRITICAL_EXCEPTIONS = (
 
 
 def _truthy(v: str | None) -> bool:
-    return bool(v) and str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
+    return is_truthy(v)
 
 
 def lima_available() -> bool:
     """Check if limactl is available on the system."""
     env = os.getenv("TLDW_SANDBOX_LIMA_AVAILABLE")
     if env is not None:
-        return env.lower() in {"1", "true", "yes", "on"}
+        return _truthy(env)
     return shutil.which("limactl") is not None
 
 

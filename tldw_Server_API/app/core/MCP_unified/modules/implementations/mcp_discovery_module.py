@@ -15,6 +15,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.database import build_sqlite_in_clause, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
 from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, RequestContext
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..base import BaseModule, create_tool_definition
 
@@ -112,7 +113,7 @@ class MCPDiscoveryModule(BaseModule):
         elif isinstance(catalog_strict, (int, float)):
             params["catalog_strict"] = bool(catalog_strict)
         elif isinstance(catalog_strict, str):
-            params["catalog_strict"] = catalog_strict.strip().lower() in {"1", "true", "yes", "on"}
+            params["catalog_strict"] = is_truthy(catalog_strict)
 
         modules: list[str] = []
         module_single = args.get("module")

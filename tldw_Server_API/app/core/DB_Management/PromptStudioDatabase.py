@@ -3545,8 +3545,9 @@ class _SQLitePromptStudioDatabase(PromptsDatabase):
             # By default, avoid WAL for per-test temp DBs to reduce file artifact churn in CI.
             # Allow opting into WAL to mimic production via TLDW_PS_SQLITE_WAL=1
             try:
-                import os as _ps_os
-                _wal_requested = _ps_os.getenv("TLDW_PS_SQLITE_WAL", "0").lower() in {"1", "true", "yes", "on"}
+                from tldw_Server_API.app.core.testing import env_flag_enabled
+
+                _wal_requested = env_flag_enabled("TLDW_PS_SQLITE_WAL")
                 _mode = "WAL" if _wal_requested else "DELETE"
                 cursor.execute(f"PRAGMA journal_mode={_mode}")
             except _PROMPT_STUDIO_NONCRITICAL_EXCEPTIONS:

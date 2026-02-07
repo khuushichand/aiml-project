@@ -55,9 +55,13 @@ except _SETTINGS_IMPORT_EXCEPTIONS:
 
 try:
     from tldw_Server_API.app.core.testing import (
+        is_truthy as _is_truthy,
         is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
     )
 except _SETTINGS_IMPORT_EXCEPTIONS:
+    def _is_truthy(value: str | None) -> bool:
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
     def _is_explicit_pytest_runtime() -> bool:
         return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
@@ -1181,7 +1185,6 @@ def get_settings() -> Settings:
         # limiting.
         try:
             import os as _os
-            truthy = {"1", "true", "yes", "on"}
             falsy = {"0", "false", "no", "off"}
 
             def _env_bool(name: str) -> Optional[bool]:
@@ -1189,7 +1192,7 @@ def get_settings() -> Settings:
                 if raw is None:
                     return None
                 norm = str(raw).strip().lower()
-                if norm in truthy:
+                if _is_truthy(norm):
                     return True
                 if norm in falsy:
                     return False

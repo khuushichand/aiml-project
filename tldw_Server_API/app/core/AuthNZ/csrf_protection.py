@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.config import settings as global_settings
 from tldw_Server_API.app.core.DB_Management.backends.base import (
     DatabaseError as BackendDatabaseError,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _CSRF_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -511,7 +512,7 @@ def add_csrf_protection(app):
         import os as _os
         import sys as _sys
         if csrf_enabled is None and (
-            _os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes"}
+            env_flag_enabled("TEST_MODE")
             or "pytest" in _sys.modules
         ):
             csrf_enabled = False

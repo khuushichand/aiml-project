@@ -25,6 +25,7 @@ export type ServerCapabilities = {
   hasWebSearch: boolean
   hasFeedbackExplicit: boolean
   hasFeedbackImplicit: boolean
+  hasSkills: boolean
   hasGuardian: boolean
   hasSelfMonitoring: boolean
   specVersion: string | null
@@ -55,6 +56,7 @@ const defaultCapabilities: ServerCapabilities = {
   hasWebSearch: false,
   hasFeedbackExplicit: false,
   hasFeedbackImplicit: false,
+  hasSkills: false,
   hasGuardian: false,
   hasSelfMonitoring: false,
   specVersion: null
@@ -123,7 +125,9 @@ const fallbackSpec = {
       "/api/v1/writing/themes",
       "/api/v1/writing/tokenize",
       "/api/v1/writing/token-count",
-      "/api/v1/research/websearch"
+      "/api/v1/research/websearch",
+      "/api/v1/skills/",
+      "/api/v1/skills/context"
     ].map((p) => [p, {}])
   )
 }
@@ -236,6 +240,7 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
       has("/api/v1/writing/version") ||
       has("/api/v1/writing/capabilities"),
     hasWebSearch: has("/api/v1/research/websearch"),
+    hasSkills: has("/api/v1/skills/") || has("/api/v1/skills/context"),
     hasFeedbackExplicit: has("/api/v1/feedback/explicit"),
     hasFeedbackImplicit: has("/api/v1/rag/feedback/implicit"),
     hasGuardian:

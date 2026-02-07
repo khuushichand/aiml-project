@@ -6,12 +6,12 @@ This module includes the reranking adapter.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import RerankConfig
 
@@ -104,7 +104,7 @@ async def run_rerank_adapter(config: dict[str, Any], context: dict[str, Any]) ->
     top_k = max(1, min(top_k, 100))
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         # Simulate reranking by adding scores
         reranked = []
         for i, doc in enumerate(documents[:top_k]):

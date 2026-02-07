@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -20,6 +19,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import AdapterError
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     extract_openai_content,
     resolve_artifacts_dir,
@@ -148,7 +148,7 @@ async def run_pdf_extract_adapter(config: dict[str, Any], context: dict[str, Any
     vlm_detect_tables_only = True if vlm_detect_tables_only is None else bool(vlm_detect_tables_only)
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         simulated_content = f"[TEST_MODE PDF] Simulated text extraction from {pdf_uri}"
         simulated_chunks = [
             {"text": f"Chunk 1 from {pdf_uri}", "index": 0},
@@ -318,7 +318,7 @@ async def run_ocr_adapter(config: dict[str, Any], context: dict[str, Any]) -> di
     prompt_preset = config.get("prompt_preset")
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         return {
             "text": f"[TEST_MODE OCR] Simulated text extraction from {image_uri}",
             "format": output_format,

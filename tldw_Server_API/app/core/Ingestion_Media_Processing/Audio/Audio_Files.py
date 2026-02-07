@@ -55,6 +55,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Video.Video_DL_Ingestio
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.Utils import downloaded_files, get_project_root, logging, sanitize_filename
 
 
@@ -887,7 +888,7 @@ def process_audio_files(
                         err_msg = f"Audio conversion failed: {conv_err}"
                         update_progress(err_msg)
                         import os as _os_mod
-                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or _os_mod.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}) and Path(current_audio_path).suffix.lower() in {'.mp3', '.m4a'}:
+                        if ("PYTEST_CURRENT_TEST" in _os_mod.environ or env_flag_enabled("TESTING")) and Path(current_audio_path).suffix.lower() in {'.mp3', '.m4a'}:
                             item_result["status"] = "Success"
                             item_result.setdefault("warnings", [])
                             item_result["warnings"].append("Audio conversion unavailable in test; using placeholder transcript.")
@@ -966,7 +967,7 @@ def process_audio_files(
                         update_progress("Warning: Transcription generated no segments.")
                         is_test_mode = (
                             "PYTEST_CURRENT_TEST" in os.environ
-                            or os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+                            or env_flag_enabled("TESTING")
                         )
                         if is_test_mode:
                             # Keep test runs deterministic when silent or placeholder audio

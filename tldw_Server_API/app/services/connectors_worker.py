@@ -12,6 +12,7 @@ try:
     from tldw_Server_API.app.core.Jobs.manager import JobManager
 except ImportError:  # pragma: no cover - optional
     JobManager = None  # type: ignore
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _CONNECTOR_NONCRITICAL_EXCEPTIONS = (
     ArithmeticError,
@@ -70,7 +71,7 @@ async def run_connectors_worker(stop_event: asyncio.Event | None = None) -> None
 
 
 async def start_connectors_worker() -> asyncio.Task | None:
-    enabled = os.getenv("CONNECTORS_WORKER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("CONNECTORS_WORKER_ENABLED")
     if not enabled:
         return None
     stop = asyncio.Event()

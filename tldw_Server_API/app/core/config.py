@@ -996,9 +996,7 @@ def load_settings():
     SANDBOX_WS_POLL_TIMEOUT_SEC = _sbx_int("SANDBOX_WS_POLL_TIMEOUT_SEC", "ws_poll_timeout_sec", 30)
     # Optional: signed WS URLs for log_stream_url issuance
     SANDBOX_WS_SIGNED_URL_TTL_SEC = _sbx_int("SANDBOX_WS_SIGNED_URL_TTL_SEC", "ws_signed_url_ttl_sec", 60)
-    SANDBOX_WS_SIGNED_URLS = (
-        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
-    )(
+    SANDBOX_WS_SIGNED_URLS = is_truthy(
         os.getenv("SANDBOX_WS_SIGNED_URLS")
         or _sbx_get("ws_signed_urls", "false")
         or "false"
@@ -1007,19 +1005,17 @@ def load_settings():
     # Test-only helper: when true, the WS endpoint will publish synthetic
     # start/end frames to ensure subscribers see frames immediately. Disabled
     # by default; tests should set SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS=true.
-    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = (
-        lambda v: str(v).strip().lower() in {"1", "true", "yes", "on", "y"}
-    )(
+    SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS = is_truthy(
         os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
         or _sbx_get("ws_synthetic_frames_for_tests", "false")
         or "false"
     )
     # Advertise spec 1.1 support by default (backward-compatible with 1.0)
     SANDBOX_SUPPORTED_SPEC_VERSIONS = _sbx_list("SANDBOX_SUPPORTED_SPEC_VERSIONS", "supported_spec_versions", ["1.0", "1.1"])
-    SANDBOX_ENABLE_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+    SANDBOX_ENABLE_EXECUTION = is_truthy(
         os.getenv("SANDBOX_ENABLE_EXECUTION") or _sbx_get("enable_execution", "false") or "false"
     )
-    SANDBOX_BACKGROUND_EXECUTION = (lambda v: str(v).strip().lower() in {"1","true","yes","on","y"})(
+    SANDBOX_BACKGROUND_EXECUTION = is_truthy(
         os.getenv("SANDBOX_BACKGROUND_EXECUTION") or _sbx_get("background_execution", "false") or "false"
     )
     SANDBOX_IDEMPOTENCY_TTL_SEC = _sbx_int("SANDBOX_IDEMPOTENCY_TTL_SEC", "idempotency_ttl_sec", 600)
@@ -2045,7 +2041,7 @@ def _as_bool(val: object, default: bool) -> bool:
     if val is None:
         return default
     s = str(val).strip().lower()
-    if s in ("1", "true", "yes", "on", "y"):  # truthy
+    if is_truthy(s):  # truthy
         return True
     if s in ("0", "false", "no", "off", "n"):
         return False
@@ -3540,7 +3536,7 @@ def load_and_log_configs():
         def _as_bool(v: object, d: bool) -> bool:
             try:
                 s = str(v).strip().lower()
-                if s in {"1", "true", "yes", "on", "y"}:
+                if is_truthy(s):
                     return True
                 if s in {"0", "false", "no", "off", "n"}:
                     return False

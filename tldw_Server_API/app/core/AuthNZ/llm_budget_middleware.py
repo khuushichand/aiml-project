@@ -15,6 +15,7 @@ from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_ha
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, get_settings_generation
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import get_key_limits
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _LLM_BUDGET_PARSE_EXCEPTIONS = (TypeError, ValueError, UnicodeError, json.JSONDecodeError)
 _LLM_BUDGET_NONCRITICAL_EXCEPTIONS = (
@@ -155,7 +156,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
         # Optional debug toggle for diagnosis. Enabled automatically in pytest contexts.
         _mw_debug = (
-            os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+            env_flag_enabled("BUDGET_MW_DEBUG")
             or os.getenv("PYTEST_CURRENT_TEST") is not None
         )
         if _mw_debug:

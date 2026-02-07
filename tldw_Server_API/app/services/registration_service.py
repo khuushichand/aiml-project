@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService, ge
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.testing import is_test_mode
 
 #######################################################################################################################
 #
@@ -402,7 +403,7 @@ class RegistrationService:
                 )
 
                 if not directories_created:
-                    if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                    if is_test_mode():
                         logger.warning(f"TEST_MODE: Skipping directory creation failure for user {user_id}")
                     else:
                         raise DirectoryCreationError(

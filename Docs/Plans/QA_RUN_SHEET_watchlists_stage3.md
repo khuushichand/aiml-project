@@ -82,3 +82,23 @@ Notes:
 Overall Stage 3 Manual QA: PASS/FAIL
 Blocking Issues:
 ```
+
+## Latest Run (2026-02-07)
+
+```text
+Run Date: 2026-02-07
+Tester: Codex (assisted automation pass)
+Environment: local backend 127.0.0.1:8000 + frontend 127.0.0.1:3000, Node LTS via nvm, bunx Playwright
+
+Selection Highlight Flow: PASS
+Notes: selection panel rendered, add/update action path completed, highlight persisted for seeded quote.
+
+Stale Badge + Filters: PASS
+Notes: stale badge visible in Highlights tabpanel for patched stale state; quote visible under filtered search.
+
+Notes Autosave + Dirty Protection: PASS
+Notes: notes transitioned Unsaved -> Saved and persisted after drawer close/reopen.
+
+Overall Stage 3 Manual QA: PASS
+Blocking Issues: None in Stage 3 scope.
+```

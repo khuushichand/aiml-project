@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import (
     WatchlistRuleRecord,
 )
 from tldw_Server_API.app.core.Monitoring.notification_service import get_notification_service
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 @dataclass
@@ -118,7 +119,7 @@ class TopicMonitoringService:
         raw = monitoring_cfg.get("enabled") if isinstance(monitoring_cfg, dict) else None
         if raw is None:
             raw = os.getenv("MONITORING_ENABLED", "false")
-        return str(raw).strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(str(raw))
 
     def _resolve_max_scan_chars(self) -> int:
         default = 200000

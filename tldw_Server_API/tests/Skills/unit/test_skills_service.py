@@ -2,18 +2,19 @@
 #
 # Unit tests for the SkillsService class
 #
-import pytest
 import tempfile
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+
+import pytest
 
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
-from tldw_Server_API.app.core.Skills.skills_service import SkillsService, SkillMetadata
 from tldw_Server_API.app.core.Skills.exceptions import (
-    SkillNotFoundError,
     SkillConflictError,
+    SkillNotFoundError,
     SkillValidationError,
 )
+from tldw_Server_API.app.core.Skills.skills_service import SkillMetadata, SkillsService
 
 
 class TestSkillMetadata:
@@ -482,11 +483,11 @@ Content""")
             service._sync_registry = types.MethodType(counting_sync, service)
 
             # First call triggers sync
-            payload = service.get_context_payload()
+            service.get_context_payload()
             first_count = sync_count
 
             # Second call (within debounce window) should skip actual scan
-            payload2 = service.get_context_payload()
+            service.get_context_payload()
             assert sync_count == first_count + 1  # Called, but debounce returns early inside
         finally:
             chacha_db.close_connection()
@@ -511,8 +512,9 @@ class TestSkillSchemaValidation:
 
     def test_supporting_files_count_limit(self):
         """Regression Bug 7: too many supporting files should be rejected."""
-        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
         import pydantic
+
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
 
         files = {f"file{i:02d}.md": "content" for i in range(25)}
         with pytest.raises(pydantic.ValidationError, match="Too many supporting files"):
@@ -520,11 +522,73 @@ class TestSkillSchemaValidation:
 
     def test_supporting_files_aggregate_limit(self):
         """Regression Bug 7: total size exceeding 5MB should be rejected."""
-        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
         import pydantic
+
+        from tldw_Server_API.app.api.v1.schemas.skills_schemas import SkillCreate
 
         # Create files that individually pass (< 500KB) but collectively exceed 5MB
         big_content = "x" * 400_000  # ~400KB each
         files = {f"file{i:02d}.md": big_content for i in range(15)}  # ~6MB total
         with pytest.raises(pydantic.ValidationError, match="Total supporting files size"):
             SkillCreate(name="test-skill", content="content", supporting_files=files)
+
+
+class TestSeedBuiltinSkills:
+    """Tests for seed_builtin_skills method."""
+
+    @pytest.fixture
+    def temp_base_path(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    @pytest.fixture
+    def service(self, temp_base_path):
+        db_path = temp_base_path / "ChaChaNotes.db"
+        chacha_db = CharactersRAGDB(db_path=db_path, client_id="test_seed")
+        service = SkillsService(user_id=1, base_path=temp_base_path, db=chacha_db)
+        yield service
+        chacha_db.close_connection()
+
+    @pytest.mark.asyncio
+    async def test_seed_builtin_skills(self, service):
+        """Verify seeding creates built-in skills."""
+        seeded = await service.seed_builtin_skills()
+
+        assert len(seeded) >= 2
+        assert "summarize" in seeded
+        assert "code-review" in seeded
+
+        # Verify they exist
+        skill = await service.get_skill("summarize")
+        assert skill["name"] == "summarize"
+        assert "Summarize" in skill["content"]
+
+    @pytest.mark.asyncio
+    async def test_seed_builtin_skills_no_overwrite(self, service):
+        """Verify existing skills are not replaced when overwrite=False."""
+        # Seed once
+        await service.seed_builtin_skills()
+        # Modify a skill
+        await service.update_skill("summarize", "Custom content")
+        # Seed again without overwrite
+        seeded = await service.seed_builtin_skills(overwrite=False)
+        assert "summarize" not in seeded
+
+        # Original modification should remain
+        skill = await service.get_skill("summarize")
+        assert "Custom content" in skill["content"]
+
+    @pytest.mark.asyncio
+    async def test_seed_builtin_skills_overwrite(self, service):
+        """Verify overwrite replaces existing skills."""
+        # Seed once
+        await service.seed_builtin_skills()
+        # Modify a skill
+        await service.update_skill("summarize", "Custom content")
+        # Seed again with overwrite
+        seeded = await service.seed_builtin_skills(overwrite=True)
+        assert "summarize" in seeded
+
+        # Should have original content again
+        skill = await service.get_skill("summarize")
+        assert "Summarize" in skill["content"]

@@ -1,15 +1,34 @@
 import pytest
 import uuid
+import pytest_asyncio
 
 from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
+from tldw_Server_API.app.core.AuthNZ.database import get_db_pool, reset_db_pool
 
 pytestmark = pytest.mark.integration
 
 
-@pytest.mark.asyncio
-async def test_api_key_rotation_and_audit_sqlite():
+@pytest_asyncio.fixture
+async def sqlite_authnz_pool(tmp_path, monkeypatch):
+    from tldw_Server_API.app.core.AuthNZ.api_key_manager import reset_api_key_manager
+
+    db_path = tmp_path / f"api_key_rotation_{uuid.uuid4().hex}.sqlite"
+    monkeypatch.setenv("AUTH_MODE", "single_user")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+    await reset_api_key_manager()
+    await reset_db_pool()
     pool = await get_db_pool()
+    try:
+        yield pool
+    finally:
+        await reset_api_key_manager()
+        await reset_db_pool()
+
+
+@pytest.mark.asyncio
+async def test_api_key_rotation_and_audit_sqlite(sqlite_authnz_pool):
+    pool = sqlite_authnz_pool
 
     # Ensure a user exists (minimal row)
     # Use a unique username/email per test run to avoid collisions with
@@ -27,7 +46,7 @@ async def test_api_key_rotation_and_audit_sqlite():
     user_row = await pool.fetchone("SELECT id FROM users WHERE username = ?", uname)
     user_id = user_row["id"] if isinstance(user_row, dict) else user_row[0]
 
-    mgr = APIKeyManager()
+    mgr = APIKeyManager(db_pool=pool)
     await mgr.initialize()
 
     # Create key
@@ -49,8 +68,8 @@ async def test_api_key_rotation_and_audit_sqlite():
 
 
 @pytest.mark.asyncio
-async def test_api_key_rotation_preserves_allowlists_and_metadata():
-    pool = await get_db_pool()
+async def test_api_key_rotation_preserves_allowlists_and_metadata(sqlite_authnz_pool):
+    pool = sqlite_authnz_pool
 
     uname = f"akuser_meta_{uuid.uuid4().hex[:8]}"
     email = f"{uname}@example.com"
@@ -65,7 +84,7 @@ async def test_api_key_rotation_preserves_allowlists_and_metadata():
     user_row = await pool.fetchone("SELECT id FROM users WHERE username = ?", uname)
     user_id = user_row["id"] if isinstance(user_row, dict) else user_row[0]
 
-    mgr = APIKeyManager()
+    mgr = APIKeyManager(db_pool=pool)
     await mgr.initialize()
 
     created = await mgr.create_api_key(

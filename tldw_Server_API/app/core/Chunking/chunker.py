@@ -20,6 +20,7 @@ from typing import Any, Optional, Union
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
 from .base import ChunkerConfig, ChunkingMethod, ChunkMetadata, ChunkResult
 from .constants import FRONTMATTER_SENTINEL_KEY
 from .exceptions import ChunkingError, InvalidChunkingMethodError, InvalidInputError
@@ -1381,8 +1382,7 @@ class Chunker:
         import os as _os
         _is_test_mode = (
             _os.getenv("PYTEST_CURRENT_TEST", "") != "" or
-            _os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or
-            _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            is_test_mode()
         )
 
         # Remove null bytes which could cause issues (preserve in test mode for property tests)

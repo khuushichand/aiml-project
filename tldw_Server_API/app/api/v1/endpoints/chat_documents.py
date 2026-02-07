@@ -46,6 +46,7 @@ from tldw_Server_API.app.core.Chat.document_generator import (
     GenerationStatus as GenStatus,
 )
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, InputError
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 router = APIRouter()
 
@@ -105,7 +106,7 @@ async def generate_document(
             _is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
         except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS:
             _is_pytest = False
-        _is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        _is_test_mode = is_test_mode()
 
         if request.api_key:
             logger.debug("Ignoring per-request api_key override for provider=%s", provider_name)
@@ -250,7 +251,7 @@ async def generate_document(
             stream_started_at = time.perf_counter()
             collected_chunks: list[str] = []
 
-            if str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+            if env_flag_enabled("STREAMS_UNIFIED"):
                 from tldw_Server_API.app.core.Streaming.streams import SSEStream
 
                 stream = SSEStream(labels={"component": "chat", "endpoint": "chat_doc_stream"})

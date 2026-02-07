@@ -20,4 +20,9 @@
 **Goal**: Add notes autosave and dirty-state safeguards to prevent losing edits when closing item detail.
 **Success Criteria**: Dirty indicator appears during edits, autosave runs, and close/navigation attempts do not silently drop pending note changes.
 **Tests**: Targeted UI tests for highlight/stale behavior (`HighlightCard.test.tsx`), manual QA run sheet (`Docs/Plans/QA_RUN_SHEET_watchlists_stage3.md`), and Playwright skeleton coverage (`apps/tldw-frontend/e2e/workflows/collections-stage3.spec.ts`).
-**Status**: In Progress
+**Status**: Complete
+
+## Stage 3 Closeout Evidence (2026-02-07)
+- Automated E2E: `bunx playwright test e2e/workflows/collections-stage3.spec.ts --reporter=line`
+- Environment: `nvm use --lts`, `TLDW_WEB_URL=http://127.0.0.1:3000`, `TLDW_SERVER_URL=http://127.0.0.1:8000`
+- Result: `3 passed`

@@ -5,6 +5,8 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
+
 try:
     from tldw_Server_API.app.core.config import settings
 except Exception:  # pragma: no cover - config import fallback
@@ -84,7 +86,7 @@ async def apply_prompt_studio_quota_policy(user_id: str) -> dict[str, int]:
     """Apply per-user Prompt Studio quotas from AuthNZ policy/DB overrides."""
     if not user_id:
         return {}
-    if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode():
         return {}
     try:
         user_id_int = int(str(user_id))

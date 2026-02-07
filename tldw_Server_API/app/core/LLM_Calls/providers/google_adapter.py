@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import ChatProvider
 
@@ -68,7 +69,7 @@ def _env_flag(name: str) -> bool:
     if value is None:
         return False
     lowered = value.strip().lower()
-    if lowered in {"1", "true", "yes", "on"}:
+    if is_truthy(lowered):
         return True
     return lowered not in {"0", "false", "no", "off", ""}
 

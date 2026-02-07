@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import extract_openai_content
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.rag._config import (
@@ -223,7 +223,7 @@ async def run_query_expand_adapter(config: dict[str, Any], context: dict[str, An
         domain_context = apply_template_to_string(str(domain_context_t), context) or str(domain_context_t)
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         # Simulate query expansion
         simulated_variations = [
             f"{query} (expanded)",

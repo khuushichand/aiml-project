@@ -12,6 +12,7 @@ from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.integration._config import EmailSendConfig
 
@@ -93,7 +94,7 @@ async def run_email_send_adapter(config: dict[str, Any], context: dict[str, Any]
     timeout = int(config.get("timeout", 30))
 
     # TEST_MODE: return simulated result without actually sending
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode():
         return {
             "sent": True,
             "recipients": to,

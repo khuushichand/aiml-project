@@ -8,6 +8,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_test_mode
 
 
 def _jobs_queue() -> str:
@@ -49,7 +50,7 @@ async def enqueue_embeddings_job_for_item(
     priority: int = 50,
 ) -> None:
     """Best-effort queueing of an embedding job for a collections item."""
-    if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes"}:
+    if is_test_mode():
         return
 
     text = (content or "").strip()

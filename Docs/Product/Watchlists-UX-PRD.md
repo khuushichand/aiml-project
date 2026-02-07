@@ -105,10 +105,10 @@ This PRD captures the remaining UX work for Content Collections after the core A
 **Goal**: Provide selection-based highlight creation, highlight list filtering, stale badges, and stronger notes autosave/dirty indicators.
 **Success Criteria**: Users can select text to create highlights, edit/delete highlights in-place, filter highlights by color/search, and see stale badges; notes show dirty state and do not lose edits on navigation.
 **Tests**: UI tests for highlight CRUD state changes and notes autosave/dirty indicator; manual QA for text selection flows.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 4: Output Template Editor and Bulk Item Actions
 **Goal**: Add a template editor with preview and integrate bulk actions in Items/Reading views.
 **Success Criteria**: Templates list/create/edit/preview flows work end-to-end; job editor can assign default templates; bulk actions support tag add/remove, status update, favorite toggle, delete, and output generation with progress/error summaries.
 **Tests**: UI tests for template preview rendering and bulk action summaries; manual QA for mixed-success scenarios.
-**Status**: Not Started
+**Status**: Complete

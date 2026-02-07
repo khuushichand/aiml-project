@@ -114,7 +114,8 @@ def auth_headers():
     }
 
 def _quote_ident(name: str) -> str:
-    return f"\"{name.replace('\"', '\"\"')}\""
+    escaped_name = name.replace('"', '""')
+    return f'"{escaped_name}"'
 
 def _row_name(row) -> str:
     if isinstance(row, (list, tuple)) and row:

@@ -38,7 +38,7 @@
 **Goal**: Ship safely with migration controls, feature flags where needed, and updated product/developer documentation.
 **Success Criteria**: PRD and setup docs are current, rollout checklist is complete, regression suite passes in CI, and any deprecations have explicit timelines.
 **Tests**: `python -m pytest -q`
-**Status**: Not Started
+**Status**: In Progress
 
 ---
 
@@ -137,3 +137,45 @@
   - Result: `16 passed`.
   - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/unit/test_voice_manager.py tldw_Server_API/tests/Storage/test_voice_storage_integration.py`
   - Result: `14 passed`.
+- Started Stage 7 rollout/backward-compat completion:
+  - Added voice-registry compatibility feature flag in `app/core/TTS/voice_manager.py`:
+    - `TTS_VOICE_REGISTRY_ENABLED` (default enabled)
+    - when disabled, manager uses runtime/filesystem-only sync path
+    - emits one-time deprecation warning for compatibility mode with removal target after `2026-12-31`
+    - persistent registry operations now fail-safe with warning logs (no hard failure on DB operation errors)
+  - Added test coverage for compatibility mode disable path:
+    - `tests/TTS_NEW/unit/test_voice_manager.py::test_voice_registry_persistence_can_be_disabled`
+  - Updated docs for rollout and compatibility mode:
+    - `tldw_Server_API/app/core/TTS/README.md`
+    - `tldw_Server_API/Config_Files/README.md`
+    - `Docs/User_Guides/TTS_Getting_Started.md`
+    - `Docs/Published/User_Guides/TTS_Getting_Started.md`
+    - `Docs/Product/TTS_Module_PRD.md`
+  - Added rollout checklist:
+    - `Docs/Operations/TTS_Voice_Registry_Rollout_Checklist.md`
+- Stage 7 validation runs:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/unit/test_voice_manager.py tldw_Server_API/tests/TTS_NEW/unit/test_voice_registry_db.py tldw_Server_API/tests/Storage/test_voice_storage_integration.py tldw_Server_API/tests/TTS_NEW/integration/test_custom_voice_resolution.py tldw_Server_API/tests/TTS_NEW/integration/test_voice_routes_rate_limit.py`
+  - Result: `20 passed`.
+  - `.venv/bin/python -m pytest -q`
+  - Result: collection interrupted with pre-existing repository test issues outside Stage 7 scope:
+    - import-file mismatch in `tests/Audiobooks/unit/test_tts_provider_inference.py` vs `tests/Audio/test_tts_provider_inference.py`
+    - indentation errors in `tests/Evaluations/integration/test_ocr_pdf_dots_backend_integration.py` and `tests/Evaluations/integration/test_ocr_pdf_dots_backend_vllm_accuracy.py`
+    - syntax error in `tests/prompt_studio/conftest.py` (f-string with backslash in expression)
+- Stage 7 follow-up on full-suite blockers:
+  - Fixed previously blocking collection issues:
+    - added test package markers to disambiguate duplicate module basenames:
+      - `tests/Audio/__init__.py`
+      - `tests/Audiobooks/__init__.py`
+      - `tests/Audiobooks/unit/__init__.py`
+    - corrected indentation/import formatting in:
+      - `tests/Evaluations/integration/test_ocr_pdf_dots_backend_integration.py`
+      - `tests/Evaluations/integration/test_ocr_pdf_dots_backend_vllm_accuracy.py`
+    - corrected identifier quoting helper syntax in:
+      - `tests/prompt_studio/conftest.py`
+  - Verified clean collection on previously failing paths:
+    - `.venv/bin/python -m pytest -q --collect-only tldw_Server_API/tests/Audio/test_tts_provider_inference.py tldw_Server_API/tests/Audiobooks/unit/test_tts_provider_inference.py tldw_Server_API/tests/Evaluations/integration/test_ocr_pdf_dots_backend_integration.py tldw_Server_API/tests/Evaluations/integration/test_ocr_pdf_dots_backend_vllm_accuracy.py tldw_Server_API/tests/prompt_studio`
+    - Result: `356 tests collected` (no collection errors).
+  - Re-ran broader suite with early-stop:
+    - `.venv/bin/python -m pytest -q --maxfail=1`
+    - Result: collection succeeded; run stopped on first runtime failure outside Stage 7 scope:
+      - `tests/Admin/test_admin_watchlists_org_settings.py::test_admin_update_org_watchlists_settings` returning `500 failed_to_fetch_org_watchlists_settings`.

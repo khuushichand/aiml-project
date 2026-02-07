@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
+
 from .manager import JobManager
 
 CancelCheck = Callable[[dict[str, Any]], Awaitable[bool]]
@@ -62,10 +64,7 @@ class WorkerSDK:
         self._sleep = asyncio.sleep
         # Detect test mode for more responsive sleeps and optional iteration caps
         try:
-            self._test_mode = any(
-                str(os.getenv(k, "")).strip().lower() in {"1", "true", "yes", "on"}
-                for k in ("TEST_MODE", "TLDW_TEST_MODE")
-            )
+            self._test_mode = is_test_mode()
         except (TypeError, ValueError):
             self._test_mode = False
         try:

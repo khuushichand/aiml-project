@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _RATE_LIMITER_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -548,7 +549,7 @@ def initialize_rate_limiter(config: Optional[RateLimitConfig] = None) -> Convers
         config = config or RateLimitConfig()
         # Test-mode overrides via environment for deterministic integration testing
         try:
-            if os.getenv("TEST_MODE", "").lower() == "true":
+            if is_test_mode():
                 per_user = os.getenv("TEST_CHAT_PER_USER_RPM")
                 per_conv = os.getenv("TEST_CHAT_PER_CONVERSATION_RPM")
                 global_rpm = os.getenv("TEST_CHAT_GLOBAL_RPM")

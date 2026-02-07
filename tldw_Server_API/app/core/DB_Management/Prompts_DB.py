@@ -44,6 +44,8 @@ from typing import Any, Optional, Union
 from loguru import logger
 from loguru import logger as logging
 
+from tldw_Server_API.app.core.testing import is_test_mode
+
 #
 # Local Imports
 #
@@ -1671,9 +1673,11 @@ class PromptsDatabase:
         # --- FTS search using subqueries, with robust fallback ---
         used_fts = False
         fts_error = False
-        import os as _os
         # Prefer Python-side normalization only in TEST_MODE and when caller didn't specify fields
-        prefer_naive = ((_os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")) and ((original_fields is None) or (isinstance(original_fields, list) and len(original_fields) == 0)))
+        prefer_naive = (
+            is_test_mode()
+            and ((original_fields is None) or (isinstance(original_fields, list) and len(original_fields) == 0))
+        )
 
         if search_query and search_fields and not prefer_naive:
             matching_prompt_ids = set()

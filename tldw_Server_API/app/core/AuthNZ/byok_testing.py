@@ -17,15 +17,13 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.LLM_Calls.adapter_registry import get_registry
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import normalize_provider
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import list_registered_providers
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _INVALID_TEST_KEY_PREFIXES = ("invalid-", "test-invalid-", "bad-key-", "dummy-invalid-")
 
 
 def _is_test_mode() -> bool:
-    return (
-        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
+    return is_test_mode() or os.getenv("PYTEST_CURRENT_TEST") is not None
 
 
 def is_obviously_invalid_key(api_key: str) -> bool:

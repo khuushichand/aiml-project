@@ -139,4 +139,58 @@ describe("TldwApiClient reading import/export stage 2 wiring", () => {
     expect(requestArg.path).toContain("include_highlights=true")
     expect(requestArg.path).toContain("include_notes=false")
   })
+
+  it("calls reading items bulk endpoint and normalizes response shape", async () => {
+    mocks.bgRequest.mockResolvedValueOnce({
+      total: 2,
+      succeeded: 1,
+      failed: 1,
+      results: [
+        { item_id: 101, success: true },
+        { item_id: 202, success: false, error: "item_not_found" }
+      ]
+    })
+
+    const client = new TldwApiClient()
+    const result = await client.bulkUpdateReadingItems({
+      item_ids: ["101", "202"],
+      action: "add_tags",
+      tags: ["research"]
+    })
+
+    expect(mocks.bgRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/api/v1/reading/items/bulk",
+        method: "POST",
+        body: {
+          item_ids: [101, 202],
+          action: "add_tags",
+          status: undefined,
+          favorite: undefined,
+          tags: ["research"],
+          hard: undefined
+        }
+      })
+    )
+    expect(result).toEqual({
+      total: 2,
+      succeeded: 1,
+      failed: 1,
+      results: [
+        { item_id: "101", success: true, error: null },
+        { item_id: "202", success: false, error: "item_not_found" }
+      ]
+    })
+  })
+
+  it("rejects reading items bulk calls without numeric ids", async () => {
+    const client = new TldwApiClient()
+    await expect(
+      client.bulkUpdateReadingItems({
+        item_ids: ["abc", "-1"],
+        action: "delete"
+      })
+    ).rejects.toThrow("item_ids_required")
+    expect(mocks.bgRequest).not.toHaveBeenCalled()
+  })
 })

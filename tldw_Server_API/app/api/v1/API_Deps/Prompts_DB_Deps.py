@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.Prompt_Management.Prompts_Interop import (
     PromptsDatabase,
     SchemaError,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 #
 # Local Imports
@@ -252,7 +253,7 @@ async def get_prompts_db_for_user(
     # In test mode, isolate DB per app instance to avoid cross-test conflicts
     salt = ""
     try:
-        if os.environ.get("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             if not hasattr(request.app.state, "prompts_db_salt"):
                 request.app.state.prompts_db_salt = _uuid.uuid4().hex
             salt = str(request.app.state.prompts_db_salt)

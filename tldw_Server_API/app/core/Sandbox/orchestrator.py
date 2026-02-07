@@ -15,6 +15,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .models import RunPhase, RunSpec, RunStatus, Session, SessionSpec
 from .policy import SandboxPolicy, SandboxPolicyConfig
@@ -508,7 +509,12 @@ class SandboxOrchestrator:
         ws = Path(str(root)) / str(user_id) / "sessions" / session_id / "workspace"
         ws.mkdir(parents=True, exist_ok=True)
         try:
-            bind_workspace = str(os.getenv("SANDBOX_DOCKER_BIND_WORKSPACE") or getattr(app_settings, "SANDBOX_DOCKER_BIND_WORKSPACE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            bind_workspace = is_truthy(
+                str(
+                    os.getenv("SANDBOX_DOCKER_BIND_WORKSPACE")
+                    or getattr(app_settings, "SANDBOX_DOCKER_BIND_WORKSPACE", "")
+                ).strip().lower()
+            )
             if bind_workspace:
                 os.chmod(ws, 0o777)
         except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:

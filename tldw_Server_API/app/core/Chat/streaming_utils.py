@@ -21,6 +21,7 @@ from typing import Any, Optional, Union
 from loguru import logger
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 _STREAMING_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -129,7 +130,7 @@ try:
         or _chat_config.get("chat_stream_include_metadata")
         or "true"
     )
-    CHAT_STREAM_INCLUDE_METADATA = str(_include_meta_raw).strip().lower() in {"1", "true", "yes", "on"}
+    CHAT_STREAM_INCLUDE_METADATA = is_truthy(_include_meta_raw)
 except (ValueError, TypeError) as exc:
     logger.debug(f"Failed to parse CHAT_STREAM_INCLUDE_METADATA, using default: {exc}")
     CHAT_STREAM_INCLUDE_METADATA = True

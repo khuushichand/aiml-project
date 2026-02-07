@@ -22,6 +22,8 @@ except (ImportError, AttributeError):  # v1 fallback
 from loguru import logger
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+
 _MCP_CONFIG_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
     LookupError,
@@ -424,7 +426,7 @@ class MCPConfig(BaseSettings):
         try:
             # Optional opt-out to inherit global logger configuration
             import os as _os
-            if _os.getenv("MCP_INHERIT_GLOBAL_LOGGER", "").lower() in {"1","true","yes","on"}:
+            if env_flag_enabled("MCP_INHERIT_GLOBAL_LOGGER"):
                 return
         except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:
             pass
@@ -509,7 +511,7 @@ def validate_config() -> bool:
         test_mode = False
         try:
             test_mode = (
-                os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+                is_test_mode()
                 or bool(os.getenv("PYTEST_CURRENT_TEST"))
             )
         except _MCP_CONFIG_NONCRITICAL_EXCEPTIONS:

@@ -51,6 +51,13 @@ jobs:
 
       - name: Cache pip
         uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-
 
       - name: Print server log (single-user)
         if: failure()
@@ -69,14 +76,9 @@ jobs:
       - name: Upload server log (single-user)
         if: failure()
         uses: actions/upload-artifact@v6
-
         with:
-          path: |
-            ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
-            ${{ runner.os }}-pip-
+          name: server-log-single-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: server-single.log
 
       - name: Install dependencies
         run: |

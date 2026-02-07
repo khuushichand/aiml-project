@@ -12,6 +12,7 @@ import uuid
 from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
+from tldw_Server_API.app.core.testing import is_truthy
 
 try:
     import redis as _redis_lib
@@ -535,7 +536,7 @@ class RunStreamHub:
         try:
             # Redis fan-out must be explicitly enabled for sandbox streams.
             toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower()
-            if toggle_env not in {"1", "true", "yes", "on", "y"}:
+            if not is_truthy(toggle_env):
                 return
             # Resolve URL
             url = os.getenv("SANDBOX_REDIS_URL") or os.getenv("REDIS_URL")

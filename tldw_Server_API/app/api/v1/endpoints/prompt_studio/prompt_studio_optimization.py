@@ -60,6 +60,7 @@ from tldw_Server_API.app.core.Logging.log_context import (
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.job_types import JobType
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter import PromptStudioJobsAdapter
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.monitoring import prompt_studio_metrics
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 _OPTIMIZATION_NONCRITICAL_EXCEPTIONS = (
@@ -367,7 +368,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             return env in {"dev", "development", "local", "debug"}
 
         def _flag(name: str, default: str = "false") -> bool:
-            return str(_os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(_os.getenv(name, default))
 
         _mcts_enabled = _flag("PROMPT_STUDIO_ENABLE_MCTS", "false") or (
             _flag("PROMPT_STUDIO_ENABLE_MCTS_CANARY", "true") and _is_dev_env()
@@ -752,7 +753,7 @@ async def create_optimization(
     except DatabaseError as exc:
         logger.error(f"Database error creating optimization: {exc}")
         import os as _os
-        if _os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create optimization: {exc}",

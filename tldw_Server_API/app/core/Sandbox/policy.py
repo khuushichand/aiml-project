@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass, field
 
 from tldw_Server_API.app.core.config import settings as app_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .models import RunSpec, RuntimeType, SessionSpec, TrustLevel
 
@@ -101,7 +102,7 @@ class SandboxPolicyConfig:
                 if isinstance(v, bool):
                     return v
                 s = str(v).strip().lower()
-                return s in {"1", "true", "yes", "on", "y"}
+                return is_truthy(s)
             except _POLICY_NONCRITICAL_EXCEPTIONS:
                 return dv
         return cls(

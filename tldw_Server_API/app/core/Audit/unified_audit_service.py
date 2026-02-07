@@ -51,6 +51,7 @@ from uuid import uuid4
 # 3rd-Party Imports
 import aiosqlite
 from loguru import logger
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
 
 _AUDIT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -187,7 +188,7 @@ def _coerce_bool(value: Any, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(str(value))
 
 
 def _normalize_storage_mode(raw: Any) -> str:
@@ -749,7 +750,7 @@ class RiskScorer:
                         merged_thr[key] = v
                     elif isinstance(v, str):
                         normalized = v.strip().lower()
-                        if normalized in {"1", "true", "yes", "on", "y"}:
+                        if is_truthy(normalized):
                             merged_thr[key] = True
                             continue
                         if normalized in {"0", "false", "no", "off", "n"}:
@@ -987,7 +988,7 @@ class UnifiedAuditService:
         # direct/on-demand flushing via log_event/flush.
         try:
             self._test_mode = any(
-                (os.getenv(k, "").strip().lower() in {"1", "true", "yes", "on"})
+                env_flag_enabled(k)
                 for k in ("TEST_MODE", "TLDW_TEST_MODE")
             ) or (os.getenv("PYTEST_CURRENT_TEST") is not None)
         except _AUDIT_NONCRITICAL_EXCEPTIONS:
@@ -997,7 +998,7 @@ class UnifiedAuditService:
         # Configure PII detector and scan fields
         if enable_pii_detection:
             # Settings: AUDIT_PII_USE_RAG_PATTERNS, AUDIT_PII_PATTERNS (dict)
-            use_rag = bool(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower() in {"1","true","yes","on","y"})
+            use_rag = is_truthy(str(_app_settings.get("AUDIT_PII_USE_RAG_PATTERNS", "false")).strip().lower())
             # Pull overrides from settings if present (no dict-type gate; LazySettings isn't a dict)
             overrides = _app_settings.get("AUDIT_PII_PATTERNS")
             if overrides is not None and not isinstance(overrides, dict):

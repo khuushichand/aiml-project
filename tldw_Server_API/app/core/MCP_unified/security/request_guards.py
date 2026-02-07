@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from fastapi import HTTPException, Request
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode
 from ..config import get_config
 from .ip_filter import enforce_ip_allowlist as _enforce_ip_allowlist
 from .ip_filter import get_ip_access_controller
@@ -48,9 +49,8 @@ def enforce_client_certificate(request: Request) -> None:
     controller = get_ip_access_controller()
     peer_ip = getattr(request.client, "host", None) if request.client else None
     # Allow test harness peer during TEST_MODE, otherwise require trusted proxy
-    import os as _os
     if not controller._is_trusted_proxy(peer_ip):  # type: ignore[attr-defined]
-        if not (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"} and peer_ip in {"testclient", "127.0.0.1"}):
+        if not (is_test_mode() and peer_ip in {"testclient", "127.0.0.1"}):
             logger.warning(
                 "Rejected client-cert header from untrusted peer",
                 extra={"audit": True, "peer_ip": peer_ip, "path": request.url.path},
@@ -74,9 +74,8 @@ def enforce_client_certificate_headers(headers: Mapping[str, str], remote_addr: 
         return
     # Only accept client-certificate headers when the immediate peer is a trusted proxy
     controller = get_ip_access_controller()
-    import os as _os
     if not controller._is_trusted_proxy(remote_addr):  # type: ignore[attr-defined]
-        if not (_os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"} and remote_addr in {"testclient", "127.0.0.1"}):
+        if not (is_test_mode() and remote_addr in {"testclient", "127.0.0.1"}):
             raise HTTPException(status_code=403, detail="Client certificate required")
 
     if not _is_client_certificate_valid(headers, remote_addr=remote_addr):

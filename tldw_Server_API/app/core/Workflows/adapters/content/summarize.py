@@ -6,12 +6,12 @@ This module includes the summarization adapter.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.content._config import SummarizeConfig
 
@@ -79,7 +79,7 @@ async def run_summarize_adapter(config: dict[str, Any], context: dict[str, Any])
     chunk_options = config.get("chunk_options")
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         # Simulate summarization by truncating
         simulated_summary = text[:200] + "..." if len(text) > 200 else text
         simulated_summary = f"[Summary of {len(text)} chars] {simulated_summary}"

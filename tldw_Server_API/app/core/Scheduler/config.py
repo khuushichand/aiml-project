@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Prefer using the central project config when available so we place
 # the scheduler DB alongside other Databases by default.
@@ -41,7 +42,7 @@ def _default_scheduler_db_url() -> str:
 
     # Preserve test behavior
     if (os.getenv('PYTEST_CURRENT_TEST') is not None or
-            os.getenv('TEST_MODE', '').strip().lower() in {'1', 'true', 'yes', 'on'}):
+            is_test_mode()):
         import os as _os
         import tempfile
         return f"sqlite:///{tempfile.gettempdir()}/scheduler_{_os.getpid()}.db"

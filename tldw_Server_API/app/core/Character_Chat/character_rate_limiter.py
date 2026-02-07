@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.Character_Chat.character_limits import (
 from tldw_Server_API.app.core.Character_Chat.character_limits import (
     check_soft_message_limit as _check_soft_message_limit,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 
 # Optional Resource Governor integration (gated by global RG_ENABLED/config)
 RG_IMPORT_EXCEPTIONS = (ImportError, AttributeError)
@@ -286,7 +287,7 @@ def _rg_character_enforce_requests() -> bool:
     governs ingress routes.
     """
     val = os.getenv("RG_CHARACTER_CHAT_ENFORCE_REQUESTS", "0").strip().lower()
-    return val in {"1", "true", "yes", "on", "y"}
+    return is_truthy(val)
 
 
 async def _get_character_rg_governor():
@@ -385,12 +386,12 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
     global _rate_limiter
 
     # Honor TEST_MODE by returning permissive limits for guardrails.
-    test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+    test_mode = is_test_mode()
 
     # Security check: warn if TEST_MODE is enabled in what looks like production
     if test_mode:
         env_name = os.getenv("ENVIRONMENT", os.getenv("ENV", "")).lower()
-        prod_flag = os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        prod_flag = env_flag_enabled("tldw_production")
         if env_name in ("production", "prod", "live") or prod_flag:
             logger.critical(
                 "TEST_MODE is enabled in a production environment! "
@@ -432,7 +433,7 @@ def get_character_rate_limiter() -> CharacterRateLimiter:
             raw = os.getenv(name)
             if raw is not None:
                 s = str(raw).strip().lower()
-                if s in {"1", "true", "yes", "on"}:
+                if is_truthy(s):
                     return True
                 if s in {"0", "false", "no", "off"}:
                     return False

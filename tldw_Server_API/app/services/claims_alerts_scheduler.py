@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     create_media_database,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_truthy
 
 _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -40,11 +41,6 @@ _CLAIMS_ALERTS_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
-
-
-def _is_truthy(value: str | None) -> bool:
-    return str(value or "").lower() in {"1", "true", "yes", "on"}
-
 
 def _enumerate_sqlite_user_ids() -> list[int]:
     try:
@@ -147,7 +143,7 @@ async def run_claims_alerts_once(
 
 
 async def start_claims_alerts_scheduler() -> asyncio.Task | None:
-    enabled = _is_truthy(os.getenv("CLAIMS_ALERTS_SCHEDULER_ENABLED")) or bool(
+    enabled = is_truthy(os.getenv("CLAIMS_ALERTS_SCHEDULER_ENABLED")) or bool(
         settings.get("CLAIMS_ALERTS_SCHEDULER_ENABLED", False)
     )
     if not enabled:

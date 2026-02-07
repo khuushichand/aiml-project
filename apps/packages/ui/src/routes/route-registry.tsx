@@ -32,7 +32,8 @@ import {
   SquarePen,
   ImageIcon,
   SlidersHorizontal,
-  FileText
+  FileText,
+  Zap
 } from "lucide-react"
 import { ALL_TARGETS, type PlatformTarget } from "@/config/platform"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -188,6 +189,7 @@ const OptionCollections = lazy(() => import("./option-collections"))
 const OptionAudiobookStudio = lazy(() => import("./option-audiobook-studio"))
 const OptionWorkflowEditor = lazy(() => import("./option-workflow-editor"))
 const OptionACPPlayground = lazy(() => import("./option-acp-playground"))
+const OptionSkills = lazy(() => import("./option-skills"))
 const OptionSetup = lazy(() => import("./option-setup"))
 // OptionWorkspacePlayground and OptionChat are eagerly imported above
 
@@ -605,6 +607,18 @@ export const ROUTE_DEFINITIONS: RouteDefinition[] = [
       labelToken: "option:header.acpPlayground",
       icon: Bot,
       order: 12,
+      beta: true
+    }
+  },
+  {
+    kind: "options",
+    path: "/skills",
+    element: <OptionSkills />,
+    nav: {
+      group: "workspace",
+      labelToken: "option:header.skills",
+      icon: Zap,
+      order: 13,
       beta: true
     }
   },

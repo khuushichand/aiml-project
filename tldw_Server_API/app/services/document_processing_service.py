@@ -19,6 +19,7 @@ from tldw_Server_API.app.core.Chunking.chunker import Chunker
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_database
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Utils.Utils import logging
 
@@ -43,7 +44,7 @@ def _ensure_placeholder_enabled():
 
 def _file_security_strict() -> bool:
     import os as _os
-    return (_os.getenv("FILE_SECURITY_STRICT", "true").strip().lower() in {"1","true","yes","on"})
+    return is_truthy(_os.getenv("FILE_SECURITY_STRICT", "true"))
 
 async def process_documents(
     doc_urls: Optional[list[str]],

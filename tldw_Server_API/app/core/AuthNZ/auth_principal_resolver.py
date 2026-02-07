@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _RESOLVER_MODE_EXCEPTIONS = (
     AttributeError,
@@ -147,7 +148,7 @@ def _is_test_context() -> bool:
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
     for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled(flag):
             return True
     return False
 

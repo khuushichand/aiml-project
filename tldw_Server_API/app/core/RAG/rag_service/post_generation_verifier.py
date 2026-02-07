@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 if TYPE_CHECKING:
     from .claims import ClaimsEngine as ClaimsEngineType
@@ -138,7 +139,7 @@ class PostGenerationVerifier:
         if use_advanced_rewrites is None:
             try:
                 env_val = os.getenv("RAG_ADAPTIVE_ADVANCED_REWRITES", "true").strip().lower()
-                self._adv = env_val in {"1", "true", "yes", "on"}
+                self._adv = is_truthy(env_val)
             except Exception:  # noqa: BLE001 - env parsing best-effort
                 self._adv = True
         else:

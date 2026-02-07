@@ -9,6 +9,7 @@ from tldw_Server_API.app.core.AuthNZ.auth_governor import get_auth_governor
 from tldw_Server_API.app.core.AuthNZ.key_resolution import resolve_api_key_by_hash
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 
 async def enforce_llm_budget(request: Request) -> None:
@@ -19,7 +20,7 @@ async def enforce_llm_budget(request: Request) -> None:
     """
     settings = get_settings()
     _dbg = (
-        os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        env_flag_enabled("BUDGET_MW_DEBUG")
         or os.getenv("PYTEST_CURRENT_TEST") is not None
     )
     if not getattr(settings, "VIRTUAL_KEYS_ENABLED", True):

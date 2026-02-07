@@ -39,6 +39,7 @@ from tldw_Server_API.app.core.AuthNZ.scheduler import start_authnz_scheduler
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 from tldw_Server_API.app.core.AuthNZ.username_utils import normalize_admin_username
 from tldw_Server_API.app.core.DB_Management.Users_DB import ensure_user_directories, get_users_db
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -616,7 +617,7 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
     if effective_single_user_api_key and effective_single_user_api_key != settings.SINGLE_USER_API_KEY:
         need_reset = True
 
-    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+    test_mode = is_test_mode()
     if test_mode:
         need_reset = True
 
@@ -1444,10 +1445,7 @@ async def main(*, non_interactive: bool = False, test_setup: bool = False):
         if not bootstrap_ok:
             print("\n❌ Single-user bootstrap failed")
             logger.error("Single-user bootstrap failed during AuthNZ initialization")
-            test_mode = (
-                str(os.getenv("TEST_MODE", "")).strip().lower()
-                in {"1", "true", "yes", "y", "on"}
-            )
+            test_mode = is_test_mode()
             if not test_mode:
                 print("❌ Exiting due to single-user bootstrap failure.")
                 sys.exit(1)

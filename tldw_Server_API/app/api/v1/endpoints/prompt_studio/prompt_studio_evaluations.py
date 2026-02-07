@@ -48,6 +48,7 @@ from tldw_Server_API.app.core.LLM_Calls.adapter_utils import (
 )
 from tldw_Server_API.app.core.LLM_Calls.provider_metadata import provider_requires_api_key
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.evaluation_manager import EvaluationManager
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter(prefix="/api/v1/prompt-studio", tags=["prompt-studio"])
 import contextlib
@@ -81,10 +82,7 @@ _PROMPT_STUDIO_EVAL_NONCRITICAL_EXCEPTIONS = (
 
 
 def _is_prompt_studio_test_mode() -> bool:
-    return (
-        os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
+    return is_test_mode() or os.getenv("PYTEST_CURRENT_TEST") is not None
 
 @router.post(
     "/evaluations",
@@ -283,7 +281,7 @@ async def create_evaluation(
 
             # In test environments, run inline to ensure timely completion for polling tests
             import os as _os
-            if _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() == "true":
+            if _os.getenv("PYTEST_CURRENT_TEST") or is_test_mode():
                 # Finalize immediately for deterministic tests without background scheduling
                 test_ids = evaluation.test_case_ids or []
                 aggregate_metrics = {

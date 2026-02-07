@@ -14,6 +14,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     MetricType,
     get_metrics_registry,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -264,7 +265,7 @@ async def _audio_ws_authenticate(
 
     def _policy_close_code() -> int:
         flag = str(os.getenv("AUDIO_WS_QUOTA_CLOSE_1008", "0")).strip().lower()
-        return 1008 if flag in {"1", "true", "yes", "on"} else 4003
+        return 1008 if is_truthy(flag) else 4003
 
     async def _stream_error(message: str, code: int = 4401) -> None:
         if outer_stream:

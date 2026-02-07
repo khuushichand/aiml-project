@@ -189,12 +189,10 @@ class TestMigrations(unittest.TestCase):
 
     def test_no_migrations_upgrade_reports_diagnostics(self):
         """Upgrade with no migration files should expose diagnostic details."""
-        conn = sqlite3.connect(self.db_path)
-        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)")
-        conn.execute("DELETE FROM schema_version")
-        conn.execute("INSERT INTO schema_version (version) VALUES (8)")
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)")
+            conn.execute("DELETE FROM schema_version")
+            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (8,))
 
         result = self.migrator.migrate_to_version(20)
 

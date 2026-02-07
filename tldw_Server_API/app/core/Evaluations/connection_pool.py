@@ -21,6 +21,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from tldw_Server_API.app.core.Evaluations.config_manager import get_config
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Evaluations.metrics import get_metrics
 
 
@@ -590,8 +591,7 @@ class EvaluationsConnectionManager:
 
         # When running tests, prefer very small pool sizes/timeouts to avoid overhead
         try:
-            _tm = (os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")).strip().lower()
-            _testy = _tm in {"1", "true", "yes", "y", "on"}
+            _testy = is_test_mode()
         except Exception:
             _testy = False
 

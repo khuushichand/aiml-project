@@ -12,6 +12,7 @@ from tldw_Server_API.app.core.AuthNZ.database import DatabasePool, get_db_pool
 from tldw_Server_API.app.core.AuthNZ.repos.llm_provider_overrides_repo import (
     AuthnzLLMProviderOverridesRepo,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.AuthNZ.user_provider_secrets import (
     decrypt_byok_payload,
     loads_envelope,
@@ -71,7 +72,7 @@ def _normalize_optional_bool(raw: Any) -> bool | None:
         return bool(raw)
     if isinstance(raw, str):
         lowered = raw.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
+        if is_truthy(lowered):
             return True
         if lowered in {"0", "false", "no", "off"}:
             return False

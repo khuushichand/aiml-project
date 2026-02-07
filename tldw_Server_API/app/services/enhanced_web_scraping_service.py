@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import create_media_datab
 from tldw_Server_API.app.core.DB_Management.db_path_utils import get_user_media_db_path
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib import ContentMetadataHandler, is_content_page
 
@@ -130,7 +131,7 @@ class WebScrapingService:
             def _as_bool(v: Any, d: bool) -> bool:
                 try:
                     s = str(v).strip().lower()
-                    if s in {"1", "true", "yes", "on", "y"}:
+                    if is_truthy(s):
                         return True
                     if s in {"0", "false", "no", "off", "n"}:
                         return False

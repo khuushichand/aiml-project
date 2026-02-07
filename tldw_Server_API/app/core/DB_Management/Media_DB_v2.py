@@ -99,6 +99,7 @@ from tldw_Server_API.app.core.DB_Management.backends.query_utils import (
 )
 from tldw_Server_API.app.core.DB_Management.content_backend import get_content_backend, load_content_db_settings
 from tldw_Server_API.app.core.DB_Management.scope_context import get_scope
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Use application-wide logging configuration; avoid configuring here.
 
@@ -1282,7 +1283,7 @@ class MediaDatabase:
         try:
             test_mode = (
                 os.getenv("PYTEST_CURRENT_TEST") is not None
-                or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                or is_test_mode()
             )
         except _MEDIA_NONCRITICAL_EXCEPTIONS:
             test_mode = False

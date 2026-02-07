@@ -64,6 +64,7 @@ from tldw_Server_API.app.core.Embeddings.audit_adapter import (
     log_security_violation,
 )
 from tldw_Server_API.app.core.LLM_Calls.Summarization_General_Lib import analyze  # Assuming this is correct
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.prompt_loader import load_prompt
 from tldw_Server_API.app.core.Utils.Utils import logger  # Assuming this is 'logging' aliased or a custom logger
 
@@ -283,7 +284,7 @@ class ChromaDBManager:
         else:
             backend = str(chroma_client_settings_config.get("backend", "persistent")).lower()
             # Honor explicit config, and also support CHROMADB_FORCE_STUB for tests/CI
-            _env_force_stub = str(os.getenv("CHROMADB_FORCE_STUB", "")).strip().lower() in {"1", "true", "yes", "on"}
+            _env_force_stub = env_flag_enabled("CHROMADB_FORCE_STUB")
             use_stub = bool(
                 chroma_client_settings_config.get("use_in_memory_stub", False)
                 or backend == "stub"

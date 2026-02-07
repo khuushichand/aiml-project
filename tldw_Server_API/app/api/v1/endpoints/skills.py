@@ -491,6 +491,26 @@ async def execute_skill(
         ) from e
 
 
+@router.post(
+    "/seed",
+    response_model=dict,
+    status_code=status.HTTP_200_OK,
+    summary="Seed built-in example skills",
+    description="Copy built-in example skills (summarize, code-review) into the user's skills directory.",
+)
+async def seed_builtin_skills(
+    overwrite: bool = False,
+    service: SkillsService = Depends(get_skills_service),
+):
+    """Seed built-in example skills.
+
+    Args:
+        overwrite: If true, replace existing skills with same names.
+    """
+    seeded = await service.seed_builtin_skills(overwrite=overwrite)
+    return {"seeded": seeded, "count": len(seeded)}
+
+
 #
 # End of skills.py
 #######################################################################################################################

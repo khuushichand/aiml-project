@@ -301,3 +301,13 @@ def test_user_db_strict_test_bypass_context_accepts_single_letter_y(
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
     assert User_DB_Handling._is_strict_test_bypass_context() is True
+
+
+def test_auth_principal_resolver_is_test_context_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TEST_MODE", raising=False)
+    monkeypatch.setenv("TESTING", "y")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    assert auth_principal_resolver._is_test_context() is True

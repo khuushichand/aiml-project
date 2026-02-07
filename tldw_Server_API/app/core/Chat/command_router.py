@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Integrations import weather_providers
 from tldw_Server_API.app.core.Metrics import increment_counter
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
+from tldw_Server_API.app.core.testing import is_truthy
 
 _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
@@ -71,12 +72,12 @@ def _cfg() -> any | None:
 def _cfg_bool(env_name: str, cfg_key: str, fallback: bool) -> bool:
     v = os.getenv(env_name)
     if isinstance(v, str) and v.strip():
-        return v.strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(v)
     cp = _cfg()
     if cp and cp.has_section('Chat-Commands'):
         try:
             raw = cp.get('Chat-Commands', cfg_key, fallback=str(fallback))
-            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(raw)
         except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
             return fallback
     return fallback

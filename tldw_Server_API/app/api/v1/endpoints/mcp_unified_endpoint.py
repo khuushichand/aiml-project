@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import TokenData, get
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
 from tldw_Server_API.app.core.MCP_unified.security.request_guards import enforce_http_security
 from tldw_Server_API.app.core.MCP_unified.server import _is_authnz_access_token
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -306,12 +307,7 @@ async def get_current_user(
             try:
                 if _should_use_single_user_api_key_compat():
                     settings = get_settings()
-                    test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                    }
+                    test_mode = is_test_mode()
                     if test_mode:
                         # Guard against accidental production use of TEST_MODE-based
                         # SINGLE_USER_TEST_API_KEY shortcuts. Only honor TEST_MODE
@@ -326,7 +322,7 @@ async def get_current_user(
                             or os.getenv("ENV")
                             or ""
                         ).lower()
-                        prod_flag = os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+                        prod_flag = env_flag_enabled("tldw_production")
                         is_dev_ctx = bool(cfg and getattr(cfg, "debug_mode", False))
                         if os.getenv("PYTEST_CURRENT_TEST") is not None:
                             is_dev_ctx = True
@@ -1395,14 +1391,14 @@ async def create_token(
     Use the primary AuthNZ login flow to obtain a JWT, or enable this endpoint
     explicitly via MCP_ENABLE_DEMO_AUTH=1 for development/testing only.
     """
-    if os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() not in {"1", "true", "yes"}:
+    if not env_flag_enabled("MCP_ENABLE_DEMO_AUTH"):
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Direct MCP auth is disabled. Use AuthNZ bearer tokens.",
         )
 
     cfg = get_config()
-    test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+    test_mode = is_test_mode()
     if not cfg.debug_mode and not test_mode:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

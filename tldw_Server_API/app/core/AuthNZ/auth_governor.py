@@ -20,6 +20,7 @@ from loguru import logger
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.rate_limiter import get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.virtual_keys import is_key_over_budget
+from tldw_Server_API.app.core.testing import is_truthy
 
 _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -60,7 +61,7 @@ class AuthGovernor:
         if fail_open is None:
             # Default fail mode is closed unless explicitly set to open.
             env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "0").lower()
-            fail_open = env_val in {"1", "true", "yes", "on", "y"}
+            fail_open = is_truthy(env_val)
         try:
             result = await is_key_over_budget(api_key_id)
         except _AUTH_GOVERNOR_NONCRITICAL_EXCEPTIONS as exc:

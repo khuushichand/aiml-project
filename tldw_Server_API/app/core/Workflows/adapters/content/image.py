@@ -8,7 +8,6 @@ This module includes adapters for image operations:
 from __future__ import annotations
 
 import base64
-import os
 import time
 import uuid
 from typing import Any
@@ -16,6 +15,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     extract_openai_content,
     resolve_artifacts_dir,
@@ -126,7 +126,7 @@ async def run_image_gen_adapter(config: dict[str, Any], context: dict[str, Any])
     save_artifact = True if save_artifact is None else bool(save_artifact)
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         fake_id = str(uuid.uuid4())[:8]
         step_run_id = str(context.get("step_run_id") or f"test_image_gen_{int(time.time()*1000)}")
         out_dir = resolve_artifacts_dir(step_run_id)

@@ -7,6 +7,7 @@ including connection, message handling, and permission flows.
 
 import asyncio
 import json
+import time
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,21 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.runner_client import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _wait_for_permission_resolution(
+    runner_client: "MockRunnerClient",
+    session_id: str,
+    request_id: str,
+    timeout_s: float = 1.0,
+) -> bool:
+    """Poll for async websocket permission handling to update pending state."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if request_id not in runner_client._pending_permissions.get(session_id, {}):
+            return True
+        time.sleep(0.01)
+    return request_id not in runner_client._pending_permissions.get(session_id, {})
 
 
 class MockRunnerClient:
@@ -293,8 +309,10 @@ class TestACPPermissionFlow:
             })
 
             # Permission should be removed from pending
-            assert "perm-123" not in mock_get_runner_client._pending_permissions.get(
-                "test-session", {}
+            assert _wait_for_permission_resolution(
+                mock_get_runner_client,
+                "test-session",
+                "perm-123",
             )
 
     def test_permission_response_denied(
@@ -319,8 +337,10 @@ class TestACPPermissionFlow:
             })
 
             # Permission should be removed from pending
-            assert "perm-456" not in mock_get_runner_client._pending_permissions.get(
-                "test-session", {}
+            assert _wait_for_permission_resolution(
+                mock_get_runner_client,
+                "test-session",
+                "perm-456",
             )
 
     def test_permission_response_not_found(

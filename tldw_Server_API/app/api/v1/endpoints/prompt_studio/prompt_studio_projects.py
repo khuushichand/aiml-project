@@ -50,6 +50,7 @@ from tldw_Server_API.app.api.v1.schemas.prompt_studio_project import (
 )
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import ConflictError, DatabaseError, InputError
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensure_traceparent, get_ps_logger
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 ########################################################################################################################
@@ -308,7 +309,7 @@ async def list_projects(
     except DatabaseError as e:
         logger.error(f"Database error listing projects: {e}")
         detail = "Failed to list projects"
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -317,7 +318,7 @@ async def list_projects(
     except Exception as e:  # noqa: BLE001
         logger.exception("Unexpected error listing projects: {}", e)
         detail = "Failed to list projects"
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

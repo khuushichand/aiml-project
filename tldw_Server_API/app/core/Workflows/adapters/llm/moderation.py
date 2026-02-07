@@ -5,13 +5,13 @@ These adapters handle content moderation and policy checking.
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Chat.prompt_template_manager import apply_template_to_string
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import resolve_context_user_id
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.llm._config import (
@@ -66,7 +66,7 @@ async def run_moderation_adapter(config: dict[str, Any], context: dict[str, Any]
         return {"error": "missing_text"}
 
     # Test mode simulation
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes", "on"):
+    if is_test_mode():
         if action == "check":
             # Simulate: flag if "blocked" appears in text
             is_blocked = "blocked" in text.lower() or "unsafe" in text.lower()

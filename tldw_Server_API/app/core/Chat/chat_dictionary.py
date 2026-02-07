@@ -18,6 +18,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Templating.template_renderer import (
     TemplateContext,
     TemplateEnv,
@@ -44,7 +45,7 @@ def _truthy_env(name: str, default: bool = False) -> bool:
     val = os.getenv(name)
     if val is None:
         return default
-    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(val)
 
 
 def _templates_enabled() -> bool:
@@ -55,7 +56,7 @@ def _templates_enabled() -> bool:
         cp = load_comprehensive_config()
         if cp and cp.has_section('Chat-Templating'):
             raw = cp.get('Chat-Templating', 'enable_templates', fallback='false')
-            return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(raw)
     except _CHAT_DICT_NONCRITICAL_EXCEPTIONS:
         pass
     return False

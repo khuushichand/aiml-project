@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from tldw_Server_API.app.core.LLM_Calls.adapter_utils import ensure_app_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import EmbeddingsProvider
 
@@ -21,7 +22,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
         import os
         v = os.getenv("LLM_EMBEDDINGS_NATIVE_HTTP_OPENAI")
         # Default to False to preserve current behavior; can be flipped in CI later
-        return bool(v and v.lower() in {"1", "true", "yes", "on"})
+        return is_truthy(v)
 
     def _base_url(self, openai_cfg: dict[str, Any] | None = None) -> str:
         from tldw_Server_API.app.core.LLM_Calls.chat_calls import _resolve_openai_api_base

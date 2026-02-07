@@ -20,6 +20,7 @@ from fastapi import HTTPException, Request, status
 from loguru import logger
 
 from tldw_Server_API.app.core.Setup import setup_manager
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 # Treat these as local hostnames for the Host header check.
@@ -202,7 +203,7 @@ async def require_local_setup_access(request: Request) -> None:
     This keeps the Setup UI functional behind common local reverse proxies,
     while keeping POST/PUT restricted.
     """
-    allow_remote_env = os.getenv("TLDW_SETUP_ALLOW_REMOTE", "").strip().lower() in {"1", "true", "yes", "on", "y"}
+    allow_remote_env = env_flag_enabled("TLDW_SETUP_ALLOW_REMOTE")
     allow_remote_config = _config_allows_remote()
 
     path = (request.url.path or "").lower()

@@ -52,6 +52,7 @@ from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import Conflict
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_generator import TestCaseGenerator
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_io import TestCaseIO
 from tldw_Server_API.app.core.Prompt_Management.prompt_studio.test_case_manager import TestCaseManager
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 PROMPT_STUDIO_TEST_CASE_EXCEPTIONS = (
@@ -409,7 +410,7 @@ async def list_test_cases(
     except DatabaseError as e:
         logger.error(f"Database error listing test cases: {e}")
         detail = "Failed to list test cases"
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -418,7 +419,7 @@ async def list_test_cases(
     except Exception as e:  # noqa: BLE001
         logger.exception("Unexpected error listing test cases: {}", e)
         detail = "Failed to list test cases"
-        if os.getenv("TEST_MODE", "").lower() == "true":
+        if is_test_mode():
             detail = f"{detail}: {e}"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

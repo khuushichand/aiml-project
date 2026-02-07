@@ -371,10 +371,16 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     q = self._normalize_sqlite_sql(query)
                     cur = await self._conn.execute(q, params)
                     rows = await cur.fetchall()
-                    try:
-                        return [{key: r[key] for key in r} for r in rows]
-                    except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
-                        return rows
+                    normalized_rows: list[Any] = []
+                    for row in rows:
+                        try:
+                            keys = row.keys()  # sqlite3.Row / aiosqlite.Row
+                            normalized_rows.append({key: row[key] for key in keys})
+                            continue
+                        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
+                            pass
+                        normalized_rows.append(row)
+                    return normalized_rows
 
             async def fetchrow(self, query: str, *args: object) -> Any | None:
                 if not self._is_sqlite:
@@ -386,7 +392,10 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
                     cur = await self._conn.execute(q, params)
                     row = await cur.fetchone()
                     try:
-                        return {key: row[key] for key in row} if row else None
+                        if not row:
+                            return None
+                        keys = row.keys()  # sqlite3.Row / aiosqlite.Row
+                        return {key: row[key] for key in keys}
                     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
                         return row
 

@@ -32,6 +32,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
 from tldw_Server_API.app.core.Metrics.telemetry import get_telemetry_manager
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .auth.authnz_rbac import Action, Resource, get_rbac_policy
 from .auth.rate_limiter import RateLimitExceeded, get_rate_limiter
@@ -1168,7 +1169,7 @@ class MCPProtocol:
             elif isinstance(raw_strict, (int, float)):
                 strict = bool(raw_strict)
             elif isinstance(raw_strict, str):
-                strict = raw_strict.strip().lower() in {"1", "true", "yes", "on"}
+                strict = is_truthy(raw_strict)
         catalog_name = None
         catalog_id = None
         if isinstance(params, dict):

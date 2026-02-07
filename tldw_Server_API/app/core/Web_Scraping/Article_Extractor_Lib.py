@@ -2684,6 +2684,8 @@ def convert_html_to_markdown(html: str) -> str:
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
+    from tldw_Server_API.app.core.testing import is_truthy
+
     if isinstance(value, bool):
         return value
     if value is None:
@@ -2691,7 +2693,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+        return is_truthy(value)
     return default
 
 

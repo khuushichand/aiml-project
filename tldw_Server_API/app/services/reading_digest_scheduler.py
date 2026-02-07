@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.config import settings as core_settings
 from tldw_Server_API.app.core.DB_Management.Collections_DB import CollectionsDatabase, ReadingDigestScheduleRow
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _READING_DIGEST_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -399,7 +400,7 @@ def get_reading_digest_scheduler() -> _ReadingDigestScheduler:
 
 async def start_reading_digest_scheduler(enabled: bool | None = None) -> asyncio.Task | None:
     if enabled is None:
-        enabled = os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        enabled = env_flag_enabled("READING_DIGEST_SCHEDULER_ENABLED")
     if not enabled:
         return None
     svc = get_reading_digest_scheduler()

@@ -1,4 +1,8 @@
+"""Tests for MediaDatabase upgrade diagnostics when migration scripts are missing."""
+
+import pathlib
 import sqlite3
+from typing import Any
 
 import pytest
 
@@ -6,7 +10,12 @@ import tldw_Server_API.app.core.DB_Management.Media_DB_v2 as media_db_mod
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import DatabaseError, MediaDatabase
 
 
-def test_media_db_upgrade_no_migrations_reports_explicit_diagnostics(tmp_path, monkeypatch):
+@pytest.mark.unit
+def test_media_db_upgrade_no_migrations_reports_explicit_diagnostics(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify that upgrading with no migration scripts raises DatabaseError with full diagnostics."""
     db_path = tmp_path / "Media_DB_v2.db"
     with sqlite3.connect(db_path) as conn:
         conn.execute("CREATE TABLE schema_version (version INTEGER)")
@@ -15,7 +24,11 @@ def test_media_db_upgrade_no_migrations_reports_explicit_diagnostics(tmp_path, m
 
     fake_migrations_dir = str(tmp_path / "missing_migrations")
 
-    def _fake_migrate_to_version(self, target_version, create_backup=True):
+    def _fake_migrate_to_version(
+        _self: Any,
+        target_version: int,
+        _create_backup: bool = True,
+    ) -> dict[str, Any]:
         return {
             "status": "no_migrations",
             "current_version": 8,

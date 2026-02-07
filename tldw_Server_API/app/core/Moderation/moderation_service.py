@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from loguru import logger
 
 from tldw_Server_API.app.core.config import load_and_log_configs, load_comprehensive_config
+from tldw_Server_API.app.core.testing import is_truthy
 
 _MODERATION_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -226,7 +227,7 @@ class ModerationService:
         else:
             if cats_val:
                 logger.warning(f"Invalid moderation categories_enabled type: {type(cats_val)}")
-        pii_enabled = str(mod_cfg.get("pii_enabled", os.getenv("MODERATION_PII_ENABLED", "false"))).strip().lower() in {"1","true","yes","on","y"}
+        pii_enabled = is_truthy(str(mod_cfg.get("pii_enabled", os.getenv("MODERATION_PII_ENABLED", "false"))).strip().lower())
         # Apply runtime overrides if present
         try:
             if isinstance(self._runtime_override.get("categories_enabled"), (set, list)):

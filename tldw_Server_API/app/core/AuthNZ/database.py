@@ -37,6 +37,7 @@ from tldw_Server_API.app.core.AuthNZ.migrations import ensure_authnz_tables
 #
 # Local imports
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
+from tldw_Server_API.app.core.testing import is_test_mode
 
 _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -280,7 +281,7 @@ class DatabasePool:
         # Allow Postgres in single-user mode only in explicit test contexts,
         # so production single-user profiles continue to fall back to SQLite.
         try:
-            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+            test_mode = is_test_mode()
         except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         # Also allow Postgres when running under pytest even if TEST_MODE is not set,

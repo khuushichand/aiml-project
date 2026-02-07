@@ -51,6 +51,7 @@ from tldw_Server_API.app.core.Metrics.metrics_logger import (
     log_gauge,
     log_histogram,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import get_database_dir
 from tldw_Server_API.app.core.Web_Scraping.filters import (
     ContentTypeFilter,
@@ -778,7 +779,7 @@ class EnhancedWebScraper:
         if isinstance(value, (int, float)):
             return bool(value)
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on", "y"}
+            return is_truthy(value)
         return default
 
     @staticmethod
@@ -976,7 +977,7 @@ class EnhancedWebScraper:
         ua_mode = str(ws_cfg.get("web_scraper_ua_mode", "fixed") or "fixed")
         respect_robots_default = ws_cfg.get("web_scraper_respect_robots", True)
         if isinstance(respect_robots_default, str):
-            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on"}
+            respect_robots_default = is_truthy(respect_robots_default)
         router = ScraperRouter(rules, ua_mode=ua_mode, default_respect_robots=bool(respect_robots_default))
         plan = router.resolve(url)
 
@@ -2054,7 +2055,7 @@ class EnhancedWebScraper:
         # Optional robots filter controlled by config (default: respect robots)
         respect_robots_default = wc.get('web_scraper_respect_robots', True)
         if isinstance(respect_robots_default, str):
-            respect_robots_default = respect_robots_default.strip().lower() in {"1", "true", "yes", "on", "y"}
+            respect_robots_default = is_truthy(respect_robots_default)
         robots_filter: Optional[RobotsFilter] = None
         if bool(respect_robots_default):
             robots_ua = user_agent or DEFAULT_USER_AGENT

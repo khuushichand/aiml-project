@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.Chat.chat_dictionary import parse_user_dict_markdo
 from tldw_Server_API.app.core.Chunking.regex_safety import check_pattern as check_regex_pattern
 from tldw_Server_API.app.core.Chunking.regex_safety import warn_ambiguity
 from tldw_Server_API.app.core.Metrics import increment_counter, observe_histogram
+from tldw_Server_API.app.core.testing import is_truthy
 
 _VALIDATE_DICT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     AttributeError,
@@ -88,7 +89,7 @@ def _truthy_env(name: str, default: bool = False) -> bool:
     v = os.getenv(name)
     if v is None:
         return default
-    return str(v).strip().lower() in {"1", "true", "yes", "on"}
+    return is_truthy(v)
 
 
 def _int_env(name: str, default: int) -> int:

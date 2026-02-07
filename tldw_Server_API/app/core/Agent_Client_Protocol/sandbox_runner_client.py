@@ -26,6 +26,7 @@ from tldw_Server_API.app.core.Agent_Client_Protocol.stream_client import ACPStre
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Sandbox.models import RunSpec, RuntimeType, SessionSpec
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
+from tldw_Server_API.app.core.testing import is_truthy
 
 _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS = (
     ACPResponseError,
@@ -112,7 +113,7 @@ class ACPSandboxRunnerManager:
         try:
             env_bg = os.getenv("SANDBOX_BACKGROUND_EXECUTION")
             if env_bg is not None:
-                background = str(env_bg).strip().lower() in {"1", "true", "yes", "on", "y"}
+                background = is_truthy(env_bg)
             else:
                 background = bool(getattr(app_settings, "SANDBOX_BACKGROUND_EXECUTION", False))
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -122,7 +123,7 @@ class ACPSandboxRunnerManager:
         try:
             env_exec = os.getenv("SANDBOX_ENABLE_EXECUTION")
             if env_exec is not None:
-                execute_enabled = str(env_exec).strip().lower() in {"1", "true", "yes", "on", "y"}
+                execute_enabled = is_truthy(env_exec)
             else:
                 execute_enabled = bool(getattr(app_settings, "SANDBOX_ENABLE_EXECUTION", False))
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS:

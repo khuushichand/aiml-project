@@ -880,3 +880,49 @@ class SkillsService:
             include_hidden=include_hidden,
             include_deleted=False,
         )
+
+    async def seed_builtin_skills(self, overwrite: bool = False) -> list[str]:
+        """Copy built-in example skills into the user's skills directory.
+
+        Args:
+            overwrite: If True, replace existing skills with same names.
+
+        Returns:
+            List of skill names that were seeded.
+        """
+        builtin_dir = Path(__file__).parent / "builtin"
+        if not builtin_dir.is_dir():
+            logger.warning("Built-in skills directory not found: {}", builtin_dir)
+            return []
+
+        seeded: list[str] = []
+        for skill_dir in sorted(builtin_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.is_file():
+                continue
+            skill_name = skill_dir.name
+            if not SKILL_NAME_PATTERN.match(skill_name):
+                logger.warning("Skipping built-in skill with invalid name: {}", skill_name)
+                continue
+
+            content = skill_file.read_text(encoding="utf-8")
+
+            # Check if skill already exists
+            try:
+                existing = await self.get_skill(skill_name)
+                if existing and not overwrite:
+                    logger.debug("Built-in skill '{}' already exists, skipping", skill_name)
+                    continue
+                # Overwrite: delete then recreate
+                if existing:
+                    await self.delete_skill(skill_name)
+            except SkillNotFoundError:
+                pass
+
+            await self.create_skill(skill_name, content)
+            seeded.append(skill_name)
+            logger.info("Seeded built-in skill: {}", skill_name)
+
+        return seeded

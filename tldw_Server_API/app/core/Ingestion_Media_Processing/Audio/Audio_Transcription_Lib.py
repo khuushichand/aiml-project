@@ -70,6 +70,7 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.exceptions import CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram, timeit
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import logging, sanitize_filename
 
 _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS = (
@@ -126,7 +127,7 @@ _cache_cfg = _stt_cache_config()
 
 
 def _to_bool(val) -> bool:
-    return str(val).lower() in {"1", "true", "yes", "on"}
+    return is_truthy(str(val))
 
 
 _env_disable = _to_bool(os.getenv("STT_DISABLE_TRANSCRIPT_CACHE", ""))

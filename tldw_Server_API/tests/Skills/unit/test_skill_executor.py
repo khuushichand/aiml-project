@@ -5,9 +5,9 @@
 import pytest
 
 from tldw_Server_API.app.core.Skills.skill_executor import (
+    SKILL_TOOL_DEFINITION,
     RequestContext,
     SkillExecutor,
-    SKILL_TOOL_DEFINITION,
 )
 
 
@@ -316,6 +316,7 @@ class TestForkExceptionLogging:
         """Test that unexpected exceptions in fork tool execution are logged with traceback."""
         import json
         from io import StringIO
+
         from loguru import logger
 
         skill_data = {

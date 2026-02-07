@@ -32,6 +32,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from tldw_Server_API.app.core.config import load_and_log_configs
 from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicAlert
+from tldw_Server_API.app.core.testing import is_truthy
 
 _SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 
@@ -55,7 +56,7 @@ class NotificationService:
     def __init__(self) -> None:
         cfg = load_and_log_configs() or {}
         ncfg = (cfg.get("monitoring") or {}).get("notifications") if isinstance(cfg, dict) else None
-        self.enabled = os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))).strip().lower() in {"1","true","yes","on","y"}
+        self.enabled = is_truthy(os.getenv("MONITORING_NOTIFY_ENABLED", str((ncfg or {}).get("enabled", False))))
         self.min_severity = str(os.getenv("MONITORING_NOTIFY_MIN_SEVERITY", (ncfg or {}).get("min_severity", "critical"))).strip().lower()
         raw_file = os.getenv("MONITORING_NOTIFY_FILE", (ncfg or {}).get("file", "Databases/monitoring_notifications.log"))
         self.file_path = self._resolve_file_path(raw_file)
@@ -65,7 +66,7 @@ class NotificationService:
         self.smtp_host = os.getenv("MONITORING_NOTIFY_SMTP_HOST", (ncfg or {}).get("smtp_host", ""))
         raw_smtp_port = os.getenv("MONITORING_NOTIFY_SMTP_PORT", (ncfg or {}).get("smtp_port", "587"))
         self.smtp_port = self._coerce_int(raw_smtp_port, 587)
-        self.smtp_starttls = str(os.getenv("MONITORING_NOTIFY_SMTP_STARTTLS", (ncfg or {}).get("smtp_starttls", "true"))).lower() in {"1","true","yes","on","y"}
+        self.smtp_starttls = is_truthy(os.getenv("MONITORING_NOTIFY_SMTP_STARTTLS", (ncfg or {}).get("smtp_starttls", "true")))
         self.smtp_user = os.getenv("MONITORING_NOTIFY_SMTP_USER", (ncfg or {}).get("smtp_user", ""))
         self.smtp_password = os.getenv("MONITORING_NOTIFY_SMTP_PASSWORD", (ncfg or {}).get("smtp_password", ""))
         self.email_from = os.getenv("MONITORING_NOTIFY_EMAIL_FROM", (ncfg or {}).get("email_from", self.smtp_user or ""))

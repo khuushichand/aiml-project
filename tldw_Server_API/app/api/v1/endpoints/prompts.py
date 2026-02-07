@@ -24,6 +24,7 @@ from tldw_Server_API.app.core.DB_Management.Prompts_DB import (
     InputError,
     PromptsDatabase,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 #
 # Local Imports
@@ -254,7 +255,7 @@ async def verify_prompts_user(
     )
     if _is_single_user_auth_mode():
         return True
-    require_admin = os.getenv("PROMPTS_REQUIRE_ADMIN", "").strip().lower() in {"1", "true", "yes", "on"}
+    require_admin = env_flag_enabled("PROMPTS_REQUIRE_ADMIN")
     if require_admin:
         roles = getattr(user, "roles", []) or []
         is_admin = bool(getattr(user, "is_admin", False) or ("admin" in roles))

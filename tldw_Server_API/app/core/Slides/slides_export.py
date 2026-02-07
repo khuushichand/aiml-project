@@ -39,6 +39,7 @@ except Exception:  # pragma: no cover - playwright is an optional dependency
 
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.Slides.slides_images import SlidesImageError, validate_images_payload
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 class SlidesExportError(Exception):
@@ -209,7 +210,7 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     value = str(raw).strip().lower()
-    if value in {"1", "true", "yes", "on"}:
+    if is_truthy(value):
         return True
     if value in {"0", "false", "no", "off"}:
         return False

@@ -1275,12 +1275,8 @@ async def lifespan(app: FastAPI):
     # - default => synchronous (no deferral)
     try:
         import os as _env_os
-
-        def _env_to_bool(v):
-            return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-        _disable = _env_to_bool(_env_os.getenv("DISABLE_HEAVY_STARTUP"))
-        _defer_heavy = False if _disable else _env_to_bool(_env_os.getenv("DEFER_HEAVY_STARTUP"))
+        _disable = _shared_is_truthy(_env_os.getenv("DISABLE_HEAVY_STARTUP"))
+        _defer_heavy = False if _disable else _shared_is_truthy(_env_os.getenv("DEFER_HEAVY_STARTUP"))
         # Default to synchronous (False) if neither flag is set
         _defer_heavy = bool(_defer_heavy)
     except _STARTUP_GUARD_EXCEPTIONS:
@@ -2841,12 +2837,7 @@ async def lifespan(app: FastAPI):
             if globals().get("_TEST_MODE") and _os.getenv("READING_DIGEST_SCHEDULER_ENABLED") is None:
                 _rd_sched_enabled = False
         except _STARTUP_GUARD_EXCEPTIONS:
-            _rd_sched_enabled = _os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "true").lower() in {
-                "1",
-                "true",
-                "yes",
-                "on",
-            }
+            _rd_sched_enabled = _shared_is_truthy(_os.getenv("READING_DIGEST_SCHEDULER_ENABLED", "true"))
         reading_digest_sched_task = await start_reading_digest_scheduler(enabled=_rd_sched_enabled)
         if reading_digest_sched_task:
             logger.info("Reading digest scheduler started")

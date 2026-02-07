@@ -3882,6 +3882,57 @@ export class TldwApiClient {
     })
   }
 
+  async bulkUpdateReadingItems(data: {
+    item_ids: string[]
+    action: "set_status" | "set_favorite" | "add_tags" | "remove_tags" | "replace_tags" | "delete"
+    status?: string
+    favorite?: boolean
+    tags?: string[]
+    hard?: boolean
+  }): Promise<{
+    total: number
+    succeeded: number
+    failed: number
+    results: Array<{ item_id: string; success: boolean; error?: string | null }>
+  }> {
+    const itemIds = (data.item_ids || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0)
+      .map((id) => Math.floor(id))
+    if (itemIds.length === 0) {
+      throw new Error("item_ids_required")
+    }
+
+    const response = await bgRequest<any>({
+      path: "/api/v1/reading/items/bulk",
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: {
+        item_ids: itemIds,
+        action: data.action,
+        status: data.status,
+        favorite: data.favorite,
+        tags: data.tags,
+        hard: data.hard
+      }
+    })
+
+    const results = Array.isArray(response?.results)
+      ? response.results.map((entry: any) => ({
+          item_id: String(entry?.item_id),
+          success: Boolean(entry?.success),
+          error: entry?.error ?? null
+        }))
+      : []
+
+    return {
+      total: response?.total ?? itemIds.length,
+      succeeded: response?.succeeded ?? results.filter((entry) => entry.success).length,
+      failed: response?.failed ?? results.filter((entry) => !entry.success).length,
+      results
+    }
+  }
+
   async deleteReadingItem(itemId: string, options?: { hard?: boolean }): Promise<void> {
     const query = new URLSearchParams()
     if (options?.hard !== undefined) query.set("hard", String(options.hard))
@@ -4386,6 +4437,136 @@ export class TldwApiClient {
     }
 
     return new Blob([data], { type: mimeType })
+  }
+
+  // Skills API
+  async listSkills(params?: {
+    limit?: number
+    offset?: number
+  }): Promise<any> {
+    const query = this.buildQuery(params)
+    const base = await this.resolveApiPath("skills.list", [
+      "/api/v1/skills",
+      "/api/v1/skills/"
+    ])
+    return await bgRequest<any>({
+      path: appendPathQuery(base, query),
+      method: "GET"
+    })
+  }
+
+  async getSkill(name: string): Promise<any> {
+    const base = await this.resolveApiPath("skills.get", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    return await bgRequest<any>({ path, method: "GET" })
+  }
+
+  async createSkill(payload: {
+    name: string
+    content: string
+    supporting_files?: Record<string, string> | null
+  }): Promise<any> {
+    const base = await this.resolveApiPath("skills.create", [
+      "/api/v1/skills",
+      "/api/v1/skills/"
+    ])
+    return await bgRequest<any>({
+      path: base,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async updateSkill(
+    name: string,
+    payload: { content?: string; supporting_files?: Record<string, string> | null },
+    version?: number
+  ): Promise<any> {
+    const base = await this.resolveApiPath("skills.update", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (version != null) {
+      headers["If-Match"] = String(version)
+    }
+    return await bgRequest<any>({ path, method: "PUT", headers, body: payload })
+  }
+
+  async deleteSkill(name: string): Promise<void> {
+    const base = await this.resolveApiPath("skills.delete", [
+      "/api/v1/skills/{name}",
+      "/api/v1/skills/{name}/"
+    ])
+    const path = this.fillPathParams(base, name)
+    await bgRequest<any>({ path, method: "DELETE" })
+  }
+
+  async importSkill(payload: {
+    name: string
+    content: string
+    supporting_files?: Record<string, string> | null
+    overwrite?: boolean
+  }): Promise<any> {
+    const base = await this.resolveApiPath("skills.import", [
+      "/api/v1/skills/import",
+      "/api/v1/skills/import/"
+    ])
+    return await bgRequest<any>({
+      path: base,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: payload
+    })
+  }
+
+  async importSkillFile(file: File): Promise<any> {
+    return await bgUpload<any>({
+      path: "/api/v1/skills/import/file" as AllowedPath,
+      fieldName: "file",
+      file,
+      fileName: file.name
+    })
+  }
+
+  async exportSkill(name: string): Promise<Blob> {
+    await this.ensureConfigForRequest(true)
+    const res = await bgRequest<ArrayBuffer, AllowedPath>({
+      path: `/api/v1/skills/${encodeURIComponent(name)}/export` as AllowedPath,
+      method: "GET",
+      responseType: "arrayBuffer"
+    })
+    return new Blob([res], { type: "application/zip" })
+  }
+
+  async executeSkill(
+    name: string,
+    args?: string
+  ): Promise<any> {
+    const base = await this.resolveApiPath("skills.execute", [
+      "/api/v1/skills/{name}/execute",
+      "/api/v1/skills/{name}/execute/"
+    ])
+    const path = this.fillPathParams(base, name)
+    return await bgRequest<any>({
+      path,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { args: args || "" }
+    })
+  }
+
+  async getSkillsContext(): Promise<any> {
+    const base = await this.resolveApiPath("skills.context", [
+      "/api/v1/skills/context",
+      "/api/v1/skills/context/"
+    ])
+    return await bgRequest<any>({ path: base, method: "GET" })
   }
 }
 

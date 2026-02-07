@@ -79,6 +79,7 @@ from tldw_Server_API.app.core.RAG.rag_service.vector_stores.factory import (
     VectorStoreFactory,
     create_from_settings_for_user,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 from tldw_Server_API.app.core.Utils.pydantic_compat import model_dump_compat
 
 RBAC_VECTOR_ADMIN = rbac_rate_limit("vector.admin")
@@ -1308,7 +1309,7 @@ async def query_vectors(
         # In test contexts, normalize provider baseline to 'openai' for predictable policy behavior
         try:
             import os as _os
-            if str(_os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+            if env_flag_enabled("TESTING"):
                 provider = "openai"
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             pass

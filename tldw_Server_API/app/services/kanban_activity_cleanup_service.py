@@ -18,6 +18,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import KanbanDB
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _KANBAN_ACTIVITY_CLEANUP_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -66,7 +67,7 @@ def _cleanup_for_user(user_id: int) -> int:
 
 
 async def start_kanban_activity_cleanup_scheduler() -> asyncio.Task | None:
-    enabled = os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("KANBAN_ACTIVITY_CLEANUP_ENABLED")
     if not enabled:
         return None
     try:

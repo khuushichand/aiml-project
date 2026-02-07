@@ -29,6 +29,7 @@ from loguru import logger
 from tldw_Server_API.app.core.Metrics.metrics_manager import (
     set_gauge,
 )
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 DEFAULT_EVAL_PATH = Path("Docs/Deployment/Monitoring/Evals/nightly_rag_eval.jsonl")
 
@@ -126,7 +127,7 @@ async def start_quality_eval_scheduler() -> asyncio.Task | None:
 
     Returns an asyncio.Task or None if disabled.
     """
-    enabled = os.getenv("RAG_QUALITY_EVAL_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+    enabled = env_flag_enabled("RAG_QUALITY_EVAL_ENABLED")
     if not enabled:
         return None
 

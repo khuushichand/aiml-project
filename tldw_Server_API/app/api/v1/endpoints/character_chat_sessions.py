@@ -88,6 +88,7 @@ from tldw_Server_API.app.core.Character_Chat.constants import (
     THROTTLE_CACHE_MAX_KEYS,
     THROTTLE_STALE_SECONDS,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Character_Chat.modules.character_generation_presets import (
     resolve_character_generation_settings,
 )
@@ -1488,7 +1489,7 @@ def _coerce_truthy_bool(value: Any, default: bool = False) -> bool:
         return bool(value)
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
+        if is_truthy(normalized):
             return True
         if normalized in {"0", "false", "no", "off"}:
             return False

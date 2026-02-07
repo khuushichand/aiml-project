@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.LLM_Calls.sse import (
     sse_done,
 )
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .base import ChatProvider
 
@@ -74,7 +75,7 @@ class CustomOpenAIAdapter(ChatProvider):
         v = (os.getenv("LLM_ADAPTERS_NATIVE_HTTP_CUSTOM_OPENAI") or "").strip().lower()
         if v in {"0", "false", "no", "off"}:
             return False
-        if v in {"1", "true", "yes", "on"}:
+        if is_truthy(v):
             return True
         return True
 

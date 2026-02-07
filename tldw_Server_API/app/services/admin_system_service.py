@@ -21,6 +21,7 @@ from tldw_Server_API.app.core.AuthNZ.database import is_postgres_backend
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Logging.system_log_buffer import query_system_logs
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.services import admin_scope_service
 from tldw_Server_API.app.services.admin_data_ops_service import (
     build_audit_log_csv as svc_build_audit_log_csv,
@@ -221,8 +222,7 @@ async def get_system_stats(db) -> SystemStatsResponse:
     except Exception as exc:
         logger.error(f"Failed to get system stats: {exc}")
         try:
-            import os as _os
-            if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            if is_test_mode():
                 return SystemStatsResponse(
                     users={"total": 0, "active": 0, "verified": 0, "admins": 0, "new_last_30d": 0},
                     storage={"total_used_mb": 0.0, "total_quota_mb": 0.0, "average_used_mb": 0.0, "max_used_mb": 0.0},

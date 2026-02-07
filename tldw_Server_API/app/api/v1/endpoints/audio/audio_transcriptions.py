@@ -29,6 +29,7 @@ from tldw_Server_API.app.core.Audio.transcription_service import _map_openai_aud
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter(
     tags=["Audio"],
@@ -66,6 +67,8 @@ def _audio_shim_attr(name: str):
             return False
         mod_name = getattr(value, "__module__", None)
         if isinstance(mod_name, str) and mod_name:
+            if mod_name.startswith("tldw_Server_API.tests."):
+                return True
             return not mod_name.startswith("tldw_Server_API.")
         return True
 
@@ -339,7 +342,7 @@ async def create_transcription(
                 )
                 canonical_path = temp_audio_path
 
-        if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+        if is_test_mode():
             source_label = "converted" if canonical_path != temp_audio_path else "original"
             logger.debug(f"TEST_MODE: canonical audio path resolved: path={canonical_path}, source={source_label}")
 

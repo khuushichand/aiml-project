@@ -54,6 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRe
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -149,7 +150,7 @@ class SessionManager:
             if str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower() in _truthy:
                 disable_sched = True
             # In general test mode, default to disabled unless explicitly overridden
-            if (str(os.getenv("TEST_MODE", "")).strip().lower() in _truthy or str(os.getenv("TLDW_TEST_MODE", "")).strip().lower() in _truthy) and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
+            if is_test_mode() and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
                 disable_sched = True
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
@@ -438,7 +439,7 @@ class SessionManager:
             _append(derived)
 
         if not key_bytes:
-            test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            test_mode = env_flag_enabled("TEST_MODE")
             pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
             if test_mode or pytest_active:
                 logger.warning("Generating temporary session encryption key for test context.")

@@ -12,6 +12,8 @@ from typing import Any, Optional, Protocol
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 
 class ChunkingMethod(Enum):
     """Enumeration of available chunking methods."""
@@ -469,13 +471,13 @@ class ChunkerConfig:
                 try:
                     v = cp.get('Chunking', 'cache_copy_on_access', fallback=None)
                     if v is not None:
-                        self.cache_copy_on_access = str(v).strip().lower() in {"1","true","yes","on"}
+                        self.cache_copy_on_access = is_truthy(str(v))
                 except (AttributeError, KeyError, TypeError) as e:
                     logger.debug(f"ChunkerConfig: failed to read 'cache_copy_on_access' from config: {e}")
                 try:
                     v = cp.get('Chunking', 'verbose_logging', fallback=None)
                     if v is not None:
-                        self.verbose_logging = str(v).strip().lower() in {"1","true","yes","on"}
+                        self.verbose_logging = is_truthy(str(v))
                 except (AttributeError, KeyError, TypeError) as e:
                     logger.debug(f"ChunkerConfig: failed to read 'verbose_logging' from config: {e}")
         except ImportError as e:

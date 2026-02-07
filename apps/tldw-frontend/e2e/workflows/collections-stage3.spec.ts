@@ -207,7 +207,11 @@ test.describe("Collections Stage 3 Skeleton", () => {
       authedPage.getByText(/Selected text captured|Selected text matches an existing highlight/i)
     ).toBeVisible({ timeout: 10_000 })
 
-    await authedPage.getByRole("button", { name: /Add Highlight|Update/i }).first().click()
+    await authedPage
+      .locator(".reading-item-detail-drawer")
+      .getByRole("button", { name: /Add Highlight|Update/i })
+      .first()
+      .click()
     await expect(
       authedPage.getByText(/Selected text captured|Selected text matches an existing highlight/i)
     ).not.toBeVisible({ timeout: 10_000 })

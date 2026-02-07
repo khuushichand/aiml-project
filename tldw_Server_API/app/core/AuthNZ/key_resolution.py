@@ -23,6 +23,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRep
 #
 # Local Imports
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 
 def _compute_legacy_hmac_digests(api_key: str, key_materials: list[bytes]) -> list[str]:
@@ -110,7 +111,7 @@ async def resolve_api_key_by_hash(api_key: str, *, settings=None) -> dict[str, A
 
     try:
         key_materials = tuple(derive_hmac_key_candidates(s))
-        if os.getenv("BUDGET_MW_DEBUG", "").lower() in {"1", "true", "yes", "on"} or os.getenv("PYTEST_CURRENT_TEST"):
+        if env_flag_enabled("BUDGET_MW_DEBUG") or os.getenv("PYTEST_CURRENT_TEST"):
             try:
                 logger.debug(f"resolve_api_key_by_hash: key_materials={len(key_materials)}")
             except Exception as _dbg_exc:

@@ -74,6 +74,7 @@ from tldw_Server_API.app.core.Sandbox.policy import SandboxPolicy
 from tldw_Server_API.app.core.Sandbox.service import SandboxService
 from tldw_Server_API.app.core.Sandbox.streams import get_hub
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 from tldw_Server_API.app.core.Utils.path_utils import safe_join
 
 _SANDBOX_NONCRITICAL_EXCEPTIONS = (
@@ -1443,9 +1444,9 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             test_mode = False
         with contextlib.suppress(_SANDBOX_NONCRITICAL_EXCEPTIONS):
-            test_mode = test_mode or str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            test_mode = test_mode or is_test_mode()
         try:
-            allow_untracked = str(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", "")).strip().lower() in {"1", "true", "yes", "on", "y"}
+            allow_untracked = is_truthy(os.getenv("SANDBOX_WS_ALLOW_UNTRACKED_RUNS", ""))
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             allow_untracked = False
         if test_mode or allow_untracked:

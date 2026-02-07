@@ -28,6 +28,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 )
 from tldw_Server_API.app.core.config import settings
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import get_project_root
 
 _UNIDENTIFIED_TENANT_ID = "unidentified_user"
@@ -569,7 +570,7 @@ def _safe_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "on", "y"}:
+    if is_truthy(normalized):
         return True
     if normalized in {"0", "false", "no", "off", "n", ""}:
         return False

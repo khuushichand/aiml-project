@@ -65,6 +65,7 @@ from tldw_Server_API.app.core.Prompt_Management.prompt_studio.jobs_adapter impor
     PromptStudioJobsAdapter,
 )
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 ########################################################################################################################
 # Error Handling Utilities
@@ -262,7 +263,7 @@ async def sse_endpoint(
         db: Database instance
     """
     from tldw_Server_API.app.core.Streaming.streams import SSEStream
-    use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    use_unified = env_flag_enabled("STREAMS_UNIFIED")
 
     if use_unified:
         stream = SSEStream(

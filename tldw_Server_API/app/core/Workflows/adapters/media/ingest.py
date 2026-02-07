@@ -18,6 +18,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.exceptions import AdapterError
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import (
     resolve_workflow_file_uri,
 )
@@ -275,7 +276,7 @@ async def run_media_ingest_adapter(config: dict[str, Any], context: dict[str, An
                 continue
 
             # Skip actual download in tests/no-network; detect env var
-            if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            if is_test_mode():
                 out["metadata"].append({
                     "source": uri,
                     "status": "simulated_download",
