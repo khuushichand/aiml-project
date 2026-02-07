@@ -224,6 +224,39 @@ def test_demo_auth_issues_token_with_secret(monkeypatch):
         assert "access_token" in body and body["token_type"] == "bearer"
 
 
+def test_refresh_endpoint_rejects_query_token_and_accepts_body(monkeypatch):
+    _setup_env()
+    from tldw_Server_API.app.core.MCP_unified.auth.jwt_manager import get_jwt_manager
+    from tldw_Server_API.app.core.MCP_unified import config as config_module
+    from tldw_Server_API.app.core.MCP_unified.security import ip_filter
+
+    try:
+        config_module.get_config.cache_clear()  # type: ignore[attr-defined]
+        ip_filter.get_ip_access_controller.cache_clear()  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    mgr = get_jwt_manager()
+    refresh, token_id = mgr.create_refresh_token(subject="1")
+
+    with _build_mcp_client() as temp_client:
+        # Query transport is intentionally unsupported for refresh tokens.
+        r_query = temp_client.post(
+            "/api/v1/mcp/auth/refresh",
+            params={"refresh_token": "qtoken", "token_id": "qid"},
+        )
+        assert r_query.status_code == 422
+
+        # Body transport is supported.
+        r_body = temp_client.post(
+            "/api/v1/mcp/auth/refresh",
+            json={"refresh_token": refresh, "token_id": token_id},
+        )
+        assert r_body.status_code == 200
+        data = r_body.json()
+        assert "access_token" in data and data["token_type"] == "bearer"
+
+
 def test_request_guard_enforces_body_size_limit(monkeypatch):
     _setup_env()
     from tldw_Server_API.app.core.MCP_unified import config as config_module

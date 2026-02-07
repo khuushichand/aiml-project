@@ -116,10 +116,6 @@ class AuthNZRBAC:
             if is_admin is not None:
                 return True
 
-            # Ensure dynamic tool permission exists when applicable
-            if resource == Resource.TOOL and action == Action.EXECUTE and resource_id:
-                await self._ensure_permission_exists(perm, description=f"Execute tool {resource_id}", category='tools')
-
             # Explicit user permission overrides
             row = await pool.fetchone(
                 """

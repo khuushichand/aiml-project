@@ -53,6 +53,25 @@ class FakeRedis:
         return FakePubSub()
 
 
+def test_redis_fanout_requires_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv("SANDBOX_WS_REDIS_FANOUT", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+    from tldw_Server_API.app.core.Sandbox import streams as sb_streams
+
+    attempted = {"redis_client": False}
+
+    def _raise_if_called(*args, **kwargs):
+        attempted["redis_client"] = True
+        raise AssertionError("create_sync_redis_client should not be called without SANDBOX_WS_REDIS_FANOUT")
+
+    monkeypatch.setattr(sb_streams, "create_sync_redis_client", _raise_if_called)
+    hub = sb_streams.RunStreamHub()
+
+    assert attempted["redis_client"] is False
+    assert hub.get_redis_status()["enabled"] is False
+
+
 @pytest.mark.asyncio
 async def test_redis_fanout_cross_worker(monkeypatch):
     # Enable fanout and use a unique channel

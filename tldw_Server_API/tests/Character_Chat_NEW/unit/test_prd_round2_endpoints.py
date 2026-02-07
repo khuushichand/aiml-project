@@ -16,6 +16,7 @@ from tldw_Server_API.app.api.v1.endpoints.character_chat_sessions import (
     _compute_greetings_checksum,
     _parse_greeting_selection_index,
     _resolve_author_note_text,
+    _summary_matches_existing,
     _estimate_tokens,
     _normalize_memory_scope,
     _TOKEN_BUDGET_AUTHOR_NOTE,
@@ -486,6 +487,57 @@ class TestLorebookDiagnosticExport:
         assert len(desc_data["turns"]) == 1
         assert desc_data["turns"][0]["message_id"] == second_message_id
 
+    @pytest.mark.integration
+    def test_diagnostics_include_character_name_sender_alias(
+        self,
+        test_client,
+        auth_headers,
+        sample_character_card,
+        character_db,
+    ):
+        """Diagnostics export should include assistant turns stored under character name senders."""
+        char_resp = test_client.post("/api/v1/characters/", json=sample_character_card, headers=auth_headers)
+        assert char_resp.status_code == 201
+        character = char_resp.json()
+        char_id = character["id"]
+        char_name = character.get("name") or "Assistant"
+
+        chat_resp = test_client.post(
+            "/api/v1/chats/",
+            json={"character_id": char_id, "title": "diag-name-sender"},
+            headers=auth_headers,
+        )
+        assert chat_resp.status_code == 201
+        chat_id = chat_resp.json()["id"]
+
+        message_id = str(uuid4())
+        character_db.add_message(
+            {
+                "id": message_id,
+                "conversation_id": chat_id,
+                "sender": char_name,
+                "content": "Assistant turn saved with character-name sender",
+                "parent_message_id": None,
+                "deleted": 0,
+                "client_id": "test_client",
+                "version": 1,
+            }
+        )
+        assert character_db.add_message_metadata(
+            message_id,
+            extra={"lorebook_diagnostics": [{"entry_id": 99, "keyword": "alpha"}]},
+        )
+
+        resp = test_client.get(
+            f"/api/v1/chats/{chat_id}/diagnostics/lorebook",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_turns_with_diagnostics"] == 1
+        assert len(data["turns"]) == 1
+        assert data["turns"][0]["message_id"] == message_id
+
 
 # ========================================================================
 # Integration tests for preset editor CRUD
@@ -589,3 +641,68 @@ class TestPresetEditorEndpoints:
             headers=auth_headers,
         )
         assert resp.status_code == 422
+
+    @pytest.mark.integration
+    def test_create_preset_returns_500_when_db_upsert_fails(self, test_client, auth_headers, monkeypatch):
+        """Create should fail with 500 when DB layer reports upsert failure."""
+        from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+        monkeypatch.setattr(CharactersRAGDB, "upsert_prompt_preset", lambda *args, **kwargs: False)
+
+        resp = test_client.post(
+            "/api/v1/chats/presets",
+            json={
+                "preset_id": "db_fail_create",
+                "name": "DB Failure Create",
+                "section_order": ["identity"],
+                "section_templates": {"identity": "You are {{char}}."},
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 500
+
+    @pytest.mark.integration
+    def test_delete_preset_returns_500_when_db_delete_fails(self, test_client, auth_headers, monkeypatch):
+        """Delete should fail with 500 when DB layer reports delete failure."""
+        create_resp = test_client.post(
+            "/api/v1/chats/presets",
+            json={
+                "preset_id": "db_fail_delete",
+                "name": "DB Failure Delete",
+                "section_order": ["identity"],
+                "section_templates": {"identity": "You are {{char}}."},
+            },
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 201
+
+        from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
+
+        monkeypatch.setattr(CharactersRAGDB, "delete_prompt_preset", lambda *args, **kwargs: False)
+
+        resp = test_client.delete("/api/v1/chats/presets/db_fail_delete", headers=auth_headers)
+        assert resp.status_code == 500
+
+
+class TestSummaryRobustness:
+    """Unit tests for summary parsing robustness."""
+
+    @pytest.mark.unit
+    def test_summary_matches_existing_handles_non_numeric_fields(self):
+        """Malformed numeric values should not crash summary comparison."""
+        existing_summary = {
+            "content": "summary",
+            "sourceRange": {"fromMessageId": "m1", "toMessageId": "m2"},
+            "thresholdMessages": "oops",
+            "windowMessages": "12",
+            "compressedCount": "3",
+        }
+        assert _summary_matches_existing(
+            existing_summary,
+            content="summary",
+            source_from_id="m1",
+            source_to_id="m2",
+            threshold=40,
+            window=12,
+            compressed_count=3,
+        ) is False

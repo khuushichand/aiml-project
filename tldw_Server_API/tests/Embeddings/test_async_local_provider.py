@@ -61,3 +61,24 @@ async def test_async_local_provider_eviction_calls_cpu_cleanup():
     assert "old" not in provider.models
     assert "new" in provider.models
     assert model_old.cpu_called is True
+
+
+@pytest.mark.asyncio
+async def test_async_local_provider_eviction_keeps_single_loaded_model():
+    class DummyModel:
+        def __init__(self):
+            self.cpu_called = False
+
+        def cpu(self):
+            self.cpu_called = True
+
+    provider = AsyncLocalProvider(max_models_in_memory=1, model_ttl_seconds=0)
+    only = DummyModel()
+    provider.models = {"only": only}
+    provider.model_last_used = {"only": 1.0}
+    provider.model_in_use = {"only": 0}
+
+    await provider._evict_if_needed()
+
+    assert "only" in provider.models
+    assert only.cpu_called is False

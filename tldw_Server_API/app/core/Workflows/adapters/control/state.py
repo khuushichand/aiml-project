@@ -36,6 +36,16 @@ _STATE_ADAPTER_EXCEPTIONS = (
 _STATE_JSON_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
 
 
+def _get_workflow_cache_collection(collection_name: str):
+    """Resolve a Chroma collection for workflow cache storage."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
+
+    manager = get_default_chroma_manager()
+    if not manager:
+        return None
+    return manager.get_or_create_collection(collection_name=collection_name)
+
+
 @registry.register(
     "batch",
     category="control",
@@ -109,18 +119,13 @@ async def run_cache_result_adapter(config: dict[str, Any], context: dict[str, An
         data = prev
 
     try:
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client
-
-        client = chroma_client()
-        if not client:
-            # Fallback: just pass through
-            return {"cached": False, "data": data, "error": "cache_unavailable"}
-
         cache_collection_name = "workflow_cache"
         try:
-            collection = client.get_or_create_collection(name=cache_collection_name)
+            collection = _get_workflow_cache_collection(cache_collection_name)
         except _STATE_ADAPTER_EXCEPTIONS:
             return {"cached": False, "data": data, "error": "cache_collection_error"}
+        if not collection:
+            return {"cached": False, "data": data, "error": "cache_unavailable"}
 
         if action == "invalidate":
             with contextlib.suppress(_STATE_ADAPTER_EXCEPTIONS):

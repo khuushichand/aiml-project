@@ -8,6 +8,7 @@ testing the new unified audit service without references to deprecated modules.
 import asyncio
 import hashlib
 import json
+from contextlib import asynccontextmanager
 import tempfile
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ import aiosqlite
 
 from tldw_Server_API.app.core.Audit.unified_audit_service import (
     UnifiedAuditService,
+    AuditReadError,
     AuditEvent,
     AuditContext,
     AuditEventType,
@@ -1667,6 +1669,14 @@ class TestStreamingExport:
         finally:
             audit_service.query_events = orig_query  # type: ignore[assignment]
 
+    @pytest.mark.asyncio
+    async def test_export_events_rejects_non_positive_max_rows(self, audit_service):
+        """export_events should reject non-positive max_rows values."""
+        with pytest.raises(ValueError, match="max_rows must be > 0"):
+            await audit_service.export_events(format="json", max_rows=0)
+        with pytest.raises(ValueError, match="max_rows must be > 0"):
+            await audit_service.export_events(format="json", max_rows=-1)
+
     async def test_audit_operation_with_start_and_completed_types(self, audit_service):
         ctx = AuditContext(user_id="ctx_op_user")
         # Use distinct start and complete event types
@@ -1692,6 +1702,55 @@ class TestStreamingExport:
         assert started["result"] == "started"
         assert completed["result"] == "success"
         assert (completed.get("duration_ms") or 0) > 0
+
+    @pytest.mark.asyncio
+    async def test_audit_operation_ignores_reserved_kwargs_on_success(self, audit_service):
+        """Reserved kwargs should be ignored rather than causing duplicate-kwarg crashes."""
+        ctx = AuditContext(user_id="ctx_reserved_success")
+        async with audit_operation(
+            audit_service,
+            AuditEventType.DATA_READ,
+            ctx,
+            resource_type="document",
+            resource_id="doc-reserved-success",
+            result="failure",
+            duration_ms=999.0,
+            error_message="override-me",
+        ):
+            await asyncio.sleep(0)
+
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="ctx_reserved_success")
+        assert len(events) == 1
+        event = events[0]
+        assert event["result"] == "success"
+        assert "override-me" not in str(event.get("error_message") or "")
+        # Context manager-computed duration must be used, not caller override.
+        assert float(event.get("duration_ms") or 0.0) != 999.0
+
+    @pytest.mark.asyncio
+    async def test_audit_operation_ignores_reserved_kwargs_on_failure(self, audit_service):
+        """Reserved kwargs should not mask real failure semantics."""
+        ctx = AuditContext(user_id="ctx_reserved_failure")
+        with pytest.raises(ValueError, match="boom-real"):
+            async with audit_operation(
+                audit_service,
+                AuditEventType.DATA_WRITE,
+                ctx,
+                resource_type="document",
+                result="success",
+                duration_ms=123.0,
+                error_message="override-me",
+            ):
+                raise ValueError("boom-real")
+
+        await audit_service.flush()
+        events = await audit_service.query_events(user_id="ctx_reserved_failure")
+        assert len(events) == 1
+        event = events[0]
+        assert event["result"] == "failure"
+        assert "boom-real" in str(event.get("error_message") or "")
+        assert "override-me" not in str(event.get("error_message") or "")
 
 
 # ============================================================================
@@ -2030,3 +2089,165 @@ async def test_migration_drops_legacy_views_and_triggers(tmp_path):
         assert "audit_rate_limit_changes" not in triggers
         cols = [row[1] for row in cur.execute("PRAGMA table_info(audit_events)")]
         assert "outcome" not in cols
+
+
+@pytest.mark.asyncio
+async def test_flush_propagates_cancellation_and_preserves_buffer(audit_service, monkeypatch):
+    """flush() should re-raise cancellation and keep buffered events."""
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_READ,
+        context=AuditContext(user_id="cancel-user"),
+    )
+    assert len(audit_service.event_buffer) == 1
+
+    async def _cancel_filter(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(audit_service, "_filter_new_events", _cancel_filter)
+
+    with pytest.raises(asyncio.CancelledError):
+        await audit_service.flush()
+
+    assert len(audit_service.event_buffer) == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_logs_propagates_cancellation(audit_service, monkeypatch):
+    """cleanup_old_logs() should not swallow task cancellation."""
+
+    async def _cancel_pool():
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(audit_service, "_ensure_db_pool", _cancel_pool)
+
+    with pytest.raises(asyncio.CancelledError):
+        await audit_service.cleanup_old_logs()
+
+
+@pytest.mark.asyncio
+async def test_audit_operation_logs_failure_for_non_whitelisted_exception(audit_service):
+    """Runtime exceptions outside noncritical tuple should still be audited as failures."""
+    context = AuditContext(user_id="zero-div-user")
+
+    with pytest.raises(ZeroDivisionError):
+        async with audit_operation(
+            audit_service,
+            AuditEventType.DATA_WRITE,
+            context,
+            resource_type="document",
+        ):
+            raise ZeroDivisionError("division by zero")
+
+    await audit_service.flush()
+    events = await audit_service.query_events(user_id="zero-div-user")
+    assert len(events) == 1
+    assert events[0]["result"] == "failure"
+    assert "division by zero" in (events[0]["error_message"] or "")
+
+
+@pytest.mark.asyncio
+async def test_replay_fallback_queue_parses_falsey_pii_detected_string(audit_service):
+    """Fallback replay should parse string false values as false."""
+    event = AuditEvent(
+        event_id="fallback-pii-string",
+        event_type=AuditEventType.DATA_READ,
+        category=AuditEventCategory.DATA_ACCESS,
+        context=AuditContext(user_id="fallback-user"),
+        pii_detected=True,
+    )
+    record = event.to_dict()
+    record["pii_detected"] = "false"
+
+    fb_path = Path(audit_service.db_path).parent / "audit_fallback_queue.jsonl"
+    fb_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    inserted = await audit_service.replay_fallback_queue(max_batch=100)
+    assert inserted == 1
+
+    events = await audit_service.query_events(user_id="fallback-user")
+    replayed = next((row for row in events if row["event_id"] == "fallback-pii-string"), None)
+    assert replayed is not None
+    assert replayed["pii_detected"] in (0, False)
+
+
+@pytest.mark.asyncio
+async def test_replay_fallback_queue_quarantines_malformed_lines(audit_service):
+    """Malformed fallback lines should be quarantined instead of dropped."""
+    event = AuditEvent(
+        event_id="fallback-quarantine-valid",
+        event_type=AuditEventType.DATA_READ,
+        category=AuditEventCategory.DATA_ACCESS,
+        context=AuditContext(user_id="fallback-quarantine-user"),
+    )
+
+    fb_path = Path(audit_service.db_path).parent / "audit_fallback_queue.jsonl"
+    bad_path = fb_path.with_suffix(".bad.jsonl")
+    bad_path.unlink(missing_ok=True)
+    fb_path.write_text(
+        "not-json\n[]\n" + json.dumps(event.to_dict()) + "\n",
+        encoding="utf-8",
+    )
+
+    inserted = await audit_service.replay_fallback_queue(max_batch=100)
+    assert inserted == 1
+    assert not fb_path.exists()
+    assert bad_path.exists()
+
+    bad_lines = [line.strip() for line in bad_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(bad_lines) == 2
+    assert "not-json" in bad_lines
+    assert "[]" in bad_lines
+
+    events = await audit_service.query_events(user_id="fallback-quarantine-user")
+    replayed = next((row for row in events if row["event_id"] == "fallback-quarantine-valid"), None)
+    assert replayed is not None
+
+
+@pytest.mark.asyncio
+async def test_query_events_raises_on_read_failure(audit_service, monkeypatch):
+    """query_events should raise on DB read failure (no silent empty success)."""
+
+    @asynccontextmanager
+    async def _boom_read_db():
+        raise RuntimeError("db read failed")
+        yield
+
+    monkeypatch.setattr(audit_service, "_read_db", _boom_read_db)
+
+    with pytest.raises(AuditReadError):
+        await audit_service.query_events(user_id="read-fail-user")
+
+
+@pytest.mark.asyncio
+async def test_count_events_raises_on_read_failure(audit_service, monkeypatch):
+    """count_events should raise on DB read failure (no silent zero success)."""
+
+    @asynccontextmanager
+    async def _boom_read_db():
+        raise RuntimeError("db count failed")
+        yield
+
+    monkeypatch.setattr(audit_service, "_read_db", _boom_read_db)
+
+    with pytest.raises(AuditReadError):
+        await audit_service.count_events(user_id="count-fail-user")
+
+
+@pytest.mark.asyncio
+async def test_export_events_raises_on_read_failure(audit_service, monkeypatch):
+    """export_events should raise when keyset query fails."""
+
+    @asynccontextmanager
+    async def _boom_read_db():
+        raise RuntimeError("db export failed")
+        yield
+
+    monkeypatch.setattr(audit_service, "_read_db", _boom_read_db)
+
+    with pytest.raises(AuditReadError):
+        await audit_service.export_events(
+            format="json",
+            user_id="export-fail-user",
+            stream=False,
+            max_rows=10,
+        )

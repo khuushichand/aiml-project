@@ -105,8 +105,10 @@ async def test_auth_governor_under_budget_includes_principal(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auth_governor_budget_check_failure_fails_open(monkeypatch):
+    marker = "budget backend down secret"
+
     async def _fake_is_key_over_budget(_key_id: int):
-        raise RuntimeError("budget backend down")
+        raise RuntimeError(marker)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
@@ -140,8 +142,10 @@ async def test_auth_governor_budget_check_failure_fails_open(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auth_governor_budget_check_failure_fails_closed(monkeypatch):
+    marker = "budget backend down secret"
+
     async def _fake_is_key_over_budget(_key_id: int):
-        raise RuntimeError("budget backend down")
+        raise RuntimeError(marker)
 
     monkeypatch.setattr(
         "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
@@ -168,9 +172,50 @@ async def test_auth_governor_budget_check_failure_fails_closed(monkeypatch):
 
     assert result["over"] is True
     assert "budget_check_failed" in result.get("reasons", [])
+    assert result.get("error") == "budget_check_failed"
+    assert marker not in str(result)
     meta = result.get("principal") or {}
     assert meta.get("api_key_id") == 321
     assert meta.get("user_id") == 4
+
+
+@pytest.mark.asyncio
+async def test_auth_governor_budget_check_failure_defaults_to_fail_closed(monkeypatch):
+    marker = "budget backend down secret"
+
+    async def _fake_is_key_over_budget(_key_id: int):
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.auth_governor.is_key_over_budget",
+        _fake_is_key_over_budget,
+    )
+    monkeypatch.delenv("AUTH_BUDGET_FAIL_OPEN", raising=False)
+
+    principal = AuthPrincipal(
+        kind="api_key",
+        user_id=5,
+        api_key_id=654,
+        subject=None,
+        token_type="api_key",
+        jti=None,
+        roles=[],
+        permissions=[],
+        is_admin=False,
+        org_ids=[],
+        team_ids=[],
+    )
+
+    gov = AuthGovernor()
+    result = await gov.check_llm_budget_for_api_key(principal, 654)
+
+    assert result["over"] is True
+    assert "budget_check_failed" in result.get("reasons", [])
+    assert result.get("error") == "budget_check_failed"
+    assert marker not in str(result)
+    meta = result.get("principal") or {}
+    assert meta.get("api_key_id") == 654
+    assert meta.get("user_id") == 5
 
 
 @pytest.mark.asyncio

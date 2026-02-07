@@ -264,25 +264,17 @@ async def test_resend_verification_throttled(isolated_test_environment, test_use
             self.sent = True
             return True
 
-    class _StubLimiter:
-        async def check_rate_limit(self, *args, **kwargs):
-            return False, {}
-
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
     stub_email = _StubEmail()
     monkeypatch.setattr(auth, "_get_email_service", lambda: stub_email)
+    async def _deny_auth_rg(*args, **kwargs):
+        return False, 1
+    monkeypatch.setattr(auth, "_reserve_auth_rg_requests", _deny_auth_rg)
 
-    from tldw_Server_API.app.api.v1.API_Deps.auth_deps import get_rate_limiter_dep
-    app = client.app
-    app.dependency_overrides[get_rate_limiter_dep] = lambda: _StubLimiter()
-
-    try:
-        r = client.post(
-            "/api/v1/auth/resend-verification",
-            json={"email": test_user["email"]},
-        )
-        assert r.status_code == 200
-        assert "email" in r.json().get("message", "").lower()
-        assert stub_email.sent is False
-    finally:
-        app.dependency_overrides.pop(get_rate_limiter_dep, None)
+    r = client.post(
+        "/api/v1/auth/resend-verification",
+        json={"email": test_user["email"]},
+    )
+    assert r.status_code == 200
+    assert "email" in r.json().get("message", "").lower()
+    assert stub_email.sent is False

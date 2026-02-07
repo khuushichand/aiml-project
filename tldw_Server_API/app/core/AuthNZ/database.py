@@ -565,7 +565,20 @@ class DatabasePool:
                 cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 if row:
-                    return dict(row)
+                    # Convert sqlite row objects defensively across row_factory variants.
+                    if isinstance(row, dict):
+                        return row
+                    with suppress(Exception):
+                        return {key: row[key] for key in row.keys()}  # type: ignore[call-arg]
+                    with suppress(Exception):
+                        return dict(row)
+                    values = tuple(row)
+                    with suppress(Exception):
+                        if values and all(
+                            isinstance(item, (tuple, list)) and len(item) == 2 for item in values
+                        ):
+                            return {str(item[0]): item[1] for item in values}
+                    return {str(index): value for index, value in enumerate(values)}
                 return None
 
     # Compatibility aliases for callers expecting asyncpg-like API

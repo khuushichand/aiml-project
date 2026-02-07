@@ -8,7 +8,12 @@ from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import (
     _reset_topic_monitoring_service,
 )
 from tldw_Server_API.app.api.v1.schemas.monitoring_schemas import Watchlist, WatchlistRule
-from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import TopicMonitoringDB, TopicAlert
+from tldw_Server_API.app.core.DB_Management.TopicMonitoring_DB import (
+    TopicMonitoringDB,
+    TopicAlert,
+    WatchlistRecord,
+    WatchlistRuleRecord,
+)
 
 
 pytestmark = pytest.mark.unit
@@ -251,6 +256,41 @@ def test_topic_monitoring_allows_duplicate_rule_ids_across_watchlists(tmp_path, 
     rule_id_1 = by_name["WL One"]["rules"][0]["rule_id"]
     rule_id_2 = by_name["WL Two"]["rules"][0]["rule_id"]
     assert rule_id_1 == rule_id_2
+
+
+def test_list_watchlists_include_rules_materializes_rows_without_index_error(tmp_path: Path) -> None:
+    db_file = tmp_path / "alerts.db"
+    db = TopicMonitoringDB(db_path=str(db_file))
+
+    watchlist_id = "wl-materialize"
+    db.upsert_watchlist(
+        WatchlistRecord(
+            id=watchlist_id,
+            name="Materialize Test",
+            scope_type="user",
+            scope_id="u1",
+        )
+    )
+    db.replace_watchlist_rules(
+        watchlist_id,
+        [
+            WatchlistRuleRecord(
+                rule_id="rule-1",
+                watchlist_id=watchlist_id,
+                pattern="badword",
+                category="custom",
+                severity="warning",
+                tags=["a", "b"],
+            )
+        ],
+    )
+
+    rows = db.list_watchlists(include_rules=True)
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == watchlist_id
+    assert rows[0]["rules"][0]["rule_id"] == "rule-1"
+    assert rows[0]["rules"][0]["watchlist_id"] == watchlist_id
 
 
 def test_topic_monitoring_global_watchlist_without_user_id(tmp_path, monkeypatch):

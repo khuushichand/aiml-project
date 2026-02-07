@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 from loguru import logger
-from pydantic import AnyUrl, BaseModel, Field, ValidationError, model_validator, validator
+from pydantic import AnyUrl, BaseModel, Field, ValidationError, field_validator, model_validator
 
 
 def _default_catalog_path() -> Path:
@@ -63,13 +63,15 @@ class OwnershipPredicateEntry(BaseModel):
     evaluator: str
     description: str | None
 
-    @validator("id")
+    @field_validator("id")
+    @classmethod
     def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Ownership predicate id cannot be empty.")
         return value
 
-    @validator("evaluator")
+    @field_validator("evaluator")
+    @classmethod
     def validate_evaluator(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Ownership predicate evaluator cannot be empty.")
@@ -84,13 +86,15 @@ class RateLimitClassEntry(BaseModel):
     burst: int
     notes: str | None
 
-    @validator("id")
+    @field_validator("id")
+    @classmethod
     def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Rate limit class id cannot be empty.")
         return value
 
-    @validator("requests_per_min", "burst")
+    @field_validator("requests_per_min", "burst")
+    @classmethod
     def validate_positive(cls, value: int) -> int:
         if value < 0:
             raise ValueError("Rate limit quotas must be non-negative.")
@@ -106,13 +110,15 @@ class FeatureFlagEntry(BaseModel):
     allowed_roles: list[str] = Field(default_factory=list)
     expires_at: str | None
 
-    @validator("id")
+    @field_validator("id")
+    @classmethod
     def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Feature flag id cannot be empty.")
         return value
 
-    @validator("default_state")
+    @field_validator("default_state")
+    @classmethod
     def validate_state(cls, value: str) -> str:
         allowed = {"enabled", "disabled"}
         if value not in allowed:
@@ -133,34 +139,39 @@ class ScopeEntry(BaseModel):
     ownership_predicates: list[str] = Field(default_factory=list)
     doc_url: AnyUrl | None
 
-    @validator("id")
+    @field_validator("id")
+    @classmethod
     def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Scope id cannot be empty.")
         return value
 
-    @validator("sensitivity_tier")
+    @field_validator("sensitivity_tier")
+    @classmethod
     def validate_tier(cls, value: str) -> str:
         allowed = {"low", "moderate", "high", "restricted"}
         if value not in allowed:
             raise ValueError(f"sensitivity_tier must be one of {allowed}, got '{value}'.")
         return value
 
-    @validator("resource_tags", each_item=True)
-    def validate_resource_tags(cls, value: str) -> str:
-        if not value.strip():
+    @field_validator("resource_tags")
+    @classmethod
+    def validate_resource_tags(cls, value: list[str]) -> list[str]:
+        if any(not str(item).strip() for item in value):
             raise ValueError("Resource tags cannot be empty strings.")
         return value
 
-    @validator("default_roles", each_item=True)
-    def validate_roles(cls, value: str) -> str:
-        if not value.strip():
+    @field_validator("default_roles")
+    @classmethod
+    def validate_roles(cls, value: list[str]) -> list[str]:
+        if any(not str(item).strip() for item in value):
             raise ValueError("Role names cannot be empty strings.")
         return value
 
-    @validator("ownership_predicates", each_item=True)
-    def validate_ownership_predicates(cls, value: str) -> str:
-        if not value.strip():
+    @field_validator("ownership_predicates")
+    @classmethod
+    def validate_ownership_predicates(cls, value: list[str]) -> list[str]:
+        if any(not str(item).strip() for item in value):
             raise ValueError("Ownership predicate identifiers cannot be empty strings.")
         return value
 
@@ -175,7 +186,8 @@ class PrivilegeCatalog(BaseModel):
     rate_limit_classes: list[RateLimitClassEntry] = Field(default_factory=list)
     ownership_predicates: list[OwnershipPredicateEntry] = Field(default_factory=list)
 
-    @validator("version")
+    @field_validator("version")
+    @classmethod
     def validate_version(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Catalog version cannot be empty.")
@@ -189,12 +201,15 @@ class PrivilegeCatalog(BaseModel):
         ownership_predicates: list[OwnershipPredicateEntry] = self.ownership_predicates
 
         self._assert_unique([scope.id for scope in scopes], "scope id")
-        feature_flag_ids = {flag.id for flag in feature_flags}
-        self._assert_unique(feature_flag_ids, "feature flag id")
-        rate_limit_ids = {rl.id for rl in limit_classes}
-        self._assert_unique(rate_limit_ids, "rate limit class id")
-        ownership_ids = {pred.id for pred in ownership_predicates}
-        self._assert_unique(ownership_ids, "ownership predicate id")
+        feature_flag_id_values = [flag.id for flag in feature_flags]
+        self._assert_unique(feature_flag_id_values, "feature flag id")
+        feature_flag_ids = set(feature_flag_id_values)
+        rate_limit_id_values = [rl.id for rl in limit_classes]
+        self._assert_unique(rate_limit_id_values, "rate limit class id")
+        rate_limit_ids = set(rate_limit_id_values)
+        ownership_id_values = [pred.id for pred in ownership_predicates]
+        self._assert_unique(ownership_id_values, "ownership predicate id")
+        ownership_ids = set(ownership_id_values)
 
         for scope in scopes:
             if scope.feature_flag_id and scope.feature_flag_id not in feature_flag_ids:

@@ -102,3 +102,69 @@ async def test_run_audio_batch_counts_warnings_as_processed(monkeypatch, tmp_pat
     assert "Warning" in statuses
     assert "Success" in statuses
     assert "Error" in statuses
+
+
+@pytest.mark.asyncio
+async def test_run_audio_batch_dedupes_errors_in_stable_order(monkeypatch, tmp_path):
+    def fake_process_audio_files(**_kwargs: Any) -> Dict[str, Any]:
+        return {
+            "results": [
+                {
+                    "status": "Error",
+                    "input_ref": "bad-input",
+                    "processing_source": "bad-input",
+                    "media_type": "audio",
+                    "metadata": {},
+                    "content": None,
+                    "segments": None,
+                    "chunks": None,
+                    "analysis": None,
+                    "analysis_details": {},
+                    "error": "gamma",
+                    "warnings": None,
+                }
+            ],
+            "processed_count": 0,
+            "errors_count": 1,
+            "errors": ["beta", "alpha", "gamma", "beta"],
+        }
+
+    monkeypatch.setattr(audio_batch, "process_audio_files", fake_process_audio_files)
+
+    form_data = SimpleNamespace(
+        transcription_model=None,
+        transcription_language=None,
+        perform_chunking=False,
+        chunk_method=None,
+        chunk_size=None,
+        chunk_overlap=None,
+        use_adaptive_chunking=False,
+        use_multi_level_chunking=False,
+        chunk_language=None,
+        diarize=False,
+        vad_use=False,
+        timestamp_option=None,
+        perform_analysis=False,
+        api_name=None,
+        custom_prompt=None,
+        system_prompt=None,
+        summarize_recursively=False,
+        use_cookies=False,
+        cookies=None,
+        title=None,
+        author=None,
+    )
+
+    batch = await audio_batch.run_audio_batch(
+        all_inputs=["bad-input"],
+        form_data=form_data,
+        temp_dir=str(tmp_path),
+        temp_path_to_original_name={},
+        saved_files=[],
+        file_errors_raw=[
+            {"input_ref": "upload-a", "error": "alpha"},
+            {"input_ref": "upload-b", "error": "beta"},
+        ],
+    )
+
+    assert batch["errors"] == ["alpha", "beta", "gamma"]

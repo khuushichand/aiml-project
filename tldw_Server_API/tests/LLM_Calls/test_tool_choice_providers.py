@@ -70,17 +70,21 @@ def test_openai_tool_choice_gating(monkeypatch):
 
     # 1) No tools, tool_choice should raise a deterministic 400
     with pytest.raises(ChatBadRequestError):
-        chat_with_openai(messages, tool_choice={"type": "function", "function": {"name": "f"}})
+        chat_with_openai(
+            messages,
+            model="gpt-4o-mini",
+            tool_choice={"type": "function", "function": {"name": "f"}},
+        )
 
     # 2) No tools, tool_choice == "none" should be allowed
-    chat_with_openai(messages, tool_choice="none")
+    chat_with_openai(messages, model="gpt-4o-mini", tool_choice="none")
     payload = captured["json"]
     assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
     tc = {"type": "function", "function": {"name": "f"}}
-    chat_with_openai(messages, tools=tools, tool_choice=tc)
+    chat_with_openai(messages, model="gpt-4o-mini", tools=tools, tool_choice=tc)
     payload = captured["json"]
     assert payload.get("tool_choice") == tc
 
@@ -95,16 +99,20 @@ def test_groq_tool_choice_gating(monkeypatch):
 
     # 1) No tools, tool_choice should raise a deterministic 400
     with pytest.raises(ChatBadRequestError):
-        chat_with_groq(messages, tool_choice={"type": "function", "function": {"name": "f"}})
+        chat_with_groq(
+            messages,
+            model="llama-3.1-8b-instant",
+            tool_choice={"type": "function", "function": {"name": "f"}},
+        )
 
     # 2) No tools, tool_choice == "none" should be allowed
-    chat_with_groq(messages, tool_choice="none")
+    chat_with_groq(messages, model="llama-3.1-8b-instant", tool_choice="none")
     payload = captured["json"]
     assert payload.get("tool_choice") == "none"
 
     # 3) Tools present, function tool_choice should be honored
     tools = [{"type": "function", "function": {"name": "f", "parameters": {}}}]
     tc = {"type": "function", "function": {"name": "f"}}
-    chat_with_groq(messages, tools=tools, tool_choice=tc)
+    chat_with_groq(messages, model="llama-3.1-8b-instant", tools=tools, tool_choice=tc)
     payload = captured["json"]
     assert payload.get("tool_choice") == tc

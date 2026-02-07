@@ -42,6 +42,15 @@ _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS = (
     json.JSONDecodeError,
 )
 
+try:
+    import httpx as _google_httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _google_httpx = None
+else:
+    _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS = _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS + (
+        _google_httpx.HTTPError,
+    )
+
 
 def _stream_debug_enabled(provider: str) -> bool:
     value = (os.getenv("LLM_ADAPTERS_STREAM_DEBUG") or "").strip().lower()
@@ -149,6 +158,14 @@ class GoogleAdapter(ChatProvider):
         override = (request or {}).get("base_url")
         if isinstance(override, str) and override.strip():
             return override.strip().rstrip("/")
+        try:
+            cfg = (request or {}).get("app_config") or {}
+            gcfg = cfg.get("google_api") or {}
+            base = gcfg.get("api_base_url") or gcfg.get("api_base")
+            if isinstance(base, str) and base.strip():
+                return base.strip().rstrip("/")
+        except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS:
+            pass
         return os.getenv("GOOGLE_GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
 
     def _headers(self, api_key: str | None) -> dict[str, str]:
@@ -187,6 +204,8 @@ class GoogleAdapter(ChatProvider):
             # Gemini uses "model" instead of "assistant"
             if role == "assistant":
                 role = "model"
+            elif role not in {"user", "model"}:
+                role = "user"
             content = m.get("content")
             parts: list[dict[str, Any]] = []
             if isinstance(content, str):

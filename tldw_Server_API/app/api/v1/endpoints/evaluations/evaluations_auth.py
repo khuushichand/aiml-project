@@ -32,8 +32,25 @@ from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import (
     verify_jwt_and_fetch_user,
 )
 from tldw_Server_API.app.core.exceptions import InactiveUserError
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 security = HTTPBearer(auto_error=False)
+
+
+def _env_truthy(name: str, default: str = "") -> bool:
+    return str(os.getenv(name, default)).strip().lower() in {"true", "1", "yes", "on"}
+
+
+def _evals_heavy_admin_only_enabled() -> bool:
+    return _env_truthy("EVALS_HEAVY_ADMIN_ONLY", "true")
+
+
+def _evals_testing_bypass_enabled() -> bool:
+    return is_explicit_pytest_runtime() and _env_truthy("TESTING") and not _evals_heavy_admin_only_enabled()
+
+
+def _evals_test_mode_bypass_enabled() -> bool:
+    return is_explicit_pytest_runtime() and _env_truthy("TEST_MODE")
 
 
 def sanitize_error_message(error: Exception, context: str = "") -> str:
@@ -87,13 +104,9 @@ async def verify_api_key(
     """Verify API key or JWT token based on auth mode (single_user|multi_user)."""
     settings = get_settings()
 
-    # Testing bypass
-    try:
-        if os.getenv("TESTING", "").lower() in ("true", "1", "yes") and \
-           os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in ("true", "1", "yes"):
-            return "test_user"
-    except Exception:
-        pass
+    # Test-only bypass: must run under explicit pytest runtime.
+    if _evals_testing_bypass_enabled():
+        return "test_user"
 
     token = None
     if settings.AUTH_MODE == "single_user" and x_api_key and isinstance(x_api_key, str):
@@ -126,12 +139,9 @@ async def verify_api_key(
             }},
         )
 
-    # Test-mode convenience
-    try:
-        if os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes") and settings.AUTH_MODE == "single_user":
-            return token
-    except Exception:
-        pass
+    # Test-mode convenience (single-user): must run under explicit pytest runtime.
+    if _evals_test_mode_bypass_enabled() and settings.AUTH_MODE == "single_user":
+        return token
 
     if settings.AUTH_MODE == "single_user":
         expected_token = (
@@ -152,14 +162,11 @@ async def verify_api_key(
         if token == expected_token:
             return token
     elif settings.AUTH_MODE == "multi_user":
-        # In TEST_MODE, allow using SINGLE_USER_API_KEY as a bearer for compatibility
-        try:
-            if os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
-                env_key = os.getenv("SINGLE_USER_API_KEY") or getattr(settings, "SINGLE_USER_API_KEY", None)
-                if env_key and token == env_key:
-                    return "test_user"
-        except Exception:
-            pass
+        # In TEST_MODE, allow SINGLE_USER_API_KEY bearer only under explicit pytest runtime.
+        if _evals_test_mode_bypass_enabled():
+            env_key = os.getenv("SINGLE_USER_API_KEY") or getattr(settings, "SINGLE_USER_API_KEY", None)
+            if env_key and token == env_key:
+                return "test_user"
         try:
             jwt_service = get_jwt_service()
             # Decode early to surface token-specific errors before user lookup.
@@ -244,17 +251,13 @@ async def get_eval_request_user(
 ) -> User:
     """Resolve the authenticated User after evaluations auth validation."""
     if not api_key and not token and not legacy_token_header:
-        try:
-            if os.getenv("TESTING", "").lower() in {"true", "1", "yes", "on"} and \
-               os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"true", "1", "yes", "on"}:
-                return await get_request_user(
-                    request=request,
-                    api_key=api_key,
-                    token=token,
-                    legacy_token_header=legacy_token_header,
-                )
-        except Exception:
-            pass
+        if _evals_testing_bypass_enabled():
+            return await get_request_user(
+                request=request,
+                api_key=api_key,
+                token=token,
+                legacy_token_header=legacy_token_header,
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={

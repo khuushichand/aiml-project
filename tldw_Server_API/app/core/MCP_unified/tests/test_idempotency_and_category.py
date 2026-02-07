@@ -2,7 +2,7 @@ import pytest
 
 from typing import Dict, Any
 
-from tldw_Server_API.app.core.MCP_unified.protocol import MCPProtocol, MCPRequest, RequestContext
+from tldw_Server_API.app.core.MCP_unified.protocol import IdempotencyManager, MCPProtocol, MCPRequest, RequestContext
 from tldw_Server_API.app.core.MCP_unified.modules.base import BaseModule, ModuleConfig, create_tool_definition
 from tldw_Server_API.app.core.MCP_unified.modules.registry import get_module_registry
 from tldw_Server_API.app.core.MCP_unified.monitoring.metrics import get_metrics_collector
@@ -87,6 +87,70 @@ async def test_idempotency_dedupes_write_calls():
     assert misses and any(getattr(e, "labels", {}).get("tool") == "write_count" for e in misses)
 
 
+@pytest.mark.asyncio
+async def test_idempotency_key_reuse_with_different_arguments_rejected():
+    registry = get_module_registry()
+    await registry.register_module("counting_write_diff_args", _CountingWriteModule, ModuleConfig(name="counting_write_diff_args"))
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+
+    ctx = RequestContext(request_id="id2", user_id="u1", client_id="c1")
+
+    req1 = MCPRequest(method="tools/call", params={
+        "name": "write_count",
+        "arguments": {"x": "A"},
+        "idempotencyKey": "k-diff-1",
+    }, id="r1")
+    resp1 = await proto.process_request(req1, ctx)
+    assert resp1.error is None
+    payload1 = resp1.result
+    assert any(part.get("text", "").startswith("count:1:A") for part in payload1.get("content", []))
+
+    # Reusing the same key with different args must fail explicitly.
+    req2 = MCPRequest(method="tools/call", params={
+        "name": "write_count",
+        "arguments": {"x": "B"},
+        "idempotencyKey": "k-diff-1",
+    }, id="r2")
+    resp2 = await proto.process_request(req2, ctx)
+    assert resp2.error is not None
+    assert resp2.error.code == -32602
+    assert "idempotency key" in resp2.error.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_idempotency_key_isolated_across_users():
+    registry = get_module_registry()
+    await registry.register_module("counting_write_user_isolation", _CountingWriteModule, ModuleConfig(name="counting_write_user_isolation"))
+
+    proto = MCPProtocol()
+    proto.rbac_policy = AllowAllRBAC()
+
+    req = MCPRequest(method="tools/call", params={
+        "name": "write_count",
+        "arguments": {"x": "A"},
+        "idempotencyKey": "k-shared",
+    }, id="r1")
+
+    resp_user_1 = await proto.process_request(req, RequestContext(request_id="u1", user_id="u1", client_id="c1"))
+    assert resp_user_1.error is None
+    payload_user_1 = resp_user_1.result
+    assert any(part.get("text", "").startswith("count:1:A") for part in payload_user_1.get("content", []))
+
+    resp_user_2 = await proto.process_request(
+        MCPRequest(
+            method="tools/call",
+            params={"name": "write_count", "arguments": {"x": "A"}, "idempotencyKey": "k-shared"},
+            id="r2",
+        ),
+        RequestContext(request_id="u2", user_id="u2", client_id="c1"),
+    )
+    assert resp_user_2.error is None
+    payload_user_2 = resp_user_2.result
+    assert any(part.get("text", "").startswith("count:2:A") for part in payload_user_2.get("content", []))
+
+
 class _CategoryProbeLimiter:
     def __init__(self):
         self.last_category = None
@@ -141,3 +205,25 @@ async def test_category_prefers_metadata_over_config_mapping(monkeypatch):
     assert resp.error is None
     # The category should be 'ingestion' from metadata
     assert probe.last_category == "ingestion"
+
+
+@pytest.mark.asyncio
+async def test_idempotency_local_lock_map_prunes_with_cache_bounds():
+    manager = IdempotencyManager()
+
+    async def _execute(value: str):
+        return {"content": [{"type": "text", "text": value}]}
+
+    for idx in range(10):
+        key = f"k-{idx}"
+        await manager.run(
+            key,
+            lambda i=idx: _execute(str(i)),
+            ttl=1,
+            max_size=3,
+            lock_ttl=2,
+        )
+
+    # Local cache is size-bounded, and lock bookkeeping should track cache lifetime.
+    assert len(manager._local_cache) <= 3
+    assert len(manager._local_locks) <= 3

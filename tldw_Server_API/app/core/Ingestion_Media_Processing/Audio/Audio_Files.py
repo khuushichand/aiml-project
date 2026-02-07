@@ -24,6 +24,7 @@
 # Imports
 import json
 import os
+import string
 import tempfile
 import time
 import uuid
@@ -267,6 +268,17 @@ def _unique_path(target_path: Path) -> Path:
             return candidate
     unique_suffix = uuid.uuid4().hex[:UUID_LENGTH]
     return target_path.with_name(f"{stem}_{unique_suffix}{suffix}")
+
+
+def _default_title_from_audio_path(audio_path: str | Path) -> str:
+    stem = Path(audio_path).stem
+    marker_len = int(UUID_LENGTH)
+    if marker_len > 0 and len(stem) > marker_len + 1 and stem[-(marker_len + 1)] == "_":
+        suffix = stem[-marker_len:]
+        if all(char in string.hexdigits for char in suffix):
+            trimmed = stem[: -(marker_len + 1)]
+            return trimmed or stem
+    return stem
 
 def download_audio_file(
     url: str,
@@ -787,7 +799,10 @@ def process_audio_files(
 
                         item_result["processing_source"] = current_audio_path
                         item_temp_files.append(current_audio_path) # Mark for potential cleanup
-                        item_result["metadata"]["title"] = item_result["metadata"].get("title") or Path(current_audio_path).stem.replace("_"+uuid.uuid4().hex[:8],"") # Basic title
+                        item_result["metadata"]["title"] = (
+                            item_result["metadata"].get("title")
+                            or _default_title_from_audio_path(current_audio_path)
+                        )
                     except _AUDIO_FILES_NONCRITICAL_EXCEPTIONS as download_err:
                         err_msg = f"Failed to download/prepare URL: {download_err}"
                         update_progress(err_msg)

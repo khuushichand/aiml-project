@@ -215,6 +215,7 @@ class MCPServer:
 
         # Server state
         self.initialized = False
+        self._initialize_lock = asyncio.Lock()
         self.startup_time = datetime.now(timezone.utc)
         self.shutdown_event = asyncio.Event()
 
@@ -248,56 +249,59 @@ class MCPServer:
         if self.initialized:
             logger.warning("Server already initialized")
             return
+        async with self._initialize_lock:
+            if self.initialized:
+                logger.warning("Server already initialized")
+                return
+            logger.info("Initializing MCP Server")
 
-        logger.info("Initializing MCP Server")
-
-        try:
-            # Fail fast on insecure production configurations
             try:
-                import os as _os
-                _test_mode = (
-                    _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
-                    or bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                )
-                if not self.config.debug_mode and not _test_mode:
-                    ok = validate_config()
-                    if not ok:
-                        raise RuntimeError("MCP configuration validation failed; refusing to start in production")
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                # If validation fails, propagate to abort startup
-                raise
-            # Warn if demo auth is enabled in a non-debug environment
-            try:
-                import os as _os
-                if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
-                    logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
-            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
-                pass
-            # Start module health monitoring
-            await self.module_registry.start_health_monitoring()
-
-            # Start metrics collection
-            if self.config.metrics_enabled:
+                # Fail fast on insecure production configurations
                 try:
-                    await get_metrics_collector().start_collection()
-                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
-                    logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
+                    import os as _os
+                    _test_mode = (
+                        _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
+                        or bool(_os.getenv("PYTEST_CURRENT_TEST"))
+                    )
+                    if not self.config.debug_mode and not _test_mode:
+                        ok = validate_config()
+                        if not ok:
+                            raise RuntimeError("MCP configuration validation failed; refusing to start in production")
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
+                    # If validation fails, propagate to abort startup
+                    raise
+                # Warn if demo auth is enabled in a non-debug environment
+                try:
+                    import os as _os
+                    if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
+                        logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
+                except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
+                    pass
+                # Start module health monitoring
+                await self.module_registry.start_health_monitoring()
 
-            # Register default modules (will be implemented when migrating modules)
-            await self._register_default_modules()
+                # Start metrics collection
+                if self.config.metrics_enabled:
+                    try:
+                        await get_metrics_collector().start_collection()
+                    except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
+                        logger.warning(f"MCP metrics collector start failed: {self._mask_secrets(str(e))}")
 
-            # Ensure default tool permissions exist (wildcard)
-            await self._ensure_default_tool_permissions()
+                # Register default modules (will be implemented when migrating modules)
+                await self._register_default_modules()
 
-            # Start background tasks
-            self._start_background_tasks()
+                # Ensure default tool permissions exist (wildcard)
+                await self._ensure_default_tool_permissions()
 
-            self.initialized = True
-            logger.info("MCP Server initialized successfully")
+                # Start background tasks
+                self._start_background_tasks()
 
-        except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
-            logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
-            raise
+                self.initialized = True
+                logger.info("MCP Server initialized successfully")
+
+            except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
+                logger.error(f"Server initialization failed: {self._mask_secrets(str(e))}")
+                raise
 
     async def _ensure_default_tool_permissions(self):
         """Seed wildcard tool permission tools.execute:* if missing."""

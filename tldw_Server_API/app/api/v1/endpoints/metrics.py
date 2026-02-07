@@ -61,7 +61,7 @@ async def get_prometheus_metrics() -> Response:
                         _emb.embedding_stage_flag.labels(stage=_st, flag="paused").set(1.0 if str(p).lower() in ("1","true","yes") else 0.0)
                         _emb.embedding_stage_flag.labels(stage=_st, flag="drain").set(1.0 if str(d).lower() in ("1","true","yes") else 0.0)
                     except _METRICS_NONCRITICAL_EXCEPTIONS:
-                        logger.debug("metrics: failed to refresh stage gauge for %s", _st)
+                        logger.debug("metrics: failed to refresh stage gauge for {}", _st)
                 try:
                     await client.close()
                 except _METRICS_NONCRITICAL_EXCEPTIONS:
@@ -239,9 +239,7 @@ async def reset_metrics() -> dict[str, str]:
         registry.reset()
 
         # Reset active counters
-        chat_metrics.active_requests = 0
-        chat_metrics.active_streams = 0
-        chat_metrics.active_transactions = 0
+        chat_metrics.reset_active_metrics()
 
         logger.info("Metrics reset by admin")
 

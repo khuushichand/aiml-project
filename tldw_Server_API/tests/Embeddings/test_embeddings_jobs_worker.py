@@ -118,13 +118,28 @@ async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
         return [[0.1, 0.2, 0.3]]
 
     stored: dict[str, object] = {}
+    created: dict[str, object] = {}
 
-    def fake_store_in_chroma(*, texts, embeddings, ids, metadatas, collection_name):
-        stored["texts"] = texts
-        stored["embeddings"] = embeddings
-        stored["ids"] = ids
-        stored["metadatas"] = metadatas
-        stored["collection_name"] = collection_name
+    class FakeChromaDBManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            created["user_id"] = user_id
+            created["user_embedding_config"] = user_embedding_config
+
+        def store_in_chroma(
+            self,
+            collection_name,
+            texts,
+            embeddings,
+            ids,
+            metadatas,
+            embedding_model_id_for_dim_check=None,
+        ):
+            stored["texts"] = texts
+            stored["embeddings"] = embeddings
+            stored["ids"] = ids
+            stored["metadatas"] = metadatas
+            stored["collection_name"] = collection_name
+            stored["embedding_model_id_for_dim_check"] = embedding_model_id_for_dim_check
 
     monkeypatch.setattr(
         embeddings_v5_production_enhanced,
@@ -133,7 +148,8 @@ async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
     )
     monkeypatch.setattr(jobs_worker, "_resolve_model_provider", lambda *_: ("test-model", "test-provider"))
     monkeypatch.setattr(jobs_worker, "_kanban_card_indexable", lambda **_: True)
-    monkeypatch.setattr(jobs_worker, "store_in_chroma", fake_store_in_chroma)
+    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": "/tmp/test"})
+    monkeypatch.setattr(jobs_worker, "ChromaDBManager", FakeChromaDBManager)
 
     job = {
         "job_type": "content_embeddings",
@@ -153,6 +169,99 @@ async def test_embeddings_worker_custom_content_stores_in_chroma(monkeypatch):
     result = await jobs_worker._handle_job(job)
 
     assert result["embedding_count"] == 1
+    assert created["user_id"] == "1"
     assert stored["collection_name"] == "kanban_user_1"
     assert stored["ids"] == ["card_55"]
     assert stored["metadatas"][0]["card_id"] == 55
+    assert stored["embedding_model_id_for_dim_check"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_embeddings_worker_storage_uses_user_scoped_chroma_manager(monkeypatch, tmp_path):
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    chunks_path = artifact_dir / "chunks.json"
+    embeddings_path = artifact_dir / "embeddings.json"
+
+    chunks_path.write_text(
+        '[{"text": "hello embeddings", "index": 0, "start": 0, "end": 16}]',
+        encoding="utf-8",
+    )
+    embeddings_path.write_text(
+        '{"embeddings": [[0.1, 0.2, 0.3]], "embedding_model": "test-model", "embedding_provider": "test-provider"}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(jobs_worker, "_artifact_dir", lambda *_, **__: artifact_dir)
+    monkeypatch.setattr(
+        jobs_worker,
+        "_load_media_content",
+        lambda *_: {"media_item": {"title": "Doc", "author": "A"}, "content": {"content": "hello embeddings"}},
+    )
+    monkeypatch.setattr(jobs_worker, "invalidate_rag_caches", lambda *_, **__: None)
+    monkeypatch.setattr(jobs_worker, "_embedding_config_for_user", lambda: {"USER_DB_BASE_DIR": str(tmp_path)})
+
+    captured: dict[str, object] = {}
+
+    class FakeChromaDBManager:
+        def __init__(self, *, user_id, user_embedding_config):
+            captured["user_id"] = user_id
+            captured["user_embedding_config"] = user_embedding_config
+
+        def store_in_chroma(
+            self,
+            collection_name,
+            texts,
+            embeddings,
+            ids,
+            metadatas,
+            embedding_model_id_for_dim_check=None,
+        ):
+            captured["collection_name"] = collection_name
+            captured["texts"] = texts
+            captured["embeddings"] = embeddings
+            captured["ids"] = ids
+            captured["metadatas"] = metadatas
+            captured["embedding_model_id_for_dim_check"] = embedding_model_id_for_dim_check
+
+    monkeypatch.setattr(jobs_worker, "ChromaDBManager", FakeChromaDBManager)
+
+    result = await jobs_worker._handle_storage_job(
+        job={"id": 1, "uuid": "job-1"},
+        payload={},
+        media_id=42,
+        user_id="user-42",
+        embedding_model="test-model",
+        embedding_provider="test-provider",
+        root_uuid=None,
+    )
+
+    assert result["embedding_count"] == 1
+    assert captured["user_id"] == "user-42"
+    assert captured["collection_name"] == "user_user-42_media_embeddings"
+    assert captured["ids"] == ["media_42_chunk_0"]
+    assert captured["embedding_model_id_for_dim_check"] == "test-model"
+
+
+@pytest.mark.asyncio
+async def test_embeddings_worker_storage_rejects_malformed_idempotent_artifact(monkeypatch, tmp_path):
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    storage_path = artifact_dir / "storage.json"
+    storage_path.write_text('["bad-shape"]', encoding="utf-8")
+
+    monkeypatch.setattr(jobs_worker, "_artifact_dir", lambda *_, **__: artifact_dir)
+
+    with pytest.raises(jobs_worker.EmbeddingsJobError) as excinfo:
+        await jobs_worker._handle_storage_job(
+            job={"id": 2, "uuid": "job-2"},
+            payload={},
+            media_id=77,
+            user_id="user-77",
+            embedding_model="test-model",
+            embedding_provider="test-provider",
+            root_uuid=None,
+        )
+
+    assert "Storage artifact invalid for idempotent reuse" in str(excinfo.value)
+    assert excinfo.value.retryable is False

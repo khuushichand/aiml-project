@@ -2,12 +2,15 @@
 Integration tests for role normalization and message search placeholder handling.
 """
 
+import base64
 from datetime import datetime, timezone
+import io
 import shutil
 import tempfile
 
 import httpx
 import pytest
+from PIL import Image
 
 from tldw_Server_API.app.core.AuthNZ.settings import get_settings, reset_settings
 
@@ -443,6 +446,238 @@ async def test_chat_settings_server_wins_when_updated_at_equal(monkeypatch):
             merged = r.json().get("settings") or {}
             assert merged.get("authorNote") == "server-value"
             assert merged.get("memoryScope") == "shared"
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_chat_settings_untimestamped_update_applies(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_settings_untimestamped_update_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        baseline_updated_at = "2026-02-06T00:00:00Z"
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            baseline_payload = {
+                "settings": {
+                    "schemaVersion": 2,
+                    "updatedAt": baseline_updated_at,
+                    "authorNote": "server-value",
+                    "memoryScope": "shared",
+                }
+            }
+            r = await client.put(f"/api/v1/chats/{chat_id}/settings", headers=headers, json=baseline_payload)
+            assert r.status_code == 200
+
+            patch_payload = {
+                "settings": {
+                    "authorNote": "client-value-without-updated-at",
+                }
+            }
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json=patch_payload,
+            )
+            assert r.status_code == 200
+
+            merged = r.json().get("settings") or {}
+            assert merged.get("authorNote") == "client-value-without-updated-at"
+            assert merged.get("memoryScope") == "shared"
+            assert merged.get("updatedAt") != baseline_updated_at
+            assert datetime.fromisoformat(merged.get("updatedAt").replace("Z", "+00:00"))
+
+            r = await client.get(f"/api/v1/chats/{chat_id}/settings", headers=headers)
+            assert r.status_code == 200
+            stored = r.json().get("settings") or {}
+            assert stored.get("authorNote") == "client-value-without-updated-at"
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_chat_settings_update_increments_conversation_version_once(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_settings_version_single_bump_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post("/api/v1/chats/", headers=headers, json={"character_id": character_id})
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.get(f"/api/v1/chats/{chat_id}", headers=headers)
+            assert r.status_code == 200
+            before_version = int(r.json()["version"])
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": "2026-02-06T00:00:00Z",
+                        "authorNote": "version-bump-check",
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.get(f"/api/v1/chats/{chat_id}", headers=headers)
+            assert r.status_code == 200
+            after_first_update_version = int(r.json()["version"])
+            assert after_first_update_version == before_version + 1
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={"settings": {"authorNote": "version-bump-check-2"}},
+            )
+            assert r.status_code == 200
+
+            r = await client.get(f"/api/v1/chats/{chat_id}", headers=headers)
+            assert r.status_code == 200
+            after_second_update_version = int(r.json()["version"])
+            assert after_second_update_version == after_first_update_version + 1
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_character_create_rejects_decodable_non_image_base64(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="character_create_non_image_reject_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        non_image_b64 = base64.b64encode(b"not-real-image-binary").decode("utf-8")
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/characters/",
+                headers=headers,
+                json={"name": "Create Invalid Image", "image_base64": non_image_b64},
+            )
+            assert r.status_code == 400
+            assert "not a valid image" in str(r.json().get("detail", "")).lower()
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_character_update_rejects_decodable_non_image_base64(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="character_update_non_image_reject_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        non_image_b64 = base64.b64encode(b"not-real-image-binary").decode("utf-8")
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/characters/",
+                headers=headers,
+                json={"name": "Update Invalid Image Base"},
+            )
+            assert r.status_code == 201
+            character = r.json()
+            character_id = character["id"]
+            original_version = int(character["version"])
+
+            r = await client.put(
+                f"/api/v1/characters/{character_id}",
+                headers=headers,
+                params={"expected_version": original_version},
+                json={"image_base64": non_image_b64},
+            )
+            assert r.status_code == 400
+            assert "not a valid image" in str(r.json().get("detail", "")).lower()
+
+            r = await client.get(f"/api/v1/characters/{character_id}", headers=headers)
+            assert r.status_code == 200
+            assert int(r.json()["version"]) == original_version
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_character_update_accepts_valid_image_base64(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="character_update_valid_image_accept_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), color=(255, 0, 0)).save(buffer, format="PNG")
+        valid_png_1x1_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        transport = httpx.ASGITransport(app=app)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/characters/",
+                headers=headers,
+                json={"name": "Update Valid Image Base"},
+            )
+            assert r.status_code == 201
+            character = r.json()
+            character_id = character["id"]
+            original_version = int(character["version"])
+
+            r = await client.put(
+                f"/api/v1/characters/{character_id}",
+                headers=headers,
+                params={"expected_version": original_version},
+                json={"image_base64": valid_png_1x1_b64},
+            )
+            assert r.status_code == 200
+            payload = r.json()
+            assert payload.get("image_present") is True
+            assert int(payload["version"]) == original_version + 1
     finally:
         reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -2816,6 +3051,233 @@ async def test_edit_message_pinned_updates_message_metadata(monkeypatch):
             metadata_extra = payload.get("metadata_extra")
             assert isinstance(metadata_extra, dict)
             assert metadata_extra.get("pinned") is True
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_complete_v2_world_book_uses_active_directed_character_id(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_world_book_active_character_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        captured: dict[str, object] = {}
+
+        import tldw_Server_API.app.core.Character_Chat.world_book_manager as wb_mod
+
+        class _StubWorldBookService:
+            def __init__(self, db):
+                self._db = db
+
+            def process_context(self, text, world_book_ids=None, character_id=None, scan_depth=3, token_budget=500, recursive_scanning=False, **kwargs):
+                captured["character_id"] = character_id
+                captured["include_diagnostics"] = kwargs.get("include_diagnostics")
+                return {"processed_context": "", "diagnostics": []}
+
+        monkeypatch.setattr(wb_mod, "WorldBookService", _StubWorldBookService)
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            primary_character = r.json()[0]
+            primary_character_id = primary_character["id"]
+
+            r = await client.post(
+                "/api/v1/characters/",
+                headers=headers,
+                json={"name": "WorldBook Secondary"},
+            )
+            assert r.status_code == 201
+            secondary_character = r.json()
+            secondary_character_id = secondary_character.get("id") or secondary_character.get("character_id")
+            assert secondary_character_id is not None
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": primary_character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "turnTakingMode": "round_robin",
+                        "participantCharacterIds": [secondary_character_id],
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/complete-v2",
+                headers=headers,
+                json={
+                    "provider": "local-llm",
+                    "model": "local-test",
+                    "append_user_message": "trigger-world-book",
+                    "save_to_db": False,
+                    "directed_character_id": secondary_character_id,
+                },
+            )
+            assert r.status_code == 200
+            payload = r.json()
+            assert payload.get("speaker_character_id") == secondary_character_id
+            assert captured.get("character_id") == secondary_character_id
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_prompt_preview_applies_custom_chat_preset_override(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_custom_preset_chat_scope_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+
+        custom_preset_id = "custom_chat_scope_apply"
+        marker = "CUSTOM-PRESET-MARKER"
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/chats/presets",
+                headers=headers,
+                json={
+                    "preset_id": custom_preset_id,
+                    "name": "Custom Chat Scope Apply",
+                    "section_order": ["identity"],
+                    "section_templates": {"identity": f"{marker}: {{char}} -> {{user}}"},
+                },
+            )
+            assert r.status_code == 201
+
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.put(
+                f"/api/v1/chats/{chat_id}/settings",
+                headers=headers,
+                json={
+                    "settings": {
+                        "schemaVersion": 2,
+                        "updatedAt": datetime.now(timezone.utc).isoformat(),
+                        "presetScope": "chat",
+                        "chatPresetOverrideId": custom_preset_id,
+                    }
+                },
+            )
+            assert r.status_code == 200
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/prompt-preview",
+                headers=headers,
+                json={"include_character_context": True},
+            )
+            assert r.status_code == 200
+            preview = r.json()
+
+            preset_section = next(
+                (
+                    section
+                    for section in (preview.get("sections") or [])
+                    if section.get("name") == "preset"
+                ),
+                {},
+            )
+            preset_content = str(preset_section.get("content") or "")
+            assert marker in preset_content
+    finally:
+        reset_settings()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_prompt_preview_applies_custom_request_preset_override(monkeypatch):
+    tmpdir = tempfile.mkdtemp(prefix="chacha_custom_preset_request_scope_")
+    monkeypatch.setenv("USER_DB_BASE_DIR", tmpdir)
+    reset_settings()
+    try:
+        from tldw_Server_API.app.main import app
+
+        settings = get_settings()
+        headers = {"X-API-KEY": settings.SINGLE_USER_API_KEY}
+        transport = httpx.ASGITransport(app=app)
+
+        custom_preset_id = "custom_request_scope_apply"
+        marker = "REQUEST-PRESET-MARKER"
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/api/v1/chats/presets",
+                headers=headers,
+                json={
+                    "preset_id": custom_preset_id,
+                    "name": "Custom Request Scope Apply",
+                    "section_order": ["identity"],
+                    "section_templates": {"identity": f"{marker}: {{char}}"},
+                },
+            )
+            assert r.status_code == 201
+
+            r = await client.get("/api/v1/characters/", headers=headers)
+            assert r.status_code == 200
+            character_id = r.json()[0]["id"]
+
+            r = await client.post(
+                "/api/v1/chats/",
+                headers=headers,
+                json={"character_id": character_id},
+            )
+            assert r.status_code == 201
+            chat_id = r.json()["id"]
+
+            r = await client.post(
+                f"/api/v1/chats/{chat_id}/prompt-preview",
+                headers=headers,
+                json={"include_character_context": True, "prompt_preset": custom_preset_id},
+            )
+            assert r.status_code == 200
+            preview = r.json()
+
+            preset_section = next(
+                (
+                    section
+                    for section in (preview.get("sections") or [])
+                    if section.get("name") == "preset"
+                ),
+                {},
+            )
+            preset_content = str(preset_section.get("content") or "")
+            assert marker in preset_content
     finally:
         reset_settings()
         shutil.rmtree(tmpdir, ignore_errors=True)

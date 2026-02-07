@@ -286,17 +286,12 @@ async def shutdown_evaluations_audit_services() -> None:
 
 
 def _shutdown_on_exit() -> None:
-    """Atexit handler to ensure services are shutdown at interpreter exit."""
-    try:
-        try:
-            loop = asyncio.get_running_loop()
-            with contextlib.suppress(Exception):
-                loop.create_task(shutdown_evaluations_audit_services())
-        except RuntimeError:
-            with contextlib.suppress(Exception):
-                asyncio.run(shutdown_evaluations_audit_services())
-    except Exception:
-        pass
+    """Atexit handler for best-effort local cleanup without late logging."""
+    # Application shutdown hooks should perform full async audit shutdown.
+    # At interpreter exit, invoking async shutdown can emit log lines after
+    # stdio/log sinks are already closing, which causes noisy teardown errors.
+    with contextlib.suppress(Exception):
+        _stop_sync_loop()
 
 
 atexit.register(_shutdown_on_exit)

@@ -184,8 +184,6 @@ class ConnectionPool:
                         f"{self.provider} API error: "
                         f"status={status}, body={error_text}"
                     )
-                    with self._lock:
-                        self._usage_stats['failures'] += 1
                     raise NetworkError(f"HTTP {status}")
 
                 ctype = (resp.headers.get("content-type", "") or "").lower()

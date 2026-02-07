@@ -50,6 +50,18 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
     logger.warning("psycopg (v3) not available. PostgreSQL backend will not work.")
 
+if PSYCOPG2_AVAILABLE:
+    _PSYCOPG_DRIVER_EXCEPTIONS: tuple[type[BaseException], ...] = tuple(
+        exc
+        for exc in (
+            getattr(psycopg, "Error", None),
+            getattr(psycopg, "Warning", None),
+        )
+        if isinstance(exc, type) and issubclass(exc, BaseException)
+    )
+else:
+    _PSYCOPG_DRIVER_EXCEPTIONS = ()
+
 _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS = (
     AssertionError,
     AttributeError,
@@ -67,6 +79,7 @@ _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     DatabaseError,
+    *_PSYCOPG_DRIVER_EXCEPTIONS,
 )
 
 
@@ -205,12 +218,15 @@ class PostgreSQLConnectionPool(ConnectionPool):
                 with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                     connection.close()
             return
-        # Minimal pool: store for reuse up to capacity; else close
-        if len(self._free) < self._max:
+        # Minimal pool:
+        # - keep only managed connections in the reusable free list
+        # - close overflow/fallback connections immediately to avoid growth
+        is_managed = connection in self._connections
+        if is_managed and len(self._free) < self._max:
             self._free.append(connection)
-        else:
-            with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
-                connection.close()
+            return
+        with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
+            connection.close()
 
     @contextmanager
     def connection(self) -> Generator[Any, None, None]:
@@ -226,7 +242,13 @@ class PostgreSQLConnectionPool(ConnectionPool):
             with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 self._pool.close()
             return
-        for conn in self._connections:
+        # Close all tracked connections (both managed and currently free).
+        seen_ids: set[int] = set()
+        for conn in [*self._connections, *self._free]:
+            conn_id = id(conn)
+            if conn_id in seen_ids:
+                continue
+            seen_ids.add(conn_id)
             with suppress(_POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS):
                 conn.close()
         self._connections.clear()
@@ -835,7 +857,8 @@ class PostgreSQLBackend(DatabaseBackend):
 
             cursor.executemany(normalized_query, normalized_params)
 
-            status = (cursor.statusmessage or "").split()
+            statusmsg = getattr(cursor, "statusmessage", None)
+            status = (statusmsg or "").split()
             command_tag = status[0].upper() if status else ""
             is_write = self._is_write_command(command_tag, normalized_query)
 

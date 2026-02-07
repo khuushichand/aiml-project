@@ -33,6 +33,7 @@ from tldw_Server_API.app.core.Chatbooks.chatbook_models import (
     ContentType,
     ConflictResolution,
 )
+from tldw_Server_API.app.core.Chatbooks.exceptions import SecurityError
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 
 
@@ -755,6 +756,69 @@ class TestChatbookService:
             ok = service.delete_export_job(job.job_id)
 
         assert ok is False
+
+    def test_resolve_import_archive_path_rejects_outside_paths(self, service):
+        """Path resolution should raise SecurityError with a stable violation type."""
+        with pytest.raises(SecurityError) as exc_info:
+            service._resolve_import_archive_path("../../outside.chatbook")
+
+        assert exc_info.value.context.get("violation_type") == "import_path_outside_allowed_directories"
+
+    def test_cleanup_expired_exports_breaks_on_repeated_no_progress(self, service, mock_db):
+        """Cleanup should stop after repeated batches that cannot mark rows expired."""
+        expired_rows = [{"job_id": "job-stuck", "output_path": None}]
+        call_counts = {"select": 0, "update": 0}
+
+        def _execute_query(sql, params=None, commit=False):
+            if sql.startswith("SELECT * FROM export_jobs"):
+                call_counts["select"] += 1
+                return expired_rows
+            if sql.startswith("UPDATE export_jobs"):
+                call_counts["update"] += 1
+                raise RuntimeError("update failed")
+            return []
+
+        mock_db.execute_query.side_effect = _execute_query
+
+        deleted = service.cleanup_expired_exports(batch_size=1)
+
+        assert deleted == 0
+        assert call_counts["select"] == 2
+        assert call_counts["update"] == 2
+
+    def test_cleanup_expired_exports_mixed_progress_exits_cleanly(self, service, mock_db):
+        """Cleanup should preserve successful updates and still terminate with mixed outcomes."""
+        select_batches = [
+            [
+                {"job_id": "job-ok", "output_path": None},
+                {"job_id": "job-fail", "output_path": None},
+            ],
+            [
+                {"job_id": "job-fail", "output_path": None},
+            ],
+        ]
+        update_attempts: list[str] = []
+
+        def _execute_query(sql, params=None, commit=False):
+            if sql.startswith("SELECT * FROM export_jobs"):
+                if select_batches:
+                    return select_batches.pop(0)
+                return []
+            if sql.startswith("UPDATE export_jobs"):
+                job_id = params[1]
+                update_attempts.append(job_id)
+                if job_id == "job-fail":
+                    raise RuntimeError("update failed")
+                return None
+            return []
+
+        mock_db.execute_query.side_effect = _execute_query
+
+        deleted = service.cleanup_expired_exports(batch_size=2)
+
+        assert deleted == 0
+        assert update_attempts.count("job-ok") == 1
+        assert update_attempts.count("job-fail") == 2
 
     def test_import_chatbook_cleans_temp_dir_on_failure(self, service, tmp_path):
         """Temporary extraction directories should not linger after import errors."""

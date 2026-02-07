@@ -70,7 +70,10 @@ _USER_DB_NONCRITICAL_EXCEPTIONS = (
 
 def is_single_user_mode() -> bool:
     """Compatibility helper for tests and legacy callers."""
-    return get_settings().AUTH_MODE == "single_user"
+    try:
+        return get_settings().AUTH_MODE == "single_user"
+    except _USER_DB_NONCRITICAL_EXCEPTIONS:
+        return False
 
 
 def is_multi_user_mode() -> bool:
@@ -334,6 +337,31 @@ def _is_strict_test_bypass_context() -> bool:
             return True
     except _USER_DB_NONCRITICAL_EXCEPTIONS:
         pass
+    return False
+
+
+def _is_production_like_env() -> bool:
+    """
+    Detect production-like runtime from common deployment environment variables.
+
+    This intentionally checks multiple keys because not all deployments set
+    `tldw_production`.
+    """
+    truthy = {"1", "true", "yes", "on", "y"}
+    if os.getenv("tldw_production", "").strip().lower() in truthy:
+        return True
+
+    production_values = {"production", "prod", "live"}
+    for key in (
+        "ENVIRONMENT",
+        "APP_ENV",
+        "DEPLOYMENT_ENV",
+        "FASTAPI_ENV",
+        "TLDW_ENV",
+    ):
+        value = os.getenv(key, "").strip().lower()
+        if value in production_values:
+            return True
     return False
 
 
@@ -702,10 +730,14 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
     org_ids: list[int] = []
     active_team_id: Optional[int] = None
     active_org_id: Optional[int] = None
+    membership_error_detail = "Token membership could not be validated"
     try:
         membership_lookup_id = user.id_int
         if membership_lookup_id is None:
-            raise ValueError("User ID is non-numeric; skipping membership lookup.")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=membership_error_detail,
+            )
 
         memberships = await list_memberships_for_user(membership_lookup_id)
         member_team_ids = _coerce_int_list(
@@ -796,17 +828,41 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         active_org_id = _normalize_active_id(token_active_org_id, org_ids)
     except HTTPException:
         raise
-    except _USER_DB_NONCRITICAL_EXCEPTIONS:
-        pass
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as membership_exc:
+        if pii_redact_logs:
+            logger.warning("JWT membership validation failed (details redacted)")
+        else:
+            logger.warning(
+                f"JWT membership validation failed for subject {subject_identifier}: {membership_exc}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=membership_error_detail,
+        ) from membership_exc
 
-    scoped_result = await apply_scoped_permissions(
-        user_id=user.id_int,
-        base_permissions=list(user.permissions or []),
-        org_ids=org_ids,
-        team_ids=team_ids,
-        active_org_id=active_org_id,
-        active_team_id=active_team_id,
-    )
+    try:
+        scoped_result = await apply_scoped_permissions(
+            user_id=user.id_int,
+            base_permissions=list(user.permissions or []),
+            org_ids=org_ids,
+            team_ids=team_ids,
+            active_org_id=active_org_id,
+            active_team_id=active_team_id,
+        )
+    except HTTPException:
+        raise
+    except _USER_DB_NONCRITICAL_EXCEPTIONS as scope_exc:
+        if pii_redact_logs:
+            logger.warning("JWT scoped permission application failed (details redacted)")
+        else:
+            logger.warning(
+                f"JWT scoped permission application failed for subject {subject_identifier}: {scope_exc}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=membership_error_detail,
+        ) from scope_exc
+
     user.permissions = list(scoped_result.permissions or [])
     active_org_id = scoped_result.active_org_id
     active_team_id = scoped_result.active_team_id
@@ -1312,7 +1368,7 @@ async def get_request_user(
     # Test-mode bypasses are disabled in production for safety
     try:
         import os as _os
-        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        _prod = _is_production_like_env()
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
         if (
             not _prod
@@ -1333,7 +1389,7 @@ async def get_request_user(
     # Warn if test flags are present in production deployments
     try:
         import os as _os
-        _prod = _os.getenv("tldw_production", "false").lower() in {"1", "true", "yes", "on", "y"}
+        _prod = _is_production_like_env()
         if _prod and (
             _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
             or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}

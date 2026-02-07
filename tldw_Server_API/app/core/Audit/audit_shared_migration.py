@@ -77,11 +77,22 @@ class AuditMigrationCounts:
     events_read: int = 0
     events_inserted: int = 0
     events_skipped: int = 0
+    # stats_* are event-level counters for audit_daily_stats derivation.
+    # stats_read = source events considered for stats, stats_inserted =
+    # events that contributed to a daily stats bucket, stats_skipped =
+    # events that could not contribute (duplicate event IDs or invalid timestamp).
     stats_read: int = 0
     stats_inserted: int = 0
     stats_skipped: int = 0
     failed: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditStatsUpdateResult:
+    events_contributed: int = 0
+    events_skipped: int = 0
+    buckets_updated: int = 0
 
 
 @dataclass
@@ -96,6 +107,10 @@ class AuditMigrationReport:
     @property
     def total_events_skipped(self) -> int:
         return sum(c.events_skipped for c in self.sources)
+
+    @property
+    def total_stats_read(self) -> int:
+        return sum(c.stats_read for c in self.sources)
 
     @property
     def total_stats_inserted(self) -> int:
@@ -348,18 +363,17 @@ def _coerce_timestamp(value: Any) -> str:
 
 
 def _checkpoint_timestamp(value: Any, previous: str | None) -> str | None:
-    """Return a safe checkpoint timestamp, preserving previous on empty values."""
+    """Return a safe checkpoint timestamp while preserving source text ordering."""
     try:
         if value is None:
             return previous
         s = str(value).strip()
         if not s:
             return previous
+        # Preserve source-side timestamp text so resume comparisons match
+        # ORDER BY timestamp,event_id semantics in the source database.
+        return s
     except _AUDIT_COERCE_EXCEPTIONS:
-        return previous
-    try:
-        return _coerce_timestamp(value)
-    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         return previous
 
 
@@ -492,7 +506,7 @@ def _build_event_record(
     record["result_count"] = _pick(row, "result_count")
 
     record["risk_score"] = _pick(row, "risk_score") or 0
-    record["pii_detected"] = bool(_pick(row, "pii_detected") or False)
+    record["pii_detected"] = _safe_bool(_pick(row, "pii_detected"), False)
     record["compliance_flags"] = _safe_json_text(_pick(row, "compliance_flags"), "[]")
     record["metadata"] = _safe_json_text(_pick(row, "metadata"), "{}")
 
@@ -549,6 +563,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n", ""}:
+        return False
+    return default
+
+
 def _normalize_result(value: Any) -> str:
     """Normalize result strings for stats; missing/invalid values become empty string."""
     try:
@@ -564,9 +591,9 @@ async def _update_shared_daily_stats_from_records(
     records: list[dict[str, Any]],
     *,
     unidentified_tenant_id: str,
-) -> int:
+) -> AuditStatsUpdateResult:
     if not records:
-        return 0
+        return AuditStatsUpdateResult()
     stats = defaultdict(lambda: {
         "total": 0,
         "high_risk": 0,
@@ -575,12 +602,16 @@ async def _update_shared_daily_stats_from_records(
         "tokens": 0,
         "durations": [],
     })
+    stats_events_contributed = 0
+    stats_events_skipped = 0
 
     for record in records:
         tenant_id = record.get("tenant_user_id") or unidentified_tenant_id
         date_val = _parse_timestamp_to_date(record.get("timestamp"))
         if date_val is None:
+            stats_events_skipped += 1
             continue
+        stats_events_contributed += 1
         category = str(record.get("category") or "system")
         key = (tenant_id, date_val, category)
         stats[key]["total"] += 1
@@ -639,7 +670,11 @@ async def _update_shared_daily_stats_from_records(
             ),
         )
         updated_rows += 1
-    return updated_rows
+    return AuditStatsUpdateResult(
+        events_contributed=stats_events_contributed,
+        events_skipped=stats_events_skipped,
+        buckets_updated=updated_rows,
+    )
 
 
 async def _migrate_source(
@@ -663,6 +698,22 @@ async def _migrate_source(
                 return counts
 
             last_rowid, last_event_id, last_timestamp = await _load_checkpoint(shared_db, source_key)
+            # Existing checkpoints may contain normalized UTC timestamps from older
+            # builds. Refresh from the source event_id to keep resume comparisons
+            # aligned with source timestamp text.
+            if last_timestamp is not None and last_event_id:
+                try:
+                    async with source_db.execute(
+                        "SELECT timestamp FROM audit_events WHERE event_id = ? LIMIT 1",
+                        (last_event_id,),
+                    ) as cur:
+                        checkpoint_row = await cur.fetchone()
+                    if checkpoint_row:
+                        refreshed = _checkpoint_timestamp(checkpoint_row["timestamp"], last_timestamp)
+                        if refreshed is not None:
+                            last_timestamp = refreshed
+                except _AUDIT_DB_EXCEPTIONS:
+                    pass
             if last_timestamp is None and last_rowid > 0:
                 # Attempt to upgrade legacy rowid checkpoint to timestamp+event_id.
                 async with source_db.execute(
@@ -704,6 +755,7 @@ async def _migrate_source(
                         break
 
                     counts.events_read += len(rows)
+                    counts.stats_read += len(rows)
                     records: list[dict[str, Any]] = []
                     seen: set[str] = set()
                     duplicates_in_chunk: list[str] = []
@@ -728,9 +780,10 @@ async def _migrate_source(
                     )
                     filtered = [r for r in records if r.get("event_id") not in existing]
                     duplicates_existing = [r["event_id"] for r in records if r.get("event_id") in existing]
+                    duplicates_total = len(duplicates_in_chunk) + len(duplicates_existing)
 
                     counts.events_inserted += len(filtered)
-                    counts.events_skipped += len(duplicates_in_chunk) + len(duplicates_existing)
+                    counts.events_skipped += duplicates_total
 
                     if duplicates_in_chunk:
                         logger.warning(
@@ -749,14 +802,16 @@ async def _migrate_source(
                             duplicates_existing[:5],
                         )
 
+                    counts.stats_skipped += duplicates_total
                     if filtered:
                         await shared_db.executemany(insert_sql, filtered)
-                        stats_updated = await _update_shared_daily_stats_from_records(
+                        stats_result = await _update_shared_daily_stats_from_records(
                             shared_db,
                             filtered,
                             unidentified_tenant_id=unidentified_tenant_id,
                         )
-                        counts.stats_inserted += stats_updated
+                        counts.stats_inserted += stats_result.events_contributed
+                        counts.stats_skipped += stats_result.events_skipped
 
                     last_row = rows[-1]
                     with contextlib.suppress(_AUDIT_COERCE_EXCEPTIONS):
@@ -858,11 +913,12 @@ async def migrate_to_shared_audit_db(
 
     report = AuditMigrationReport(shared_db_path=shared_path, sources=counts)
     logger.info(
-        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_inserted={}, stats_skipped={}",
+        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_read={}, stats_inserted={}, stats_skipped={}",
         len(report.sources),
         report.total_failures,
         report.total_events_inserted,
         report.total_events_skipped,
+        report.total_stats_read,
         report.total_stats_inserted,
         report.total_stats_skipped,
     )

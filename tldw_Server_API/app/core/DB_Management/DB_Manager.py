@@ -112,7 +112,8 @@ single_user_config = load_comprehensive_config()
 content_db_settings: ContentDatabaseSettings = load_content_db_settings(single_user_config)
 
 # Resolve shared backend instance for content databases (Media/ChaCha).
-_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = get_content_backend(single_user_config)
+# Keep backend initialization lazy to avoid heavy import-time side effects.
+_CONTENT_DB_BACKEND: Optional[DatabaseBackend] = None
 _POSTGRES_CONTENT_MODE = content_db_settings.backend_type == BackendType.POSTGRESQL
 
 # Default Media DB is per-user. For single-user mode, resolve the fixed user's path.
@@ -156,11 +157,24 @@ DB_MANAGER_RUNTIME_EXCEPTIONS = (
 )
 
 
+def _ensure_content_backend_loaded() -> Optional[DatabaseBackend]:
+    """Lazily resolve the shared content backend when PostgreSQL mode is active."""
+    global _CONTENT_DB_BACKEND
+    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
+        try:
+            _CONTENT_DB_BACKEND = get_content_backend(single_user_config)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Unable to initialize PostgreSQL content backend lazily: {exc}")
+            _CONTENT_DB_BACKEND = None
+    return _CONTENT_DB_BACKEND
+
+
 def get_content_backend_instance() -> Optional[DatabaseBackend]:
     """Return the shared content DatabaseBackend instance (if configured)."""
-    if _POSTGRES_CONTENT_MODE and _CONTENT_DB_BACKEND is None:
+    backend = _ensure_content_backend_loaded()
+    if _POSTGRES_CONTENT_MODE and backend is None:
         raise RuntimeError("PostgreSQL content backend is required but was not initialized. Check TLDW_CONTENT_DB_BACKEND configuration.")
-    return _CONTENT_DB_BACKEND
+    return backend
 
 
 def shutdown_content_backend() -> None:
@@ -286,7 +300,7 @@ def create_media_database(
     """Factory for MediaDatabase instances using the shared backend wiring."""
 
     target_path = Path(db_path) if db_path else Path(single_user_db_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     if _POSTGRES_CONTENT_MODE:
@@ -411,7 +425,7 @@ def create_chacha_database(
     """Factory for ChaChaNotes database instances with backend support."""
 
     target_path = Path(db_path) if db_path else Path(single_user_chacha_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     return CharactersRAGDB(
@@ -432,7 +446,7 @@ def create_prompt_studio_database(
     """Factory for Prompt Studio databases with backend-aware wiring."""
 
     target_path = Path(db_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     cfg = config or single_user_config
 
     return PromptStudioDatabase(
@@ -451,7 +465,7 @@ def create_workflows_database(
     """Factory for Workflow database instances with backend-aware wiring."""
 
     target_path = Path(db_path) if db_path else Path(single_user_workflows_path)
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
 
     # Only pass backend through when it is a PostgreSQL adapter; SQLite continues to
     # rely on the local file connection for compatibility with existing tests.
@@ -475,7 +489,7 @@ def create_evaluations_database(
     EvaluationsDatabase instance bound to that backend; otherwise it
     falls back to the SQLite file at `db_path`.
     """
-    backend_to_use = backend or _CONTENT_DB_BACKEND
+    backend_to_use = backend or _ensure_content_backend_loaded()
     return EvaluationsDatabase(str(Path(db_path)), backend=backend_to_use)
 
 

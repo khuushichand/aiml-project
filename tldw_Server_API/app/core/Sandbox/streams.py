@@ -11,7 +11,6 @@ import uuid
 
 from loguru import logger
 
-from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
 try:
@@ -534,28 +533,18 @@ class RunStreamHub:
     # -----------------
     def _maybe_enable_redis_fanout(self) -> None:
         try:
-            # Explicit toggle (env) or reuse global REDIS_ENABLED
-            toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower() in {"1","true","yes","on","y"}
-            global_enabled = False
-            try:
-                global_enabled = bool(getattr(app_settings, "REDIS_ENABLED", False))
-            except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
-                global_enabled = False
-            if not (toggle_env or global_enabled):
+            # Redis fan-out must be explicitly enabled for sandbox streams.
+            toggle_env = str(os.getenv("SANDBOX_WS_REDIS_FANOUT") or "").strip().lower()
+            if toggle_env not in {"1", "true", "yes", "on", "y"}:
                 return
             # Resolve URL
             url = os.getenv("SANDBOX_REDIS_URL") or os.getenv("REDIS_URL")
             if not url:
-                try:
-                    url = getattr(app_settings, "REDIS_URL", None)
-                except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
-                    url = None
-            if not url:
                 # Try host/port/db
                 try:
-                    host = getattr(app_settings, "REDIS_HOST", "127.0.0.1")
-                    port = int(getattr(app_settings, "REDIS_PORT", 6379))
-                    db = int(getattr(app_settings, "REDIS_DB", 0))
+                    host = str(os.getenv("REDIS_HOST", "127.0.0.1"))
+                    port = int(os.getenv("REDIS_PORT", "6379"))
+                    db = int(os.getenv("REDIS_DB", "0"))
                     url = f"redis://{host}:{port}/{db}"
                 except _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS:
                     url = None

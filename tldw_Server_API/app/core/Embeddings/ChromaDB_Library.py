@@ -1902,11 +1902,7 @@ def store_in_chroma(texts, embeddings, ids, metadatas, collection_name="default_
     manager = get_default_chroma_manager()
     return manager.store_in_chroma(collection_name, texts, embeddings, ids, metadatas)
 
-# Create a chroma_client property for backward compatibility
-class ChromaClientProxy:
-    """Proxy object that delegates to the default manager's chroma_client."""
-    def __getattr__(self, name):
-        manager = get_default_chroma_manager()
-        return getattr(manager.chroma_client, name)
-
-chroma_client = ChromaClientProxy()
+def get_default_chroma_client():
+    """Return the default manager's underlying Chroma client instance."""
+    manager = get_default_chroma_manager()
+    return getattr(manager, "client", None)

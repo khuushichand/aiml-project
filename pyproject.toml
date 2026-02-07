@@ -589,7 +589,6 @@ norecursedirs = [
 ]
 plugins = [
     # Shared fixtures/plugins for the suite
-    "tldw_Server_API.tests._plugins.chat_fixtures",
     "tldw_Server_API.tests._plugins.authnz_fixtures",
     # Isolated Chat fixtures (unit_test_client, isolated_db, etc.)
     "tldw_Server_API.tests.Chat.integration.conftest_isolated",

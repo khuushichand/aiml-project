@@ -375,6 +375,7 @@ def _convert_insert_boolean_literals(query: str) -> str:
         if not m:
             return query
         cols_open = m.end() - 1  # position of '('
+
         # Find matching ')' for columns
         depth = 1
         i = cols_open + 1
@@ -402,62 +403,92 @@ def _convert_insert_boolean_literals(query: str) -> str:
             return query
         cols_close = i
         columns_block = query[cols_open + 1:cols_close]
+        column_names = [c.strip().strip('"') for c in _split_csv_ignoring_quotes_and_parens(columns_block)]
 
-        # Find VALUES(...)
+        # Find VALUES keyword, then parse one or more VALUES tuples.
         tail = query[cols_close + 1:]
-        m2 = re.search(r"\bVALUES\b\s*\(", tail, flags=re.IGNORECASE)
+        m2 = re.search(r"\bVALUES\b", tail, flags=re.IGNORECASE)
         if not m2:
             return query
-        vals_open = cols_close + 1 + m2.end() - 1
-        depth = 1
-        i = vals_open + 1
-        while i < len(query) and depth > 0:
-            ch = query[i]
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
-                if depth == 0:
-                    break
-            elif ch in ("'", '"'):
-                quote = ch
-                i += 1
-                while i < len(query):
-                    c = query[i]
-                    if c == quote:
-                        if i + 1 < len(query) and query[i + 1] == quote:
-                            i += 2
-                            continue
-                        break
-                    i += 1
+        values_kw_end = cols_close + 1 + m2.end()
+        i = values_kw_end
+        while i < len(query) and query[i].isspace():
             i += 1
-        if depth != 0:
-            return query
-        vals_close = i
-        values_block = query[vals_open + 1:vals_close]
 
-        column_names = [c.strip().strip('"') for c in _split_csv_ignoring_quotes_and_parens(columns_block)]
-        values = _split_csv_ignoring_quotes_and_parens(values_block)
-        if len(column_names) != len(values):
-            return query
+        first_tuple_start = i
+        converted_tuples: list[str] = []
+        changed_any = False
 
-        changed = False
-        for idx, (col, val) in enumerate(zip(column_names, values)):
-            if not _LIKELY_BOOLEAN_COLUMN.match(col):
+        while i < len(query):
+            while i < len(query) and query[i].isspace():
+                i += 1
+            if i >= len(query) or query[i] != '(':
+                break
+
+            tuple_open = i
+            depth = 1
+            i += 1
+            in_single = False
+            in_double = False
+            while i < len(query) and depth > 0:
+                ch = query[i]
+                nxt = query[i + 1] if i + 1 < len(query) else ""
+                if ch == "'" and not in_double:
+                    if in_single and nxt == "'":
+                        i += 2
+                        continue
+                    in_single = not in_single
+                elif ch == '"' and not in_single:
+                    if in_double and nxt == '"':
+                        i += 2
+                        continue
+                    in_double = not in_double
+                elif not in_single and not in_double:
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                i += 1
+
+            if depth != 0:
+                return query
+
+            tuple_close = i
+            tuple_block = query[tuple_open + 1:tuple_close]
+            values = _split_csv_ignoring_quotes_and_parens(tuple_block)
+            if len(column_names) != len(values):
+                return query
+
+            tuple_changed = False
+            for idx, (col, val) in enumerate(zip(column_names, values)):
+                if not _LIKELY_BOOLEAN_COLUMN.match(col):
+                    continue
+                v = val.strip()
+                if re.fullmatch(r"0", v):
+                    values[idx] = "FALSE"
+                    tuple_changed = True
+                elif re.fullmatch(r"1", v):
+                    values[idx] = "TRUE"
+                    tuple_changed = True
+
+            changed_any = changed_any or tuple_changed
+            converted_tuples.append(f"({', '.join(values)})")
+
+            i = tuple_close + 1
+            while i < len(query) and query[i].isspace():
+                i += 1
+            if i < len(query) and query[i] == ',':
+                i += 1
                 continue
-            v = val.strip()
-            if re.fullmatch(r"0", v):
-                values[idx] = "FALSE"
-                changed = True
-            elif re.fullmatch(r"1", v):
-                values[idx] = "TRUE"
-                changed = True
+            break
 
-        if not changed:
+        if not changed_any or not converted_tuples:
             return query
 
-        new_values_block = ", ".join(values)
-        return query[:vals_open + 1] + new_values_block + query[vals_close:]
+        suffix = query[i:]
+        return query[:first_tuple_start] + ", ".join(converted_tuples) + suffix
     except Exception:
         # On any parsing error, return original query unchanged
         return query

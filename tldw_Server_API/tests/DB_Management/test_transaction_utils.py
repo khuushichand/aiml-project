@@ -228,6 +228,18 @@ class TestDbTransaction:
                 assert calls[0][0][0] == 0.2  # First retry: 0.1 * 2^1
                 assert calls[1][0][0] == 0.4  # Second retry: 0.1 * 2^2
 
+    async def test_conflict_inside_context_body_propagates_without_runtime_error(self):
+        """Conflict raised inside caller block should not trigger generator re-yield errors."""
+        db = MockDatabase()
+
+        with pytest.raises(ConflictError):
+            async with db_transaction(db, max_retries=3):
+                raise ConflictError("conflict in body")
+
+        # Caller block ran once; context manager must not retry by yielding again.
+        assert db.transaction_count == 1
+        assert db.rollback_count == 1
+
 
 @pytest.mark.asyncio
 class TestTransactionalDecorator:
@@ -315,6 +327,7 @@ class TestSaveConversationWithMessages:
         conversation_data = {"character_id": 1, "title": "Test Conversation", "client_id": "test_client"}
 
         messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there"}]
+        original_messages = [dict(message) for message in messages]
 
         with patch.object(db, "add_conversation", return_value="conv_123"):
             with patch.object(db, "add_message", side_effect=["msg_1", "msg_2"]):
@@ -322,6 +335,7 @@ class TestSaveConversationWithMessages:
 
         assert conv_id == "conv_123"
         assert msg_ids == ["msg_1", "msg_2"]
+        assert messages == original_messages
 
     async def test_failed_conversation_creation(self):
         """Test handling of failed conversation creation."""
@@ -395,12 +409,14 @@ class TestUpdateConversationWithRollback:
 
         updates = {"title": "New Title", "updated_at": "2024-01-01"}
         new_messages = [{"role": "user", "content": "New message"}]
+        original_messages = [dict(message) for message in new_messages]
 
         with patch.object(db, "update_conversation", return_value=True):
             with patch.object(db, "add_message", return_value="msg_1"):
                 result = await update_conversation_with_rollback(db, "conv_123", updates, new_messages)
 
         assert result is True
+        assert new_messages == original_messages
 
     async def test_update_without_messages(self):
         """Test update without new messages."""

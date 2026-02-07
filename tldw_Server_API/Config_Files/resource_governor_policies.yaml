@@ -62,6 +62,37 @@ policies:
     requests: { rpm: 60, burst: 1.0 }
     scopes: [global, entity]
 
+  # AuthNZ sensitive endpoint policies (endpoint-level + ingress mapping).
+  authnz.forgot_password:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [global, entity]
+
+  authnz.reset_password:
+    # Equivalent to ~20 attempts/5 minutes with burst allowance.
+    requests: { rpm: 4, burst: 5.0 }
+    scopes: [global, entity]
+
+  authnz.resend_verification:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [global, entity]
+
+  authnz.magic_link.request:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [global, entity]
+
+  authnz.magic_link.email:
+    # Approximate 3 requests per 10 minutes per normalized email identity.
+    requests: { rpm: 0.3, burst: 10.0 }
+    scopes: [entity]
+
+  authnz.mfa.verify:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [global, entity]
+
+  authnz.mfa.login:
+    requests: { rpm: 10, burst: 1.0 }
+    scopes: [global, entity]
+
   # Embeddings service (OpenAI-compatible)
   embeddings.default:
     requests: { rpm: 60, burst: 1.2 }
@@ -371,6 +402,12 @@ route_map:
     "/api/v1/watchlists*": watchlists.default
     "/api/v1/subscriptions*": core.default
     "/api/v1/billing*": core.default
+    "/api/v1/auth/forgot-password": authnz.forgot_password
+    "/api/v1/auth/reset-password": authnz.reset_password
+    "/api/v1/auth/resend-verification": authnz.resend_verification
+    "/api/v1/auth/magic-link/request": authnz.magic_link.request
+    "/api/v1/auth/mfa/verify": authnz.mfa.verify
+    "/api/v1/auth/mfa/login": authnz.mfa.login
     "/api/v1/auth*": authnz.default
     "/api/v1/authnz*": core.default
     "/api/v1/users*": core.default

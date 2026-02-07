@@ -58,6 +58,10 @@ from tldw_Server_API.app.core.exceptions import InactiveUserError
 from tldw_Server_API.app.core.External_Sources.connectors_service import get_policy
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
+from tldw_Server_API.app.core.testing import (
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_production_like_env as _is_production_like_env,
+)
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService, get_storage_service
@@ -289,22 +293,18 @@ def _activate_scope_context(
 async def get_db_transaction() -> AsyncGenerator[Any, None]:
     """Get database connection in transaction mode.
 
-    Always behaves as an async generator for FastAPI compatibility. In TEST_MODE/pytest,
+    Always behaves as an async generator for FastAPI compatibility. In explicit test mode,
     yields a lightweight pool adapter that runs queries without holding a long-lived
     transaction to avoid event-loop and teardown issues. Otherwise, yields a
     request-scoped transaction connection.
     """
     db_pool = await get_db_pool()
 
-    # Decide whether to use the lightweight adapter (tests/pytest) or a real transaction
+    # Decide whether to use the lightweight adapter (explicit test mode) or a real transaction
     use_adapter = False
     try:
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
             use_adapter = True
-        else:
-            import sys as _sys  # local import to avoid test-only dependency at module import
-            if "pytest" in _sys.modules:
-                use_adapter = True
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         # If any detection fails, fall back to default transaction behavior
         use_adapter = False
@@ -423,13 +423,19 @@ async def get_jwt_service_dep() -> JWTService:
 
 async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
-    # In pytest/TEST_MODE contexts, return a lightweight stub to avoid heavy init
+    # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init.
+    # Never use this stub in production-like environments.
     try:
         import os as _os
-        import sys as _sys
 
         force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
-        if not force_real and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or "pytest" in _sys.modules):
+        in_production_like = bool(_is_production_like_env())
+        if (
+            not force_real
+            and not in_production_like
+            and _is_explicit_pytest_runtime()
+            and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"))
+        ):
             class _StubSessionManager:
                 enabled = True
 
@@ -1328,8 +1334,9 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
     RG-first rate limit dependency with legacy fallback.
 
     When Resource Governor (RG) has already governed this request, this is a
-    no-op. Otherwise it uses the legacy AuthNZ rate limiter (user-scoped when
-    available, else IP-scoped).
+    no-op. Otherwise it calls the legacy AuthNZ limiter shim (user-scoped when
+    available, else IP-scoped). That shim is intentionally a compatibility
+    no-op in RG cutover mode and primarily preserves call contracts/metadata.
     """
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
@@ -1426,7 +1433,7 @@ async def check_rate_limit(request: Request, rate_limiter=None) -> None:
 
 
 async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
-    """RG-first auth rate limit dependency with legacy fallback (IP-scoped)."""
+    """RG-first auth rate limit dependency with legacy fallback (IP-scoped no-op shim)."""
     # TODO(Q2-2026): remove legacy fallback after RG enabled in all production environments; track via metrics.record_rate_limit_fallback().
     if _rg_enabled_for_request(request):
         return
@@ -1672,7 +1679,8 @@ def require_token_scope(
       it must match the provided `scope` or 403.
     - If `require_schedule_match=True` and the token includes 'schedule_id', the value must
       match the request path param `schedule_path_param` when present, or header `schedule_header`.
-    - In single-user mode, or when no bearer token is present, this check is bypassed.
+    - When `require_if_present=True`, missing/invalid credentials fail closed (401).
+      API keys are accepted via `X-API-KEY` or Authorization bearer (non-JWT).
     - If `allow_admin_bypass=True`, admin users skip this enforcement.
     - If the bearer token is not a JWT, enforce API key constraints using that token.
     """
@@ -1747,9 +1755,12 @@ def require_token_scope(
         if token and token_is_jwt:
             try:
                 payload = jwt_service.decode_access_token(token)
-            except (InvalidTokenError, TokenExpiredError):
-                # Defensive: malformed tokens should fall back to upstream auth handling.
-                return None
+            except (InvalidTokenError, TokenExpiredError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Could not validate credentials",
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
             # Enforce revocation/blacklist checks for scoped JWTs.
             try:
                 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
@@ -1888,6 +1899,14 @@ def require_token_scope(
             api_key = None
         if not api_key and token and not token_is_jwt:
             api_key = token
+        if not api_key:
+            if require_if_present:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return None
         if api_key:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
@@ -1912,9 +1931,19 @@ def require_token_scope(
 
                 api_mgr = await get_api_key_manager()
                 client_ip = resolve_client_ip(request, get_settings())
-                info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+                info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    ip_address=client_ip,
+                    record_usage=False,
+                )
                 if not info:
-                    # Let upstream auth fail; do not enforce here
+                    if require_if_present:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Could not validate credentials",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                    # Optional mode: let upstream auth fail.
                     return None
                 # Admin bypass via scope 'admin'
                 key_scopes = _normalize_scope(info.get("scope"))
@@ -1932,8 +1961,20 @@ def require_token_scope(
                     import json as _json
                     try:
                         allowed_eps = _json.loads(allowed_eps)
-                    except (ValueError, TypeError):
-                        allowed_eps = None
+                    except (ValueError, TypeError) as parse_exc:
+                        logger.debug(
+                            "require_token_scope: malformed llm_allowed_endpoints for key {}; denying",
+                            info.get("id"),
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key endpoint constraints",
+                        ) from parse_exc
+                if allowed_eps is not None and not isinstance(allowed_eps, list):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Forbidden: invalid API key endpoint constraints",
+                    )
                 if endpoint_id and isinstance(allowed_eps, list) and allowed_eps:
                     if endpoint_id not in [str(x) for x in allowed_eps]:
                         raise HTTPException(status_code=403, detail="Forbidden: endpoint not permitted for API key")
@@ -1943,15 +1984,37 @@ def require_token_scope(
                     import json as _json
                     try:
                         meta = _json.loads(meta)
-                    except (ValueError, TypeError):
-                        meta = None
+                    except (ValueError, TypeError) as parse_exc:
+                        logger.debug(
+                            "require_token_scope: malformed metadata constraints for key {}; denying",
+                            info.get("id"),
+                        )
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        ) from parse_exc
+                if meta is not None and not isinstance(meta, dict):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Forbidden: invalid API key metadata constraints",
+                    )
                 if isinstance(meta, dict):
                     am = meta.get("allowed_methods")
+                    if am is not None and not isinstance(am, list):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        )
                     if isinstance(am, list) and am:
                         method = str(getattr(request, "method", "")).upper()
                         if method and method not in [str(x).upper() for x in am]:
                             raise HTTPException(status_code=403, detail="Forbidden: method not permitted for API key")
                     ap = meta.get("allowed_paths")
+                    if ap is not None and not isinstance(ap, list):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Forbidden: invalid API key metadata constraints",
+                        )
                     if isinstance(ap, list) and ap:
                         path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
                         if path and not any(str(path).startswith(str(pfx)) for pfx in ap):
@@ -1987,9 +2050,15 @@ def require_token_scope(
                                         ) from err
             except HTTPException:
                 raise
-            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:  # noqa: BLE001
-                # Best-effort: do not block if metadata not available
-                return None
+            except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+                logger.debug(
+                    "require_token_scope: API key constraint evaluation failed; denying: {}",
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Forbidden: unable to validate API key constraints",
+                ) from exc
         return None
 
     try:

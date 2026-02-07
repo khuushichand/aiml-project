@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import AsyncIterator
 from typing import Any
@@ -325,20 +326,103 @@ def _prepare_native_payload(request_data: Any, *, model: str) -> dict[str, Any]:
     return payload
 
 
-async def _proxy_native_stream(
+def _map_native_upstream_exception(
+    exc: Exception,
+    *,
+    provider: str,
+    operation: str,
+) -> HTTPException:
+    """Translate upstream HTTP/network errors into stable API errors."""
+
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if not isinstance(status_code, int) or not (400 <= status_code <= 599):
+        status_code = status.HTTP_502_BAD_GATEWAY
+
+    detail: dict[str, Any] = {
+        "error_code": "upstream_provider_error",
+        "provider": provider,
+        "operation": operation,
+        "message": f"Upstream provider '{provider}' request failed.",
+    }
+
+    upstream_error: Any | None = None
+    if response is not None:
+        with contextlib.suppress(Exception):
+            data = response.json()
+            if isinstance(data, (dict, list)):
+                upstream_error = data
+        if upstream_error is None:
+            with contextlib.suppress(Exception):
+                text = response.text
+                if isinstance(text, str) and text.strip():
+                    upstream_error = text[:2000]
+    if upstream_error is not None:
+        detail["upstream_error"] = upstream_error
+
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+async def _native_post_json(
     url: str,
     headers: dict[str, str],
     payload: dict[str, Any],
     *,
-    timeout: float | None = None,
-) -> AsyncIterator[bytes]:
-    """Proxy streaming responses from native Messages providers."""
-    async with async_http_client_factory(timeout=timeout) as client:
-        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+    timeout: float | None,
+    provider: str,
+    operation: str,
+) -> Any:
+    """Execute a native provider POST and map upstream failures consistently."""
+    try:
+        async with async_http_client_factory(timeout=timeout) as client:
+            resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
-            async for chunk in resp.aiter_raw():
+            return resp.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_native_upstream_exception(exc, provider=provider, operation=operation) from exc
+
+
+async def _prepare_native_stream_iterator(
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    *,
+    timeout: float | None,
+    provider: str,
+    operation: str,
+) -> AsyncIterator[bytes]:
+    """Open a native provider stream and preflight status before returning an iterator."""
+    client_cm = async_http_client_factory(timeout=timeout)
+    client = await client_cm.__aenter__()
+    stream_cm = None
+    response = None
+    try:
+        stream_cm = client.stream("POST", url, headers=headers, json=payload)
+        response = await stream_cm.__aenter__()
+        response.raise_for_status()
+    except Exception as exc:
+        if stream_cm is not None:
+            with contextlib.suppress(Exception):
+                await stream_cm.__aexit__(type(exc), exc, exc.__traceback__)
+        with contextlib.suppress(Exception):
+            await client_cm.__aexit__(type(exc), exc, exc.__traceback__)
+        raise _map_native_upstream_exception(exc, provider=provider, operation=operation) from exc
+
+    async def _iter() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in response.aiter_raw():  # type: ignore[union-attr]
                 if chunk:
                     yield chunk
+        finally:
+            if stream_cm is not None:
+                with contextlib.suppress(Exception):
+                    await stream_cm.__aexit__(None, None, None)
+            with contextlib.suppress(Exception):
+                await client_cm.__aexit__(None, None, None)
+
+    return _iter()
 
 
 async def _resolve_credentials_for_request(
@@ -418,14 +502,26 @@ async def _handle_messages(
         )
         stream = _extract_stream_flag(request_data.stream)
         if stream:
+            stream_iter = await _prepare_native_stream_iterator(
+                url,
+                headers,
+                payload,
+                timeout=timeout,
+                provider=provider,
+                operation="messages.stream",
+            )
             return StreamingResponse(
-                _proxy_native_stream(url, headers, payload, timeout=timeout),
+                stream_iter,
                 media_type="text/event-stream",
             )
-        async with async_http_client_factory(timeout=timeout) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await _native_post_json(
+            url,
+            headers,
+            payload,
+            timeout=timeout,
+            provider=provider,
+            operation="messages",
+        )
         return JSONResponse(data)
 
     # Non-native providers: convert to OpenAI-compatible request
@@ -488,10 +584,14 @@ async def _handle_count_tokens(
         anthropic_version=anthropic_version,
         anthropic_beta=anthropic_beta,
     )
-    async with async_http_client_factory(timeout=timeout) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _native_post_json(
+        url,
+        headers,
+        payload,
+        timeout=timeout,
+        provider=provider,
+        operation="messages.count_tokens",
+    )
     return JSONResponse(data)
 
 

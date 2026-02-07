@@ -242,6 +242,14 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
     except RuntimeError:
         current_loop = None
 
+    def _run():
+        try:
+            asyncio.run(_stop())
+        except (OSError, RuntimeError, TypeError, ValueError) as e:
+            logger.error(
+                f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
+            )
+
     if owner_loop and owner_loop is not current_loop:
         future = asyncio.run_coroutine_threadsafe(_stop(), owner_loop)
 
@@ -257,16 +265,12 @@ def _schedule_service_stop(user_id: Optional[Union[int, str]], service: UnifiedA
         return
 
     if current_loop:
+        # In test contexts, avoid leaving background stop tasks pending on loop shutdown.
+        if _is_test_context():
+            threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
+            return
         current_loop.create_task(_stop())
         return
-
-    def _run():
-        try:
-            asyncio.run(_stop())
-        except (OSError, RuntimeError, TypeError, ValueError) as e:
-            logger.error(
-                f"Audit service stop failed for user {user_id} in fallback thread: {type(e).__name__}: {e}"
-            )
 
     threading.Thread(target=_run, name=f"audit-stop-{user_id}", daemon=True).start()
 

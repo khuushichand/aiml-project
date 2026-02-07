@@ -92,7 +92,9 @@ from tldw_Server_API.app.core.Character_Chat.modules.character_generation_preset
     resolve_character_generation_settings,
 )
 from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
+    DEFAULT_PROMPT_PRESET,
     build_character_system_prompt,
+    build_custom_system_prompt,
     resolve_character_prompt_preset,
 )
 from tldw_Server_API.app.core.Character_Chat.modules.character_utils import (
@@ -358,21 +360,6 @@ def _convert_db_message_to_response(msg_data: dict[str, Any]) -> MessageResponse
         version=msg_data.get('version', 1)
     )
 
-def _touch_conversation_metadata(db: CharactersRAGDB, conversation_id: str) -> bool:
-    """Best-effort bump last_modified/version after settings updates."""
-    for _ in range(2):
-        conversation = db.get_conversation_by_id(conversation_id)
-        if not conversation:
-            return False
-        try:
-            db.update_conversation(conversation_id, {}, conversation.get("version", 1))
-            return True
-        except ConflictError:
-            continue
-        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
-            return False
-    return False
-
 def _validate_chat_settings_payload(settings: dict[str, Any]) -> None:
     """Validate settings payload size, shape, and known enum fields."""
     try:
@@ -631,25 +618,47 @@ def _merge_conversation_settings(
     server_settings_raw: Any,
     incoming_settings_raw: Any,
 ) -> dict[str, Any]:
-    """Merge settings with top-level LWW and per-entry memory map reconciliation."""
+    """Merge settings with timestamp-aware conflict rules and per-entry memory reconciliation.
+
+    Rules:
+    - If incoming and server both provide valid ``updatedAt`` values, apply LWW with
+      server-wins ties.
+    - If incoming omits ``updatedAt``, treat it as an intentional patch update so
+      incoming fields apply without client-managed timestamps.
+    """
     server_settings = server_settings_raw if isinstance(server_settings_raw, dict) else {}
     incoming_settings = incoming_settings_raw if isinstance(incoming_settings_raw, dict) else {}
 
-    server_updated_at_epoch = _parse_iso_timestamp(server_settings.get("updatedAt")) or 0.0
-    incoming_updated_at_epoch = _parse_iso_timestamp(incoming_settings.get("updatedAt")) or 0.0
+    server_updated_at_epoch = _parse_iso_timestamp(server_settings.get("updatedAt"))
+    incoming_updated_at_epoch = _parse_iso_timestamp(incoming_settings.get("updatedAt"))
+    server_has_updated_at = isinstance(server_settings.get("updatedAt"), str) and server_updated_at_epoch is not None
+    incoming_has_updated_at = isinstance(incoming_settings.get("updatedAt"), str) and incoming_updated_at_epoch is not None
 
-    incoming_wins = incoming_updated_at_epoch > server_updated_at_epoch
+    if incoming_has_updated_at and server_has_updated_at:
+        incoming_wins = incoming_updated_at_epoch > server_updated_at_epoch
+    elif incoming_has_updated_at:
+        incoming_wins = True
+    else:
+        # Untimestamped writes are treated as direct patch updates.
+        incoming_wins = True
+
     if incoming_wins:
         merged = {**server_settings, **incoming_settings}
     else:
         # Server-backed ties resolve to server settings.
         merged = {**incoming_settings, **server_settings}
 
+    server_memory_fallback_epoch = server_updated_at_epoch if server_updated_at_epoch is not None else 0.0
+    if incoming_updated_at_epoch is not None:
+        incoming_memory_fallback_epoch = incoming_updated_at_epoch
+    else:
+        incoming_memory_fallback_epoch = server_memory_fallback_epoch + 1.0
+
     merged_memory = _merge_character_memory_by_id(
         server_settings.get("characterMemoryById"),
         incoming_settings.get("characterMemoryById"),
-        server_updated_at_epoch=server_updated_at_epoch,
-        incoming_updated_at_epoch=incoming_updated_at_epoch,
+        server_updated_at_epoch=server_memory_fallback_epoch,
+        incoming_updated_at_epoch=incoming_memory_fallback_epoch,
     )
     if merged_memory is not None:
         merged["characterMemoryById"] = merged_memory
@@ -658,9 +667,11 @@ def _merge_conversation_settings(
     if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
         merged["schemaVersion"] = 2
 
-    if incoming_wins and isinstance(incoming_settings.get("updatedAt"), str):
+    if incoming_wins and incoming_has_updated_at:
         merged["updatedAt"] = incoming_settings["updatedAt"]
-    elif isinstance(server_settings.get("updatedAt"), str):
+    elif not incoming_has_updated_at:
+        merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
+    elif server_has_updated_at:
         merged["updatedAt"] = server_settings["updatedAt"]
     else:
         merged["updatedAt"] = datetime.now(timezone.utc).isoformat()
@@ -838,16 +849,11 @@ def _resolve_effective_prompt_preset(
     4) global default
     """
 
-    from tldw_Server_API.app.core.Character_Chat.modules.character_prompt_presets import (
-        _VALID_PROMPT_PRESETS,
-        DEFAULT_PROMPT_PRESET,
-    )
-
     def _coerce_preset_id(value: Any) -> Optional[str]:
         if not isinstance(value, str):
             return None
         preset = value.strip()
-        if not preset or preset not in _VALID_PROMPT_PRESETS:
+        if not preset:
             return None
         return preset
 
@@ -867,6 +873,46 @@ def _resolve_effective_prompt_preset(
 
     character_preset = _coerce_preset_id(resolve_character_prompt_preset(character))
     return character_preset or DEFAULT_PROMPT_PRESET
+
+
+def _build_system_prompt_for_preset(
+    db: CharactersRAGDB,
+    character: dict[str, Any],
+    char_name: str,
+    user_name: str,
+    preset_id: Optional[str],
+) -> str:
+    preset = str(preset_id or "").strip()
+    if not preset:
+        preset = DEFAULT_PROMPT_PRESET
+
+    if preset in {"default", "st_default"}:
+        return build_character_system_prompt(character, char_name, user_name, preset=preset)
+
+    try:
+        custom_preset = db.get_prompt_preset(preset)
+    except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Non-fatal: failed to fetch custom preset '{}': {}", preset, exc)
+        custom_preset = None
+
+    if isinstance(custom_preset, dict):
+        raw_order = custom_preset.get("section_order")
+        raw_templates = custom_preset.get("section_templates")
+        section_order = [item for item in raw_order if isinstance(item, str)] if isinstance(raw_order, list) else []
+        section_templates = (
+            {key: value for key, value in raw_templates.items() if isinstance(key, str) and isinstance(value, str)}
+            if isinstance(raw_templates, dict)
+            else {}
+        )
+        return build_custom_system_prompt(
+            character=character,
+            char_name=char_name,
+            user_name=user_name,
+            section_order=section_order,
+            section_templates=section_templates,
+        )
+
+    return build_character_system_prompt(character, char_name, user_name, preset=DEFAULT_PROMPT_PRESET)
 
 
 def _resolve_effective_generation_settings(
@@ -1594,6 +1640,14 @@ def _summary_matches_existing(
     window: int,
     compressed_count: int,
 ) -> bool:
+    def _safe_int(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(str(value).strip())
+        except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS:
+            return None
+
     if not isinstance(existing_summary, dict):
         return False
     if existing_summary.get("content") != content:
@@ -1605,11 +1659,11 @@ def _summary_matches_existing(
         return False
     if str(source_range.get("toMessageId") or "") != source_to_id:
         return False
-    if int(existing_summary.get("thresholdMessages") or -1) != threshold:
+    if _safe_int(existing_summary.get("thresholdMessages")) != threshold:
         return False
-    if int(existing_summary.get("windowMessages") or -1) != window:
+    if _safe_int(existing_summary.get("windowMessages")) != window:
         return False
-    return int(existing_summary.get("compressedCount") or -1) == compressed_count
+    return _safe_int(existing_summary.get("compressedCount")) == compressed_count
 
 
 def _persist_auto_summary_to_settings(
@@ -1654,8 +1708,7 @@ def _persist_auto_summary_to_settings(
 
     try:
         _validate_chat_settings_payload(merged_settings)
-        if db.upsert_conversation_settings(chat_id, merged_settings):
-            _touch_conversation_metadata(db, chat_id)
+        db.upsert_conversation_settings(chat_id, merged_settings)
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(
             "Non-fatal: failed to persist auto-summary settings for chat {}: {}",
@@ -2114,12 +2167,17 @@ async def create_preset(
     current_user: User = Depends(get_request_user),
 ):
     """Create a new user-defined prompt preset."""
-    db.upsert_prompt_preset(
+    created = db.upsert_prompt_preset(
         preset_id=body.preset_id,
         name=body.name,
         section_order=body.section_order,
         section_templates=body.section_templates,
     )
+    if not created:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create prompt preset",
+        )
     return PresetDetail(
         preset_id=body.preset_id,
         name=body.name,
@@ -2159,13 +2217,23 @@ async def update_preset(
     section_order = body.section_order if body.section_order is not None else existing.get("section_order", [])
     section_templates = body.section_templates if body.section_templates is not None else existing.get("section_templates", {})
 
-    db.upsert_prompt_preset(
+    updated_ok = db.upsert_prompt_preset(
         preset_id=preset_id,
         name=name,
         section_order=section_order,
         section_templates=section_templates,
     )
+    if not updated_ok:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update preset '{preset_id}'",
+        )
     updated = db.get_prompt_preset(preset_id)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to load updated preset '{preset_id}'",
+        )
     return PresetDetail(
         preset_id=preset_id,
         name=updated["name"],
@@ -2202,7 +2270,12 @@ async def delete_preset(
             detail=f"Preset '{preset_id}' not found",
         )
 
-    db.delete_prompt_preset(preset_id)
+    deleted = db.delete_prompt_preset(preset_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete preset '{preset_id}'",
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -2492,7 +2565,13 @@ async def prepare_chat_completion(
 
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            sys_text = build_character_system_prompt(character, char_label, user_name, preset=effective_preset)
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_label,
+                user_name=user_name,
+                preset_id=effective_preset,
+            )
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
         if summary_content:
@@ -2718,7 +2797,13 @@ async def prompt_assembly_preview(
         formatted: list[dict[str, Any]] = []
         sys_text = ""
         if include_ctx and character and body.offset == 0:
-            sys_text = build_character_system_prompt(character, char_name, user_name, preset=preview_preset)
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_name,
+                user_name=user_name,
+                preset_id=preview_preset,
+            )
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
         if summary_content:
@@ -2798,9 +2883,13 @@ async def prompt_assembly_preview(
                 str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
             )[-2000:]
             if recent_text.strip():
+                world_book_character_id = (
+                    turn_context.get("active_character_id")
+                    or conversation.get("character_id")
+                )
                 wb_result = wb_manager.process_context(
                     text=recent_text,
-                    character_id=conversation.get("character_id"),
+                    character_id=world_book_character_id,
                     include_diagnostics=True,
                 )
                 if isinstance(wb_result, dict):
@@ -3033,7 +3122,13 @@ async def character_chat_completion(
 
         formatted: list[dict[str, Any]] = []
         if include_ctx and character and offset == 0:
-            sys_text = build_character_system_prompt(character, char_label, user_name, preset=completion_preset)
+            sys_text = _build_system_prompt_for_preset(
+                db=db,
+                character=character,
+                char_name=char_label,
+                user_name=user_name,
+                preset_id=completion_preset,
+            )
             if sys_text.strip():
                 formatted.append({"role": "system", "content": sys_text.strip()})
         if summary_content:
@@ -3091,9 +3186,13 @@ async def character_chat_completion(
                 str(m.get("content", "")) for m in formatted if m.get("role") in ("user", "assistant")
             )[-2000:]
             if recent_text.strip():
+                world_book_character_id = (
+                    active_character_id
+                    or conversation.get("character_id")
+                )
                 wb_result = wb_manager.process_context(
                     text=recent_text,
-                    character_id=conversation.get("character_id"),
+                    character_id=world_book_character_id,
                     include_diagnostics=True,
                 )
                 if isinstance(wb_result, dict):
@@ -3876,7 +3975,6 @@ async def update_chat_settings(
         if not db.upsert_conversation_settings(chat_id, merged_settings):
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to update chat settings")
 
-        _touch_conversation_metadata(db, chat_id)
         settings_row = db.get_conversation_settings(chat_id)
 
         return ChatSettingsResponse(
@@ -4238,15 +4336,110 @@ async def export_chat_history(
 )
 async def persist_streamed_assistant_message(
     chat_id: str = Path(..., description="Chat session ID"),
-    body: CharacterChatStreamPersistRequest = None,
+    body: CharacterChatStreamPersistRequest = Body(...),
     db: CharactersRAGDB = Depends(get_chacha_db_for_user),
     current_user: User = Depends(get_request_user),
 ):
     try:
-        body = body or CharacterChatStreamPersistRequest(assistant_content="")
-
         conversation = db.get_conversation_by_id(chat_id)
         _verify_chat_ownership(conversation, current_user.id, chat_id)
+
+        settings_row = db.get_conversation_settings(chat_id)
+        history_messages = db.get_messages_for_conversation(chat_id, limit=1000, offset=0) or []
+        history_messages = [m for m in history_messages if not m.get("deleted")]
+
+        turn_context = _resolve_chat_turn_context(
+            db=db,
+            conversation=conversation,
+            settings_row=settings_row,
+            history_messages=history_messages,
+            directed_character_id=body.speaker_character_id,
+        )
+        if (
+            body.speaker_character_id is not None
+            and not turn_context.get("directed_character_applied")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="speaker_character_id must reference a selected participant in this chat",
+            )
+
+        participants = turn_context.get("participants") or []
+        participants_by_alias: dict[str, dict[str, Any]] = {}
+        for participant in participants:
+            aliases = _normalize_sender_aliases([participant.get("name", "")])
+            for alias in aliases:
+                participants_by_alias.setdefault(alias, participant)
+
+        resolved_participant: Optional[dict[str, Any]] = None
+        requested_speaker_name = (
+            body.speaker_character_name.strip()
+            if isinstance(body.speaker_character_name, str)
+            else ""
+        )
+
+        if body.speaker_character_id is not None:
+            requested_id = _normalize_character_id(body.speaker_character_id)
+            resolved_participant = next(
+                (
+                    participant
+                    for participant in participants
+                    if _normalize_character_id(participant.get("id")) == requested_id
+                ),
+                None,
+            )
+
+        if requested_speaker_name:
+            requested_aliases = _normalize_sender_aliases([requested_speaker_name])
+            matched_by_name = next(
+                (
+                    participants_by_alias.get(alias)
+                    for alias in requested_aliases
+                    if alias in participants_by_alias
+                ),
+                None,
+            )
+            if matched_by_name is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="speaker_character_name must reference a selected participant in this chat",
+                )
+            if (
+                resolved_participant is not None
+                and _normalize_character_id(matched_by_name.get("id"))
+                != _normalize_character_id(resolved_participant.get("id"))
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="speaker_character_id and speaker_character_name must reference the same participant",
+                )
+            resolved_participant = matched_by_name
+
+        if resolved_participant is None:
+            active_character_id = _normalize_character_id(turn_context.get("active_character_id"))
+            resolved_participant = next(
+                (
+                    participant
+                    for participant in participants
+                    if _normalize_character_id(participant.get("id")) == active_character_id
+                ),
+                None,
+            )
+        if resolved_participant is None and participants:
+            resolved_participant = participants[0]
+
+        resolved_speaker_id = (
+            _normalize_character_id(resolved_participant.get("id"))
+            if isinstance(resolved_participant, dict)
+            else _normalize_character_id(turn_context.get("active_character_id"))
+        )
+        resolved_speaker_name = (
+            str((resolved_participant or {}).get("name") or turn_context.get("active_character_name") or "").strip()
+        )
+        if not resolved_speaker_name:
+            char_card = db.get_character_card_by_id(conversation.get("character_id")) or {}
+            resolved_speaker_name = str(char_card.get("name") or "Assistant").strip() or "Assistant"
+        resolved_turn_mode = str(turn_context.get("turn_taking_mode") or "single").strip() or "single"
 
         # Enforce message cap (+1 assistant)
         try:
@@ -4273,12 +4466,10 @@ async def persist_streamed_assistant_message(
                 )
 
         # Persist assistant response via Character_Chat guardrails
-        char_card = db.get_character_card_by_id(conversation.get('character_id')) or {}
-        raw_name = (char_card.get('name') or 'Assistant') if isinstance(char_card, dict) else 'Assistant'
         assistant_msg_id = post_message_to_conversation(
             db=db,
             conversation_id=chat_id,
-            character_name=raw_name,
+            character_name=resolved_speaker_name,
             message_content=body.assistant_content,
             is_user_message=False,
             parent_message_id=body.user_message_id,
@@ -4291,12 +4482,19 @@ async def persist_streamed_assistant_message(
             )
         # Persist metadata: tool_calls and usage
         try:
-            extra = None
+            metadata_extra: dict[str, Any] = {
+                "speaker_character_id": resolved_speaker_id,
+                "speaker_character_name": resolved_speaker_name,
+                "turn_taking_mode": resolved_turn_mode,
+            }
             if getattr(body, 'usage', None) is not None:
-                extra = {"usage": body.usage}
+                metadata_extra["usage"] = body.usage
             validated_tool_calls = _validate_and_truncate_tool_calls(getattr(body, 'tool_calls', None))
-            if validated_tool_calls is not None or extra is not None:
-                db.add_message_metadata(assistant_msg_id, tool_calls=validated_tool_calls, extra=extra)
+            db.add_message_metadata(
+                assistant_msg_id,
+                tool_calls=validated_tool_calls,
+                extra=metadata_extra,
+            )
         except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(
                 f"Non-fatal: failed to persist metadata for message {assistant_msg_id}: {exc}"
@@ -4424,7 +4622,11 @@ async def select_greeting(
     checksum = _compute_greetings_checksum(character)
     settings["greetingSelectionId"] = f"greeting:{body.index}:selected"
     settings["greetingsChecksum"] = checksum
-    db.upsert_conversation_settings(chat_id, settings)
+    if not db.upsert_conversation_settings(chat_id, settings):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist greeting selection",
+        )
 
     return GreetingSelectResponse(
         chat_id=chat_id,
@@ -4535,16 +4737,30 @@ async def export_lorebook_diagnostics(
     _verify_chat_ownership(conversation, current_user.id, chat_id)
 
     character_id = conversation.get("character_id")
+    settings_row = db.get_conversation_settings(chat_id)
 
     # Fetch all messages ordered by timestamp
     messages = db.get_messages_for_conversation(chat_id, limit=10000, order_by_timestamp="ASC")
+    history_messages = [msg for msg in messages if not msg.get("deleted")]
+    turn_context = _resolve_chat_turn_context(
+        db=db,
+        conversation=conversation,
+        settings_row=settings_row,
+        history_messages=history_messages,
+    )
+    participant_aliases = turn_context.get("participant_aliases") or set()
+    primary_character_name = str(turn_context.get("primary_character_name") or "")
 
     # Filter assistant messages that have lorebook diagnostics
     turns_with_diags: list[DiagnosticTurnEntry] = []
     turn_counter = 0
     for msg in messages:
-        sender = (msg.get("sender") or "").lower()
-        if sender not in ("assistant", "char", "character"):
+        role = _map_sender_to_role_with_participants(
+            msg.get("sender"),
+            primary_character_name,
+            participant_aliases,
+        )
+        if role != "assistant":
             continue
         turn_counter += 1
 

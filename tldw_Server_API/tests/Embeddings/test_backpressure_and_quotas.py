@@ -3,6 +3,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi.routing import APIRoute
 
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user
@@ -87,3 +88,33 @@ def test_tenant_quota_429(monkeypatch):
     assert r2.status_code == 429
     assert r2.headers.get("Retry-After") == "1"
     app.dependency_overrides.pop(get_request_user, None)
+
+
+@pytest.mark.unit
+def test_embeddings_batch_route_has_rbac_rate_limit_parity():
+    single_route = None
+    batch_route = None
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if route.path == "/api/v1/embeddings" and "POST" in route.methods:
+            single_route = route
+        if route.path == "/api/v1/embeddings/batch" and "POST" in route.methods:
+            batch_route = route
+
+    assert single_route is not None
+    assert batch_route is not None
+
+    def _resources(route: APIRoute) -> list[str]:
+        resources: list[str] = []
+        for dep in route.dependant.dependencies:
+            resource = getattr(dep.call, "_tldw_rate_limit_resource", None)
+            if resource:
+                resources.append(str(resource))
+        return resources
+
+    single_resources = _resources(single_route)
+    batch_resources = _resources(batch_route)
+
+    assert "embeddings.create" in single_resources
+    assert "embeddings.create" in batch_resources

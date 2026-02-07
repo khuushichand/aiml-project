@@ -2675,7 +2675,8 @@ class EmbeddingsBatchResponse(BaseModel):
 @router.post(
     "/embeddings/batch",
     response_model=EmbeddingsBatchResponse,
-    summary="Create embeddings for a batch of texts"
+    summary="Create embeddings for a batch of texts",
+    dependencies=[Depends(rbac_rate_limit("embeddings.create"))],
 )
 async def create_embeddings_batch_endpoint(
     payload: EmbeddingsBatchRequest,

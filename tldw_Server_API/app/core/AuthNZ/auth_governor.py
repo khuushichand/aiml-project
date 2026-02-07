@@ -58,7 +58,8 @@ class AuthGovernor:
         selected identity metadata for observability.
         """
         if fail_open is None:
-            env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "1").lower()
+            # Default fail mode is closed unless explicitly set to open.
+            env_val = os.getenv("AUTH_BUDGET_FAIL_OPEN", "0").lower()
             fail_open = env_val in {"1", "true", "yes", "on", "y"}
         try:
             result = await is_key_over_budget(api_key_id)
@@ -79,10 +80,10 @@ class AuthGovernor:
                         "org_ids": principal.org_ids,
                         "team_ids": principal.team_ids,
                     },
-                    "error": str(exc),
+                    "error": "budget_check_failed",
                 }
             # Fail open for budget checks if underlying inspection fails; callers can
-            # switch to fail-closed via AUTH_BUDGET_FAIL_OPEN=0.
+            # keep the default fail-closed behavior by leaving AUTH_BUDGET_FAIL_OPEN unset.
             return {
                 "over": False,
                 "reasons": [],

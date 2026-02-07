@@ -1,7 +1,7 @@
 import asyncio
 import time
+from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -204,3 +204,247 @@ async def test_core_worker_rejects_unsupported_import_media(monkeypatch, tmp_pat
     ij = FakeChatbookService.jobs["cb-imp-1"]
     assert ij.status == ImportStatus.FAILED
     assert "Media/embedding imports are not supported" in (ij.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_core_worker_cleans_export_file_and_stops_renew_after_midflight_cancel(monkeypatch, tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    ensure_jobs_tables(jobs_db)
+    jm = JobManager(jobs_db)
+
+    from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_path = export_dir / "cancelled.chatbook"
+
+    class FakeExportJob:
+        def __init__(self, jid: str):
+            self.job_id = jid
+            self.status = ExportStatus.PENDING
+            self.started_at = None
+            self.completed_at = None
+            self.output_path = None
+            self.file_size_bytes = None
+            self.expires_at = None
+            self.download_url = None
+            self.error_message = None
+
+    class FakeChatbookService:
+        jobs = {}
+
+        def __init__(self, user_id, db, **kwargs):
+            self.export_dir = export_dir
+
+        def _get_export_job(self, jid: str):
+            return FakeChatbookService.jobs.get(jid)
+
+        def _save_export_job(self, ej):
+            FakeChatbookService.jobs[ej.job_id] = ej
+
+        def _get_export_expiry(self, now_utc):
+            return now_utc + timedelta(days=1)
+
+        def _get_download_expiry(self, _now_utc, expires_at):
+            return expires_at
+
+        def _build_download_url(self, job_id, _exp):
+            return f"http://test/{job_id}"
+
+        async def _create_chatbook_sync_wrapper(self, **kwargs):
+            export_path.write_text("payload", encoding="utf-8")
+            await asyncio.sleep(0.4)
+            return True, None, str(export_path)
+
+    import tldw_Server_API.app.services.core_jobs_worker as worker
+
+    renew_calls = {"count": 0}
+    original_renew = jm.renew_job_lease
+
+    def _counted_renew(*args, **kwargs):
+        renew_calls["count"] += 1
+        return original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(jm, "renew_job_lease", _counted_renew)
+
+    class JMProxy:
+        def __init__(self):
+            self._jm = jm
+
+        def __getattr__(self, name):
+            return getattr(self._jm, name)
+
+    monkeypatch.setattr(worker, "JobManager", JMProxy)
+    monkeypatch.setattr(worker, "ChatbookService", FakeChatbookService)
+    monkeypatch.setattr(worker, "_build_chacha_db_for_user", lambda _user_id: None)
+    monkeypatch.setenv("JOBS_LEASE_RENEW_SECONDS", "1")
+    monkeypatch.setenv("JOBS_LEASE_RENEW_JITTER_SECONDS", "0")
+
+    FakeChatbookService.jobs["cb-clean-1"] = FakeExportJob("cb-clean-1")
+
+    job = jm.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={"action": "export", "chatbooks_job_id": "cb-clean-1", "user_id": "1"},
+        owner_user_id="1",
+    )
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run_chatbooks_core_jobs_worker(stop_event))
+
+    try:
+        await asyncio.sleep(0.15)
+        jm.cancel_job(int(job["id"]))
+
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            ej = FakeChatbookService.jobs.get("cb-clean-1")
+            if (
+                ej is not None
+                and ej.status == ExportStatus.CANCELLED
+                and ej.completed_at is not None
+                and not export_path.exists()
+            ):
+                break
+            await asyncio.sleep(0.05)
+        jr = jm.get_job(int(job["id"]))
+        assert jr and jr["status"] == "cancelled"
+        ej = FakeChatbookService.jobs["cb-clean-1"]
+        assert ej.status == ExportStatus.CANCELLED
+        assert ej.completed_at is not None
+        assert not export_path.exists()
+        await asyncio.sleep(0.2)
+        renew_count_after_cancel = renew_calls["count"]
+        await asyncio.sleep(1.2)
+        assert renew_calls["count"] == renew_count_after_cancel
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(run_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+
+    ej = FakeChatbookService.jobs["cb-clean-1"]
+    assert ej.status == ExportStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_core_worker_stops_renew_after_successful_export(monkeypatch, tmp_path):
+    jobs_db = tmp_path / "jobs.db"
+    ensure_jobs_tables(jobs_db)
+    jm = JobManager(jobs_db)
+
+    from tldw_Server_API.app.core.Chatbooks.chatbook_models import ExportStatus
+
+    export_dir = tmp_path / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    export_path = export_dir / "completed.chatbook"
+
+    class FakeExportJob:
+        def __init__(self, jid: str):
+            self.job_id = jid
+            self.status = ExportStatus.PENDING
+            self.started_at = None
+            self.completed_at = None
+            self.output_path = None
+            self.file_size_bytes = None
+            self.expires_at = None
+            self.download_url = None
+            self.error_message = None
+
+    class FakeChatbookService:
+        jobs = {}
+
+        def __init__(self, user_id, db, **kwargs):
+            self.export_dir = export_dir
+
+        def _get_export_job(self, jid: str):
+            return FakeChatbookService.jobs.get(jid)
+
+        def _save_export_job(self, ej):
+            FakeChatbookService.jobs[ej.job_id] = ej
+
+        def _get_export_expiry(self, now_utc):
+            return now_utc + timedelta(days=1)
+
+        def _get_download_expiry(self, _now_utc, expires_at):
+            return expires_at
+
+        def _build_download_url(self, job_id, _exp):
+            return f"http://test/{job_id}"
+
+        async def _create_chatbook_sync_wrapper(self, **kwargs):
+            export_path.write_text("payload", encoding="utf-8")
+            await asyncio.sleep(0.2)
+            return True, None, str(export_path)
+
+    import tldw_Server_API.app.services.core_jobs_worker as worker
+
+    renew_calls = {"count": 0}
+    original_renew = jm.renew_job_lease
+
+    def _counted_renew(*args, **kwargs):
+        renew_calls["count"] += 1
+        return original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(jm, "renew_job_lease", _counted_renew)
+
+    class JMProxy:
+        def __init__(self):
+            self._jm = jm
+
+        def __getattr__(self, name):
+            return getattr(self._jm, name)
+
+    monkeypatch.setattr(worker, "JobManager", JMProxy)
+    monkeypatch.setattr(worker, "ChatbookService", FakeChatbookService)
+    monkeypatch.setattr(worker, "_build_chacha_db_for_user", lambda _user_id: None)
+    monkeypatch.setenv("JOBS_LEASE_RENEW_SECONDS", "1")
+    monkeypatch.setenv("JOBS_LEASE_RENEW_JITTER_SECONDS", "0")
+
+    FakeChatbookService.jobs["cb-ok-1"] = FakeExportJob("cb-ok-1")
+
+    job = jm.create_job(
+        domain="chatbooks",
+        queue="default",
+        job_type="export",
+        payload={"action": "export", "chatbooks_job_id": "cb-ok-1", "user_id": "1"},
+        owner_user_id="1",
+    )
+
+    stop_event = asyncio.Event()
+    run_task = asyncio.create_task(worker.run_chatbooks_core_jobs_worker(stop_event))
+
+    try:
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            jr = jm.get_job(int(job["id"]))
+            if jr and jr.get("status") == "completed":
+                break
+            await asyncio.sleep(0.05)
+        jr = jm.get_job(int(job["id"]))
+        assert jr and jr["status"] == "completed"
+        assert export_path.exists()
+
+        await asyncio.sleep(0.2)
+        renew_count_after_complete = renew_calls["count"]
+        await asyncio.sleep(1.2)
+        assert renew_calls["count"] == renew_count_after_complete
+    finally:
+        stop_event.set()
+        try:
+            await asyncio.wait_for(run_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+
+    ej = FakeChatbookService.jobs["cb-ok-1"]
+    assert ej.status == ExportStatus.COMPLETED

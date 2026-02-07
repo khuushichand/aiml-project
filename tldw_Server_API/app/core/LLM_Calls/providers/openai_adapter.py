@@ -342,7 +342,7 @@ class OpenAIAdapter(ChatProvider):
                     if stop_event.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, item)
-            except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as exc:
+            except Exception as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
                 try:

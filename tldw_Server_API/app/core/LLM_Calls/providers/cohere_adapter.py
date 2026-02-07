@@ -93,9 +93,12 @@ def _cohere_request(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, Any] | None = None,
     base_url: str | None = None,
+    timeout: float | None = None,
 ):
     logging.debug(f"Cohere Chat: Request process starting for model '{model}' (Streaming: {streaming})")
-    loaded_config_data = app_config or load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs() or {}
+    if not isinstance(loaded_config_data, dict):
+        loaded_config_data = {}
     cohere_config = loaded_config_data.get("cohere_api", loaded_config_data.get("API", {}).get("cohere", {}))
 
     final_api_key = api_key or cohere_config.get("api_key")
@@ -131,7 +134,9 @@ def _cohere_request(
     api_base_url = (base_url or cohere_config.get("api_base_url", "https://api.cohere.ai")).rstrip("/")
     COHERE_CHAT_URL = f"{api_base_url}/v1/chat"
 
-    timeout_seconds = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
+    configured_timeout = _safe_cast(cohere_config.get("api_timeout"), float, 180.0)
+    request_timeout = _safe_cast(timeout, float) if timeout is not None else None
+    timeout_seconds = request_timeout if request_timeout is not None else configured_timeout
 
     headers = {
         "Authorization": f"Bearer {final_api_key}",
@@ -434,7 +439,13 @@ class CohereAdapter(ChatProvider):
             "default_timeout_seconds": 180,
         }
 
-    def _to_handler_args(self, request: dict[str, Any], *, streaming: bool | None = None) -> dict[str, Any]:
+    def _to_handler_args(
+        self,
+        request: dict[str, Any],
+        *,
+        streaming: bool | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         stream_flag = request.get("stream")
         if stream_flag is None:
             stream_flag = request.get("streaming")
@@ -462,19 +473,16 @@ class CohereAdapter(ChatProvider):
             "extra_headers": request.get("extra_headers"),
             "extra_body": request.get("extra_body"),
             "base_url": request.get("base_url"),
+            "timeout": timeout,
         }
 
     def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         request = validate_payload(self.name, request or {})
-        if timeout is not None:
-            logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return _cohere_request(**self._to_handler_args(request, streaming=False))
+        return _cohere_request(**self._to_handler_args(request, streaming=False, timeout=timeout))
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = validate_payload(self.name, request or {})
-        if timeout is not None:
-            logger.debug("Cohere adapter ignoring explicit timeout override.")
-        return _cohere_request(**self._to_handler_args(request, streaming=True))
+        return _cohere_request(**self._to_handler_args(request, streaming=True, timeout=timeout))
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)

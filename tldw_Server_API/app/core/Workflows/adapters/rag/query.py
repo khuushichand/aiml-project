@@ -55,6 +55,37 @@ _QUERY_ADAPTER_EXCEPTIONS = (
 _QUERY_JSON_PARSE_EXCEPTIONS = (TypeError, ValueError, json.JSONDecodeError)
 
 
+def _get_workflow_chroma_manager():
+    """Resolve the default ChromaDB manager for workflow adapters."""
+    from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import get_default_chroma_manager
+
+    return get_default_chroma_manager()
+
+
+def _get_semantic_cache_collection(collection_name: str) -> tuple[Any, Any]:
+    """Resolve semantic-cache collection and return (manager, collection)."""
+    manager = _get_workflow_chroma_manager()
+    if not manager:
+        return None, None
+    collection = manager.get_or_create_collection(collection_name=collection_name)
+    return manager, collection
+
+
+def _build_semantic_cache_query_embedding(query: str, manager: Any) -> list[float]:
+    """Build query embedding for semantic cache lookup."""
+    from tldw_Server_API.app.core.Embeddings.Embeddings_Server.Embeddings_Create import create_embedding
+
+    model_override = getattr(manager, "default_embedding_model_id", None)
+    user_cfg = getattr(manager, "user_embedding_config", None)
+    if not isinstance(user_cfg, dict):
+        raise ValueError("Chroma manager is missing embedding configuration.")
+    return create_embedding(
+        text=query,
+        user_app_config=user_cfg,
+        model_id_override=model_override,
+    )
+
+
 @registry.register(
     "query_rewrite",
     category="rag",
@@ -406,25 +437,15 @@ async def run_semantic_cache_check_adapter(config: dict[str, Any], context: dict
     try:
         import time
 
-        from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import chroma_client, embedding_function_factory
-
-        client = chroma_client()
-        if not client:
+        manager, collection = _get_semantic_cache_collection(cache_collection)
+        if not collection:
             return {"cache_hit": False, "query": query, "error": "chroma_unavailable"}
 
-        # Get or create cache collection
-        try:
-            collection = client.get_or_create_collection(
-                name=cache_collection,
-                embedding_function=embedding_function_factory(),
-            )
-        except _QUERY_ADAPTER_EXCEPTIONS as e:
-            logger.debug(f"Semantic cache collection error: {e}")
-            return {"cache_hit": False, "query": query, "error": "collection_error"}
+        query_embedding = _build_semantic_cache_query_embedding(query, manager)
 
         # Search for similar queries
         results = collection.query(
-            query_texts=[query],
+            query_embeddings=[query_embedding],
             n_results=1,
             include=["metadatas", "distances", "documents"],
         )

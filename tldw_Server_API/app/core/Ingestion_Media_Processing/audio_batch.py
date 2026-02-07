@@ -19,6 +19,20 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Files impor
 from tldw_Server_API.app.core.Utils.Utils import logging as logger
 
 
+def _dedupe_errors_preserve_order(errors: list[Any]) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for error in errors:
+        if not error:
+            continue
+        error_text = str(error)
+        if error_text in seen:
+            continue
+        seen.add(error_text)
+        deduped.append(error_text)
+    return deduped
+
+
 async def run_audio_batch(
     all_inputs: list[str],
     *,
@@ -103,8 +117,7 @@ async def run_audio_batch(
     if not all_inputs:
         # No additional processing to perform. Ensure top-level errors list is
         # de-duplicated before returning.
-        unique_errors = list({str(e) for e in batch_result["errors"] if e})
-        batch_result["errors"] = unique_errors
+        batch_result["errors"] = _dedupe_errors_preserve_order(batch_result["errors"])
         return batch_result
 
     # -------------------------------
@@ -253,7 +266,7 @@ async def run_audio_batch(
     elif processing_output is not None:
         # Handle unexpected output format from the library more gracefully.
         logger.error(
-            "process_audio_files returned unexpected format: Type=%s; Value=%s",
+            "process_audio_files returned unexpected format: Type={}; Value={}",
             type(processing_output),
             processing_output,
         )
@@ -312,8 +325,7 @@ async def run_audio_batch(
     batch_result["processed_count"] = final_processed_count
     batch_result["errors_count"] = final_error_count
 
-    unique_errors = list({str(e) for e in batch_result["errors"] if e})
-    batch_result["errors"] = unique_errors
+    batch_result["errors"] = _dedupe_errors_preserve_order(batch_result["errors"])
 
     return batch_result
 

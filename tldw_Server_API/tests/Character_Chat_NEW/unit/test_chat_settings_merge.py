@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from tldw_Server_API.app.api.v1.endpoints import character_chat_sessions as sessions
+from tldw_Server_API.app.api.v1.schemas.chat_session_schemas import GreetingSelectRequest
 
 
 @pytest.mark.unit
@@ -45,6 +46,45 @@ def test_merge_conversation_settings_incoming_wins_when_newer():
     assert merged["greetingEnabled"] is False
     assert merged["updatedAt"] == "2026-02-06T00:00:01Z"
     assert merged["schemaVersion"] == 2
+
+
+@pytest.mark.unit
+def test_merge_conversation_settings_incoming_loses_when_older():
+    server = {
+        "schemaVersion": 2,
+        "updatedAt": "2026-02-06T00:00:10Z",
+        "authorNote": "server-note",
+    }
+    incoming = {
+        "updatedAt": "2026-02-06T00:00:00Z",
+        "authorNote": "incoming-stale-note",
+    }
+
+    merged = sessions._merge_conversation_settings(server, incoming)
+
+    assert merged["authorNote"] == "server-note"
+    assert merged["updatedAt"] == "2026-02-06T00:00:10Z"
+
+
+@pytest.mark.unit
+def test_merge_conversation_settings_applies_untimestamped_patch_update():
+    server = {
+        "schemaVersion": 2,
+        "updatedAt": "2026-02-06T00:00:00Z",
+        "authorNote": "server-note",
+        "memoryScope": "shared",
+    }
+    incoming = {
+        "authorNote": "incoming-note-without-timestamp",
+    }
+
+    merged = sessions._merge_conversation_settings(server, incoming)
+
+    assert merged["authorNote"] == "incoming-note-without-timestamp"
+    assert merged["memoryScope"] == "shared"
+    assert merged["schemaVersion"] == 2
+    assert merged["updatedAt"] != "2026-02-06T00:00:00Z"
+    assert sessions._parse_iso_timestamp(merged["updatedAt"]) is not None
 
 
 @pytest.mark.unit
@@ -95,6 +135,40 @@ def test_merge_conversation_settings_preserves_unknown_keys():
 
 
 @pytest.mark.unit
+def test_persist_auto_summary_settings_upsert_does_not_touch_conversation_metadata():
+    class _StubDB:
+        def __init__(self) -> None:
+            self.upsert_calls = 0
+            self.update_conversation_calls = 0
+
+        def upsert_conversation_settings(self, conversation_id: str, settings: dict[str, object]) -> bool:
+            self.upsert_calls += 1
+            return True
+
+        def update_conversation(self, conversation_id: str, update_data: dict[str, object], expected_version: int) -> bool:
+            self.update_conversation_calls += 1
+            return True
+
+    db = _StubDB()
+    settings = {"schemaVersion": 2, "updatedAt": "2026-02-06T00:00:00Z"}
+
+    sessions._persist_auto_summary_to_settings(
+        db=db,
+        chat_id="chat-1",
+        settings=settings,
+        content="summary content",
+        source_from_id="msg-1",
+        source_to_id="msg-2",
+        threshold=10,
+        window=20,
+        compressed_count=3,
+    )
+
+    assert db.upsert_calls == 1
+    assert db.update_conversation_calls == 0
+
+
+@pytest.mark.unit
 def test_convert_db_conversation_to_response_includes_settings_payload():
     conv = {
         "id": "chat-1",
@@ -141,3 +215,34 @@ def test_openapi_exposes_include_settings_query_params():
     list_params = schema["paths"]["/api/v1/chats/"]["get"]["parameters"]
     list_param_names = {param["name"] for param in list_params}
     assert "include_settings" in list_param_names
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_select_greeting_returns_500_when_settings_persist_fails():
+    class _StubDB:
+        def get_conversation_by_id(self, chat_id: str) -> dict[str, object]:
+            return {"id": chat_id, "client_id": "1", "character_id": 7}
+
+        def get_character_card_by_id(self, character_id: int) -> dict[str, object]:
+            return {"id": character_id, "name": "Test Character", "first_message": "Hello!", "alternate_greetings": ["Hi!"]}
+
+        def get_conversation_settings(self, chat_id: str) -> dict[str, object]:
+            return {"settings": {}}
+
+        def upsert_conversation_settings(self, chat_id: str, settings: dict[str, object]) -> bool:
+            return False
+
+    class _StubUser:
+        id = "1"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await sessions.select_greeting(
+            chat_id="chat-1",
+            body=GreetingSelectRequest(index=0),
+            db=_StubDB(),  # type: ignore[arg-type]
+            current_user=_StubUser(),  # type: ignore[arg-type]
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "Failed to persist greeting selection" in str(exc_info.value.detail)

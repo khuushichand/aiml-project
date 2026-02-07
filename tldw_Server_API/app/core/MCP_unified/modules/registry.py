@@ -241,29 +241,42 @@ class ModuleRegistry:
 
     async def get_module(self, module_id: str) -> Optional[BaseModule]:
         """Get a module by ID"""
-        registration = self._modules.get(module_id)
-        if registration and registration.is_operational():
-            return registration.module_instance
-        return None
+        async with self._lock:
+            registration = self._modules.get(module_id)
+            if registration and registration.is_operational():
+                return registration.module_instance
+            return None
 
     async def get_all_modules(self) -> dict[str, BaseModule]:
         """Get all operational modules"""
         result = {}
-        for module_id, registration in self._modules.items():
+        async with self._lock:
+            registrations = list(self._modules.items())
+        for module_id, registration in registrations:
             if registration.is_operational() and registration.module_instance:
                 result[module_id] = registration.module_instance
         return result
 
     async def find_module_for_tool(self, tool_name: str) -> Optional[BaseModule]:
         """Find module that provides a specific tool"""
-        module_id = self._tool_registry.get(tool_name)
+        async with self._lock:
+            module_id = self._tool_registry.get(tool_name)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._tool_registry.get(tool_name) == module_id:
+                    self._tool_registry.pop(tool_name, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_tool(tool_name):
-                self._tool_registry[tool_name] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._tool_registry[tool_name] = module_id  # Cache for next time
                 return module
 
         return None
@@ -274,14 +287,24 @@ class ModuleRegistry:
 
     async def find_module_for_resource(self, uri: str) -> Optional[BaseModule]:
         """Find module that provides a specific resource"""
-        module_id = self._resource_registry.get(uri)
+        async with self._lock:
+            module_id = self._resource_registry.get(uri)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._resource_registry.get(uri) == module_id:
+                    self._resource_registry.pop(uri, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_resource(uri):
-                self._resource_registry[uri] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._resource_registry[uri] = module_id  # Cache for next time
                 return module
 
         return None
@@ -292,14 +315,24 @@ class ModuleRegistry:
 
     async def find_module_for_prompt(self, name: str) -> Optional[BaseModule]:
         """Find module that provides a specific prompt"""
-        module_id = self._prompt_registry.get(name)
+        async with self._lock:
+            module_id = self._prompt_registry.get(name)
         if module_id:
-            return await self.get_module(module_id)
+            module = await self.get_module(module_id)
+            if module is not None:
+                return module
+            async with self._lock:
+                if self._prompt_registry.get(name) == module_id:
+                    self._prompt_registry.pop(name, None)
 
         # Fallback: search all modules
-        for module_id, module in self._module_instances.items():
+        async with self._lock:
+            module_snapshot = list(self._module_instances.items())
+        for module_id, module in module_snapshot:
             if await module.has_prompt(name):
-                self._prompt_registry[name] = module_id  # Cache for next time
+                async with self._lock:
+                    if module_id in self._module_instances:
+                        self._prompt_registry[name] = module_id  # Cache for next time
                 return module
 
         return None

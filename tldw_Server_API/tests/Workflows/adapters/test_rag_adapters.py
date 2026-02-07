@@ -1077,7 +1077,7 @@ class TestSemanticCacheCheckAdapter:
         from tldw_Server_API.app.core.Workflows.adapters.rag import run_semantic_cache_check_adapter
         import time
 
-        # Mock ChromaDB client and collection
+        # Mock semantic-cache collection path
         mock_collection = MagicMock()
         mock_collection.query.return_value = {
             "distances": [[0.05]],  # Low distance = high similarity
@@ -1085,16 +1085,13 @@ class TestSemanticCacheCheckAdapter:
             "documents": [["similar cached query"]],
         }
 
-        mock_client = MagicMock()
-        mock_client.get_or_create_collection.return_value = mock_collection
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.chroma_client",
-            lambda: mock_client,
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._get_semantic_cache_collection",
+            lambda _name: (MagicMock(), mock_collection),
         )
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.embedding_function_factory",
-            MagicMock(),
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._build_semantic_cache_query_embedding",
+            lambda _query, _manager: [0.1, 0.2, 0.3],
         )
 
         config = {"query": "test query", "similarity_threshold": 0.9}
@@ -1110,7 +1107,7 @@ class TestSemanticCacheCheckAdapter:
         """Test semantic cache check adapter with cache miss."""
         from tldw_Server_API.app.core.Workflows.adapters.rag import run_semantic_cache_check_adapter
 
-        # Mock ChromaDB client with no matches
+        # Mock semantic-cache collection with no matches
         mock_collection = MagicMock()
         mock_collection.query.return_value = {
             "distances": [[0.8]],  # High distance = low similarity
@@ -1118,16 +1115,13 @@ class TestSemanticCacheCheckAdapter:
             "documents": [[]],
         }
 
-        mock_client = MagicMock()
-        mock_client.get_or_create_collection.return_value = mock_collection
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.chroma_client",
-            lambda: mock_client,
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._get_semantic_cache_collection",
+            lambda _name: (MagicMock(), mock_collection),
         )
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.embedding_function_factory",
-            MagicMock(),
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._build_semantic_cache_query_embedding",
+            lambda _query, _manager: [0.1, 0.2, 0.3],
         )
 
         config = {"query": "unique query", "similarity_threshold": 0.9}
@@ -1168,8 +1162,8 @@ class TestSemanticCacheCheckAdapter:
         from tldw_Server_API.app.core.Workflows.adapters.rag import run_semantic_cache_check_adapter
 
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.chroma_client",
-            lambda: None,
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._get_semantic_cache_collection",
+            lambda _name: (None, None),
         )
 
         config = {"query": "test query"}
@@ -1196,16 +1190,13 @@ class TestSemanticCacheCheckAdapter:
             "documents": [["old query"]],
         }
 
-        mock_client = MagicMock()
-        mock_client.get_or_create_collection.return_value = mock_collection
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.chroma_client",
-            lambda: mock_client,
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._get_semantic_cache_collection",
+            lambda _name: (MagicMock(), mock_collection),
         )
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Workflows.adapters.rag.query.embedding_function_factory",
-            MagicMock(),
+            "tldw_Server_API.app.core.Workflows.adapters.rag.query._build_semantic_cache_query_embedding",
+            lambda _query, _manager: [0.1, 0.2, 0.3],
         )
 
         config = {"query": "test query", "max_age_seconds": 3600}  # 1 hour TTL

@@ -301,6 +301,47 @@ class TestSafeStreamGenerator:
                 pass
             mock_logger.info.assert_called()
 
+    async def test_finalize_callback_invoked_on_cancel(self):
+        handler = StreamingResponseHandler("conv_finalize_cancel", "gpt-4")
+        finalize_callback = AsyncMock()
+
+        async def mock_stream():
+            yield "Start"
+            handler.cancel()
+            yield "After cancel"
+
+        async for _ in handler.safe_stream_generator(
+            mock_stream(),
+            finalize_callback=finalize_callback,
+        ):
+            pass
+
+        finalize_callback.assert_awaited_once()
+        kwargs = finalize_callback.await_args.kwargs
+        assert kwargs["success"] is False
+        assert kwargs["cancelled"] is True
+        assert kwargs["error"] is False
+
+    async def test_finalize_callback_invoked_on_error(self):
+        handler = StreamingResponseHandler("conv_finalize_error", "gpt-4")
+        finalize_callback = AsyncMock()
+
+        async def mock_stream():
+            yield "Before error"
+            raise RuntimeError("boom")
+
+        async for _ in handler.safe_stream_generator(
+            mock_stream(),
+            finalize_callback=finalize_callback,
+        ):
+            pass
+
+        finalize_callback.assert_awaited_once()
+        kwargs = finalize_callback.await_args.kwargs
+        assert kwargs["success"] is False
+        assert kwargs["cancelled"] is False
+        assert kwargs["error"] is True
+
     async def test_stream_metadata(self):
         """Test stream metadata messages."""
         handler = StreamingResponseHandler("conv_123", "gpt-4")

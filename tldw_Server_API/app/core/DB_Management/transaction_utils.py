@@ -51,15 +51,20 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
     last_error = None
 
     while retry_count < max_retries:
+        entered_context = False
         try:
-            # Start transaction
+            # Retry is only safe before entering/yielding the transactional block.
+            # After the caller's block runs, we must not attempt a second yield.
             with db.transaction():
+                entered_context = True
                 yield db
-                # If we get here, transaction was successful
                 return
 
         except ConflictError as e:
-            # Conflict due to concurrent modification - retry
+            if entered_context:
+                # Conflict occurred after the caller's block started; an async
+                # context manager cannot safely re-yield to replay user code.
+                raise
             retry_count += 1
             last_error = e
             if retry_count < max_retries:
@@ -213,8 +218,9 @@ async def save_conversation_with_messages(
                 raise CharactersRAGDBError("Failed to create conversation")
             message_ids: list[str] = []
             for message in messages:
-                message['conversation_id'] = conversation_id
-                message_id = sync_db.add_message(message)
+                message_payload = dict(message)
+                message_payload['conversation_id'] = conversation_id
+                message_id = sync_db.add_message(message_payload)
                 if not message_id:
                     raise CharactersRAGDBError(
                         f"Failed to add message to conversation {conversation_id}"
@@ -231,8 +237,9 @@ async def save_conversation_with_messages(
             raise CharactersRAGDBError("Failed to create conversation")
         message_ids = []
         for message in messages:
-            message['conversation_id'] = conversation_id
-            message_id = db.add_message(message)  # type: ignore[attr-defined]
+            message_payload = dict(message)
+            message_payload['conversation_id'] = conversation_id
+            message_id = db.add_message(message_payload)  # type: ignore[attr-defined]
             if not message_id:
                 raise CharactersRAGDBError(
                     f"Failed to add message to conversation {conversation_id}"
@@ -270,8 +277,9 @@ async def update_conversation_with_rollback(
                         )
                 if new_messages:
                     for message in new_messages:
-                        message['conversation_id'] = conversation_id
-                        message_id = sync_db.add_message(message)
+                        message_payload = dict(message)
+                        message_payload['conversation_id'] = conversation_id
+                        message_id = sync_db.add_message(message_payload)
                         if not message_id:
                             raise CharactersRAGDBError(
                                 f"Failed to add message to conversation {conversation_id}"
@@ -289,15 +297,16 @@ async def update_conversation_with_rollback(
                     )
             if new_messages:
                 for message in new_messages:
-                    message['conversation_id'] = conversation_id
-                    message_id = db.add_message(message)  # type: ignore[attr-defined]
+                    message_payload = dict(message)
+                    message_payload['conversation_id'] = conversation_id
+                    message_id = db.add_message(message_payload)  # type: ignore[attr-defined]
                     if not message_id:
                         raise CharactersRAGDBError(
                             f"Failed to add message to conversation {conversation_id}"
                         )
             return True
     except Exception as e:
-        logger.error(f"Failed to update conversation {conversation_id}: {e}")
+        logger.error(f"Failed to update conversation {conversation_id}: {e}", exc_info=True)
         return False
 
 

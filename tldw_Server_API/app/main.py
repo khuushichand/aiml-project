@@ -1247,6 +1247,17 @@ async def lifespan(app: FastAPI):
         None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
     """
     _startup_trace("lifespan: entered")
+    # Security hard-stop: test-mode flags must only be active during explicit
+    # pytest runtime (PYTEST_CURRENT_TEST).
+    try:
+        from tldw_Server_API.app.core.testing import validate_test_runtime_flags
+
+        validate_test_runtime_flags()
+    except RuntimeError as _test_guard_err:
+        logger.critical(f"Startup aborted due to unsafe test-mode flags: {_test_guard_err}")
+        raise
+    except _IMPORT_EXCEPTIONS as _test_guard_import_err:
+        logger.debug(f"Test-mode runtime guard import skipped: {_test_guard_import_err}")
     # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
     # In production, the process typically exits after shutdown; in tests we reuse the app object.
     try:
@@ -1613,6 +1624,13 @@ async def lifespan(app: FastAPI):
                 )
         except _IMPORT_EXCEPTIONS as _rg_warn_err:
             logger.debug(f"ResourceGovernor init warning skipped: {_rg_warn_err}")
+
+        # Production hard-stop: require RG coverage/availability for auth endpoints.
+        from tldw_Server_API.app.core.AuthNZ.rg_startup_guard import (
+            validate_auth_rg_startup_guards,
+        )
+
+        validate_auth_rg_startup_guards(app)
 
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
@@ -3311,14 +3329,9 @@ async def lifespan(app: FastAPI):
     try:
         if "db_pool" in locals():
             import os as _os
-            import sys as _sys
 
-            _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST") or ("pytest" in _sys.modules))
-            try:
-                _is_test_mode = _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
-            except _STARTUP_GUARD_EXCEPTIONS:
-                _is_test_mode = False
-            if not (_is_test_mode or _in_pytest):
+            _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST"))
+            if not _in_pytest:
                 await db_pool.close()
                 logger.info("App Shutdown: Auth database pool closed")
             else:
@@ -4260,9 +4273,22 @@ from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMid
 from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
 
-_TEST_MODE = _env_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or bool(
-    _env_os.getenv("PYTEST_CURRENT_TEST")
+from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
+
+_TEST_TRUTHY = {"1", "true", "yes", "on"}
+_TEST_FLAGS_SET = any(
+    _env_os.getenv(name, "").strip().lower() in _TEST_TRUTHY
+    for name in ("TEST_MODE", "TESTING", "TLDW_TEST_MODE")
 )
+_EXPLICIT_PYTEST_RUNTIME = _is_explicit_pytest_runtime()
+_TEST_MODE = _EXPLICIT_PYTEST_RUNTIME and (
+    _TEST_FLAGS_SET or bool(_env_os.getenv("PYTEST_CURRENT_TEST"))
+)
+
+if _TEST_FLAGS_SET and not _EXPLICIT_PYTEST_RUNTIME:
+    logger.warning(
+        "Test flags are set without explicit pytest runtime; startup guard will reject this configuration."
+    )
 
 if _TEST_MODE:
     logger.info("TEST_MODE detected: Skipping non-essential middlewares (security headers, metrics, usage logging)")
@@ -5023,10 +5049,10 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping scheduler workflows router in minimal test app: {_sch_min_err}")
     # Evaluations endpoints for abtest tests
     try:
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
 
         app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import abtest_router as _abtest_router
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import abtest_router as _abtest_router
 
         app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
     except _IMPORT_EXCEPTIONS as _evals_min_err:
@@ -5037,9 +5063,9 @@ else:
         route_key: str, router, *, prefix: str = "", tags: list | None = None, default_stable: bool = True
     ) -> None:
         try:
-            # In test contexts, force-include certain routes even if config gating
-            # would normally disable them (e.g., workflows/scheduler marked experimental).
-            _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules
+            # In explicit pytest runtime, force-include certain routes even if
+            # config gating would normally disable them (e.g., workflows/scheduler).
+            _test_ctx = bool(_TEST_MODE)
             if _test_ctx and route_key in {"workflows", "scheduler"}:
                 app.include_router(router, prefix=prefix, tags=tags)
                 return
@@ -5331,7 +5357,7 @@ else:
     _include_if_enabled("feedback", feedback_router, prefix=f"{API_V1_PREFIX}/feedback", tags=["feedback"])
     if _HAS_WORKFLOWS:
         # In test contexts, force-include workflows regardless of policy to avoid 404s.
-        _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules
+        _test_ctx = bool(_TEST_MODE)
         if _test_ctx:
             app.include_router(workflows_router, prefix="", tags=["workflows"])
         else:
@@ -5344,7 +5370,7 @@ else:
         logger.warning(f"Scheduler Workflows endpoints unavailable; skipping import: {_sch_import_err}")
         _HAS_SCHEDULER_WF = False
     if _HAS_SCHEDULER_WF:
-        _test_ctx = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} or "pytest" in sys.modules
+        _test_ctx = bool(_TEST_MODE)
         if _test_ctx:
             app.include_router(scheduler_workflows_router, prefix="", tags=["scheduler"])
         else:
@@ -5356,10 +5382,10 @@ else:
     # Heavy routers: import only when enabled to avoid import-time side effects
     try:
         if route_enabled("evaluations"):
-            from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
 
             app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-            from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import (
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import (
                 abtest_router as _abtest_router,
             )
 

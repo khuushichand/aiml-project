@@ -108,3 +108,40 @@ def test_metrics_reset_200_for_admin_principal():
     body = resp.json()
     assert body.get("status") == "success"
     assert "message" in body
+
+
+@pytest.mark.unit
+def test_metrics_reset_invokes_chat_reset_hook_for_admin(monkeypatch):
+    principal = _make_principal(
+        is_admin=True,
+        roles=["admin"],
+        permissions=[],
+    )
+    app = _build_app_with_overrides(principal=principal)
+
+    class StubRegistry:
+        def __init__(self):
+            self.was_reset = False
+
+        def reset(self):
+            self.was_reset = True
+
+    class StubChatMetrics:
+        def __init__(self):
+            self.was_reset = False
+
+        def reset_active_metrics(self):
+            self.was_reset = True
+
+    stub_registry = StubRegistry()
+    stub_chat = StubChatMetrics()
+
+    monkeypatch.setattr(metrics_mod, "get_metrics_registry", lambda: stub_registry)
+    monkeypatch.setattr(metrics_mod, "get_chat_metrics", lambda: stub_chat)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/metrics/reset")
+
+    assert resp.status_code == 200
+    assert stub_registry.was_reset is True
+    assert stub_chat.was_reset is True

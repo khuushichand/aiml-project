@@ -224,7 +224,14 @@ ws://localhost:8000/api/v1/mcp/ws?client_id=<id>&api_key=<api_key>
 - `GET /api/v1/mcp/metrics` - Server metrics (admin only)
 - `GET /api/v1/mcp/tools` - List available tools (auth required; RBAC-filtered)
 - `POST /api/v1/mcp/tools/execute` - Execute tool (auth required)
+- `POST /api/v1/mcp/auth/token` - Issue demo MCP tokens when explicitly enabled
+- `POST /api/v1/mcp/auth/refresh` - Rotate refresh tokens (JSON body required)
 - `GET /api/v1/mcp/health` - Health check
+
+#### Refresh Token Contract
+- `POST /api/v1/mcp/auth/refresh` accepts refresh credentials in the request body:
+  - `{"refresh_token":"<token>","token_id":"<optional-token-id>"}`
+- Query-string refresh token transport is rejected to avoid leaking secrets via URLs/logs.
 
 #### Tool Discovery & Catalogs
 - Reduce discovery size by grouping tools into catalogs (global, org, team).
@@ -374,6 +381,7 @@ Recommended hardening steps for Internet-exposed deployments:
   - `MCP_IDEMPOTENCY_TTL_SECONDS` - TTL for protocol-level idempotency cache for write tools (default: 300s).
   - `MCP_IDEMPOTENCY_CACHE_SIZE` - Max entries for idempotency cache (LRU, default: 512).
   - Client hint: pass `idempotencyKey` in JSON-RPC `tools/call` params to dedupe writes.
+  - Idempotency keys are bound to the first request argument fingerprint. Reusing a key with different arguments returns `INVALID_PARAMS` instead of replaying stale payloads.
 - Demo auth (dev only)
   - `MCP_ENABLE_DEMO_AUTH` is for development/testing. If enabled in non-debug environments, the server logs a loud warning.
   - `MCP_DEMO_AUTH_SECRET` must be set to a strong value; the token endpoint also requires loopback/private clients and debug/test mode.

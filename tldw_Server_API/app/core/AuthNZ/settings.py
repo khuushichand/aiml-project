@@ -53,6 +53,14 @@ except _SETTINGS_IMPORT_EXCEPTIONS:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
 
+try:
+    from tldw_Server_API.app.core.testing import (
+        is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    )
+except _SETTINGS_IMPORT_EXCEPTIONS:
+    def _is_explicit_pytest_runtime() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
 SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
 SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
 SINGLE_USER_KEY_MISSING = (
@@ -655,7 +663,7 @@ class Settings(BaseSettings):
         description="Fixed user ID for single-user mode"
     )
     # Optional IP allowlist for single-user mode (comma-separated env or list)
-    SINGLE_USER_ALLOWED_IPS: list[str] = Field(
+    SINGLE_USER_ALLOWED_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Optional list of allowed client IPs/CIDRs for SINGLE_USER_API_KEY"
     )
@@ -668,7 +676,7 @@ class Settings(BaseSettings):
             "(see AUTH_TRUSTED_PROXY_IPS)."
         ),
     )
-    AUTH_TRUSTED_PROXY_IPS: list[str] = Field(
+    AUTH_TRUSTED_PROXY_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="Optional list of trusted proxy IPs/CIDRs for X-Forwarded-For resolution."
     )
@@ -679,7 +687,7 @@ class Settings(BaseSettings):
         ge=100,
         description="Rate limit for service accounts per minute"
     )
-    SERVICE_TOKEN_ALLOWED_IPS: list[str] = Field(
+    SERVICE_TOKEN_ALLOWED_IPS: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description=(
             "Optional list of allowed client IPs/CIDRs for service tokens. "
@@ -733,11 +741,8 @@ class Settings(BaseSettings):
             logger.info("Using configured JWT secret key")
             return
 
-        # Allow deterministic fallback in explicit test contexts
-        test_mode = (
-            os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
+        # Allow deterministic fallback only in explicit pytest runtime.
+        test_mode = _is_explicit_pytest_runtime()
         if test_mode:
             fallback = os.getenv(
                 "JWT_SECRET_TEST_KEY",
@@ -763,22 +768,10 @@ class Settings(BaseSettings):
             # If an explicit key is provided via env/.env, honor it (legacy API_KEY supported)
             explicit_env_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
 
-            # Detect test contexts where the server should expose a stable key so client tests can authenticate
-            # Only rely on environment of the server process, never trust request headers
-            # Detect test contexts eagerly. Some test suites import the app before
-            # setting TEST_MODE or PYTEST_CURRENT_TEST, so also check for the
-            # presence of the pytest module and the TESTING flag.
-            try:
-                import sys as _sys  # Local import to avoid module-level cost
-            except ImportError:
-                _sys = None
-            in_test_context = (
-                os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
-                or os.getenv("TESTING", "").lower() in ("true", "1", "yes")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
-                or (isinstance(_sys, object) and ("pytest" in getattr(_sys, "modules", {})))
-                or os.getenv("E2E_TEST_BASE_URL") is not None
-            )
+            # Detect explicit test contexts where the server should expose a
+            # stable key so client tests can authenticate. Only rely on server
+            # environment variables; never trust request headers.
+            in_test_context = _is_explicit_pytest_runtime() or os.getenv("E2E_TEST_BASE_URL") is not None
 
             if not self.SINGLE_USER_API_KEY:
                 if explicit_env_key:
@@ -1182,12 +1175,12 @@ def get_settings() -> Settings:
                 _settings.USER_DATA_BASE_PATH = str(Path(base_dir).resolve())
         except _SETTINGS_NONCRITICAL_EXCEPTIONS as exc:
             logger.warning(f"AuthNZ settings: failed to align USER_DATA_BASE_PATH with core settings: {exc}")
-        # In pytest/TEST_MODE contexts, default-disable rate limiting to keep tests deterministic.
-        # Explicit falsey flags (e.g., TEST_MODE=0) should take precedence so tests can
-        # exercise real rate limiting under pytest.
+        # In explicit pytest/runtime test contexts, default-disable rate
+        # limiting to keep tests deterministic. Explicit falsey flags (e.g.,
+        # TEST_MODE=0) should take precedence so tests can exercise real rate
+        # limiting.
         try:
             import os as _os
-            import sys as _sys
             truthy = {"1", "true", "yes", "on"}
             falsy = {"0", "false", "no", "off"}
 
@@ -1210,9 +1203,7 @@ def get_settings() -> Settings:
             explicit_false = any(flag is False for flag in explicit_flags)
             explicit_true = any(flag is True for flag in explicit_flags)
 
-            if not explicit_false and (
-                explicit_true or _os.getenv("PYTEST_CURRENT_TEST") or "pytest" in _sys.modules
-            ):
+            if not explicit_false and (explicit_true or _os.getenv("PYTEST_CURRENT_TEST")):
                 _settings.RATE_LIMIT_ENABLED = False
         except _SETTINGS_NONCRITICAL_EXCEPTIONS:
             pass

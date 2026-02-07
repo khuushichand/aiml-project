@@ -1698,19 +1698,22 @@ async def process_batch_media(
                     )
                 else:
                     temp_db_for_check = MediaDatabase(db_path=db_path, client_id=client_id)
-                    pre_check_query = """
-                                      SELECT id \
-                                      FROM Media
-                                      WHERE url = ?
-                                        AND transcription_model = ?
-                                        AND is_trash = 0 \
-                                      """
-                    cursor = temp_db_for_check.execute_query(
-                        pre_check_query,
-                        (identifier_for_check, model_for_check),
-                    )
-                    existing_record = cursor.fetchone()
-                    temp_db_for_check.close_connection()
+                    try:
+                        pre_check_query = """
+                                          SELECT id \
+                                          FROM Media
+                                          WHERE url = ?
+                                            AND transcription_model = ?
+                                            AND is_trash = 0
+                                            AND deleted = 0 \
+                                          """
+                        cursor = temp_db_for_check.execute_query(
+                            pre_check_query,
+                            (identifier_for_check, model_for_check),
+                        )
+                        existing_record = cursor.fetchone()
+                    finally:
+                        temp_db_for_check.close_connection()
 
                     if existing_record:
                         existing_id = existing_record["id"]

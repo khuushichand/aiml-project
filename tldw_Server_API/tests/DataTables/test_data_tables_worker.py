@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from tldw_Server_API.app.api.v1.schemas.data_tables_schemas import DATA_TABLES_MAX_ROWS_LIMIT
 from tldw_Server_API.app.core.Data_Tables import jobs_worker
 from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Jobs.manager import JobManager
@@ -101,3 +102,12 @@ async def test_data_tables_worker_generates_rows(monkeypatch, tmp_path):
 
     row_json = json.loads(rows[0]["row_json"])
     assert set(row_json.keys()) == {columns[0]["column_id"], columns[1]["column_id"]}
+
+
+def test_dedupe_column_names_is_case_insensitive():
+    deduped = jobs_worker._dedupe_column_names(["Name", "name", "NAME"])
+    assert deduped == ["Name", "name (2)", "NAME (3)"]
+
+
+def test_worker_max_rows_limit_matches_api_schema_limit():
+    assert jobs_worker._MAX_ROWS_LIMIT == DATA_TABLES_MAX_ROWS_LIMIT

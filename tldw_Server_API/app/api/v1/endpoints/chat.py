@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache, partial
 from typing import Any, Callable, Literal
@@ -360,7 +361,18 @@ _recent_calls_by_user: dict[str, deque] = defaultdict(lambda: deque(maxlen=16))
 _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
-_system_message_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = WeakKeyDictionary()
+
+
+@dataclass
+class _SystemMessageLockEntry:
+    lock: asyncio.Lock
+    ref_count: int = 0
+
+
+_system_message_locks: WeakKeyDictionary[
+    asyncio.AbstractEventLoop,
+    dict[str, _SystemMessageLockEntry],
+] = WeakKeyDictionary()
 _system_message_guard = threading.Lock()
 
 
@@ -379,18 +391,65 @@ def _get_active_request_lock() -> asyncio.Lock:
 
 
 def _get_system_message_lock(conversation_id: str) -> asyncio.Lock:
-    """Return an asyncio.Lock scoped to the current loop + conversation_id."""
+    """Return an asyncio.Lock scoped to the current loop + conversation_id.
+
+    Callers must pair this with `_release_system_message_lock` once done.
+    """
     loop = asyncio.get_running_loop()
     with _system_message_guard:
         per_loop = _system_message_locks.get(loop)
         if per_loop is None:
             per_loop = {}
             _system_message_locks[loop] = per_loop
-        lock = per_loop.get(conversation_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            per_loop[conversation_id] = lock
-    return lock
+        entry = per_loop.get(conversation_id)
+        if entry is None:
+            entry = _SystemMessageLockEntry(lock=asyncio.Lock())
+            per_loop[conversation_id] = entry
+        entry.ref_count += 1
+    return entry.lock
+
+
+def _release_system_message_lock(conversation_id: str) -> None:
+    """Release a system-message lock reference and prune cache entries."""
+    loop = asyncio.get_running_loop()
+    with _system_message_guard:
+        per_loop = _system_message_locks.get(loop)
+        if not per_loop:
+            return
+        entry = per_loop.get(conversation_id)
+        if entry is None:
+            return
+        if entry.ref_count > 0:
+            entry.ref_count -= 1
+        if entry.ref_count == 0 and not entry.lock.locked():
+            per_loop.pop(conversation_id, None)
+        if not per_loop:
+            _system_message_locks.pop(loop, None)
+
+
+def _schedule_audit_background_task(awaitable: Any, *, task_name: str) -> asyncio.Task[Any] | None:
+    """Schedule audit work and observe failures to avoid silent task exceptions."""
+    try:
+        task = asyncio.create_task(awaitable)
+    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to schedule audit task {}: {}", task_name, exc)
+        return None
+
+    def _consume(completed: asyncio.Task[Any]) -> None:
+        if completed.cancelled():
+            return
+        try:
+            exc = completed.exception()
+        except asyncio.CancelledError:
+            return
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as observe_exc:
+            logger.debug("Audit task {} observation failed: {}", task_name, observe_exc)
+            return
+        if exc is not None:
+            logger.debug("Audit task {} failed: {}", task_name, exc)
+
+    task.add_done_callback(_consume)
+    return task
 
 
 async def _increment_active_request(user_id: str) -> int:
@@ -661,6 +720,7 @@ async def list_chat_commands(
     dependencies=[
         Depends(rbac_rate_limit("chat.dictionaries.validate")),
         Depends(require_token_scope("any", require_if_present=True, endpoint_id="chat.dictionaries.validate")),
+        Depends(get_request_user),
     ],
 )
 async def validate_chat_dictionary(
@@ -1149,47 +1209,51 @@ async def _persist_system_message_if_needed(
 ) -> str | None:
     if not system_message or not system_message.strip():
         return None
-    async with _get_system_message_lock(conversation_id):
-        try:
-            # Best-effort guard; serialize within a process to avoid duplicates.
-            has_system = await loop.run_in_executor(
-                None,
-                db.has_system_message_for_conversation,
-                conversation_id,
-            )
-        except (CharactersRAGDBError, RuntimeError) as exc:
-            logger.debug(
-                "System message presence check failed for conv=%s: %s",
-                conversation_id,
-                exc,
-            )
-            has_system = False
-        if has_system:
-            return None
-        try:
-            conv_created_at = None
+    lock = _get_system_message_lock(conversation_id)
+    try:
+        async with lock:
             try:
-                conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
-                if conv:
-                    conv_created_at = conv.get("created_at")
-            except (CharactersRAGDBError, RuntimeError):
+                # Best-effort guard; serialize within a process to avoid duplicates.
+                has_system = await loop.run_in_executor(
+                    None,
+                    db.has_system_message_for_conversation,
+                    conversation_id,
+                )
+            except (CharactersRAGDBError, RuntimeError) as exc:
+                logger.debug(
+                    "System message presence check failed for conv=%s: %s",
+                    conversation_id,
+                    exc,
+                )
+                has_system = False
+            if has_system:
+                return None
+            try:
                 conv_created_at = None
-            system_payload: dict[str, Any] = {"role": "system", "content": system_message.strip()}
-            if conv_created_at:
-                system_payload["timestamp"] = conv_created_at
-            return await save_message_fn(
-                db,
-                conversation_id,
-                system_payload,
-                use_transaction=True,
-            )
-        except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
-            logger.warning(
-                "Failed to persist system message for conv=%s: %s",
-                conversation_id,
-                exc,
-            )
-            return None
+                try:
+                    conv = await loop.run_in_executor(None, db.get_conversation_by_id, conversation_id)
+                    if conv:
+                        conv_created_at = conv.get("created_at")
+                except (CharactersRAGDBError, RuntimeError):
+                    conv_created_at = None
+                system_payload: dict[str, Any] = {"role": "system", "content": system_message.strip()}
+                if conv_created_at:
+                    system_payload["timestamp"] = conv_created_at
+                return await save_message_fn(
+                    db,
+                    conversation_id,
+                    system_payload,
+                    use_transaction=True,
+                )
+            except (CharactersRAGDBError, InputError, ConflictError, RuntimeError) as exc:
+                logger.warning(
+                    "Failed to persist system message for conv=%s: %s",
+                    conversation_id,
+                    exc,
+                )
+                return None
+    finally:
+        _release_system_message_lock(conversation_id)
 
 
 @router.post(
@@ -1491,15 +1555,15 @@ async def create_chat_completion(
                             # Audit moderation decision
                             try:
                                 if audit_service and context:
-                                    import asyncio as _asyncio
-                                    _asyncio.create_task(
+                                    _schedule_audit_background_task(
                                         audit_service.log_event(
                                             event_type=AuditEventType.SECURITY_VIOLATION,
                                             context=context,
                                             action="moderation.input",
                                             result=("failure" if inj_mod['blocked'] else "success"),
                                             metadata={"phase": "input", "action": inj_mod['action'], "pattern": inj_mod.get('pattern'), "category": inj_mod.get('category')},
-                                        )
+                                        ),
+                                        task_name="chat.command.moderation.input.audit",
                                     )
                             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                                 pass

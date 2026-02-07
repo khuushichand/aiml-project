@@ -298,6 +298,43 @@ def _attach_queue_future_logger(future: asyncio.Future[Any], request_id: str) ->
     future.add_done_callback(_consume)
 
 
+def _schedule_background_task(
+    awaitable: Awaitable[Any],
+    *,
+    task_name: str,
+    pending_tasks: list[asyncio.Task[Any]] | None = None,
+) -> asyncio.Task[Any] | None:
+    """Schedule a background task and observe failures to avoid silent task leaks."""
+
+    try:
+        task = asyncio.create_task(awaitable)
+    except _CHAT_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Failed to schedule background task {}: {}", task_name, exc)
+        return None
+
+    if pending_tasks is not None:
+        pending_tasks.append(task)
+
+    def _consume(completed: asyncio.Task[Any]) -> None:
+        if pending_tasks is not None:
+            with contextlib.suppress(ValueError):
+                pending_tasks.remove(completed)
+        if completed.cancelled():
+            return
+        try:
+            exc = completed.exception()
+        except asyncio.CancelledError:
+            return
+        except _CHAT_NONCRITICAL_EXCEPTIONS as consume_exc:
+            logger.debug("Background task {} observation failed: {}", task_name, consume_exc)
+            return
+        if exc is not None:
+            logger.debug("Background task {} failed: {}", task_name, exc)
+
+    task.add_done_callback(_consume)
+    return task
+
+
 def parse_provider_model_for_metrics(
     request_data: Any,
     default_provider: str,
@@ -1201,15 +1238,15 @@ async def moderate_input_messages(
             metrics.track_moderation_input(str(req_user_id or client_id), resolved_action, category=(category or "default"))
         try:
             if audit_service and audit_context:
-                import asyncio as _asyncio
-                _asyncio.create_task(
+                _schedule_background_task(
                     audit_service.log_event(
                         event_type=audit_event_type,
                         context=audit_context,
                         action="moderation.input",
                         result=("failure" if resolved_action == "block" else "success"),
                         metadata={"phase": "input", "action": resolved_action, "pattern": sample},
-                    )
+                    ),
+                    task_name="chat.moderation.input.audit",
                 )
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
@@ -1895,44 +1932,66 @@ async def execute_streaming_call(
                 raise queue_exc from admission_error
 
             async def _channel_stream():
-                while True:
-                    try:
-                        # Add timeout to prevent indefinite hang if producer crashes
-                        # without sending the sentinel None value
-                        item = await asyncio.wait_for(
-                            stream_channel.get(),
-                            timeout=float(CHAT_IDLE_TIMEOUT)
-                        )
-                    except asyncio.TimeoutError:
-                        logger.warning(
-                            "Stream channel get timed out after {}s - "
-                            "producer may have crashed without sending sentinel",
-                            CHAT_IDLE_TIMEOUT
-                        )
+                graceful_end = False
+                try:
+                    while True:
                         try:
+                            # Add timeout to prevent indefinite hang if producer crashes
+                            # without sending the sentinel None value
+                            item = await asyncio.wait_for(
+                                stream_channel.get(),
+                                timeout=float(CHAT_IDLE_TIMEOUT)
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Stream channel get timed out after {}s - "
+                                "producer may have crashed without sending sentinel",
+                                CHAT_IDLE_TIMEOUT
+                            )
+                            try:
+                                if queue_future is not None and not queue_future.done():
+                                    queue_future.cancel()
+                            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                                pass
+                            try:
+                                while True:
+                                    stream_channel.get_nowait()
+                            except asyncio.QueueEmpty:
+                                pass
+                            try:
+                                error_payload = {
+                                    "error": {
+                                        "message": "Stream channel timed out waiting for queued response.",
+                                        "type": "stream_timeout",
+                                    }
+                                }
+                                yield f"data: {_json.dumps(error_payload)}\n\n"
+                            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                                yield "data: {\"error\":{\"message\":\"Stream channel timed out waiting for queued response.\",\"type\":\"stream_timeout\"}}\n\n"
+                            break
+                        if item is None:
+                            graceful_end = True
+                            break
+                        yield item
+                except asyncio.CancelledError:
+                    logger.info(
+                        "Queued stream consumer cancelled for request {}; cancelling queued job",
+                        queue_request_id,
+                    )
+                    raise
+                finally:
+                    # Pragmatic disconnect handling: cancel queued producer immediately so
+                    # workers do not remain blocked waiting on a full channel.
+                    if not graceful_end:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             if queue_future is not None and not queue_future.done():
                                 queue_future.cancel()
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            pass
-                        try:
+                        with contextlib.suppress(_CHAT_NONCRITICAL_EXCEPTIONS):
                             while True:
-                                stream_channel.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
-                        try:
-                            error_payload = {
-                                "error": {
-                                    "message": "Stream channel timed out waiting for queued response.",
-                                    "type": "stream_timeout",
-                                }
-                            }
-                            yield f"data: {_json.dumps(error_payload)}\n\n"
-                        except _CHAT_NONCRITICAL_EXCEPTIONS:
-                            yield "data: {\"error\":{\"message\":\"Stream channel timed out waiting for queued response.\",\"type\":\"stream_timeout\"}}\n\n"
-                        break
-                    if item is None:
-                        break
-                    yield item
+                                try:
+                                    stream_channel.get_nowait()
+                                except asyncio.QueueEmpty:
+                                    break
 
             raw_stream_iter = _channel_stream()
         else:
@@ -2170,8 +2229,7 @@ async def execute_streaming_call(
                             )
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2183,7 +2241,8 @@ async def execute_streaming_call(
                                             "action": "block",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.stream.save.output.block.audit",
                                 )
                         except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
@@ -2201,8 +2260,7 @@ async def execute_streaming_call(
                             )
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2214,7 +2272,8 @@ async def execute_streaming_call(
                                             "action": "redact",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.stream.save.output.redact.audit",
                                 )
                         except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
@@ -2343,13 +2402,6 @@ async def execute_streaming_call(
             stream_id = _uuid.uuid4().hex
             chunk_seq = 0
 
-            def _track_audit_task(task: asyncio.Task[Any]) -> None:
-                pending_audit_tasks.append(task)
-                def _cleanup(completed: asyncio.Task[Any]) -> None:
-                    with contextlib.suppress(ValueError):
-                        pending_audit_tasks.remove(completed)
-                task.add_done_callback(_cleanup)
-
             stream_holdback = ""
             try:
                 stream_buffer_limit = int(os.getenv("MODERATION_STREAM_BUFFER_CHARS", "1024"))
@@ -2469,8 +2521,7 @@ async def execute_streaming_call(
                             metrics.track_moderation_stream_block(str(req_user_id or client_id), category=(out_category or "default"))
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                task = _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2482,9 +2533,10 @@ async def execute_streaming_call(
                                             "action": "block",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.streaming.output.block.audit",
+                                    pending_tasks=pending_audit_tasks,
                                 )
-                                _track_audit_task(task)
                         except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["block_logged"] = True
@@ -2495,8 +2547,7 @@ async def execute_streaming_call(
                             metrics.track_moderation_output(str(req_user_id or client_id), "redact", streaming=True, category=(out_category or "default"))
                         try:
                             if audit_service and audit_context:
-                                import asyncio as _asyncio
-                                task = _asyncio.create_task(
+                                _schedule_background_task(
                                     audit_service.log_event(
                                         event_type=AuditEventType.SECURITY_VIOLATION,
                                         context=audit_context,
@@ -2508,9 +2559,10 @@ async def execute_streaming_call(
                                             "action": "redact",
                                             "pattern": sample,
                                         },
-                                    )
+                                    ),
+                                    task_name="chat.streaming.output.redact.audit",
+                                    pending_tasks=pending_audit_tasks,
                                 )
-                                _track_audit_task(task)
                         except _CHAT_NONCRITICAL_EXCEPTIONS:
                             pass
                         stream_mod_state["redact_logged"] = True
@@ -2561,7 +2613,7 @@ async def execute_streaming_call(
                 conversation_id=final_conversation_id,
                 model_name=model,
                 save_callback=save_callback,
-                finalize_callback=_finalize_stream if callable(rg_refund_cb) else None,
+                finalize_callback=_finalize_stream,
                 idle_timeout=CHAT_IDLE_TIMEOUT,
                 heartbeat_interval=CHAT_HEARTBEAT_INTERVAL,
                 text_transform=_out_transform,

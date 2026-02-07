@@ -359,6 +359,41 @@ class TestMCPServer:
 
 
 @pytest.mark.asyncio
+async def test_server_initialize_single_flight(monkeypatch):
+    server = MCPServer()
+    server.config.metrics_enabled = False
+
+    calls = {"health": 0, "register": 0, "seed": 0}
+
+    async def _start_health():
+        calls["health"] += 1
+        await asyncio.sleep(0.02)
+
+    async def _register_modules():
+        calls["register"] += 1
+        await asyncio.sleep(0.02)
+
+    async def _seed_perms():
+        calls["seed"] += 1
+        await asyncio.sleep(0.02)
+
+    monkeypatch.setattr(server.module_registry, "start_health_monitoring", _start_health)
+    monkeypatch.setattr(server, "_register_default_modules", _register_modules)
+    monkeypatch.setattr(server, "_ensure_default_tool_permissions", _seed_perms)
+    monkeypatch.setattr("tldw_Server_API.app.core.MCP_unified.server.validate_config", lambda: True)
+
+    try:
+        await asyncio.gather(*(server.initialize() for _ in range(5)))
+
+        assert server.initialized is True
+        assert calls == {"health": 1, "register": 1, "seed": 1}
+        # With metrics disabled, only connection/session cleanup loops should run.
+        assert len(server.background_tasks) <= 2
+    finally:
+        await server.shutdown()
+
+
+@pytest.mark.asyncio
 class TestEndToEnd:
     """End-to-end integration tests"""
 

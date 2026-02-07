@@ -179,7 +179,7 @@ async def export_audit_events(
     session_id: str | None = Query(None, description="Filter by session id"),
     endpoint: str | None = Query(None, description="Filter by endpoint path"),
     method: str | None = Query(None, description="Filter by HTTP method"),
-    max_rows: int | None = Query(None, description="Hard maximum rows to export"),
+    max_rows: int | None = Query(None, ge=1, description="Hard maximum rows to export"),
     filename: str | None = Query(None),
     stream: bool = Query(False, description="Stream JSON/JSONL/CSV output incrementally"),
     current_user: User = Depends(get_request_user),

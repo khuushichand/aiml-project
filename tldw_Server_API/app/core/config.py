@@ -3586,6 +3586,14 @@ def load_and_log_configs():
         )
         web_crawl_domain_map = _env_or_cfg('WEB_CRAWL_DOMAIN_MAP', 'Web-Scraper', 'web_crawl_domain_map', '')
 
+        def _section_items_dict(section_name: str) -> dict[str, Any]:
+            try:
+                if hasattr(config_parser_object, "has_section") and config_parser_object.has_section(section_name):
+                    return dict(config_parser_object.items(section_name))
+            except _CONFIG_NONCRITICAL_EXCEPTIONS as exc:
+                logger.debug("Failed to read config section '{}': {}", section_name, exc)
+            return {}
+
         return_dict = {
             'anthropic_api': {
                 'api_key': anthropic_api_key,

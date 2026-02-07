@@ -442,13 +442,19 @@ class MLXChatAdapter(ChatProvider):
         for k in ("max_tokens",):
             if request.get(k) is not None:
                 out[k] = request[k]
-        temp = request.get("temperature") or request.get("temp")
+        temp = request.get("temperature")
+        if temp is None:
+            temp = request.get("temp")
         if temp is not None:
             out["temp"] = temp
-        top_p = request.get("top_p") or request.get("topp")
+        top_p = request.get("top_p")
+        if top_p is None:
+            top_p = request.get("topp")
         if top_p is not None:
             out["top_p"] = top_p
-        top_k = request.get("top_k") or request.get("topk")
+        top_k = request.get("top_k")
+        if top_k is None:
+            top_k = request.get("topk")
         if top_k is not None:
             out["top_k"] = top_k
         return out
