@@ -4,8 +4,8 @@ import os
 from typing import Any, Mapping
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
-_TRUTHY = {"1", "true", "yes", "on", "y"}
 _PRODUCTION_VALUES = {"production", "prod", "live"}
 _PRODUCTION_ENV_KEYS = (
     "ENVIRONMENT",
@@ -34,7 +34,7 @@ class AuthRGStartupGuardError(Exception):
 
 def is_production_like_env() -> bool:
     """Detect production-like runtime from common deployment environment variables."""
-    if str(os.getenv("tldw_production", "")).strip().lower() in _TRUTHY:
+    if is_truthy(str(os.getenv("tldw_production", "")).strip().lower()):
         return True
     for key in _PRODUCTION_ENV_KEYS:
         value = str(os.getenv(key, "")).strip().lower()
@@ -83,7 +83,7 @@ def validate_auth_rg_startup_guards(
         )
         return
 
-    if str(os.getenv(bypass_env, "")).strip().lower() in _TRUTHY:
+    if is_truthy(str(os.getenv(bypass_env, "")).strip().lower()):
         logger.critical(
             "Bypassing production auth RG startup guard via {}. "
             "This is unsafe and should only be used for emergency debugging.",

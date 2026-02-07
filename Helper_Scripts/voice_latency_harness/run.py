@@ -377,6 +377,9 @@ def run_short_mode(
     Args:
         base_url: Base URL of the server (e.g., "http://127.0.0.1:8000").
         api_key: Optional API key for authentication.
+        run_id: Optional run identifier to embed in the output.
+        fixture: Optional fixture metadata to embed in the output.
+        runs: Optional run metadata (requested/completed counts).
 
     Returns:
         HarnessResult containing percentile maps for all latency metrics.
@@ -412,6 +415,9 @@ def run_full_turn(
         api_key: Optional API key for authentication.
         model: LLM model name for the audio chat request. Defaults to "gpt-4o-mini".
         provider: API provider name for the LLM. Defaults to "openai".
+        run_id: Optional run identifier to embed in the output.
+        fixture: Optional fixture metadata to embed in the output.
+        runs: Optional run metadata (requested/completed counts).
 
     Returns:
         HarnessResult containing percentile maps for all latency metrics,

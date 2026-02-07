@@ -9299,7 +9299,9 @@ class MediaDatabase:
         if self.backend_type == BackendType.POSTGRESQL:
             # Use fielded weights: title=A (highest), content=C (lower)
             try:
-                enable_syn = str(os.getenv("PG_FTS_ENABLE_SYNONYMS", "false")).lower() in {"1","true","yes","on","y"}
+                from tldw_Server_API.app.core.testing import env_flag_enabled
+
+                enable_syn = env_flag_enabled("PG_FTS_ENABLE_SYNONYMS")
                 if enable_syn:
                     # Best-effort create synonyms support
                     try:

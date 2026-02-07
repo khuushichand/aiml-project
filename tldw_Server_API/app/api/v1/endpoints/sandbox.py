@@ -1111,7 +1111,7 @@ async def start_run(
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
             signed_env = None
         if signed_env is not None:
-            signed_flag = str(signed_env).strip().lower() in {"1","true","yes","on","y"}
+            signed_flag = is_truthy(signed_env)
         else:
             signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
         secret_env = None
@@ -1405,7 +1405,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     try:
         signed_env = os.getenv("SANDBOX_WS_SIGNED_URLS")
         if signed_env is not None:
-            signed_flag = str(signed_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+            signed_flag = is_truthy(signed_env)
         else:
             signed_flag = bool(getattr(app_settings, "SANDBOX_WS_SIGNED_URLS", False))
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
@@ -1538,7 +1538,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
     # the client immediately receives non-heartbeat messages.
     try:
         _synth_env = os.getenv("SANDBOX_WS_SYNTHETIC_FRAMES_FOR_TESTS")
-        synth_enabled = str(_synth_env).strip().lower() in {"1", "true", "yes", "on", "y"}
+        synth_enabled = is_truthy(_synth_env)
         if synth_enabled:
             st = _service.get_run(run_id)
             try:

@@ -348,8 +348,7 @@ def _is_production_like_env() -> bool:
     This intentionally checks multiple keys because not all deployments set
     `tldw_production`.
     """
-    truthy = {"1", "true", "yes", "on", "y"}
-    if os.getenv("tldw_production", "").strip().lower() in truthy:
+    if is_truthy(os.getenv("tldw_production", "").strip().lower()):
         return True
 
     production_values = {"production", "prod", "live"}

@@ -421,7 +421,7 @@
     "option2": "بازیابی تقویت‌شده",
     "questionPrompt": "سوال پرامپت",
     "columns": {
-      "title": "عنولن",
+      "title": "عنوان",
       "prompt": "پرامپت",
       "type": "نوع پرامپت",
       "actions": "اقدامات"

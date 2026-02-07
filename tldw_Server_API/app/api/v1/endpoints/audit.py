@@ -17,11 +17,11 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
+from tldw_Server_API.app.core.environment.validation import is_truthy
 
 router = APIRouter()
 
 _DEFAULT_STREAM_AUTO_THRESHOLD = 5000
-_TRUTHY = {"1", "true", "yes", "on", "y"}
 raw_stream_auto = None
 try:
     raw_stream_auto = settings.get("AUDIT_EXPORT_STREAM_AUTO_MAX_ROWS", None)
@@ -70,7 +70,7 @@ def _coerce_bool(value: object | None, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in _TRUTHY
+    return is_truthy(str(value).strip().lower())
 
 
 def _shared_storage_enabled() -> bool:

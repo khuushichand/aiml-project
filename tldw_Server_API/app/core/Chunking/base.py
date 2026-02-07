@@ -127,6 +127,7 @@ class BaseChunkingStrategy(ABC):
     def _get_chunking_bool(key: str, default: bool) -> bool:
         try:
             import os
+            from tldw_Server_API.app.core.testing import is_truthy
             v = os.getenv(key.upper())
             if v is None:
                 from tldw_Server_API.app.core.config import load_comprehensive_config
@@ -134,7 +135,7 @@ class BaseChunkingStrategy(ABC):
                 if hasattr(cp, 'has_section') and cp.has_section('Chunking'):
                     v = cp.get('Chunking', key, fallback=str(default))
             s = str(v).strip().lower() if v is not None else str(default).lower()
-            return s in ("1", "true", "yes", "on", "y")
+            return is_truthy(s)
         except (ImportError, AttributeError, KeyError) as e:
             logger.debug(f"_get_chunking_bool: config lookup failed for '{key}', using default={default}: {e}")
             return default

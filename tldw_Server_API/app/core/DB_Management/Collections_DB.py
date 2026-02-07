@@ -32,6 +32,7 @@ from tldw_Server_API.app.core.Collections.utils import (
     hash_text_sha256,
 )
 from tldw_Server_API.app.core.config import load_comprehensive_config, settings
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.DB_Management.content_backend import (
     get_content_backend,
     load_content_db_settings,
@@ -379,7 +380,7 @@ class CollectionsDatabase:
         if isinstance(value, bool):
             return value
         raw = str(value).strip().lower()
-        if raw in {"1", "true", "yes", "on", "y"}:
+        if is_truthy(raw):
             return True
         if raw in {"0", "false", "no", "off", "n"}:
             return False

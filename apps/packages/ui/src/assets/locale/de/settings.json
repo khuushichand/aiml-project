@@ -12,8 +12,8 @@
   "mediaNav": "Medien",
   "guardianNav": "Guardian & Monitoring",
   "guardian": {
-    "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableTitle": "Guardian-Einstellungen nicht verfügbar",
+    "unavailableDescription": "Ihr aktueller Server stellt keine Guardian- oder Self-Monitoring-Endpunkte bereit."
   },
   "chatAppearance": {
     "title": "Chat‑Erscheinungsbild",
@@ -874,7 +874,7 @@
       "unknown": "Unbekannt",
       "connected": "Verbunden",
       "failed": "Fehlgeschlagen",
-      "continueAnyway": "You can continue and complete setup now. You’ll be able to verify the connection later from Settings."
+      "continueAnyway": "Sie können fortfahren und die Einrichtung jetzt abschließen. Sie können die Verbindung später in den Einstellungen überprüfen."
     },
     "rag": {
       "label": "RAG:",

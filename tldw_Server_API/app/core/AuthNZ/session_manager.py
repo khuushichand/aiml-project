@@ -54,7 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRe
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 
 _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -144,13 +144,12 @@ class SessionManager:
                 self.redis_client = None
 
         # Schedule session cleanup (disable in tests or when explicitly requested)
-        _truthy = {"1", "true", "yes", "on", "y"}
         disable_sched = False
         try:
-            if str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower() in _truthy:
+            if is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_DISABLED", "")).strip().lower()):
                 disable_sched = True
             # In general test mode, default to disabled unless explicitly overridden
-            if is_test_mode() and str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower() not in _truthy:
+            if is_test_mode() and not is_truthy(str(os.getenv("AUTHNZ_SCHEDULER_ENABLED", "")).strip().lower()):
                 disable_sched = True
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS:
             pass
