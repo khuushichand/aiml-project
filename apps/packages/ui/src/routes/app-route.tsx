@@ -1,12 +1,13 @@
 import React from "react"
 import type { ErrorInfo, ReactNode } from "react"
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom"
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom"
 import { useDarkMode } from "~/hooks/useDarkmode"
 import { PageAssistLoader } from "@/components/Common/PageAssistLoader"
 import { useAutoButtonTitles } from "@/hooks/useAutoButtonTitles"
 import { ensureI18nNamespaces } from "@/i18n"
 import { registerUiDiagnostics } from "@/utils/ui-diagnostics"
 import { useLayoutUiStore } from "@/store/layout-ui"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
   platformConfig,
   type PlatformTarget
@@ -17,6 +18,7 @@ import {
   type RouteDefinition,
   type RouteKind
 } from "@/routes/route-registry"
+import { isRouteEnabledForCapabilities } from "@/routes/route-capabilities"
 import { HEADER_SHORTCUTS_EXPANDED_SETTING } from "@/services/settings/ui-settings"
 import { setSetting } from "@/services/settings/registry"
 import OptionLayout from "~/components/Layouts/Layout"
@@ -184,6 +186,7 @@ class SidepanelErrorBoundary extends React.Component<
 export const RouteShell = ({ kind }: { kind: RouteKind }) => {
   const { mode } = useDarkMode()
   const navigate = useNavigate()
+  const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
   useAutoButtonTitles()
   const location = useLocation()
   const setChatSidebarCollapsed = useLayoutUiStore(
@@ -252,9 +255,25 @@ export const RouteShell = ({ kind }: { kind: RouteKind }) => {
   }
   const routesContent = (
     <Routes>
-      {visibleRoutes.map((route) => (
-        <Route key={route.path} path={route.path} element={route.element} />
-      ))}
+      {visibleRoutes.map((route) => {
+        const capabilitiesReady = !capabilitiesLoading && capabilities
+        const routeEnabled =
+          kind !== "options" ||
+          !capabilitiesReady ||
+          isRouteEnabledForCapabilities(route.path, capabilities)
+
+        return (
+          <Route
+            key={route.path}
+            path={route.path}
+            element={
+              routeEnabled
+                ? route.element
+                : <Navigate to="/settings" replace />
+            }
+          />
+        )
+      })}
     </Routes>
   )
 

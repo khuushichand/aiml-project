@@ -229,10 +229,18 @@ export interface TemplatesListResponse {
 
 export type ImportSource = "auto" | "pocket" | "instapaper"
 export type ExportFormat = "jsonl" | "zip"
+export type ReadingImportJobState =
+  | "queued"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "quarantined"
 
 export interface ImportRequest {
   source: ImportSource
   file: File
+  merge_tags?: boolean
 }
 
 export interface ImportResult {
@@ -241,6 +249,32 @@ export interface ImportResult {
   updated: number
   skipped: number
   errors: string[]
+}
+
+export interface ReadingImportJobResponse {
+  job_id: number
+  job_uuid?: string | null
+  status: ReadingImportJobState
+}
+
+export interface ReadingImportJobStatus {
+  job_id: number
+  job_uuid?: string | null
+  status: ReadingImportJobState
+  created_at?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  progress_percent?: number | null
+  progress_message?: string | null
+  error_message?: string | null
+  result?: ImportResult | null
+}
+
+export interface ReadingImportJobsListResponse {
+  jobs: ReadingImportJobStatus[]
+  total: number
+  limit?: number | null
+  offset?: number | null
 }
 
 export interface ExportRequest {
@@ -252,6 +286,8 @@ export interface ExportRequest {
   domain?: string
   page?: number
   size?: number
+  include_highlights?: boolean
+  include_notes?: boolean
 }
 
 export type ExportResponse = Blob

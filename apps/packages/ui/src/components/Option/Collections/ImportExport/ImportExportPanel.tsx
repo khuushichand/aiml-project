@@ -30,7 +30,9 @@ import type {
   ImportSource,
   ExportFormat as CollectionExportFormat,
   ReadingItem,
-  ReadingItemSummary
+  ReadingItemSummary,
+  ReadingImportJobState,
+  ReadingImportJobStatus
 } from "@/types/collections"
 
 const IMPORT_SOURCES: {
@@ -64,6 +66,20 @@ const EXPORT_FORMATS: { value: CollectionExportFormat; labelKey: string }[] = [
   { value: "zip", labelKey: "collections:export.formats.zip" }
 ]
 
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024
+const IMPORT_POLL_INTERVAL_MS = 1500
+const IMPORT_TERMINAL_STATES = new Set<ReadingImportJobState>([
+  "completed",
+  "failed",
+  "cancelled",
+  "quarantined"
+])
+const IMPORT_SOURCE_EXTENSIONS: Record<ImportSource, string[]> = {
+  auto: [".json", ".csv"],
+  pocket: [".json"],
+  instapaper: [".csv"]
+}
+
 export const ImportExportPanel: React.FC = () => {
   return (
     <div className="grid gap-6 md:grid-cols-2">
@@ -91,14 +107,167 @@ const ImportSection: React.FC = () => {
   const setImportResult = useCollectionsStore((s) => s.setImportResult)
   const setImportWizardStep = useCollectionsStore((s) => s.setImportWizardStep)
   const resetImportWizard = useCollectionsStore((s) => s.resetImportWizard)
+  const [mergeTags, setMergeTags] = useState(true)
+  const [importJob, setImportJob] = useState<ReadingImportJobStatus | null>(null)
+  const importPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearImportPoll = useCallback(() => {
+    if (importPollTimerRef.current) {
+      clearTimeout(importPollTimerRef.current)
+      importPollTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearImportPoll()
+    }
+  }, [clearImportPoll])
+
+  const describeExpectedFormats = useCallback(
+    (source: ImportSource | null) => {
+      if (!source || source === "auto") {
+        return t("collections:import.formats", "Supports Pocket JSON and Instapaper CSV")
+      }
+      if (source === "pocket") {
+        return t("collections:import.formatsPocket", "Pocket imports require JSON exports")
+      }
+      return t("collections:import.formatsInstapaper", "Instapaper imports require CSV exports")
+    },
+    [t]
+  )
+
+  const validateImportFile = useCallback(
+    (file: File, source: ImportSource) => {
+      const filename = file.name.toLowerCase()
+      const expectedExtensions = IMPORT_SOURCE_EXTENSIONS[source]
+      const extensionAllowed = expectedExtensions.some((ext) => filename.endsWith(ext))
+      if (!extensionAllowed) {
+        return t(
+          "collections:import.invalidType",
+          "File type does not match selected source. Expected: {{expected}}",
+          { expected: expectedExtensions.join(", ") }
+        )
+      }
+      if (file.size > MAX_IMPORT_FILE_BYTES) {
+        return t("collections:import.fileTooLarge", "File exceeds the {{maxMb}} MB limit.", {
+          maxMb: Math.floor(MAX_IMPORT_FILE_BYTES / (1024 * 1024))
+        })
+      }
+      return null
+    },
+    [t]
+  )
+
+  const mapImportError = useCallback(
+    (error: unknown) => {
+      const maybeError = error as Error & { status?: number; details?: unknown }
+      if (typeof maybeError?.status === "number") {
+        if (maybeError.status === 400) {
+          return t(
+            "collections:import.invalidPayload",
+            "Import failed due to invalid file content or source format."
+          )
+        }
+        if (maybeError.status === 413) {
+          return t("collections:import.fileTooLarge", "File exceeds the {{maxMb}} MB limit.", {
+            maxMb: Math.floor(MAX_IMPORT_FILE_BYTES / (1024 * 1024))
+          })
+        }
+      }
+      return maybeError?.message || t("collections:import.failed", "Import failed")
+    },
+    [t]
+  )
+
+  const importStatusLabel = useCallback(
+    (status: ReadingImportJobState) =>
+      t(
+        `collections:import.jobStatus.${status}`,
+        status.charAt(0).toUpperCase() + status.slice(1)
+      ),
+    [t]
+  )
+
+  const finalizeImport = useCallback(
+    (job: ReadingImportJobStatus) => {
+      clearImportPoll()
+      setImportInProgress(false)
+      if (job.status === "completed" && job.result) {
+        setImportResult(job.result)
+        setImportError(null)
+        setImportWizardStep("result")
+        message.success(
+          t("collections:import.success", "Imported {{count}} items", {
+            count: job.result.imported
+          })
+        )
+        return
+      }
+      if (job.result) {
+        setImportResult(job.result)
+      }
+      const err =
+        job.error_message ||
+        t("collections:import.jobFailed", "Import job {{status}}", {
+          status: importStatusLabel(job.status)
+        })
+      setImportError(err)
+      setImportWizardStep("result")
+    },
+    [
+      clearImportPoll,
+      importStatusLabel,
+      setImportError,
+      setImportInProgress,
+      setImportResult,
+      setImportWizardStep,
+      t
+    ]
+  )
+
+  const pollImportJob = useCallback(
+    async (jobId: number) => {
+      try {
+        const status = await api.getReadingImportJob(jobId)
+        setImportJob(status)
+        if (IMPORT_TERMINAL_STATES.has(status.status)) {
+          finalizeImport(status)
+          return
+        }
+        importPollTimerRef.current = setTimeout(() => {
+          void pollImportJob(jobId)
+        }, IMPORT_POLL_INTERVAL_MS)
+      } catch (error: unknown) {
+        clearImportPoll()
+        setImportInProgress(false)
+        const msg = mapImportError(error)
+        setImportError(msg)
+        message.error(msg)
+      }
+    },
+    [api, clearImportPoll, finalizeImport, mapImportError, setImportError, setImportInProgress]
+  )
 
   const handleSourceSelect = useCallback((source: ImportSource) => {
+    clearImportPoll()
     setImportSource(source)
     setImportFile(null)
     setImportError(null)
     setImportResult(null)
+    setImportInProgress(false)
     setImportWizardStep("upload")
-  }, [setImportError, setImportFile, setImportResult, setImportSource, setImportWizardStep])
+    setImportJob(null)
+    setMergeTags(true)
+  }, [
+    clearImportPoll,
+    setImportError,
+    setImportFile,
+    setImportInProgress,
+    setImportResult,
+    setImportSource,
+    setImportWizardStep
+  ])
 
   const handleFileUpload = useCallback(async (file: File) => {
     setImportFile(file)
@@ -106,37 +275,69 @@ const ImportSection: React.FC = () => {
       message.error(t("collections:import.sourceRequired", "Select a source first"))
       return
     }
+    const validationError = validateImportFile(file, importSource)
+    if (validationError) {
+      setImportError(validationError)
+      message.error(validationError)
+      return
+    }
+
+    clearImportPoll()
     setImportInProgress(true)
     setImportError(null)
+    setImportResult(null)
+    setImportJob(null)
 
     try {
-      const result = await api.importReadingList({
+      const created = await api.importReadingList({
         source: importSource,
-        file
+        file,
+        merge_tags: mergeTags
       })
-      setImportResult(result)
-      setImportWizardStep("result")
-      message.success(
-        t("collections:import.success", "Imported {{count}} items", {
-          count: result.imported
-        })
-      )
+      if (typeof created?.job_id !== "number") {
+        setImportInProgress(false)
+        setImportError(
+          t(
+            "collections:import.missingJobId",
+            "Import request was accepted but no job id was returned."
+          )
+        )
+        return
+      }
+      const initialJob: ReadingImportJobStatus = {
+        job_id: created.job_id,
+        job_uuid: created.job_uuid,
+        status: created.status
+      }
+      setImportJob(initialJob)
+      if (IMPORT_TERMINAL_STATES.has(created.status)) {
+        void pollImportJob(created.job_id)
+        return
+      }
+      importPollTimerRef.current = setTimeout(() => {
+        void pollImportJob(created.job_id)
+      }, 250)
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : "Import failed"
+      clearImportPoll()
+      setImportInProgress(false)
+      const msg = mapImportError(error)
       setImportError(msg)
       message.error(msg)
-    } finally {
-      setImportInProgress(false)
     }
   }, [
     api,
+    clearImportPoll,
     importSource,
+    mapImportError,
+    mergeTags,
+    pollImportJob,
     setImportFile,
     setImportInProgress,
     setImportError,
+    setImportJob,
     setImportResult,
-    setImportWizardStep,
-    t
+    t,
+    validateImportFile
   ])
 
   const stepItems = [
@@ -189,11 +390,33 @@ const ImportSection: React.FC = () => {
 
       {importWizardStep === "upload" && (
         <div className="space-y-4">
+          <Alert
+            type="info"
+            showIcon
+            message={t("collections:import.selectedSource", "Source: {{source}}", {
+              source: importSource
+                ? t(`collections:import.sources.${importSource}.label`, importSource)
+                : t("collections:import.sources.auto.label", "Auto-detect")
+            })}
+            description={describeExpectedFormats(importSource)}
+          />
+
+          <Checkbox
+            checked={mergeTags}
+            disabled={importInProgress}
+            onChange={(e) => setMergeTags(e.target.checked)}
+          >
+            {t("collections:import.mergeTags", "Merge imported tags with existing tags")}
+          </Checkbox>
+
           <Upload.Dragger
-            accept=".json,.csv"
+            accept={
+              importSource ? IMPORT_SOURCE_EXTENSIONS[importSource].join(",") : ".json,.csv"
+            }
             maxCount={1}
+            disabled={importInProgress}
             beforeUpload={(file) => {
-              handleFileUpload(file)
+              void handleFileUpload(file as File)
               return false
             }}
             showUploadList={false}
@@ -212,11 +435,30 @@ const ImportSection: React.FC = () => {
                   {t("collections:import.dropzone", "Click or drag file to upload")}
                 </p>
                 <p className="mt-2 text-sm text-zinc-400">
-                  {t("collections:import.formats", "Supports Pocket JSON and Instapaper CSV")}
+                  {describeExpectedFormats(importSource)}
+                </p>
+                <p className="mt-1 text-xs text-zinc-400">
+                  {t("collections:import.maxSize", "Max file size: {{size}} MB", {
+                    size: Math.floor(MAX_IMPORT_FILE_BYTES / (1024 * 1024))
+                  })}
                 </p>
               </div>
             )}
           </Upload.Dragger>
+
+          {importInProgress && importJob && (
+            <Alert
+              type="info"
+              showIcon
+              message={t("collections:import.currentStatus", "Current status: {{status}}", {
+                status: importStatusLabel(importJob.status)
+              })}
+              description={
+                importJob.progress_message ||
+                t("collections:import.processing", "Processing file...")
+              }
+            />
+          )}
 
           {importError && (
             <div className="flex items-center gap-2 text-red-500">
@@ -225,29 +467,49 @@ const ImportSection: React.FC = () => {
             </div>
           )}
 
-          <Button onClick={resetImportWizard}>{t("common:back", "Back")}</Button>
+          <Button onClick={resetImportWizard} disabled={importInProgress}>
+            {t("common:back", "Back")}
+          </Button>
         </div>
       )}
 
-      {importWizardStep === "result" && importResult && (
-        <Result
-          status={importResult.errors.length === 0 ? "success" : "warning"}
-          title={t("collections:import.complete", "Import Complete")}
-          subTitle={t(
-            "collections:import.resultSummary",
-            "Imported: {{imported}}, Updated: {{updated}}, Skipped: {{skipped}}",
-            {
-              imported: importResult.imported,
-              updated: importResult.updated,
-              skipped: importResult.skipped
-            }
+      {importWizardStep === "result" && (
+        <>
+          {importResult ? (
+            <Result
+              status={importResult.errors.length === 0 ? "success" : "warning"}
+              title={t("collections:import.complete", "Import Complete")}
+              subTitle={t(
+                "collections:import.resultSummary",
+                "Imported: {{imported}}, Updated: {{updated}}, Skipped: {{skipped}}",
+                {
+                  imported: importResult.imported,
+                  updated: importResult.updated,
+                  skipped: importResult.skipped
+                }
+              )}
+              extra={[
+                <Button key="done" type="primary" onClick={resetImportWizard}>
+                  {t("collections:import.importMore", "Import More")}
+                </Button>
+              ]}
+            />
+          ) : (
+            <Result
+              status="error"
+              title={t("collections:import.failedTitle", "Import Failed")}
+              subTitle={
+                importError ||
+                t("collections:import.failed", "The import job did not complete successfully.")
+              }
+              extra={[
+                <Button key="retry" type="primary" onClick={resetImportWizard}>
+                  {t("collections:import.tryAgain", "Try Again")}
+                </Button>
+              ]}
+            />
           )}
-          extra={[
-            <Button key="done" type="primary" onClick={resetImportWizard}>
-              {t("collections:import.importMore", "Import More")}
-            </Button>
-          ]}
-        />
+        </>
       )}
     </Card>
   )
@@ -262,6 +524,13 @@ const ExportSection: React.FC = () => {
   const storedItems = useCollectionsStore((s) => s.items)
   const exportFormat = useCollectionsStore((s) => s.exportFormat)
   const exportInProgress = useCollectionsStore((s) => s.exportInProgress)
+  const itemsSearch = useCollectionsStore((s) => s.itemsSearch)
+  const filterStatus = useCollectionsStore((s) => s.filterStatus)
+  const filterTags = useCollectionsStore((s) => s.filterTags)
+  const filterFavorite = useCollectionsStore((s) => s.filterFavorite)
+  const filterDomain = useCollectionsStore((s) => s.filterDomain)
+  const filterDateFrom = useCollectionsStore((s) => s.filterDateFrom)
+  const filterDateTo = useCollectionsStore((s) => s.filterDateTo)
 
   const setExportFormat = useCollectionsStore((s) => s.setExportFormat)
   const setExportInProgress = useCollectionsStore((s) => s.setExportInProgress)
@@ -272,11 +541,71 @@ const ExportSection: React.FC = () => {
   const [exportSearch, setExportSearch] = useState("")
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [copying, setCopying] = useState(false)
-  // Progress tracking for batch loading
+  const [applyReadingFilters, setApplyReadingFilters] = useState(true)
+  const [includeHighlights, setIncludeHighlights] = useState(false)
+  const [includeNotes, setIncludeNotes] = useState(true)
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null }>({
     loaded: 0,
     total: null
   })
+
+  const listFilters = useMemo(() => {
+    if (!applyReadingFilters) {
+      return {}
+    }
+    return {
+      q: itemsSearch || undefined,
+      status: filterStatus !== "all" ? filterStatus : undefined,
+      tags: filterTags.length > 0 ? filterTags : undefined,
+      favorite: filterFavorite ?? undefined,
+      domain: filterDomain || undefined,
+      date_from: filterDateFrom || undefined,
+      date_to: filterDateTo || undefined
+    }
+  }, [
+    applyReadingFilters,
+    filterDateFrom,
+    filterDateTo,
+    filterDomain,
+    filterFavorite,
+    filterStatus,
+    filterTags,
+    itemsSearch
+  ])
+
+  const serverExportFilters = useMemo(() => {
+    if (!applyReadingFilters) {
+      return {}
+    }
+    return {
+      q: itemsSearch || undefined,
+      status: filterStatus !== "all" ? [filterStatus] : undefined,
+      tags: filterTags.length > 0 ? filterTags : undefined,
+      favorite: filterFavorite ?? undefined,
+      domain: filterDomain || undefined
+    }
+  }, [applyReadingFilters, filterDomain, filterFavorite, filterStatus, filterTags, itemsSearch])
+
+  const hasDateFilter = Boolean(filterDateFrom || filterDateTo)
+
+  const activeFilterLabels = useMemo(() => {
+    const labels: string[] = []
+    if (itemsSearch.trim()) labels.push(t("collections:export.filter.search", "search"))
+    if (filterStatus !== "all") labels.push(t("collections:export.filter.status", "status"))
+    if (filterTags.length > 0) labels.push(t("collections:export.filter.tags", "tags"))
+    if (filterFavorite !== null) labels.push(t("collections:export.filter.favorite", "favorite"))
+    if (filterDomain.trim()) labels.push(t("collections:export.filter.domain", "domain"))
+    if (hasDateFilter) labels.push(t("collections:export.filter.date", "date range"))
+    return labels
+  }, [
+    filterDomain,
+    filterFavorite,
+    filterStatus,
+    filterTags.length,
+    hasDateFilter,
+    itemsSearch,
+    t
+  ])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -366,13 +695,16 @@ const ExportSection: React.FC = () => {
         let page = 1
         let total: number | null = null
         while (page <= MAX_EXPORT_PAGES) {
-          const response = await api.getReadingList({ page, size: pageSize })
+          const response = await api.getReadingList({
+            page,
+            size: pageSize,
+            ...(listFilters || {})
+          })
           const pageItems = Array.isArray(response?.items) ? response.items : []
           allItems.push(...pageItems)
           if (total === null && typeof response?.total === "number") {
             total = response.total
           }
-          // Update progress
           if (active) {
             setLoadProgress({ loaded: allItems.length, total })
           }
@@ -394,11 +726,17 @@ const ExportSection: React.FC = () => {
         }
       }
     }
-    loadItems()
+    void loadItems()
     return () => {
       active = false
     }
-  }, [api])
+  }, [api, listFilters])
+
+  useEffect(() => {
+    setSelectedIds((previous) =>
+      previous.filter((id) => exportItems.some((item) => item.id === id))
+    )
+  }, [exportItems])
 
   const filteredItems = useMemo(() => {
     const q = exportSearch.trim().toLowerCase()
@@ -434,7 +772,6 @@ const ExportSection: React.FC = () => {
     setSelectedIds([])
   }, [])
 
-  // Keyboard navigation and Shift+click range selection
   const {
     focusedIndex,
     handleItemClick,
@@ -449,31 +786,9 @@ const ExportSection: React.FC = () => {
   })
   const lastShiftKeyRef = useRef(false)
 
-  const buildJsonlPayload = (items: ReadingItem[]) =>
-    items
-      .map((item) =>
-        JSON.stringify({
-          id: item.id,
-          title: item.title,
-          url: item.url || item.canonical_url || "",
-          canonical_url: item.canonical_url,
-          domain: item.domain,
-          summary: item.summary,
-          notes: item.notes,
-          status: item.status,
-          favorite: item.favorite,
-          tags: item.tags,
-          created_at: item.created_at,
-          updated_at: item.updated_at,
-          published_at: item.published_at
-        })
-      )
-      .join("\n")
-
-  const resolveSelectedItems = useCallback(async (): Promise<ReadingItem[]> => {
-    const selected = exportItems.filter((item) => selectedSet.has(item.id))
+  const resolveItemsWithDetail = useCallback(async (items: ReadingItemSummary[]): Promise<ReadingItem[]> => {
     const detailed = await Promise.all(
-      selected.map(async (item) => {
+      items.map(async (item) => {
         try {
           return await api.getReadingItem(item.id)
         } catch (error) {
@@ -483,7 +798,46 @@ const ExportSection: React.FC = () => {
       })
     )
     return detailed as ReadingItem[]
-  }, [api, exportItems, selectedSet])
+  }, [api])
+
+  const resolveSelectedItems = useCallback(async (): Promise<ReadingItem[]> => {
+    const selected = exportItems.filter((item) => selectedSet.has(item.id))
+    return await resolveItemsWithDetail(selected)
+  }, [exportItems, resolveItemsWithDetail, selectedSet])
+
+  const buildJsonlPayload = useCallback(async (items: ReadingItem[]) => {
+    const lines = await Promise.all(
+      items.map(async (item) => {
+        const payload: Record<string, unknown> = {
+          id: item.id,
+          title: item.title,
+          url: item.url || item.canonical_url || "",
+          canonical_url: item.canonical_url,
+          domain: item.domain,
+          summary: item.summary,
+          status: item.status,
+          favorite: item.favorite,
+          tags: item.tags,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+          published_at: item.published_at
+        }
+        if (includeNotes) {
+          payload.notes = item.notes
+        }
+        if (includeHighlights) {
+          try {
+            payload.highlights = await api.getHighlights(item.id)
+          } catch (error) {
+            console.debug(`Failed to fetch highlights for ${item.id}:`, error)
+            payload.highlights = []
+          }
+        }
+        return JSON.stringify(payload)
+      })
+    )
+    return lines.join("\n")
+  }, [api, includeHighlights, includeNotes])
 
   const triggerDownload = (blob: Blob, filename: string) => {
     if (typeof window !== "undefined" && window.location.search.includes("e2e=1")) {
@@ -517,13 +871,37 @@ const ExportSection: React.FC = () => {
       }
       if (selectedIds.length > 0) {
         const items = await resolveSelectedItems()
-        const payload = buildJsonlPayload(items)
+        const payload = await buildJsonlPayload(items)
         const blob = new Blob([payload], { type: "application/x-ndjson" })
         triggerDownload(blob, "reading_export_selection.jsonl")
         message.success(t("collections:export.success", "Export ready for download"))
         return
       }
-      const response = await api.exportReadingList({ format: exportFormat })
+
+      if (applyReadingFilters && hasDateFilter) {
+        if (exportFormat === "zip") {
+          message.warning(
+            t(
+              "collections:export.dateZipUnsupported",
+              "Date range filter export is available in JSONL mode only."
+            )
+          )
+          return
+        }
+        const detailedItems = await resolveItemsWithDetail(exportItems)
+        const payload = await buildJsonlPayload(detailedItems)
+        const blob = new Blob([payload], { type: "application/x-ndjson" })
+        triggerDownload(blob, "reading_export_filtered.jsonl")
+        message.success(t("collections:export.success", "Export ready for download"))
+        return
+      }
+
+      const response = await api.exportReadingList({
+        format: exportFormat,
+        ...(serverExportFilters || {}),
+        include_highlights: includeHighlights,
+        include_notes: includeNotes
+      })
       triggerDownload(response.blob, response.filename)
       message.success(t("collections:export.success", "Export ready for download"))
     } catch (error: unknown) {
@@ -532,7 +910,22 @@ const ExportSection: React.FC = () => {
     } finally {
       setExportInProgress(false)
     }
-  }, [api, exportFormat, resolveSelectedItems, selectedIds.length, setExportInProgress, t])
+  }, [
+    api,
+    applyReadingFilters,
+    buildJsonlPayload,
+    exportFormat,
+    exportItems,
+    hasDateFilter,
+    includeHighlights,
+    includeNotes,
+    resolveItemsWithDetail,
+    resolveSelectedItems,
+    selectedIds.length,
+    serverExportFilters,
+    setExportInProgress,
+    t
+  ])
 
   const handleCopy = useCallback(async () => {
     if (selectedIds.length === 0) {
@@ -544,7 +937,7 @@ const ExportSection: React.FC = () => {
     setCopying(true)
     try {
       const items = await resolveSelectedItems()
-      const payload = buildJsonlPayload(items)
+      const payload = await buildJsonlPayload(items)
       await navigator.clipboard.writeText(payload)
       message.success(t("collections:export.copied", "Copied to clipboard"))
     } catch (error: unknown) {
@@ -553,7 +946,7 @@ const ExportSection: React.FC = () => {
     } finally {
       setCopying(false)
     }
-  }, [resolveSelectedItems, selectedIds.length, t])
+  }, [buildJsonlPayload, resolveSelectedItems, selectedIds.length, t])
 
   return (
     <Card
@@ -579,6 +972,43 @@ const ExportSection: React.FC = () => {
               </Radio.Button>
             ))}
           </Radio.Group>
+        </div>
+
+        <div className="space-y-2 rounded-md border border-zinc-200 p-3 dark:border-zinc-700">
+          <Checkbox
+            checked={applyReadingFilters}
+            onChange={(e) => setApplyReadingFilters(e.target.checked)}
+          >
+            {t("collections:export.useReadingFilters", "Use current Reading filters")}
+          </Checkbox>
+          {applyReadingFilters && (
+            <p className="text-xs text-zinc-500">
+              {activeFilterLabels.length > 0
+                ? t(
+                    "collections:export.activeFilters",
+                    "Active filters: {{filters}}",
+                    { filters: activeFilterLabels.join(", ") }
+                  )
+                : t(
+                    "collections:export.noActiveFilters",
+                    "No active filters. Export will include all items."
+                  )}
+            </p>
+          )}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Checkbox
+              checked={includeHighlights}
+              onChange={(e) => setIncludeHighlights(e.target.checked)}
+            >
+              {t("collections:export.includeHighlights", "Include highlights")}
+            </Checkbox>
+            <Checkbox
+              checked={includeNotes}
+              onChange={(e) => setIncludeNotes(e.target.checked)}
+            >
+              {t("collections:export.includeNotes", "Include notes")}
+            </Checkbox>
+          </div>
         </div>
 
         <div>
@@ -688,7 +1118,6 @@ const ExportSection: React.FC = () => {
           </p>
         </div>
 
-        {/* Warning when ZIP is selected but items are also selected */}
         {exportFormat === "zip" && selectedIds.length > 0 && (
           <Alert
             type="warning"
@@ -713,6 +1142,17 @@ const ExportSection: React.FC = () => {
                 </Button>
               </span>
             }
+          />
+        )}
+
+        {exportFormat === "zip" && applyReadingFilters && hasDateFilter && selectedIds.length === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={t(
+              "collections:export.dateZipUnsupported",
+              "Date range filter export is available in JSONL mode only."
+            )}
           />
         )}
 

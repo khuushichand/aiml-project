@@ -13,6 +13,7 @@ import {
   ACTION_ICON_CLICK_SETTING,
   CONTEXT_MENU_CLICK_SETTING
 } from "@/services/action"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 
 function classNames(...classes: string[]) {
   return classes.filter(Boolean).join(" ")
@@ -26,8 +27,12 @@ export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation()
   const navigate = useNavigate()
   const { t } = useTranslation(["settings", "common"])
+  const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
   const sidepanelSupported = isSidepanelSupported()
-  const settingsNavGroups = React.useMemo(() => getSettingsNavGroups(), [])
+  const settingsNavGroups = React.useMemo(
+    () => getSettingsNavGroups(capabilitiesLoading ? undefined : capabilities),
+    [capabilities, capabilitiesLoading]
+  )
   const currentNavItem = React.useMemo(() => {
     for (const group of settingsNavGroups) {
       for (const item of group.items) {

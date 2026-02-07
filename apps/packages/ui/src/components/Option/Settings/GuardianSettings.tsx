@@ -39,6 +39,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 
 import { useServerOnline } from "@/hooks/useServerOnline"
+import { useServerCapabilities } from "@/hooks/useServerCapabilities"
 import {
   listRules,
   createRule,
@@ -99,7 +100,7 @@ const SEVERITY_COLORS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  pending_consent: "orange",
+  pending: "orange",
   active: "green",
   suspended: "gold",
   dissolved: "default"
@@ -1129,7 +1130,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       width: 200,
       render: (_, record) => (
         <Space size="small" wrap>
-          {relationshipRole === "dependent" && record.status === "pending_consent" && (
+          {relationshipRole === "dependent" && record.status === "pending" && (
             <Button
               size="small"
               type="link"
@@ -1588,6 +1589,24 @@ function CrisisResourcesTab({ online }: { online: boolean }) {
 export function GuardianSettings() {
   const { t } = useTranslation("settings")
   const online = useServerOnline()
+  const { capabilities, loading: capabilitiesLoading } = useServerCapabilities()
+  const guardianRoutesAvailable =
+    !capabilities ||
+    (capabilities.hasGuardian && capabilities.hasSelfMonitoring)
+
+  if (!capabilitiesLoading && !guardianRoutesAvailable) {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message={t("guardian.unavailableTitle", "Guardian settings unavailable")}
+        description={t(
+          "guardian.unavailableDescription",
+          "Your current server does not expose Guardian or Self-Monitoring endpoints."
+        )}
+      />
+    )
+  }
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "16px 0" }}>

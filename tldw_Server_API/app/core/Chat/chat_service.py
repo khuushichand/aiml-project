@@ -1162,11 +1162,15 @@ async def moderate_input_messages(
         # Self-monitoring check (awareness/notifications)
         if self_monitoring_service and text:
             try:
-                sm_result = self_monitoring_service.check_text(
-                    text=text,
-                    user_id=str(req_user_id or client_id),
-                    phase="input",
-                    conversation_id=str(conv_id) if conv_id else None,
+                _sm_loop = asyncio.get_running_loop()
+                sm_result = await _sm_loop.run_in_executor(
+                    None,
+                    lambda: self_monitoring_service.check_text(
+                        text=text,
+                        user_id=str(req_user_id or client_id),
+                        phase="input",
+                        conversation_id=str(conv_id) if conv_id else None,
+                    ),
                 )
                 if sm_result.action == "block":
                     raise HTTPException(
@@ -1784,6 +1788,7 @@ async def execute_streaming_call(
     rg_commit_cb: Callable[[int], Any] | None = None,
     rg_refund_cb: Callable[..., Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
+    self_monitoring_service: Any | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2171,6 +2176,35 @@ async def execute_streaming_call(
         saved_message_id: str | None = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
+
+        # Self-monitoring output check (streaming)
+        if self_monitoring_service and full_reply:
+            try:
+                _sm_uid_s = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        _sm_uid_s = getattr(request.state, "user_id", None)
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    _sm_uid_s = None
+                _sm_user_s = str(_sm_uid_s or client_id)
+                _sm_loop_s = asyncio.get_running_loop()
+                sm_result_s = await _sm_loop_s.run_in_executor(
+                    None,
+                    lambda: self_monitoring_service.check_text(
+                        text=full_reply,
+                        user_id=_sm_user_s,
+                        phase="output",
+                        conversation_id=str(final_conversation_id) if final_conversation_id else None,
+                    ),
+                )
+                if sm_result_s.action == "block":
+                    post_stream_blocked = True
+                    full_reply_to_save = None
+                elif sm_result_s.action == "redact" and sm_result_s.redacted_text is not None:
+                    full_reply_to_save = sm_result_s.redacted_text
+            except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+                logger.debug(f"Self-monitoring output check (streaming) skipped: {e}")
+
         try:
             _get_mod = moderation_getter or get_moderation_service
             moderation = _get_mod()
@@ -2733,6 +2767,7 @@ async def execute_non_stream_call(
     refresh_provider_params: Callable[[str], Any],
     moderation_getter: Callable[[], Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
+    self_monitoring_service: Any | None = None,
 ) -> dict[str, Any]:
     """Execute a non-streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2996,6 +3031,49 @@ async def execute_non_stream_call(
 
     # Cache content text for moderation/usage when content is non-string
     content_text_for_usage = _extract_text_from_content(content_to_save)
+
+    # Self-monitoring output check (awareness/notifications)
+    if self_monitoring_service and content_text_for_usage:
+        try:
+            _sm_uid = None
+            try:
+                if request is not None and hasattr(request, "state"):
+                    _sm_uid = getattr(request.state, "user_id", None)
+            except _CHAT_NONCRITICAL_EXCEPTIONS:
+                _sm_uid = None
+            _sm_user = str(_sm_uid or client_id)
+            _sm_loop = asyncio.get_running_loop()
+            sm_result = await _sm_loop.run_in_executor(
+                None,
+                lambda: self_monitoring_service.check_text(
+                    text=content_text_for_usage,
+                    user_id=_sm_user,
+                    phase="output",
+                    conversation_id=str(final_conversation_id) if final_conversation_id else None,
+                ),
+            )
+            if sm_result.action == "block":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=sm_result.block_message or "Output blocked by self-monitoring rule",
+                )
+            if sm_result.action == "redact" and sm_result.redacted_text is not None:
+                content_to_save = sm_result.redacted_text
+                content_text_for_usage = sm_result.redacted_text
+                # Update llm_response dict if applicable
+                try:
+                    if isinstance(llm_response, dict):
+                        choices = llm_response.get("choices")
+                        if choices and isinstance(choices, list) and choices:
+                            msg = choices[0].get("message") or {}
+                            if isinstance(msg, dict):
+                                msg["content"] = sm_result.redacted_text
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    pass
+        except HTTPException:
+            raise
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Self-monitoring output check skipped: {e}")
 
     # Output moderation (non-streaming)
     try:

@@ -81,7 +81,8 @@ async def process_web_scraping_task(
 
     Parameters:
     - crawl_strategy: Optional crawl strategy override for enhanced crawling.
-      Normalized to lowercase and validated against: "best_first", "best-first", "bestfirst".
+      Normalized to lowercase and validated against: "default", "best_first",
+      "best-first", "bestfirst".
     - include_external: Optional flag to allow following external links during crawl.
       Forwarded as-is to the enhanced service when provided.
     - score_threshold: Optional relevance threshold in [0.0, 1.0] for URL scoring.
@@ -100,25 +101,40 @@ async def process_web_scraping_task(
     # Normalize and validate crawl overrides before dispatch
     normalized_crawl_strategy: Optional[str] = None
     if crawl_strategy is not None:
-        normalized_crawl_strategy = crawl_strategy.strip().lower()
-        allowed_strategies = {"best_first", "best-first", "bestfirst"}
-        if normalized_crawl_strategy not in allowed_strategies:
-            raise ValueError(
-                f"Invalid crawl_strategy '{crawl_strategy}'. "
-                "Valid options are: 'best_first', 'best-first', 'bestfirst'."
+        candidate_strategy = crawl_strategy.strip().lower()
+        # Canonicalize aliases for internal consistency.
+        if candidate_strategy in {"best-first", "bestfirst"}:
+            candidate_strategy = "best_first"
+        allowed_strategies = {"default", "best_first"}
+        if candidate_strategy not in allowed_strategies:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid crawl_strategy '{crawl_strategy}'. "
+                    "Valid options are: 'default', 'best_first', 'best-first', 'bestfirst'."
+                ),
             )
+        normalized_crawl_strategy = candidate_strategy
 
     normalized_score_threshold: Optional[float] = None
     if score_threshold is not None:
         try:
             normalized_score_threshold = float(score_threshold)
         except (TypeError, ValueError):
-            raise ValueError(
-                f"score_threshold must be a float between 0.0 and 1.0; got {score_threshold!r}."
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"score_threshold must be a float between 0.0 and 1.0; "
+                    f"got {score_threshold!r}."
+                ),
             ) from None
         if not 0.0 <= normalized_score_threshold <= 1.0:
-            raise ValueError(
-                f"score_threshold must be between 0.0 and 1.0 inclusive; got {normalized_score_threshold}."
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "score_threshold must be between 0.0 and 1.0 inclusive; "
+                    f"got {normalized_score_threshold}."
+                ),
             )
 
     if normalized_crawl_strategy is not None:

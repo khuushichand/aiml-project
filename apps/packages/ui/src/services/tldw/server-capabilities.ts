@@ -25,6 +25,8 @@ export type ServerCapabilities = {
   hasWebSearch: boolean
   hasFeedbackExplicit: boolean
   hasFeedbackImplicit: boolean
+  hasGuardian: boolean
+  hasSelfMonitoring: boolean
   specVersion: string | null
 }
 
@@ -53,6 +55,8 @@ const defaultCapabilities: ServerCapabilities = {
   hasWebSearch: false,
   hasFeedbackExplicit: false,
   hasFeedbackImplicit: false,
+  hasGuardian: false,
+  hasSelfMonitoring: false,
   specVersion: null
 }
 
@@ -234,6 +238,14 @@ const computeCapabilities = (spec: any | null | undefined): ServerCapabilities =
     hasWebSearch: has("/api/v1/research/websearch"),
     hasFeedbackExplicit: has("/api/v1/feedback/explicit"),
     hasFeedbackImplicit: has("/api/v1/rag/feedback/implicit"),
+    hasGuardian:
+      has("/api/v1/guardian/relationships") ||
+      has("/api/v1/guardian/policies") ||
+      has("/api/v1/guardian/audit/{relationship_id}"),
+    hasSelfMonitoring:
+      has("/api/v1/self-monitoring/rules") ||
+      has("/api/v1/self-monitoring/alerts") ||
+      has("/api/v1/self-monitoring/crisis-resources"),
     specVersion: spec?.info?.version ?? null
   }
 }

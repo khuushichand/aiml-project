@@ -2553,6 +2553,7 @@ async def create_chat_completion(
                         (lambda **_kwargs: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": 0}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
                     ),
+                    self_monitoring_service=_self_mon_service,
                 )
 
             else: # Non-streaming
@@ -2582,6 +2583,7 @@ async def create_chat_completion(
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
+                    self_monitoring_service=_self_mon_service,
                 )
                 # Track response size and return
                 if isinstance(encoded_payload, dict):

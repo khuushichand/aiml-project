@@ -1,5 +1,7 @@
 import type { LucideIcon } from "lucide-react"
 import { optionRoutes, type NavGroupKey } from "@/routes/route-registry"
+import { isRouteEnabledForCapabilities } from "@/routes/route-capabilities"
+import type { ServerCapabilities } from "@/services/tldw/server-capabilities"
 
 export type SettingsNavItem = {
   to: string
@@ -23,9 +25,17 @@ const NAV_GROUPS: Array<{ key: NavGroupKey; titleToken: string }> = [
 
 type NavItemWithOrder = SettingsNavItem & { order: number }
 
-const buildNavItemsByGroup = () =>
+const buildNavItemsByGroup = (
+  capabilities: ServerCapabilities | null | undefined
+) =>
   optionRoutes.reduce((acc, route) => {
     if (!route.nav) return acc
+    if (
+      capabilities &&
+      !isRouteEnabledForCapabilities(route.path, capabilities)
+    ) {
+      return acc
+    }
     const { group, labelToken, icon, beta, order } = route.nav
     const items = acc.get(group) ?? []
     items.push({ to: route.path, icon, labelToken, beta, order })
@@ -33,8 +43,10 @@ const buildNavItemsByGroup = () =>
     return acc
   }, new Map<NavGroupKey, NavItemWithOrder[]>())
 
-export const getSettingsNavGroups = (): SettingsNavGroup[] => {
-  const navItemsByGroup = buildNavItemsByGroup()
+export const getSettingsNavGroups = (
+  capabilities?: ServerCapabilities | null
+): SettingsNavGroup[] => {
+  const navItemsByGroup = buildNavItemsByGroup(capabilities)
   return NAV_GROUPS.map((group) => {
     const items = (navItemsByGroup.get(group.key) ?? [])
       .sort((a, b) => a.order - b.order)

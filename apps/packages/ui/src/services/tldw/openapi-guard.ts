@@ -134,6 +134,8 @@ export type ClientPath =
   | "/api/v1/reading/items/{item_id}/highlights"
   | "/api/v1/reading/highlights/{highlight_id}"
   | "/api/v1/reading/import"
+  | "/api/v1/reading/import/jobs"
+  | "/api/v1/reading/import/jobs/{job_id}"
   | "/api/v1/reading/export"
   | "/api/v1/writing/version"
   | "/api/v1/writing/capabilities"

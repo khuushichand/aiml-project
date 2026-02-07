@@ -1935,6 +1935,20 @@ class EnhancedWebScraper:
             }
         visited: set[str] = set()
         base_norm = normalize_for_crawl(base_url, base_url)
+        # Path depth guards are evaluated relative to the base URL path so
+        # nested entry points do not get unexpectedly pruned.
+        def _path_segment_count(url: str) -> int:
+            try:
+                parsed = urlparse(url)
+                return len([seg for seg in (parsed.path or '/').split('/') if seg])
+            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                return 0
+
+        base_path_segments = _path_segment_count(base_norm)
+
+        def _relative_path_depth(url: str) -> int:
+            return max(0, _path_segment_count(url) - base_path_segments)
+
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
         # Prefer instance config provided at construction; do not override with
         # on-disk config unless necessary. Tests pass config={} to exercise
@@ -2025,7 +2039,7 @@ class EnhancedWebScraper:
 
         results = []
 
-        # Determine effective strategy (default to best_first)
+        # Determine effective strategy (explicit request override or config default).
         eff_strategy = (crawl_strategy or str(wc.get('web_crawl_strategy', 'best_first'))).strip().lower()
 
         if eff_strategy in {"best_first", "best-first", "bestfirst"}:
@@ -2037,11 +2051,7 @@ class EnhancedWebScraper:
             except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                 start_score = 0.0
             # Use path segment count for tie-breaks (deeper paths first)
-            try:
-                from urllib.parse import urlparse as _urlparse
-                _ps = len([seg for seg in (_urlparse(base_url).path or '/').split('/') if seg])
-            except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                _ps = 0
+            _ps = _path_segment_count(base_url)
             heappush(pq, (-float(start_score), 0, -_ps, base_url, None))
             seen.add(base_norm)
             # Initial metrics
@@ -2099,19 +2109,40 @@ class EnhancedWebScraper:
                     neg_score, depth, parent = meta_map.get(r_url, (0.0, 0, None))
                     # Attach traversal metadata
                     res.setdefault('metadata', {})
-                    # Score is derived from queue priority (negated)
+                    # Best-first ordering score (queue priority) and relevance score
+                    # are tracked separately so downstream consumers can reason
+                    # about why a page was ordered vs. why it was retained.
                     try:
-                        computed_score = float(-neg_score)
+                        ordering_score = float(-neg_score)
                     except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                        # Fallback compute on demand
                         try:
-                            computed_score = float(composite.score(r_url))
+                            ordering_score = float(order_scorer.score(r_url))
                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                            computed_score = 0.0
-                    res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
+                            ordering_score = 0.0
+                    try:
+                        relevance_score = float(composite.score(r_url))
+                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
+                            log_histogram("webscraping.crawl.score", relevance_score, labels={"stage": "visit"})
+                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                        relevance_score = 0.0
+                    res['metadata'].update({
+                        'depth': depth,
+                        'parent_url': parent,
+                        'score': relevance_score,
+                        'ordering_score': ordering_score,
+                        'score_type': 'composite_relevance',
+                        'ordering_score_type': 'path_depth',
+                        'crawl_strategy': 'best_first',
+                    })
 
                     if res.get('extraction_successful'):
-                        logger.debug(f"Crawled page success: {r_url} depth={depth} score={computed_score:.3f}")
+                        logger.debug(
+                            "Crawled page success: {} depth={} score={:.3f} ordering_score={:.3f}",
+                            r_url,
+                            depth,
+                            relevance_score,
+                            ordering_score,
+                        )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
                         results.append(res)
@@ -2138,16 +2169,18 @@ class EnhancedWebScraper:
                                         log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
                                     logger.debug(f"Skip URL (filters reject): {cand}")
                                     continue
-                                # Enforce path-depth limit relative to site root to align with expectations
-                                try:
-                                    from urllib.parse import urlparse as _urlparse
-                                    _ps_cand = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
-                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                    _ps_cand = 0
-                                if _ps_cand > max_depth:
+                                # Enforce path-depth limit relative to base URL path.
+                                cand_rel_depth = _relative_path_depth(cand)
+                                if cand_rel_depth > max_depth:
                                     with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                                         log_counter("webscraping.crawl.urls_skipped", labels={"reason": "path_depth"})
-                                    logger.debug(f"Skip URL (path depth>{max_depth}): {cand}")
+                                    logger.debug(
+                                        "Skip URL (relative path depth>{}; base_segments={}; cand_segments={}): {}",
+                                        max_depth,
+                                        base_path_segments,
+                                        _path_segment_count(cand),
+                                        cand,
+                                    )
                                     continue
                                 # Optional robots gating (execute only for egress-allowed hosts)
                                 if robots_filter is not None:
@@ -2183,11 +2216,7 @@ class EnhancedWebScraper:
                                     logger.debug(f"Skip URL (custom filter): {cand}")
                                     continue
                                 # Tie-break on path segment count (deeper paths first)
-                                try:
-                                    from urllib.parse import urlparse as _urlparse
-                                    _ps2 = len([seg for seg in (_urlparse(cand).path or '/').split('/') if seg])
-                                except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                                    _ps2 = 0
+                                _ps2 = _path_segment_count(cand)
                                 try:
                                     ord_val = float(order_scorer.score(cand))
                                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
@@ -2259,14 +2288,32 @@ class EnhancedWebScraper:
                     depth, parent = meta_map_fifo.get(r_url, (0, None))
                     res.setdefault('metadata', {})
                     try:
-                        computed_score = float(composite.score(r_url))
-                        log_histogram("webscraping.crawl.score", computed_score, labels={"stage": "visit"})
+                        relevance_score = float(composite.score(r_url))
+                        log_histogram("webscraping.crawl.score", relevance_score, labels={"stage": "visit"})
                     except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
-                        computed_score = 0.0
-                    res['metadata'].update({'depth': depth, 'parent_url': parent, 'score': computed_score})
+                        relevance_score = 0.0
+                    try:
+                        ordering_score = float(order_scorer.score(r_url))
+                    except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
+                        ordering_score = relevance_score
+                    res['metadata'].update({
+                        'depth': depth,
+                        'parent_url': parent,
+                        'score': relevance_score,
+                        'ordering_score': ordering_score,
+                        'score_type': 'composite_relevance',
+                        'ordering_score_type': 'path_depth',
+                        'crawl_strategy': eff_strategy,
+                    })
 
                     if res.get('extraction_successful'):
-                        logger.debug(f"Crawled page success: {r_url} depth={depth} score={computed_score:.3f}")
+                        logger.debug(
+                            "Crawled page success: {} depth={} score={:.3f} ordering_score={:.3f}",
+                            r_url,
+                            depth,
+                            relevance_score,
+                            ordering_score,
+                        )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
                         results.append(res)

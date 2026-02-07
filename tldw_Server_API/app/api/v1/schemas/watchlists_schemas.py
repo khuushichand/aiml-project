@@ -342,6 +342,13 @@ class WatchlistOutputCreateRequest(BaseModel):
         ge=1,
         description="Optional version of a watchlists template to render (supports template history).",
     )
+    summarize: bool = Field(default=False, description="Generate LLM-based per-article summaries before rendering")
+    llm_provider: str | None = Field(default=None, description="LLM provider for summarization (e.g., 'openai', 'anthropic')")
+    llm_model: str | None = Field(default=None, description="LLM model override for summarization")
+    summarize_prompt: str | None = Field(
+        default=None,
+        description="Custom prompt for per-article summarization. Default: 2-3 sentence summary.",
+    )
     generate_mece: bool = Field(default=False, description="Generate a MECE variant output")
     mece_template_name: str | None = Field(default=None, description="Override template name for MECE output")
     generate_tts: bool = Field(default=False, description="Generate a TTS audio variant output")

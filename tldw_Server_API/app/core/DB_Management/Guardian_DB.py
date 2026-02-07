@@ -1643,6 +1643,108 @@ class GuardianDB:
             finally:
                 conn.close()
 
+    # ── Analytics / Aggregation ────────────────────────────────
+
+    def aggregate_alerts_by_category(
+        self, user_id: str, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by category, return [{category, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT category, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY category ORDER BY cnt DESC"
+                rows = conn.execute(query, params).fetchall()
+                return [{"category": r["category"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def aggregate_alerts_by_severity(
+        self, user_id: str, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by severity, return [{severity, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT severity, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY severity ORDER BY cnt DESC"
+                rows = conn.execute(query, params).fetchall()
+                return [{"severity": r["severity"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def aggregate_alerts_by_time(
+        self, user_id: str, bucket: str = "day", since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Group alerts by time bucket (day|week|month), return [{bucket, count}]."""
+        fmt_map = {"day": "%Y-%m-%d", "week": "%Y-W%W", "month": "%Y-%m"}
+        fmt = fmt_map.get(bucket, "%Y-%m-%d")
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    f"SELECT strftime('{fmt}', created_at) AS bucket, COUNT(*) AS cnt "
+                    f"FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY bucket ORDER BY bucket"
+                rows = conn.execute(query, params).fetchall()
+                return [{"bucket": r["bucket"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def get_top_matched_patterns(
+        self, user_id: str, limit: int = 10, since_iso: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return most-frequent matched_pattern values, [{pattern, count}]."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                query = (
+                    "SELECT matched_pattern, COUNT(*) AS cnt "
+                    "FROM self_monitoring_alerts WHERE user_id = ?"
+                )
+                params: list[Any] = [str(user_id)]
+                if since_iso:
+                    query += " AND created_at >= ?"
+                    params.append(since_iso)
+                query += " GROUP BY matched_pattern ORDER BY cnt DESC LIMIT ?"
+                params.append(limit)
+                rows = conn.execute(query, params).fetchall()
+                return [{"pattern": r["matched_pattern"], "count": r["cnt"]} for r in rows]
+            finally:
+                conn.close()
+
+    def get_escalation_summary(self, user_id: str) -> list[dict[str, Any]]:
+        """Return current escalation states for a user."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT * FROM escalation_state WHERE user_id = ?",
+                    (str(user_id),),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+
     # ── Cleanup ────────────────────────────────────────────────
 
     def delete_all_for_user(self, user_id: str) -> dict[str, int]:

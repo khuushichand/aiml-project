@@ -68,6 +68,7 @@ from tldw_Server_API.app.core.Watchlists.filters import evaluate_filters as _eva
 from tldw_Server_API.app.core.Watchlists.filters import normalize_filters as _normalize_job_filters
 from tldw_Server_API.app.core.Watchlists.opml import generate_opml, parse_opml
 from tldw_Server_API.app.core.Watchlists.pipeline import run_watchlist_job
+from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseError as _DatabaseError
 from tldw_Server_API.app.services.outputs_service import (
     _build_output_filename,
     _ingest_output_to_media_db,
@@ -76,6 +77,7 @@ from tldw_Server_API.app.services.outputs_service import (
     _strip_html_for_tts,
     _write_tts_audio_file,
     render_output_template,
+    summarize_items_for_output,
 )
 
 # Lazy/optional notifications import: avoid blocking router load if optional deps fail
@@ -1161,7 +1163,7 @@ async def import_sources_opml(
             )
             items.append(SourcesImportItem(url=url_str, name=row.name, id=row.id, status="created"))
             created += 1
-        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+        except (*_WATCHLISTS_NONCRITICAL_EXCEPTIONS, _DatabaseError) as exc:
             items.append(SourcesImportItem(url=url_str, name=e.name, status="skipped", error=str(exc)))
             skipped += 1
     return SourcesImportResponse(items=items, total=(created + skipped + errors), created=created, skipped=skipped, errors=errors)
@@ -3065,7 +3067,52 @@ async def create_output(
     if output_format not in {"md", "html"}:
         raise HTTPException(status_code=400, detail="invalid_format")
 
+    # LLM summarization (opt-in via payload.summarize)
+    llm_summaries: dict[int, str] = {}
+    if payload.summarize:
+        llm_provider = payload.llm_provider
+        if not llm_provider:
+            llm_cfg = job_prefs.get("llm") or job_prefs.get("summarize") or {}
+            llm_provider = llm_cfg.get("provider") or llm_cfg.get("api_name")
+        if not llm_provider:
+            raise HTTPException(
+                status_code=400,
+                detail="llm_provider_required: set llm_provider in request or job output_prefs.llm.provider",
+            )
+        items_for_summary = [
+            {
+                "id": getattr(it, "id", None),
+                "title": getattr(it, "title", None),
+                "summary": getattr(it, "summary", None),
+                "content": getattr(it, "summary", None) or getattr(it, "title", ""),
+                "metadata_json": getattr(it, "metadata_json", None),
+            }
+            for it in items
+        ]
+        try:
+            items_for_summary = await summarize_items_for_output(
+                items_for_summary,
+                api_name=llm_provider,
+                model_override=payload.llm_model,
+                custom_prompt=payload.summarize_prompt,
+                db=db,
+            )
+            for entry in items_for_summary:
+                item_id = entry.get("id")
+                if item_id is not None and entry.get("llm_summary"):
+                    llm_summaries[int(item_id)] = entry["llm_summary"]
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
+            logger.warning(f"Watchlists output summarization failed (non-critical): {exc}")
+
     context = _build_output_context(title, job, run, item_models)
+
+    # Inject LLM summaries into context
+    if llm_summaries:
+        for item_ctx in context.get("items", []):
+            item_id = item_ctx.get("id")
+            if item_id is not None and int(item_id) in llm_summaries:
+                item_ctx["llm_summary"] = llm_summaries[int(item_id)]
+        context["has_llm_summaries"] = True
     if output_template:
         context["template_name"] = output_template.name
         if output_template.description:

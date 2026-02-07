@@ -14,6 +14,12 @@ import {
   type ApiDataTableJobStatus
 } from "@/services/tldw/data-tables"
 import type { DataTableColumn } from "@/types/data-tables"
+import type {
+  ImportSource,
+  ReadingImportJobResponse,
+  ReadingImportJobStatus,
+  ReadingImportJobsListResponse
+} from "@/types/collections"
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:8000"
 const CHARACTER_CACHE_TTL_MS = 5 * 60 * 1000
@@ -4165,13 +4171,13 @@ export class TldwApiClient {
 
   // Import/Export
   async importReadingList(data: {
-    source: string
+    source: ImportSource
     file: File
     merge_tags?: boolean
-  }): Promise<any> {
+  }): Promise<ReadingImportJobResponse> {
     const buffer = await data.file.arrayBuffer()
     const fileData = Array.from(new Uint8Array(buffer))
-    return await this.upload<any>({
+    return await this.upload<ReadingImportJobResponse>({
       path: "/api/v1/reading/import",
       method: "POST",
       fileFieldName: "file",
@@ -4187,6 +4193,26 @@ export class TldwApiClient {
     })
   }
 
+  async listReadingImportJobs(params?: {
+    status?: string
+    limit?: number
+    offset?: number
+  }): Promise<ReadingImportJobsListResponse> {
+    const query = this.buildQuery(params as Record<string, any>)
+    return await bgRequest<ReadingImportJobsListResponse>({
+      path: `/api/v1/reading/import/jobs${query}`,
+      method: "GET"
+    })
+  }
+
+  async getReadingImportJob(job_id: number | string): Promise<ReadingImportJobStatus> {
+    const id = String(job_id)
+    return await bgRequest<ReadingImportJobStatus>({
+      path: `/api/v1/reading/import/jobs/${id}`,
+      method: "GET"
+    })
+  }
+
   async exportReadingList(params: {
     format: string
     status?: string[]
@@ -4196,6 +4222,8 @@ export class TldwApiClient {
     domain?: string
     page?: number
     size?: number
+    include_highlights?: boolean
+    include_notes?: boolean
   }): Promise<{ blob: Blob; filename: string }> {
     const query = new URLSearchParams()
     query.set("format", params.format)
@@ -4206,6 +4234,12 @@ export class TldwApiClient {
     if (params?.domain) query.set("domain", params.domain)
     if (params?.page) query.set("page", String(params.page))
     if (params?.size) query.set("size", String(params.size))
+    if (params?.include_highlights !== undefined) {
+      query.set("include_highlights", String(params.include_highlights))
+    }
+    if (params?.include_notes !== undefined) {
+      query.set("include_notes", String(params.include_notes))
+    }
     const qs = query.toString()
     const path = `/api/v1/reading/export${qs ? `?${qs}` : ""}` as const
     const response = await bgRequest<any>({

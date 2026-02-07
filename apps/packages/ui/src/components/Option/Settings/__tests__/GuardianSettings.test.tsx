@@ -1,12 +1,45 @@
 import React from "react"
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { GuardianSettings } from "../GuardianSettings"
 
+const {
+  useQueryMock,
+  useMutationMock,
+  useQueryClientMock,
+  invalidateQueriesMock,
+  serverCapabilitiesState
+} = vi.hoisted(() => ({
+  useQueryMock: vi.fn(),
+  useMutationMock: vi.fn(),
+  useQueryClientMock: vi.fn(),
+  invalidateQueriesMock: vi.fn(),
+  serverCapabilitiesState: {
+    capabilities: {
+      hasGuardian: true,
+      hasSelfMonitoring: true
+    },
+    loading: false
+  } as {
+    capabilities: { hasGuardian: boolean; hasSelfMonitoring: boolean }
+    loading: boolean
+  }
+}))
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: useQueryMock,
+  useMutation: useMutationMock,
+  useQueryClient: useQueryClientMock
+}))
+
 vi.mock("@/hooks/useServerOnline", () => ({
   useServerOnline: () => true
+}))
+
+vi.mock("@/hooks/useServerCapabilities", () => ({
+  useServerCapabilities: () => serverCapabilitiesState
 }))
 
 vi.mock("react-i18next", () => ({
@@ -44,7 +77,7 @@ describe("GuardianSettings", () => {
     guardian_user_id: "guardian-user",
     dependent_user_id: "dependent-user",
     relationship_type: "parent",
-    status: "pending_consent",
+    status: "pending",
     consent_given_by_dependent: false,
     consent_given_at: null,
     dependent_visible: true,
@@ -128,6 +161,23 @@ describe("GuardianSettings", () => {
   })
 
   beforeEach(() => {
+    serverCapabilitiesState.loading = false
+    serverCapabilitiesState.capabilities = {
+      hasGuardian: true,
+      hasSelfMonitoring: true
+    }
+
+    invalidateQueriesMock.mockReset()
+    useQueryClientMock.mockReset()
+    useQueryClientMock.mockReturnValue({
+      invalidateQueries: invalidateQueriesMock
+    })
+    useMutationMock.mockReset()
+    useMutationMock.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false
+    })
+
     guardianRelationships = [baseRelationship]
     dependentRelationships = [baseRelationship]
     governancePolicies = [
@@ -148,7 +198,26 @@ describe("GuardianSettings", () => {
         updated_at: "2026-01-01T00:00:00Z"
       }
     ]
+
+    vi.mocked(useQueryClient).mockReturnValue({
+      invalidateQueries: invalidateQueriesMock
+    } as any)
+    vi.mocked(useMutation).mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false
+    } as any)
     setQueryMock()
+  })
+
+  it("shows unavailable state when guardian capabilities are missing", () => {
+    serverCapabilitiesState.capabilities = {
+      hasGuardian: false,
+      hasSelfMonitoring: false
+    }
+    render(<GuardianSettings />)
+
+    expect(screen.getByText("Guardian settings unavailable")).toBeInTheDocument()
+    expect(screen.queryByRole("tab", { name: /Self-Monitoring/i })).not.toBeInTheDocument()
   })
 
   it("does not offer warn as a self-monitoring rule action", async () => {

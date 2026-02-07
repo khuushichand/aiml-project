@@ -308,6 +308,25 @@ def test_reading_export_includes_highlights(client_with_user):
     assert highlights[0]["quote"] == quote
 
 
+def test_reading_export_can_omit_notes(client_with_user):
+    client = client_with_user
+    save_payload = {
+        "url": "https://example.com/no-notes",
+        "title": "No Notes Export",
+        "content": "Export body",
+        "notes": "Should be omitted",
+    }
+    r = client.post("/api/v1/reading/save", json=save_payload)
+    assert r.status_code == 200, r.text
+    item_id = r.json()["id"]
+
+    r = client.get("/api/v1/reading/export", params={"format": "jsonl", "include_notes": "false"})
+    assert r.status_code == 200, r.text
+    rows = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    exported = next(row for row in rows if row["id"] == item_id)
+    assert "notes" not in exported
+
+
 def test_reading_archive_creates_output(client_with_user):
     client = client_with_user
     save_payload = {

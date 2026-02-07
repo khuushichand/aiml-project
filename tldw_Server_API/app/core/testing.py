@@ -27,17 +27,26 @@ def _env_truthy(val: str | None) -> bool:
         return False
 
 
+def is_truthy(value: str | None) -> bool:
+    """Public truthy parser used for consistent environment-flag semantics."""
+    return _env_truthy(value)
+
+
+def env_flag_enabled(name: str) -> bool:
+    """Return True when the named environment variable is truthy."""
+    try:
+        return _env_truthy(os.getenv(name))
+    except Exception:
+        return False
+
+
 def is_test_mode() -> bool:
     """Return True when server-side test mode is enabled.
 
     Checks both TEST_MODE and TLDW_TEST_MODE, using a consistent truthy set.
     Never reads client data; only server environment variables.
     """
-    try:
-        raw = os.getenv("TEST_MODE", "") or os.getenv("TLDW_TEST_MODE", "")
-        return _env_truthy(raw)
-    except Exception:
-        return False
+    return env_flag_enabled("TEST_MODE") or env_flag_enabled("TLDW_TEST_MODE")
 
 
 def is_explicit_pytest_runtime() -> bool:
@@ -74,7 +83,7 @@ def is_production_like_env() -> bool:
 def _active_test_mode_flags() -> list[str]:
     active: list[str] = []
     for key in _TEST_FLAG_KEYS:
-        if _env_truthy(os.getenv(key)):
+        if env_flag_enabled(key):
             active.append(key)
     return active
 
