@@ -19,3 +19,5 @@ export const getBrowserRuntime = () => {
   return null
 }
 
+export const isExtensionRuntime = (runtime = getBrowserRuntime()): boolean =>
+  Boolean(runtime?.id)

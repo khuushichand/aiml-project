@@ -85,7 +85,7 @@ Each supervised policy specifies:
 
 ### Pipeline Integration
 
-`SupervisedPolicyEngine.build_moderation_policy_overlay()` merges supervised rules into a base `ModerationPolicy` object, which the existing chat pipeline already evaluates. No pipeline changes needed.
+`SupervisedPolicyEngine.build_moderation_policy_overlay()` merges supervised rules into a base `ModerationPolicy` object that is compatible with the existing moderation pipeline. Wiring this into all chat streaming callbacks is tracked as future work (P1).
 
 ---
 
@@ -139,7 +139,7 @@ Displayed with disclaimer: *"tldw is not a mental health service..."*
 - Pattern: `workout|exercise|diet|fitness|calories`
 - Action: `notify`, display: `toast`
 - Frequency: `once_per_conversation`
-- Webhook integration: push to fitness tracking app
+- Optional future integration: webhook push to a fitness tracking app
 
 ### B2: Crisis/Mental Health
 - Pattern: `\b(suicid|self.harm|kill myself)\b` (regex)
@@ -190,16 +190,16 @@ All tests use real SQLite databases (tmp_path fixtures) — no mocks.
 
 | File | Lines | Role |
 |------|-------|------|
-| `app/core/DB_Management/Guardian_DB.py` | ~1680 | Database layer |
-| `app/core/Moderation/supervised_policy.py` | ~260 | Supervised policy engine |
-| `app/core/Monitoring/self_monitoring_service.py` | ~490 | Self-monitoring service |
-| `app/api/v1/schemas/guardian_schemas.py` | ~345 | Pydantic schemas |
-| `app/api/v1/endpoints/guardian_controls.py` | ~480 | Guardian REST API |
-| `app/api/v1/endpoints/self_monitoring.py` | ~420 | Self-monitoring REST API |
-| `app/api/v1/API_Deps/guardian_deps.py` | ~25 | FastAPI DI |
-| `tests/Guardian/test_guardian_db.py` | ~820 | DB tests |
-| `tests/Guardian/test_supervised_policy.py` | ~1120 | Policy engine tests |
-| `tests/Guardian/test_self_monitoring.py` | ~590 | Service tests |
+| `tldw_Server_API/app/core/DB_Management/Guardian_DB.py` | ~1708 | Database layer |
+| `tldw_Server_API/app/core/Moderation/supervised_policy.py` | ~280 | Supervised policy engine |
+| `tldw_Server_API/app/core/Monitoring/self_monitoring_service.py` | ~496 | Self-monitoring service |
+| `tldw_Server_API/app/api/v1/schemas/guardian_schemas.py` | ~343 | Pydantic schemas |
+| `tldw_Server_API/app/api/v1/endpoints/guardian_controls.py` | ~476 | Guardian REST API |
+| `tldw_Server_API/app/api/v1/endpoints/self_monitoring.py` | ~417 | Self-monitoring REST API |
+| `tldw_Server_API/app/api/v1/API_Deps/guardian_deps.py` | ~22 | FastAPI DI |
+| `tldw_Server_API/tests/Guardian/test_guardian_db.py` | ~819 | DB tests |
+| `tldw_Server_API/tests/Guardian/test_supervised_policy.py` | ~1116 | Policy engine tests |
+| `tldw_Server_API/tests/Guardian/test_self_monitoring.py` | ~546 | Service tests |
 
 ---
 

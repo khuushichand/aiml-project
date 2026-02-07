@@ -33,7 +33,7 @@
 - Component test: `Accept` button visibility depends on role.
 - Component test: policy section enablement updates after status mutation.
 - Manual smoke: dependent can accept; guardian can suspend/reactivate; audit panel updates without manual refresh.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: Governance Policies UI Completion
 **Goal**: Implement missing governance policy CRUD in Self-Monitoring tab (or clearly scope it out with explicit deferral).
@@ -44,7 +44,7 @@
 **Tests**:
 - Component test: governance list renders and updates after create/delete.
 - Manual smoke: create governance policy, assign/use in rule workflow (if supported), delete policy.
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 5: i18n Wiring, Hardening, and Verification
 **Goal**: Replace hardcoded UI strings with translation keys and complete end-to-end verification.
@@ -63,4 +63,4 @@
 - Governance CRUD,
 - Crisis resources load,
 - Offline banner display.
-**Status**: Not Started
+**Status**: Complete

@@ -20,6 +20,7 @@ export type ConnectionState = {
   lastStatusCode: number | null
   isConnected: boolean
   isChecking: boolean
+  consecutiveFailures: number
   offlineBypass?: boolean
   knowledgeStatus: KnowledgeStatus
   knowledgeLastCheckedAt: number | null
@@ -80,13 +81,21 @@ export const deriveConnectionUxState = (
   }
 
   // Any active check maps to a testing state.
-  if (phase === ConnectionPhase.SEARCHING || isChecking) {
-    return "testing"
-  }
-
   // Treat offline bypass the same as a healthy connection for UX.
   if (offlineBypass && isConnected) {
     return "connected_ok"
+  }
+
+  // Keep connected UX stable during background refresh checks.
+  if (phase === ConnectionPhase.CONNECTED && isConnected) {
+    const degraded =
+      errorKind === "partial" || knowledgeStatus === "offline"
+    return degraded ? "connected_degraded" : "connected_ok"
+  }
+
+  // Any active check maps to a testing state.
+  if (phase === ConnectionPhase.SEARCHING || isChecking) {
+    return "testing"
   }
 
   if (phase === ConnectionPhase.CONNECTED) {

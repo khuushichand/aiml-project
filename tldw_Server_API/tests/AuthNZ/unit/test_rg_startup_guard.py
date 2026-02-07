@@ -59,18 +59,19 @@ def test_validate_auth_rg_startup_guards_non_production_noop(monkeypatch):
     validate_auth_rg_startup_guards(app)
 
 
-def test_validate_auth_rg_startup_guards_requires_rg_enabled_in_production(monkeypatch):
+def test_validate_auth_rg_startup_guards_allows_rg_disabled_in_production(monkeypatch):
     _set_production(monkeypatch)
     monkeypatch.setattr("tldw_Server_API.app.core.config.rg_enabled", lambda _default=True: False)
     app = _build_app(policies={}, by_path={}, with_governor=False)
-    with pytest.raises(AuthRGStartupGuardError, match="must be enabled"):
-        validate_auth_rg_startup_guards(app)
+    validate_auth_rg_startup_guards(app)
 
 
 def test_validate_auth_rg_startup_guards_requires_governor_in_production(monkeypatch):
     _set_production(monkeypatch)
     monkeypatch.setattr("tldw_Server_API.app.core.config.rg_enabled", lambda _default=True: True)
     app = _build_app(policies={}, by_path={}, with_governor=False)
+    # Keep middleware present so this assertion isolates the missing-governor path.
+    app.user_middleware = [SimpleNamespace(cls=type("RGSimpleMiddleware", (), {}))]
     with pytest.raises(AuthRGStartupGuardError, match="not initialized"):
         validate_auth_rg_startup_guards(app)
 
@@ -102,7 +103,7 @@ def test_validate_auth_rg_startup_guards_requires_policies_and_paths(monkeypatch
 def test_validate_auth_rg_startup_guards_allows_explicit_bypass(monkeypatch):
     _set_production(monkeypatch)
     monkeypatch.setenv("ALLOW_AUTH_RG_GUARD_BYPASS", "1")
-    monkeypatch.setattr("tldw_Server_API.app.core.config.rg_enabled", lambda _default=True: False)
+    monkeypatch.setattr("tldw_Server_API.app.core.config.rg_enabled", lambda _default=True: True)
     app = _build_app(policies={}, by_path={}, with_governor=False)
     validate_auth_rg_startup_guards(app)
 

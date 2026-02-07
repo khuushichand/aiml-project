@@ -8,12 +8,12 @@ import { PdfPage } from "./PdfPage"
 import { TextSelectionPopover } from "../TextSelectionPopover"
 import { useTextSelection } from "@/hooks/document-workspace/useTextSelection"
 import type { PdfDocumentProxy } from "@/hooks/document-workspace/usePdfSearch"
-import { getBrowserRuntime } from "@/utils/browser-runtime"
+import { getBrowserRuntime, isExtensionRuntime } from "@/utils/browser-runtime"
 import type { ViewMode } from "../../types"
 
 // Configure PDF.js worker
 // For Next.js: The worker is copied to public/ during postinstall (scripts/copy-pdf-worker.mjs)
-// For browser extension: Falls back to CDN
+// For browser extension: Uses bundled worker via runtime.getURL (with CDN fallback)
 // For development: Uses CDN for simplicity
 function getPdfWorkerSrc(): string {
   // CDN fallback URL
@@ -26,8 +26,9 @@ function getPdfWorkerSrc(): string {
 
   // In extension runtime, use the packaged worker file from the extension bundle.
   const runtime = getBrowserRuntime()
-  if (runtime?.id) {
-    return runtime.getURL ? runtime.getURL("pdf.worker.min.mjs") : cdnUrl
+  const inExtensionRuntime = isExtensionRuntime(runtime)
+  if (inExtensionRuntime) {
+    return runtime?.getURL ? runtime.getURL("pdf.worker.min.mjs") : cdnUrl
   }
 
   // In Next.js production builds, use the local worker from public/
@@ -112,9 +113,12 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
       setLoading(false)
       setError(error.message || "Failed to load PDF")
       setPdfInstance(null)
+      if (pdfDocumentRef) {
+        pdfDocumentRef.current = null
+      }
       onLoadError(error)
     },
-    [onLoadError]
+    [onLoadError, pdfDocumentRef]
   )
 
   // Scroll to current page in continuous mode

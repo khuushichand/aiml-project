@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PrivilegeBucket(BaseModel):
@@ -143,10 +143,7 @@ class PrivilegeSnapshotCreateRequest(BaseModel):
     catalog_version: str | None = None
     notes: str | None = None
     async_job: bool = Field(False, alias="async")
-
-    class Config:
-        allow_population_by_field_name = True
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class PrivilegeSnapshotAcceptedResponse(BaseModel):

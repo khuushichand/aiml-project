@@ -9,7 +9,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 from loguru import logger
 
 from tldw_Server_API.app.api.v1.API_Deps import auth_deps
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 
 
@@ -332,7 +331,7 @@ async def test_check_rate_limit_falls_back_to_ip_for_non_int_user_id(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_check_auth_rate_limit_is_effectively_permissive_when_rg_disabled_and_limiter_is_noop(
+async def test_check_auth_rate_limit_uses_fallback_limiter_when_rg_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("RG_ENABLED", "0")
@@ -348,21 +347,84 @@ async def test_check_auth_rate_limit_is_effectively_permissive_when_rg_disabled_
     request = _DummyRequest()
     request.url.path = "/api/v1/auth/forgot-password"
 
-    limiter = RateLimiter(
-        db_pool=None,
-        settings=SimpleNamespace(
-            RATE_LIMIT_ENABLED=True,
-            RATE_LIMIT_PER_MINUTE=1,
-            RATE_LIMIT_BURST=1,
-            SERVICE_ACCOUNT_RATE_LIMIT=1,
-            REDIS_URL=None,
-        ),
-    )
+    calls: dict[str, Any] = {}
 
-    # No rg_policy_id is attached when RG middleware is disabled. In that case,
-    # check_auth_rate_limit falls back to the AuthNZ limiter, whose checks are
-    # intentional no-ops during RG cutover.
-    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=limiter)
+    class _StubLimiter:
+        enabled = True
+
+        async def check_rate_limit_fallback(self, **kwargs):
+            calls.update(kwargs)
+            return True, {"rate_limit_source": "authnz_fallback_db"}
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError(
+                "check_auth_rate_limit should use check_rate_limit_fallback when RG ingress is inactive"
+            )
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+    assert calls["identifier"] == "ip:127.0.0.1"
+    assert calls["endpoint"] == "auth:/api/v1/auth/forgot-password"
+    assert calls["window_minutes"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_fails_open_when_fallback_backend_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/auth/forgot-password"
+
+    class _StubLimiter:
+        enabled = True
+
+        async def check_rate_limit_fallback(self, **kwargs):
+            _ = kwargs
+            return True, {"rate_limit_source": "authnz_fallback_db", "error": "fallback_limiter_unavailable"}
+
+        async def check_rate_limit(self, **kwargs):
+            raise AssertionError("legacy no-op path should not be called")
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_StubLimiter())
+
+
+@pytest.mark.asyncio
+async def test_check_auth_rate_limit_legacy_limiter_path_when_fallback_method_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RG_ENABLED", "0")
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
+    monkeypatch.setenv("TESTING", "0")
+
+    async def _fake_get_auth_governor() -> object:
+        return object()
+
+    monkeypatch.setattr(auth_deps, "get_auth_governor", _fake_get_auth_governor)
+
+    request = _DummyRequest()
+    request.url.path = "/api/v1/auth/forgot-password"
+
+    calls: dict[str, Any] = {}
+
+    class _LegacyOnlyLimiter:
+        enabled = True
+
+        async def check_rate_limit(self, **kwargs):
+            calls.update(kwargs)
+            return True, {"rate_limit_source": "legacy"}
+
+    await auth_deps.check_auth_rate_limit(request=request, rate_limiter=_LegacyOnlyLimiter())
+    assert calls["identifier"] == "ip:127.0.0.1"
 
 
 @pytest.mark.asyncio

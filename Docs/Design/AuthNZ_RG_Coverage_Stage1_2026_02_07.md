@@ -19,7 +19,7 @@
 ## Auth Endpoint Control Matrix
 | Endpoint Group | Current Controls | Notes |
 |---|---|---|
-| `/api/v1/auth/login`, `/register`, `/magic-link/request` | `Depends(check_auth_rate_limit)` + RG ingress (if enabled) | `check_auth_rate_limit` fallback relies on AuthNZ limiter no-op when RG not active. |
+| `/api/v1/auth/login`, `/register`, `/magic-link/request` | `Depends(check_auth_rate_limit)` + RG ingress (if enabled) | If RG ingress is not active, `check_auth_rate_limit` now uses AuthNZ DB fallback (`check_rate_limit_fallback`) rather than no-op `check_rate_limit`. |
 | `/api/v1/auth/forgot-password` | Endpoint-local `rate_limiter.check_rate_limit` + RG ingress (if enabled) | Endpoint-local call is no-op now; effective protection is RG-only unless additional control added. |
 | `/api/v1/auth/reset-password` | Endpoint-local `rate_limiter.check_rate_limit` + RG ingress (if enabled) | Same gap pattern as forgot-password. |
 | `/api/v1/auth/resend-verification` | Endpoint-local `rate_limiter.check_rate_limit` + RG ingress (if enabled) | Same gap pattern. |
@@ -28,13 +28,13 @@
 | Remaining auth routes (`/logout`, `/sessions*`, `/refresh`, `/verify-email`, `/magic-link/verify`, `/mfa/setup`, `/mfa/disable`, `/me`) | RG ingress baseline only (if enabled) + functional auth checks | No endpoint-local abuse limiter behavior remains outside RG baseline. |
 
 ## Stage 1 Conclusion
-- RG does provide baseline auth coverage **when enabled** and route mapping is loaded.
-- Coverage is **not equivalent** to prior endpoint-specific limiter semantics:
-  - endpoint-local per-IP/per-email/per-user checks now effectively allow.
-  - behavior depends on RG middleware presence; if RG is disabled, fallback paths are permissive.
+- RG provides baseline auth coverage when enabled and route mapping is loaded.
+- `check_auth_rate_limit` fallback no longer silently allows when RG ingress is inactive; it uses the AuthNZ DB fallback limiter path.
+- RG remains default-on but can be disabled via `RG_ENABLED=0`; startup should continue and auth routes rely on non-RG limiter paths in that mode.
+- Coverage is still not fully equivalent to prior endpoint-specific limiter semantics where endpoint-local per-IP/per-email/per-user no-op shims remain; RG ingress is the primary protection for those routes.
 
 ## Stage 1 Verification Tests Added
 - `tldw_Server_API/tests/Resource_Governance/test_auth_route_map_coverage.py`
   - validates all auth router paths resolve to `authnz.default` via middleware route-map derivation.
 - `tldw_Server_API/tests/AuthNZ_Unit/test_auth_deps_hardening.py`
-  - adds test showing `check_auth_rate_limit` is permissive when RG is disabled and fallback uses no-op AuthNZ limiter.
+  - verifies `check_auth_rate_limit` uses `check_rate_limit_fallback` when RG ingress is disabled and fails open if fallback storage is unavailable.

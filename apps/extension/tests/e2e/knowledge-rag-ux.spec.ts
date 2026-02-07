@@ -151,38 +151,28 @@ test.describe('Knowledge RAG workspace UX', () => {
         })
         await expect(autoRagSwitch).toBeVisible()
 
-        const initialMode = await page.evaluate(() => {
-          const w = window as unknown as {
-            __tldw_useStoreMessageOption?: {
-              getState?: () => { chatMode?: string }
-            }
-          }
-          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
-        })
+        interface MessageOptionStore {
+          getState?: () => { chatMode?: string }
+        }
+        interface MessageOptionWindow {
+          __tldw_useStoreMessageOption?: MessageOptionStore
+        }
+        const readChatMode = () =>
+          page.evaluate(() => {
+            const w = window as unknown as MessageOptionWindow
+            return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
+          })
+        const initialMode = await readChatMode()
         expect(initialMode).toBe('normal')
 
         await autoRagSwitch.click()
 
-        const ragMode = await page.evaluate(() => {
-          const w = window as unknown as {
-            __tldw_useStoreMessageOption?: {
-              getState?: () => { chatMode?: string }
-            }
-          }
-          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
-        })
+        const ragMode = await readChatMode()
         expect(ragMode).toBe('rag')
 
         await autoRagSwitch.click()
 
-        const backMode = await page.evaluate(() => {
-          const w = window as unknown as {
-            __tldw_useStoreMessageOption?: {
-              getState?: () => { chatMode?: string }
-            }
-          }
-          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
-        })
+        const backMode = await readChatMode()
         expect(backMode).toBe('normal')
       } else {
         // When RAG is unsupported, we at least show a Diagnostics CTA

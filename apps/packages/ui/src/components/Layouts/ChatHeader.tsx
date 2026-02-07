@@ -1,7 +1,7 @@
 import React from "react"
 import type { TFunction } from "i18next"
 import { Tooltip, Input } from "antd"
-import { CogIcon, Menu, Search, SquarePen } from "lucide-react"
+import { CogIcon, Menu, Search, Signpost, SquarePen } from "lucide-react"
 import { HeaderShortcuts } from "./HeaderShortcuts"
 import logoImage from "~/assets/icon.png"
 
@@ -87,6 +87,19 @@ export function ChatHeader({
             <span className="text-sm font-medium">
               {t("common:pageAssist", "tldw Assistant")}
             </span>
+            <Tooltip title={shortcutsToggleLabel}>
+              <button
+                type="button"
+                onClick={() => onToggleShortcuts(!shortcutsExpanded)}
+                aria-label={shortcutsToggleLabel as string}
+                aria-expanded={shortcutsExpanded}
+                className="inline-flex items-center justify-center rounded-md p-1.5 text-text-muted hover:bg-surface2 hover:text-text"
+                title={shortcutsToggleLabel as string}
+                data-testid="chat-toggle-shortcuts"
+              >
+                <Signpost className="size-4" aria-hidden="true" />
+              </button>
+            </Tooltip>
           </div>
           {canEditTitle && (
             <div className="min-w-[140px] max-w-[220px] truncate">

@@ -17,6 +17,11 @@ from tldw_Server_API.app.core.AuthNZ.llm_provider_overrides import (
 )
 from tldw_Server_API.app.core.Chat.provider_manager import get_provider_manager
 from tldw_Server_API.app.core.config import load_comprehensive_config
+from tldw_Server_API.app.core.exceptions import (
+    EgressPolicyError,
+    NetworkError,
+    RetryExhaustedError,
+)
 from tldw_Server_API.app.core.http_client import RetryPolicy as _RetryPolicy
 from tldw_Server_API.app.core.http_client import fetch as _http_fetch
 from tldw_Server_API.app.core.Image_Generation.listing import list_image_models_for_catalog
@@ -50,6 +55,9 @@ _LLM_PROVIDERS_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     UnicodeDecodeError,
     ValueError,
+    EgressPolicyError,
+    NetworkError,
+    RetryExhaustedError,
 )
 
 # ----------------------------------------------------------------------------------

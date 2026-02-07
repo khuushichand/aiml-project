@@ -113,9 +113,11 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
   const { t } = useTranslation("settings")
   const qc = useQueryClient()
   const [ruleDrawerOpen, setRuleDrawerOpen] = useState(false)
+  const [governanceModalOpen, setGovernanceModalOpen] = useState(false)
   const [editingRule, setEditingRule] = useState<SelfMonitoringRule | null>(null)
   const [selectedAlertIds, setSelectedAlertIds] = useState<string[]>([])
   const [form] = Form.useForm()
+  const [governanceForm] = Form.useForm()
 
   const rulesQuery = useQuery({
     queryKey: ["guardian", "rules"],
@@ -133,6 +135,12 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     queryKey: ["guardian", "unread"],
     queryFn: getUnreadCount,
     refetchInterval: 30_000,
+    enabled: online
+  })
+
+  const governanceQuery = useQuery({
+    queryKey: ["guardian", "governance"],
+    queryFn: () => listGovernancePolicies(),
     enabled: online
   })
 
@@ -193,6 +201,26 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     onError: () => message.error(t("guardian.rules.toggleFailed", "Failed to toggle rule"))
   })
 
+  const createGovernanceMutation = useMutation({
+    mutationFn: createGovernancePolicy,
+    onSuccess: () => {
+      message.success(t("guardian.governance.created", "Governance policy created"))
+      setGovernanceModalOpen(false)
+      governanceForm.resetFields()
+      qc.invalidateQueries({ queryKey: ["guardian", "governance"] })
+    },
+    onError: () => message.error(t("guardian.governance.createFailed", "Failed to create governance policy"))
+  })
+
+  const deleteGovernanceMutation = useMutation({
+    mutationFn: deleteGovernancePolicy,
+    onSuccess: () => {
+      message.success(t("guardian.governance.deleted", "Governance policy deleted"))
+      qc.invalidateQueries({ queryKey: ["guardian", "governance"] })
+    },
+    onError: () => message.error(t("guardian.governance.deleteFailed", "Failed to delete governance policy"))
+  })
+
   const openCreate = useCallback(() => {
     setEditingRule(null)
     form.resetFields()
@@ -244,6 +272,15 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
     }
   }, [form, editingRule, createMutation, updateMutation])
 
+  const handleGovernanceSubmit = useCallback(async () => {
+    try {
+      const values = await governanceForm.validateFields()
+      createGovernanceMutation.mutate(values as GovernancePolicyCreate)
+    } catch {
+      // validation error
+    }
+  }, [governanceForm, createGovernanceMutation])
+
   const confirmDelete = useCallback(
     (id: string) => {
       Modal.confirm({
@@ -272,6 +309,23 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
       })
     },
     [deactivateMutation, t]
+  )
+
+  const confirmDeleteGovernance = useCallback(
+    (id: string) => {
+      Modal.confirm({
+        title: t("guardian.governance.deleteConfirm", "Delete governance policy?"),
+        icon: <ExclamationCircleOutlined />,
+        content: t(
+          "guardian.governance.deleteConfirmContent",
+          "This action cannot be undone and may affect linked rules."
+        ),
+        okText: t("guardian.common.delete", "Delete"),
+        okType: "danger",
+        onOk: () => deleteGovernanceMutation.mutate(id)
+      })
+    },
+    [deleteGovernanceMutation, t]
   )
 
   const ruleColumns: ColumnsType<SelfMonitoringRule> = [
@@ -410,7 +464,58 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
       dataIndex: "is_read",
       key: "is_read",
       width: 60,
-      render: (read: boolean) => (read ? "Yes" : <Tag color="blue">New</Tag>)
+      render: (read: boolean) => (read ? t("guardian.common.yes", "Yes") : <Tag color="blue">{t("guardian.common.new", "New")}</Tag>)
+    }
+  ]
+
+  const governanceColumns: ColumnsType<GovernancePolicy> = [
+    {
+      title: t("guardian.governance.fields.name", "Name"),
+      dataIndex: "name",
+      key: "name",
+      ellipsis: true
+    },
+    {
+      title: t("guardian.governance.fields.policyMode", "Mode"),
+      dataIndex: "policy_mode",
+      key: "policy_mode",
+      width: 110,
+      render: (mode: string) => (
+        <Tag color={mode === "guardian" ? "blue" : "default"}>
+          {t(`guardian.governance.modes.${mode}`, mode)}
+        </Tag>
+      )
+    },
+    {
+      title: t("guardian.governance.fields.scopeChatTypes", "Scope"),
+      dataIndex: "scope_chat_types",
+      key: "scope_chat_types",
+      ellipsis: true
+    },
+    {
+      title: t("guardian.governance.fields.enabled", "Enabled"),
+      dataIndex: "enabled",
+      key: "enabled",
+      width: 90,
+      render: (enabled: boolean) =>
+        enabled ? <Tag color="green">{t("guardian.common.yes", "Yes")}</Tag> : <Tag>{t("guardian.common.no", "No")}</Tag>
+    },
+    {
+      title: t("guardian.governance.fields.updatedAt", "Updated"),
+      dataIndex: "updated_at",
+      key: "updated_at",
+      width: 170,
+      render: (value: string) => new Date(value).toLocaleString()
+    },
+    {
+      title: t("guardian.common.actions", "Actions"),
+      key: "actions",
+      width: 100,
+      render: (_, record) => (
+        <Button type="link" danger onClick={() => confirmDeleteGovernance(record.id)}>
+          {t("guardian.common.delete", "Delete")}
+        </Button>
+      )
     }
   ]
 
@@ -449,6 +554,99 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
         }}
       />
 
+      {/* Governance policies section */}
+      <Card
+        size="small"
+        title={t("guardian.governance.title", "Governance Policies")}
+        extra={
+          <Space>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={() => governanceQuery.refetch()}
+              loading={governanceQuery.isRefetching}
+            >
+              {t("guardian.governance.refresh", "Refresh")}
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setGovernanceModalOpen(true)}
+            >
+              {t("guardian.governance.create", "Create Policy")}
+            </Button>
+          </Space>
+        }
+      >
+        <Table
+          dataSource={governanceQuery.data?.items ?? []}
+          columns={governanceColumns}
+          rowKey="id"
+          loading={governanceQuery.isLoading}
+          size="small"
+          pagination={{ pageSize: 5 }}
+          locale={{
+            emptyText: <Empty description={t("guardian.governance.empty", "No governance policies yet")} />
+          }}
+        />
+      </Card>
+
+      <Modal
+        title={t("guardian.governance.create", "Create Governance Policy")}
+        open={governanceModalOpen}
+        onCancel={() => {
+          setGovernanceModalOpen(false)
+          governanceForm.resetFields()
+        }}
+        onOk={handleGovernanceSubmit}
+        confirmLoading={createGovernanceMutation.isPending}
+      >
+        <Form
+          form={governanceForm}
+          layout="vertical"
+          initialValues={{
+            policy_mode: "self",
+            scope_chat_types: "all",
+            schedule_timezone: "UTC",
+            enabled: true,
+            transparent: false
+          }}
+        >
+          <Form.Item
+            name="name"
+            label={t("guardian.governance.fields.name", "Name")}
+            rules={[{ required: true, message: t("guardian.governance.fields.nameRequired", "Name is required") }]}
+          >
+            <Input placeholder={t("guardian.governance.fields.namePlaceholder", "e.g. Evening usage policy")} />
+          </Form.Item>
+          <Form.Item name="description" label={t("guardian.governance.fields.description", "Description")}>
+            <TextArea
+              rows={2}
+              placeholder={t("guardian.governance.fields.descriptionPlaceholder", "Optional policy description")}
+            />
+          </Form.Item>
+          <Form.Item name="policy_mode" label={t("guardian.governance.fields.policyMode", "Mode")}>
+            <Select>
+              <Select.Option value="self">{t("guardian.governance.modes.self", "Self")}</Select.Option>
+              <Select.Option value="guardian">{t("guardian.governance.modes.guardian", "Guardian")}</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="scope_chat_types" label={t("guardian.governance.fields.scopeChatTypes", "Scope")}>
+            <Input placeholder={t("guardian.governance.fields.scopePlaceholder", "all")} />
+          </Form.Item>
+          <Form.Item name="schedule_timezone" label={t("guardian.governance.fields.scheduleTimezone", "Timezone")}>
+            <Input placeholder={t("guardian.governance.fields.scheduleTimezonePlaceholder", "UTC")} />
+          </Form.Item>
+          <Form.Item name="enabled" label={t("guardian.governance.fields.enabled", "Enabled")} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="transparent" label={t("guardian.governance.fields.transparent", "Transparent to dependent")} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       {/* Rule drawer */}
       <Drawer
         title={editingRule ? t("guardian.rules.edit", "Edit Rule") : t("guardian.rules.create", "Create Rule")}
@@ -480,11 +678,26 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
           enabled: true
         }}>
           <Form.Item name="name" label={t("guardian.rules.fields.name", "Name")} rules={[{ required: true }]}>
-            <Input placeholder="e.g. Harmful content filter" />
+            <Input placeholder={t("guardian.rules.fields.namePlaceholder", "e.g. Harmful content filter")} />
           </Form.Item>
 
           <Form.Item name="category" label={t("guardian.rules.fields.category", "Category")} rules={[{ required: true }]}>
-            <Input placeholder="e.g. self-harm, addiction, anxiety" />
+            <Input placeholder={t("guardian.rules.fields.categoryPlaceholder", "e.g. self-harm, addiction, anxiety")} />
+          </Form.Item>
+
+          <Form.Item
+            name="governance_policy_id"
+            label={t("guardian.rules.fields.governancePolicy", "Governance policy")}
+          >
+            <Select
+              allowClear
+              loading={governanceQuery.isLoading}
+              placeholder={t("guardian.rules.fields.governancePolicyPlaceholder", "Optional policy assignment")}
+              options={(governanceQuery.data?.items ?? []).map((policy) => ({
+                label: policy.name,
+                value: policy.id
+              }))}
+            />
           </Form.Item>
 
           <Form.Item
@@ -492,68 +705,68 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
             label={t("guardian.rules.fields.patterns", "Patterns (one per line)")}
             rules={[{ required: true, message: t("guardian.rules.fields.patternsRequired", "At least one pattern required") }]}
           >
-            <TextArea rows={4} placeholder={"pattern one\npattern two"} />
+            <TextArea rows={4} placeholder={t("guardian.rules.fields.patternsPlaceholder", "pattern one\npattern two")} />
           </Form.Item>
 
           <Form.Item name="pattern_type" label={t("guardian.rules.fields.patternType", "Pattern type")}>
             <Radio.Group>
-              <Radio value="literal">Literal</Radio>
-              <Radio value="regex">Regex</Radio>
+              <Radio value="literal">{t("guardian.common.literal", "Literal")}</Radio>
+              <Radio value="regex">{t("guardian.common.regex", "Regex")}</Radio>
             </Radio.Group>
           </Form.Item>
 
           <Form.Item name="except_patterns" label={t("guardian.rules.fields.exceptPatterns", "Exception patterns (one per line)")}>
-            <TextArea rows={2} placeholder="Patterns to exclude" />
+            <TextArea rows={2} placeholder={t("guardian.rules.fields.exceptPatternsPlaceholder", "Patterns to exclude")} />
           </Form.Item>
 
           <Form.Item name="action" label={t("guardian.rules.fields.action", "Action")}>
             <Select>
-              <Select.Option value="notify">Notify</Select.Option>
-              <Select.Option value="redact">Redact</Select.Option>
-              <Select.Option value="block">Block</Select.Option>
+              <Select.Option value="notify">{t("guardian.rules.options.action.notify", "Notify")}</Select.Option>
+              <Select.Option value="redact">{t("guardian.rules.options.action.redact", "Redact")}</Select.Option>
+              <Select.Option value="block">{t("guardian.rules.options.action.block", "Block")}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item name="phase" label={t("guardian.rules.fields.phase", "Phase")}>
             <Select>
-              <Select.Option value="input">Input</Select.Option>
-              <Select.Option value="output">Output</Select.Option>
-              <Select.Option value="both">Both</Select.Option>
+              <Select.Option value="input">{t("guardian.rules.options.phase.input", "Input")}</Select.Option>
+              <Select.Option value="output">{t("guardian.rules.options.phase.output", "Output")}</Select.Option>
+              <Select.Option value="both">{t("guardian.rules.options.phase.both", "Both")}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item name="severity" label={t("guardian.rules.fields.severity", "Severity")}>
             <Select>
-              <Select.Option value="info">Info</Select.Option>
-              <Select.Option value="warning">Warning</Select.Option>
-              <Select.Option value="critical">Critical</Select.Option>
+              <Select.Option value="info">{t("guardian.rules.options.severity.info", "Info")}</Select.Option>
+              <Select.Option value="warning">{t("guardian.rules.options.severity.warning", "Warning")}</Select.Option>
+              <Select.Option value="critical">{t("guardian.rules.options.severity.critical", "Critical")}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item name="display_mode" label={t("guardian.rules.fields.displayMode", "Display mode")}>
             <Select>
-              <Select.Option value="inline_banner">Inline banner</Select.Option>
-              <Select.Option value="sidebar_note">Sidebar note</Select.Option>
-              <Select.Option value="post_session_summary">Post-session summary</Select.Option>
-              <Select.Option value="silent_log">Silent log</Select.Option>
+              <Select.Option value="inline_banner">{t("guardian.rules.options.displayMode.inlineBanner", "Inline banner")}</Select.Option>
+              <Select.Option value="sidebar_note">{t("guardian.rules.options.displayMode.sidebarNote", "Sidebar note")}</Select.Option>
+              <Select.Option value="post_session_summary">{t("guardian.rules.options.displayMode.postSessionSummary", "Post-session summary")}</Select.Option>
+              <Select.Option value="silent_log">{t("guardian.rules.options.displayMode.silentLog", "Silent log")}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item name="notification_frequency" label={t("guardian.rules.fields.notificationFrequency", "Notification frequency")}>
             <Select>
-              <Select.Option value="every_message">Every message</Select.Option>
-              <Select.Option value="once_per_conversation">Once per conversation</Select.Option>
-              <Select.Option value="once_per_day">Once per day</Select.Option>
-              <Select.Option value="once_per_session">Once per session</Select.Option>
+              <Select.Option value="every_message">{t("guardian.rules.options.notificationFrequency.everyMessage", "Every message")}</Select.Option>
+              <Select.Option value="once_per_conversation">{t("guardian.rules.options.notificationFrequency.oncePerConversation", "Once per conversation")}</Select.Option>
+              <Select.Option value="once_per_day">{t("guardian.rules.options.notificationFrequency.oncePerDay", "Once per day")}</Select.Option>
+              <Select.Option value="once_per_session">{t("guardian.rules.options.notificationFrequency.oncePerSession", "Once per session")}</Select.Option>
             </Select>
           </Form.Item>
 
           <Form.Item name="notification_channels" label={t("guardian.rules.fields.notificationChannels", "Notification channels")}>
             <Checkbox.Group
               options={[
-                { label: "In-app", value: "in_app" },
-                { label: "Email", value: "email" },
-                { label: "Webhook", value: "webhook" }
+                { label: t("guardian.rules.options.notificationChannels.inApp", "In-app"), value: "in_app" },
+                { label: t("guardian.rules.options.notificationChannels.email", "Email"), value: "email" },
+                { label: t("guardian.rules.options.notificationChannels.webhook", "Webhook"), value: "webhook" }
               ]}
             />
           </Form.Item>
@@ -563,7 +776,7 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
           </Form.Item>
 
           <Form.Item name="trusted_contact_email" label={t("guardian.rules.fields.trustedContactEmail", "Trusted contact email")}>
-            <Input placeholder="contact@example.com" />
+            <Input placeholder={t("guardian.rules.fields.trustedContactEmailPlaceholder", "contact@example.com")} />
           </Form.Item>
 
           <Form.Item name="crisis_resources_enabled" label={t("guardian.rules.fields.crisisResourcesEnabled", "Show crisis resources")} valuePropName="checked">
@@ -576,10 +789,10 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
 
           <Form.Item name="bypass_protection" label={t("guardian.rules.fields.bypassProtection", "Bypass protection")}>
             <Select>
-              <Select.Option value="none">None</Select.Option>
-              <Select.Option value="cooldown">Cooldown</Select.Option>
-              <Select.Option value="confirmation">Confirmation</Select.Option>
-              <Select.Option value="partner_approval">Partner approval</Select.Option>
+              <Select.Option value="none">{t("guardian.rules.options.bypassProtection.none", "None")}</Select.Option>
+              <Select.Option value="cooldown">{t("guardian.rules.options.bypassProtection.cooldown", "Cooldown")}</Select.Option>
+              <Select.Option value="confirmation">{t("guardian.rules.options.bypassProtection.confirmation", "Confirmation")}</Select.Option>
+              <Select.Option value="partner_approval">{t("guardian.rules.options.bypassProtection.partnerApproval", "Partner approval")}</Select.Option>
             </Select>
           </Form.Item>
 
@@ -599,7 +812,7 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
                       <InputNumber min={0} style={{ width: "100%" }} />
                     </Form.Item>
                     <Form.Item name="escalation_session_action" label={t("guardian.rules.fields.escalationSessionAction", "Session escalation action")}>
-                      <Input placeholder="e.g. block, notify_contact" />
+                      <Input placeholder={t("guardian.rules.fields.escalationActionPlaceholder", "e.g. block, notify_contact")} />
                     </Form.Item>
                     <Form.Item name="escalation_window_days" label={t("guardian.rules.fields.escalationWindowDays", "Window (days)")}>
                       <InputNumber min={1} style={{ width: "100%" }} />
@@ -608,7 +821,7 @@ function SelfMonitoringTab({ online }: { online: boolean }) {
                       <InputNumber min={0} style={{ width: "100%" }} />
                     </Form.Item>
                     <Form.Item name="escalation_window_action" label={t("guardian.rules.fields.escalationWindowAction", "Window escalation action")}>
-                      <Input placeholder="e.g. block, notify_contact" />
+                      <Input placeholder={t("guardian.rules.fields.escalationActionPlaceholder", "e.g. block, notify_contact")} />
                     </Form.Item>
                   </>
                 )
@@ -673,17 +886,21 @@ function GuardianControlsTab({ online }: { online: boolean }) {
   const { t } = useTranslation("settings")
   const qc = useQueryClient()
   const [createModalOpen, setCreateModalOpen] = useState(false)
-  const [selectedRelationship, setSelectedRelationship] = useState<GuardianRelationship | null>(null)
+  const [relationshipRole, setRelationshipRole] = useState<"guardian" | "dependent">("guardian")
+  const [selectedRelationshipId, setSelectedRelationshipId] = useState<string | null>(null)
   const [policyDrawerOpen, setPolicyDrawerOpen] = useState(false)
   const [editingPolicy, setEditingPolicy] = useState<SupervisedPolicy | null>(null)
   const [createForm] = Form.useForm()
   const [policyForm] = Form.useForm()
 
   const relQuery = useQuery({
-    queryKey: ["guardian", "relationships"],
-    queryFn: () => listRelationships(),
+    queryKey: ["guardian", "relationships", relationshipRole],
+    queryFn: () => listRelationships({ role: relationshipRole }),
     enabled: online
   })
+
+  const selectedRelationship =
+    relQuery.data?.items?.find((relationship) => relationship.id === selectedRelationshipId) ?? null
 
   const policiesQuery = useQuery({
     queryKey: ["guardian", "policies", selectedRelationship?.id],
@@ -700,7 +917,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       selectedRelationship
         ? getAuditLog({ relationship_id: selectedRelationship.id, limit: 50 })
         : Promise.resolve({ items: [], total: 0 }),
-    enabled: online && !!selectedRelationship
+    enabled: online && relationshipRole === "guardian" && !!selectedRelationship
   })
 
   const createRelMutation = useMutation({
@@ -719,6 +936,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.relationships.accepted", "Relationship accepted"))
       qc.invalidateQueries({ queryKey: ["guardian", "relationships"] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
     },
     onError: () => message.error(t("guardian.relationships.acceptFailed", "Failed to accept"))
   })
@@ -728,6 +946,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.relationships.suspended", "Relationship suspended"))
       qc.invalidateQueries({ queryKey: ["guardian", "relationships"] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
     },
     onError: () => message.error(t("guardian.relationships.suspendFailed", "Failed to suspend"))
   })
@@ -737,6 +956,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.relationships.reactivated", "Relationship reactivated"))
       qc.invalidateQueries({ queryKey: ["guardian", "relationships"] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
     },
     onError: () => message.error(t("guardian.relationships.reactivateFailed", "Failed to reactivate"))
   })
@@ -745,8 +965,9 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     mutationFn: (id: string) => dissolveRelationship(id, "User requested dissolution"),
     onSuccess: () => {
       message.success(t("guardian.relationships.dissolved", "Relationship dissolved"))
-      setSelectedRelationship(null)
+      setSelectedRelationshipId(null)
       qc.invalidateQueries({ queryKey: ["guardian", "relationships"] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
     },
     onError: () => message.error(t("guardian.relationships.dissolveFailed", "Failed to dissolve"))
   })
@@ -756,6 +977,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.policies.created", "Policy created"))
       qc.invalidateQueries({ queryKey: ["guardian", "policies", selectedRelationship?.id] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
       closePolicyDrawer()
     },
     onError: () => message.error(t("guardian.policies.createFailed", "Failed to create policy"))
@@ -766,6 +988,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.policies.updated", "Policy updated"))
       qc.invalidateQueries({ queryKey: ["guardian", "policies", selectedRelationship?.id] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
       closePolicyDrawer()
     },
     onError: () => message.error(t("guardian.policies.updateFailed", "Failed to update policy"))
@@ -776,18 +999,20 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     onSuccess: () => {
       message.success(t("guardian.policies.deleted", "Policy deleted"))
       qc.invalidateQueries({ queryKey: ["guardian", "policies", selectedRelationship?.id] })
+      qc.invalidateQueries({ queryKey: ["guardian", "audit"] })
     },
     onError: () => message.error(t("guardian.policies.deleteFailed", "Failed to delete policy"))
   })
 
   const openCreatePolicy = useCallback(() => {
+    if (relationshipRole !== "guardian") return
     setEditingPolicy(null)
     policyForm.resetFields()
     if (selectedRelationship) {
       policyForm.setFieldValue("relationship_id", selectedRelationship.id)
     }
     setPolicyDrawerOpen(true)
-  }, [policyForm, selectedRelationship])
+  }, [policyForm, relationshipRole, selectedRelationship])
 
   const openEditPolicy = useCallback(
     (policy: SupervisedPolicy) => {
@@ -805,6 +1030,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
   }, [policyForm])
 
   const handlePolicySubmit = useCallback(async () => {
+    if (relationshipRole !== "guardian") return
     try {
       const values = await policyForm.validateFields()
       if (editingPolicy) {
@@ -816,7 +1042,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
     } catch {
       // validation error
     }
-  }, [policyForm, editingPolicy, createPolicyMutation, updatePolicyMutation])
+  }, [policyForm, editingPolicy, relationshipRole, createPolicyMutation, updatePolicyMutation])
 
   const confirmDissolve = useCallback(
     (id: string) => {
@@ -851,7 +1077,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
 
   const relColumns: ColumnsType<GuardianRelationship> = [
     {
-      title: "ID",
+      title: t("guardian.relationships.columns.id", "ID"),
       dataIndex: "id",
       key: "id",
       width: 100,
@@ -903,7 +1129,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       width: 200,
       render: (_, record) => (
         <Space size="small" wrap>
-          {record.status === "pending_consent" && (
+          {relationshipRole === "dependent" && record.status === "pending_consent" && (
             <Button
               size="small"
               type="link"
@@ -912,7 +1138,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
               {t("guardian.relationships.accept", "Accept")}
             </Button>
           )}
-          {record.status === "active" && (
+          {relationshipRole === "guardian" && record.status === "active" && (
             <Button
               size="small"
               type="link"
@@ -922,7 +1148,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
               {t("guardian.relationships.suspend", "Suspend")}
             </Button>
           )}
-          {record.status === "suspended" && (
+          {relationshipRole === "guardian" && record.status === "suspended" && (
             <Button
               size="small"
               type="link"
@@ -982,29 +1208,31 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       dataIndex: "enabled",
       key: "enabled",
       width: 70,
-      render: (val: boolean) => (val ? <Tag color="green">Yes</Tag> : <Tag>No</Tag>)
+      render: (val: boolean) =>
+        val ? <Tag color="green">{t("guardian.common.yes", "Yes")}</Tag> : <Tag>{t("guardian.common.no", "No")}</Tag>
     },
     {
       title: t("guardian.common.actions", "Actions"),
       key: "actions",
       width: 100,
-      render: (_, record) => (
-        <Space size="small">
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => openEditPolicy(record)}
-          />
-          <Button
-            type="text"
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={() => confirmDeletePolicy(record.id)}
-          />
-        </Space>
-      )
+      render: (_, record) =>
+        relationshipRole === "guardian" ? (
+          <Space size="small">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEditPolicy(record)}
+            />
+            <Button
+              type="text"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => confirmDeletePolicy(record.id)}
+            />
+          </Space>
+        ) : null
     }
   ]
 
@@ -1045,6 +1273,25 @@ function GuardianControlsTab({ online }: { online: boolean }) {
           {t("guardian.relationships.title", "Guardian Relationships")}
         </Title>
         <Space>
+          <Radio.Group
+            size="small"
+            optionType="button"
+            value={relationshipRole}
+            onChange={(event) => {
+              setRelationshipRole(event.target.value)
+              setSelectedRelationshipId(null)
+            }}
+            options={[
+              {
+                value: "guardian",
+                label: t("guardian.relationships.roleGuardian", "Guardian View")
+              },
+              {
+                value: "dependent",
+                label: t("guardian.relationships.roleDependent", "Dependent View")
+              }
+            ]}
+          />
           <Button
             icon={<ReloadOutlined />}
             onClick={() => relQuery.refetch()}
@@ -1052,13 +1299,15 @@ function GuardianControlsTab({ online }: { online: boolean }) {
           >
             {t("guardian.relationships.refresh", "Refresh")}
           </Button>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
-          >
-            {t("guardian.relationships.create", "Create Relationship")}
-          </Button>
+          {relationshipRole === "guardian" && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreateModalOpen(true)}
+            >
+              {t("guardian.relationships.create", "Create Relationship")}
+            </Button>
+          )}
         </Space>
       </div>
 
@@ -1070,11 +1319,11 @@ function GuardianControlsTab({ online }: { online: boolean }) {
         size="small"
         pagination={{ pageSize: 10 }}
         onRow={(record) => ({
-          onClick: () => setSelectedRelationship(record),
+          onClick: () => setSelectedRelationshipId(record.id),
           style: {
             cursor: "pointer",
             background:
-              selectedRelationship?.id === record.id
+              selectedRelationshipId === record.id
                 ? "var(--ant-primary-1, #e6f4ff)"
                 : undefined
           }
@@ -1108,13 +1357,13 @@ function GuardianControlsTab({ online }: { online: boolean }) {
             label={t("guardian.relationships.fields.dependentUserId", "Dependent user ID")}
             rules={[{ required: true, message: t("guardian.relationships.fields.dependentUserIdRequired", "User ID is required") }]}
           >
-            <Input placeholder="Enter dependent user ID" />
+            <Input placeholder={t("guardian.relationships.fields.dependentUserIdPlaceholder", "Enter dependent user ID")} />
           </Form.Item>
           <Form.Item name="relationship_type" label={t("guardian.relationships.fields.relationshipType", "Relationship type")}>
             <Select>
-              <Select.Option value="parent">Parent</Select.Option>
-              <Select.Option value="legal_guardian">Legal guardian</Select.Option>
-              <Select.Option value="institutional">Institutional</Select.Option>
+              <Select.Option value="parent">{t("guardian.relationships.options.relationshipType.parent", "Parent")}</Select.Option>
+              <Select.Option value="legal_guardian">{t("guardian.relationships.options.relationshipType.legalGuardian", "Legal guardian")}</Select.Option>
+              <Select.Option value="institutional">{t("guardian.relationships.options.relationshipType.institutional", "Institutional")}</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="dependent_visible" label={t("guardian.relationships.fields.dependentVisible", "Visible to dependent")} valuePropName="checked">
@@ -1134,15 +1383,17 @@ function GuardianControlsTab({ online }: { online: boolean }) {
             </Space>
           }
           extra={
-            <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
-              onClick={openCreatePolicy}
-              disabled={selectedRelationship.status !== "active"}
-            >
-              {t("guardian.policies.create", "Add Policy")}
-            </Button>
+            relationshipRole === "guardian" ? (
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={openCreatePolicy}
+                disabled={selectedRelationship.status !== "active"}
+              >
+                {t("guardian.policies.create", "Add Policy")}
+              </Button>
+            ) : null
           }
         >
           <Table
@@ -1189,37 +1440,37 @@ function GuardianControlsTab({ online }: { online: boolean }) {
             <Input disabled={!!editingPolicy} />
           </Form.Item>
           <Form.Item name="category" label={t("guardian.policies.fields.category", "Category")} rules={[{ required: true }]}>
-            <Input placeholder="e.g. violence, self-harm" />
+            <Input placeholder={t("guardian.policies.fields.categoryPlaceholder", "e.g. violence, self-harm")} />
           </Form.Item>
           <Form.Item name="pattern" label={t("guardian.policies.fields.pattern", "Pattern")} rules={[{ required: true }]}>
-            <Input placeholder="Pattern to match" />
+            <Input placeholder={t("guardian.policies.fields.patternPlaceholder", "Pattern to match")} />
           </Form.Item>
           <Form.Item name="pattern_type" label={t("guardian.policies.fields.patternType", "Pattern type")}>
             <Radio.Group>
-              <Radio value="literal">Literal</Radio>
-              <Radio value="regex">Regex</Radio>
+              <Radio value="literal">{t("guardian.common.literal", "Literal")}</Radio>
+              <Radio value="regex">{t("guardian.common.regex", "Regex")}</Radio>
             </Radio.Group>
           </Form.Item>
           <Form.Item name="action" label={t("guardian.policies.fields.action", "Action")}>
             <Select>
-              <Select.Option value="notify">Notify</Select.Option>
-              <Select.Option value="warn">Warn</Select.Option>
-              <Select.Option value="redact">Redact</Select.Option>
-              <Select.Option value="block">Block</Select.Option>
+              <Select.Option value="notify">{t("guardian.policies.options.action.notify", "Notify")}</Select.Option>
+              <Select.Option value="warn">{t("guardian.policies.options.action.warn", "Warn")}</Select.Option>
+              <Select.Option value="redact">{t("guardian.policies.options.action.redact", "Redact")}</Select.Option>
+              <Select.Option value="block">{t("guardian.policies.options.action.block", "Block")}</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="phase" label={t("guardian.policies.fields.phase", "Phase")}>
             <Select>
-              <Select.Option value="input">Input</Select.Option>
-              <Select.Option value="output">Output</Select.Option>
-              <Select.Option value="both">Both</Select.Option>
+              <Select.Option value="input">{t("guardian.policies.options.phase.input", "Input")}</Select.Option>
+              <Select.Option value="output">{t("guardian.policies.options.phase.output", "Output")}</Select.Option>
+              <Select.Option value="both">{t("guardian.policies.options.phase.both", "Both")}</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="severity" label={t("guardian.policies.fields.severity", "Severity")}>
             <Select>
-              <Select.Option value="info">Info</Select.Option>
-              <Select.Option value="warning">Warning</Select.Option>
-              <Select.Option value="critical">Critical</Select.Option>
+              <Select.Option value="info">{t("guardian.policies.options.severity.info", "Info")}</Select.Option>
+              <Select.Option value="warning">{t("guardian.policies.options.severity.warning", "Warning")}</Select.Option>
+              <Select.Option value="critical">{t("guardian.policies.options.severity.critical", "Critical")}</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="notify_guardian" label={t("guardian.policies.fields.notifyGuardian", "Notify guardian")} valuePropName="checked">
@@ -1227,13 +1478,13 @@ function GuardianControlsTab({ online }: { online: boolean }) {
           </Form.Item>
           <Form.Item name="notify_context" label={t("guardian.policies.fields.notifyContext", "Notification context")}>
             <Select>
-              <Select.Option value="topic_only">Topic only</Select.Option>
-              <Select.Option value="snippet">Snippet</Select.Option>
-              <Select.Option value="full_message">Full message</Select.Option>
+              <Select.Option value="topic_only">{t("guardian.policies.options.notifyContext.topicOnly", "Topic only")}</Select.Option>
+              <Select.Option value="snippet">{t("guardian.policies.options.notifyContext.snippet", "Snippet")}</Select.Option>
+              <Select.Option value="full_message">{t("guardian.policies.options.notifyContext.fullMessage", "Full message")}</Select.Option>
             </Select>
           </Form.Item>
           <Form.Item name="message_to_dependent" label={t("guardian.policies.fields.messageToDependent", "Message to dependent")}>
-            <TextArea rows={2} placeholder="Optional message shown to dependent" />
+            <TextArea rows={2} placeholder={t("guardian.policies.fields.messageToDependentPlaceholder", "Optional message shown to dependent")} />
           </Form.Item>
           <Form.Item name="enabled" label={t("guardian.policies.fields.enabled", "Enabled")} valuePropName="checked">
             <Switch />
@@ -1242,7 +1493,7 @@ function GuardianControlsTab({ online }: { online: boolean }) {
       </Drawer>
 
       {/* Audit log */}
-      {selectedRelationship && (
+      {relationshipRole === "guardian" && selectedRelationship && (
         <Collapse
           ghost
           items={[

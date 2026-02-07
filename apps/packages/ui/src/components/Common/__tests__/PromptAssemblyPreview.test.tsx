@@ -14,8 +14,12 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (key: string, options?: { defaultValue?: string }) =>
-      options?.defaultValue || key
+    t: (key: string, options?: { defaultValue?: string }) => {
+      if (key.startsWith("playground:section.")) {
+        return `translated:${key}`
+      }
+      return options?.defaultValue || key
+    }
   })
 }))
 
@@ -134,5 +138,37 @@ describe("PromptAssemblyPreview", () => {
         tokens: 3
       })
     )
+  })
+
+  it("uses section i18n labels in both table and preview headers", () => {
+    vi.mocked(useQuery).mockReturnValue(
+      makeQueryResult({
+        data: normalizePreviewPayload({
+          sections: [
+            {
+              name: "message_steering",
+              content: "Steering instruction",
+              tokens_effective: 7
+            }
+          ],
+          total_supplemental_effective_tokens: 7,
+          supplemental_budget: 1200
+        })
+      })
+    )
+
+    render(
+      <PromptAssemblyPreview serverChatId="chat-preview-1" settingsFingerprint="fp-1" />
+    )
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: /Prompt preview/i
+      })
+    )
+
+    expect(
+      screen.getAllByText("translated:playground:section.message_steering")
+    ).toHaveLength(2)
   })
 })

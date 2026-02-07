@@ -1485,14 +1485,33 @@ async def check_auth_rate_limit(request: Request, rate_limiter=None) -> None:
         or (request.client.host if getattr(request, "client", None) else None)
         or "unknown"
     )
+    identifier = f"ip:{client_ip}"
+    fallback_check = getattr(rate_limiter, "check_rate_limit_fallback", None)
     try:
-        allowed, meta = await rate_limiter.check_rate_limit(
-            identifier=f"ip:{client_ip}",
-            endpoint=f"auth:{endpoint}",
-            limit=settings.RATE_LIMIT_PER_MINUTE,
-            window_minutes=1,
-        )
+        if callable(fallback_check):
+            metrics.record_rate_limit_fallback(backend="authnz_fallback_db")
+            allowed, meta = await fallback_check(
+                identifier=identifier,
+                endpoint=f"auth:{endpoint}",
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
+            if isinstance(meta, dict) and meta.get("error") == "fallback_limiter_unavailable":
+                logger.warning(
+                    "Auth fallback rate limiter unavailable while RG ingress is inactive; "
+                    "failing open for availability; endpoint={}",
+                    endpoint,
+                )
+        else:
+            allowed, meta = await rate_limiter.check_rate_limit(
+                identifier=identifier,
+                endpoint=f"auth:{endpoint}",
+                limit=settings.RATE_LIMIT_PER_MINUTE,
+                window_minutes=1,
+            )
     except asyncio.CancelledError:
+        raise
+    except HTTPException:
         raise
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:
         metrics.record_rate_limit_fallback()

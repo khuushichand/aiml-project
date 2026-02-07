@@ -62,16 +62,25 @@ def validate_auth_rg_startup_guards(
     bypass_env: str = "ALLOW_AUTH_RG_GUARD_BYPASS",
 ) -> None:
     """
-    Enforce production startup guardrails for auth endpoint rate governance.
+    Enforce production startup guardrails for auth endpoint rate governance when RG is active.
 
     In production-like environments, this requires:
-    - RG globally enabled
+    - RG globally enabled (if disabled, validation is skipped)
     - RG governor initialized
     - policy loader available
     - required auth policies present
     - required auth routes covered by route_map.by_path
     """
     if not is_production_like_env():
+        return
+
+    from tldw_Server_API.app.core.config import rg_enabled
+
+    if not bool(rg_enabled(False)):
+        logger.warning(
+            "Resource Governor is disabled in production-like environment (RG_ENABLED=0). "
+            "Startup will continue; auth routes rely on non-RG limiter paths."
+        )
         return
 
     if str(os.getenv(bypass_env, "")).strip().lower() in _TRUTHY:
@@ -81,13 +90,6 @@ def validate_auth_rg_startup_guards(
             bypass_env,
         )
         return
-
-    from tldw_Server_API.app.core.config import rg_enabled
-
-    if not bool(rg_enabled(False)):
-        raise AuthRGStartupGuardError(
-            "Resource Governor must be enabled in production for auth endpoint protection."
-        )
 
     user_middleware = list(getattr(app, "user_middleware", []) or [])
     has_rg_middleware = any(

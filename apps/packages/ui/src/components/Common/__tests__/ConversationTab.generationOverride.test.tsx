@@ -139,6 +139,13 @@ describe("ConversationTab generation override controls", () => {
       refetch: vi.fn(),
       ...overrides
     }) as any
+  const getPrimaryQueryKey = (queryKey: unknown): string | null => {
+    if (!Array.isArray(queryKey) || queryKey.length === 0) {
+      return null
+    }
+    const [primaryKey] = queryKey
+    return typeof primaryKey === "string" ? primaryKey : null
+  }
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -220,7 +227,7 @@ describe("ConversationTab generation override controls", () => {
 
   it("shows an inline warning when characters fail to load", async () => {
     vi.mocked(useQuery).mockImplementation((options: any) => {
-      if (options.queryKey?.[0]?.includes("listCharacters")) {
+      if (getPrimaryQueryKey(options?.queryKey) === "tldw:listCharacters") {
         return buildQueryResult({ isError: true })
       }
       return buildQueryResult()
@@ -237,7 +244,10 @@ describe("ConversationTab generation override controls", () => {
 
   it("shows an inline warning when pinned messages fail to load", async () => {
     vi.mocked(useQuery).mockImplementation((options: any) => {
-      if (options.queryKey?.[0]?.includes("pinned-messages")) {
+      if (
+        getPrimaryQueryKey(options?.queryKey) ===
+        "conversation-tab:pinned-messages"
+      ) {
         return buildQueryResult({ isError: true })
       }
       return buildQueryResult()

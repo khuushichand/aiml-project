@@ -340,7 +340,9 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
                         className="rounded-md border border-border/60 bg-surface2/70 p-2"
                       >
                         <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-                          {section.label}
+                          {SECTION_I18N_KEYS[section.key]
+                            ? t(SECTION_I18N_KEYS[section.key], { defaultValue: section.label })
+                            : section.label}
                         </div>
                         <p className="whitespace-pre-wrap text-text">
                           {section.preview}

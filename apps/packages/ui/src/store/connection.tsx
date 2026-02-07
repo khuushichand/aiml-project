@@ -15,6 +15,8 @@ import { CONNECTED_THROTTLE_MS } from "@/config/connection-timing"
 // Shared timeout before treating the server as unreachable.
 // See New-Views-PRD.md §5.1.x / §10.1 (20 seconds).
 export const CONNECTION_TIMEOUT_MS = 20_000
+const HEALTH_LIVENESS_PATH = "/api/v1/health/live"
+const CONNECTED_FAILURE_THRESHOLD = 3
 
 const TEST_BYPASS_KEY = "__tldw_allow_offline"
 const FORCE_UNCONFIGURED_KEY = "__tldw_force_unconfigured"
@@ -199,6 +201,7 @@ const initialState: ConnectionState = {
   lastStatusCode: null,
   isConnected: false,
   isChecking: false,
+  consecutiveFailures: 0,
   offlineBypass: false,
   knowledgeStatus: "unknown",
   knowledgeLastCheckedAt: null,
@@ -270,6 +273,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           serverUrl: persistedServerUrl,
           isConnected: false,
           isChecking: false,
+          consecutiveFailures: 0,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: null,
@@ -299,6 +303,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           serverUrl,
           isConnected: true,
           isChecking: false,
+          consecutiveFailures: 0,
           offlineBypass: true,
           errorKind: "none",
           lastCheckedAt: Date.now(),
@@ -325,15 +330,19 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       return
     }
 
+    const isBackgroundRefresh =
+      prev.isConnected && prev.phase === ConnectionPhase.CONNECTED
     set({
       state: {
         ...prev,
-        phase: ConnectionPhase.SEARCHING,
+        phase: isBackgroundRefresh
+          ? ConnectionPhase.CONNECTED
+          : ConnectionPhase.SEARCHING,
         serverUrl: persistedServerUrl ?? prev.serverUrl,
-        errorKind: "none",
+        errorKind: isBackgroundRefresh ? prev.errorKind : "none",
         isChecking: true,
         offlineBypass: false,
-        lastError: null,
+        lastError: isBackgroundRefresh ? prev.lastError : null,
         checksSinceConfigChange: nextChecksSinceConfigChange
       }
     })
@@ -376,6 +385,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             serverUrl: null,
             isConnected: false,
             isChecking: false,
+            consecutiveFailures: 0,
             offlineBypass: false,
             errorKind: "none",
             lastCheckedAt: Date.now(),
@@ -405,7 +415,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         try {
           console.log('[CONN_DEBUG] calling apiSend for health')
           const resp = await apiSend({
-            path: '/api/v1/health',
+            path: HEALTH_LIVENESS_PATH,
             method: 'GET',
             // Allow unauthenticated health checks when no credentials have
             // been configured yet so first‑run onboarding can still detect a
@@ -467,6 +477,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
       }
 
       let errorKind: ConnectionState["errorKind"] = "none"
+      const nextConsecutiveFailures = ok ? 0 : prev.consecutiveFailures + 1
 
       if (ok) {
         if (knowledgeStatus === "offline") {
@@ -483,6 +494,31 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         }
       }
 
+      const holdConnectedOnTransientFailure =
+        !ok &&
+        errorKind === "unreachable" &&
+        prev.isConnected &&
+        prev.phase === ConnectionPhase.CONNECTED &&
+        nextConsecutiveFailures < CONNECTED_FAILURE_THRESHOLD
+
+      if (holdConnectedOnTransientFailure) {
+        set({
+          state: {
+            ...prev,
+            phase: ConnectionPhase.CONNECTED,
+            isConnected: true,
+            isChecking: false,
+            offlineBypass: false,
+            lastCheckedAt: Date.now(),
+            lastError: raced.error || "transient-health-check-failure",
+            lastStatusCode: raced.status || 0,
+            errorKind: "partial",
+            consecutiveFailures: nextConsecutiveFailures
+          }
+        })
+        return
+      }
+
       console.log('[CONN_DEBUG] about to set final state', {
         ok,
         phase: ok ? 'CONNECTED' : 'ERROR',
@@ -497,6 +533,12 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           serverUrl,
           isConnected: ok,
           isChecking: false,
+          consecutiveFailures:
+            ok
+              ? 0
+              : errorKind === "unreachable"
+                ? nextConsecutiveFailures
+                : 0,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: ok ? null : (raced.error || 'timeout-or-offline'),
@@ -516,6 +558,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           phase: ConnectionPhase.ERROR,
           isConnected: false,
           isChecking: false,
+          consecutiveFailures: prev.consecutiveFailures + 1,
           offlineBypass: false,
           lastCheckedAt: Date.now(),
           lastError: (error as Error)?.message ?? "unknown-error",
@@ -560,6 +603,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         mode: "normal",
         isConnected: false,
         isChecking: false,
+        consecutiveFailures: 0,
         offlineBypass: false,
         errorKind: "none",
         lastError: null,
@@ -598,6 +642,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
             ? config.serverUrl
             : prev.serverUrl,
         configStep: nextStep,
+        consecutiveFailures: 0,
         lastConfigUpdatedAt: now,
         checksSinceConfigChange: 0
       }
@@ -621,6 +666,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
           phase: ConnectionPhase.CONNECTED,
           isConnected: true,
           isChecking: false,
+          consecutiveFailures: 0,
           offlineBypass: true,
           errorKind: "none",
           lastError: null,
@@ -650,6 +696,7 @@ export const useConnectionStore = createWithEqualityFn<ConnectionStore>((set, ge
         mode: "demo",
         phase: ConnectionPhase.CONNECTED,
         isConnected: true,
+        consecutiveFailures: 0,
         offlineBypass: false,
         errorKind: "none",
         lastError: null,
