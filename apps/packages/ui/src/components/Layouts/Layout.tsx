@@ -173,10 +173,11 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         target.tagName === "TEXTAREA" ||
         target.isContentEditable
 
-      // ? key (with or without shift, since ? requires shift on most keyboards)
-      if (e.key === "?" && !isInputField) {
+      // ? key to open help modal (without Ctrl/Cmd to avoid double-fire)
+      if (e.key === "?" && !isInputField && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault()
         toggleHelpModal()
+        return
       }
 
       // Also support the legacy Ctrl/Cmd + Shift + ? shortcut

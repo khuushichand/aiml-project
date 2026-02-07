@@ -3,6 +3,7 @@ import base64
 import pytest
 
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import (
+    _process_pool_disabled,
     decode_large_base64_async,
     json_encode_heavy,
     process_large_json_async,
@@ -27,3 +28,9 @@ async def test_decode_large_base64_async_strips_whitespace():
     decoded = await decode_large_base64_async(spaced)
 
     assert decoded == data
+
+
+def test_process_pool_disabled_accepts_testing_y(monkeypatch):
+    monkeypatch.delenv("TLDR_DISABLE_CPU_PROCPOOL", raising=False)
+    monkeypatch.setenv("TESTING", "y")
+    assert _process_pool_disabled() is True

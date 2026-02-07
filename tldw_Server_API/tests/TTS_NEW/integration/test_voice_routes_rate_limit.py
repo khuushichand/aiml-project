@@ -1,5 +1,6 @@
 import pytest
 from fastapi import FastAPI, HTTPException
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from tldw_Server_API.app.api.v1.endpoints.audio.audio import router as audio_router
@@ -34,3 +35,38 @@ def test_voice_list_route_enforces_rate_limit_dependency(client):
         headers={"X-API-KEY": "test-api-key-1234567890"},
     )
     assert response.status_code == 429
+
+
+def _find_route(app: FastAPI, method: str, path: str) -> APIRoute:
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.path == path and method.upper() in route.methods:
+            return route
+    raise AssertionError(f"Route not found: {method} {path}")
+
+
+def _extract_token_scope_dependency(route: APIRoute):
+    for dependency in route.dependencies:
+        dep_fn = getattr(dependency, "dependency", None)
+        if dep_fn is not None and getattr(dep_fn, "_tldw_token_scope", False):
+            return dep_fn
+    raise AssertionError(f"No token scope dependency found for route: {route.path}")
+
+
+def test_voice_routes_use_granular_endpoint_ids_and_voice_counter():
+    app = FastAPI()
+    app.include_router(audio_router, prefix="/api/v1/audio")
+
+    expectations = [
+        ("POST", "/api/v1/audio/voices/upload", "audio.voices.upload"),
+        ("POST", "/api/v1/audio/voices/encode", "audio.voices.encode"),
+        ("GET", "/api/v1/audio/voices", "audio.voices.list"),
+        ("GET", "/api/v1/audio/voices/{voice_id}", "audio.voices.get"),
+        ("DELETE", "/api/v1/audio/voices/{voice_id}", "audio.voices.delete"),
+        ("POST", "/api/v1/audio/voices/{voice_id}/preview", "audio.voices.preview"),
+    ]
+
+    for method, path, endpoint_id in expectations:
+        route = _find_route(app, method, path)
+        scope_dep = _extract_token_scope_dependency(route)
+        assert getattr(scope_dep, "_tldw_endpoint_id", None) == endpoint_id
+        assert getattr(scope_dep, "_tldw_count_as", None) == "voice_call"

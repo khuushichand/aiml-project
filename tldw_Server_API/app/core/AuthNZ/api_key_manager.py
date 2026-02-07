@@ -670,6 +670,7 @@ class APIKeyManager:
         required_scope: Optional[str] = None,
         ip_address: Optional[str] = None,
         record_usage: bool = True,
+        usage_details: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
         """
         Validate an API key and return its information
@@ -679,6 +680,7 @@ class APIKeyManager:
             required_scope: Required permission scope
             ip_address: Client IP address for validation and logging
             record_usage: Whether to record usage/audit side effects
+            usage_details: Optional structured context persisted in API key usage audit rows
 
         Returns:
             Key information if valid, None if invalid
@@ -817,7 +819,12 @@ class APIKeyManager:
                 # Optional lightweight audit of usage
                 try:
                     if self.settings.API_KEY_AUDIT_LOG_USAGE:
-                        await self._log_action(key_info['id'], "used", key_info.get('user_id'))
+                        await self._log_action(
+                            key_info['id'],
+                            "used",
+                            key_info.get('user_id'),
+                            details=usage_details,
+                        )
                 except Exception as _e:
                     # Do not fail request on audit write
                     logger.debug(f"API key usage audit skipped/failed: {_e}")

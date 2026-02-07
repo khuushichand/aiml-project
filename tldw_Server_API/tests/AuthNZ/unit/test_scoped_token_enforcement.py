@@ -216,13 +216,21 @@ def test_require_token_scope_and_get_request_user_record_usage_once(monkeypatch)
 
     usage_flags: list[bool] = []
     usage_increment_count = {"value": 0}
+    usage_details_for_recorded_call = {"value": None}
 
     class _StubAPIKeyManager:
-        async def validate_api_key(self, api_key: str, ip_address=None, record_usage=True):
+        async def validate_api_key(
+            self,
+            api_key: str,
+            ip_address=None,
+            record_usage=True,
+            usage_details=None,
+        ):
             assert api_key == "tldw_test.key"
             usage_flags.append(bool(record_usage))
             if record_usage:
                 usage_increment_count["value"] += 1
+                usage_details_for_recorded_call["value"] = usage_details
             return {
                 "id": 7,
                 "user_id": 42,
@@ -283,6 +291,7 @@ def test_require_token_scope_and_get_request_user_record_usage_once(monkeypatch)
                     "any",
                     require_if_present=True,
                     endpoint_id="unit.api_key.double_usage",
+                    count_as="voice_call",
                 )
             )
         ],
@@ -302,6 +311,13 @@ def test_require_token_scope_and_get_request_user_record_usage_once(monkeypatch)
     assert usage_increment_count["value"] == 1
     assert usage_flags.count(False) == 1
     assert usage_flags.count(True) == 1
+    assert usage_details_for_recorded_call["value"] == {
+        "endpoint_id": "unit.api_key.double_usage",
+        "action": "voice_call",
+        "scope": "any",
+        "path": "/protected",
+        "method": "GET",
+    }
 
 
 def test_require_token_scope_rejects_invalid_jwt():

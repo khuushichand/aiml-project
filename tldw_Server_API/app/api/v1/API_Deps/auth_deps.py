@@ -1726,6 +1726,19 @@ def require_token_scope(
         token = credentials.credentials if credentials else None
         token_is_jwt = _looks_like_jwt(token) if token else False
 
+        try:
+            if endpoint_id is not None:
+                request.state._auth_endpoint_id = str(endpoint_id)
+            if count_as is not None:
+                request.state._auth_action = str(count_as)
+            if endpoint_id is not None or count_as is not None:
+                request.state._auth_scope_name = str(scope)
+        except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
+            logger.debug(
+                "require_token_scope: unable to attach endpoint/action context to request.state: {}",
+                exc,
+            )
+
         # Optional admin bypass based on the resolved principal (not token claims).
         if allow_admin_bypass:
             principal = None
@@ -2107,6 +2120,7 @@ def require_token_scope(
 
     try:
         _checker._tldw_endpoint_id = endpoint_id
+        _checker._tldw_count_as = count_as
         _checker._tldw_scope_name = scope
         _checker._tldw_token_scope = True
         _checker._tldw_token_scope_required = str(scope)

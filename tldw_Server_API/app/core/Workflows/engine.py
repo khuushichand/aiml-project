@@ -14,6 +14,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Workflows.adapters import get_adapter
 
 _WF_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
@@ -373,7 +374,7 @@ class WorkflowEngine:
                             if step_type == "prompt":
                                 fe = step_cfg.get("force_error") if isinstance(step_cfg, dict) else None
                                 if isinstance(fe, str):
-                                    fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+                                    fe = is_truthy(fe.strip())
                                 tmpl = ""
                                 try:
                                     tmpl = str(step_cfg.get("template", ""))
@@ -1110,7 +1111,7 @@ class WorkflowEngine:
                     meta_to_store = metadata or {}
                     try:
                         import os as _os
-                        if str(_os.getenv("WORKFLOWS_ARTIFACT_ENCRYPTION", "false")).lower() in {"1", "true", "yes", "on"}:
+                        if is_truthy(_os.getenv("WORKFLOWS_ARTIFACT_ENCRYPTION", "false")):
                             from tldw_Server_API.app.core.Security.crypto import encrypt_json_blob
                             env = encrypt_json_blob(meta_to_store)
                             if env is not None:
@@ -1291,7 +1292,7 @@ class WorkflowEngine:
         try:
             # Global disable
             import os as _os
-            if str(_os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")).lower() in {"1", "true", "yes", "on"}:
+            if is_truthy(_os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "false")):
                 return
             hook = definition.get("on_completion_webhook") if isinstance(definition, dict) else None
             if not hook:

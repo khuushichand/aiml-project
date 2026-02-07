@@ -33,6 +33,17 @@ from tldw_Server_API.app.core.TTS.tts_exceptions import (
 class TestKokoroAdapterMock:
     """Mock/Unit tests for Kokoro adapter"""
 
+    async def test_lazy_init_auto_enables_for_tldw_test_mode_y(self, monkeypatch):
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+        monkeypatch.setenv("TEST_MODE", "0")
+        monkeypatch.setenv("TESTING", "0")
+        monkeypatch.setenv("TLDW_TEST_MODE", "y")
+        monkeypatch.setenv("RUN_TTS_LEGACY_INTEGRATION", "0")
+
+        adapter = KokoroAdapter({})
+        assert adapter._lazy_init is True
+        assert adapter._deferred_model_load is True
+
     async def test_initialization_pytorch_mode(self):
         """Test initialization in PyTorch mode"""
         adapter = KokoroAdapter({

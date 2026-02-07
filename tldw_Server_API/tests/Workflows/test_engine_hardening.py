@@ -113,10 +113,11 @@ def test_completion_webhook_disable_and_enable(monkeypatch, client_with_wf: Test
 
     # Track invocation via method stub (global disable should short-circuit)
     from tldw_Server_API.app.core.Workflows import engine as eng_mod
+    from tldw_Server_API.app.core.testing import is_truthy
     calls = {"count": 0}
     async def _stub(self, defn, run_id, status):
         import os
-        if os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "").lower() in {"1","true","yes","on"}:
+        if is_truthy(os.getenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "")):
             return
         calls["count"] += 1
         return
@@ -131,7 +132,7 @@ def test_completion_webhook_disable_and_enable(monkeypatch, client_with_wf: Test
     wid = client.post("/api/v1/workflows", json=definition).json()["id"]
 
     # Case 1: Globally disabled - no call should be recorded
-    monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "true")
+    monkeypatch.setenv("WORKFLOWS_DISABLE_COMPLETION_WEBHOOKS", "y")
     # Patch the stored definition to include the webhook in snapshot
     # (alternatively, run ad-hoc, but this path ensures engine snapshot contains config)
     # Here we re-create with webhook for simplicity

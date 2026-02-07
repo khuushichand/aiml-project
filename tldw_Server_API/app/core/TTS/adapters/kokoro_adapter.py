@@ -35,6 +35,7 @@ from ..tts_exceptions import (
     TTSProviderNotConfiguredError,
 )
 from ..tts_resource_manager import get_resource_manager as _get_resource_manager
+from ...testing import env_flag_enabled, is_explicit_pytest_runtime, is_test_mode
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
@@ -265,11 +266,7 @@ class KokoroAdapter(TTSAdapter):
             default=parse_bool(os.getenv("KOKORO_LAZY_INIT"), default=False),
         )
         if not self._lazy_init:
-            test_mode = bool(os.getenv("PYTEST_CURRENT_TEST")) or parse_bool(
-                os.getenv("TESTING"), default=False
-            ) or parse_bool(os.getenv("TEST_MODE"), default=False) or parse_bool(
-                os.getenv("TLDW_TEST_MODE"), default=False
-            )
+            test_mode = is_explicit_pytest_runtime() or env_flag_enabled("TESTING") or is_test_mode()
             explicit_model = any(
                 key in self.config for key in ("kokoro_model_path", "kokoro_use_onnx", "kokoro_voices_json")
             )

@@ -15,8 +15,10 @@ Provides:
 - Context payload generation for LLM injection
 """
 
+import asyncio
 import contextlib
 import shutil
+import time
 import zipfile
 from datetime import datetime, timezone
 from io import BytesIO
@@ -125,7 +127,13 @@ class SkillMetadata:
 class SkillsService:
     """Central service for skill management."""
 
-    def __init__(self, user_id: int, base_path: Path, db: CharactersRAGDB | None = None):
+    def __init__(
+        self,
+        user_id: int,
+        base_path: Path,
+        db: CharactersRAGDB | None = None,
+        sync_interval: float = 5.0,
+    ):
         """
         Initialize the SkillsService.
 
@@ -133,12 +141,15 @@ class SkillsService:
             user_id: The user ID for skill isolation
             base_path: Base path for user databases (e.g., Databases/user_databases/{user_id}/)
             db: CharactersRAGDB instance for skill registry persistence
+            sync_interval: Minimum seconds between filesystem syncs for read operations
         """
         self.user_id = user_id
         self.base_path = Path(base_path)
         self.skills_dir = self.base_path / "skills"
         self.db = db
         self._parser = SkillParser()
+        self._sync_interval = sync_interval
+        self._last_sync_time: float = 0.0
         self._ensure_skills_directory()
         self._ensure_registry_ready()
 

@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional, Union
 
+from tldw_Server_API.app.core.testing import is_truthy
+
 
 class DatabaseError(Exception):
     """Base exception for database-related errors."""
@@ -203,7 +205,7 @@ class DatabaseConfig:
             cfg.pool_timeout = float(os.getenv("TLDW_DB_POOL_TIMEOUT", "30.0"))
         except Exception:
             cfg.pool_timeout = 30.0
-        cfg.echo = os.getenv("TLDW_DB_ECHO", "false").lower() in {"1", "true", "yes", "on"}
+        cfg.echo = is_truthy(os.getenv("TLDW_DB_ECHO", "false"))
 
         if backend_type == BackendType.SQLITE:
             if os.getenv("TLDW_SQLITE_PATH"):
@@ -214,8 +216,8 @@ class DatabaseConfig:
                     cfg.sqlite_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                 except Exception as exc:
                     raise ValueError("Failed to resolve default SQLite path via DatabasePaths") from exc
-            cfg.sqlite_wal_mode = os.getenv("TLDW_SQLITE_WAL_MODE", "true").lower() in {"1", "true", "yes", "on"}
-            cfg.sqlite_foreign_keys = os.getenv("TLDW_SQLITE_FOREIGN_KEYS", "true").lower() in {"1", "true", "yes", "on"}
+            cfg.sqlite_wal_mode = is_truthy(os.getenv("TLDW_SQLITE_WAL_MODE", "true"))
+            cfg.sqlite_foreign_keys = is_truthy(os.getenv("TLDW_SQLITE_FOREIGN_KEYS", "true"))
         elif backend_type == BackendType.POSTGRESQL:
             # Prefer explicit PG* envs when DATABASE_URL not set
             cfg.pg_host = os.getenv("TLDW_PG_HOST") or os.getenv("PGHOST") or "localhost"

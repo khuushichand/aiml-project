@@ -28,13 +28,28 @@ router = APIRouter(
     },
 )
 
+VOICE_SCOPE_UPLOAD = "audio.voices.upload"
+VOICE_SCOPE_ENCODE = "audio.voices.encode"
+VOICE_SCOPE_LIST = "audio.voices.list"
+VOICE_SCOPE_GET = "audio.voices.get"
+VOICE_SCOPE_DELETE = "audio.voices.delete"
+VOICE_SCOPE_PREVIEW = "audio.voices.preview"
+VOICE_COUNTER_TYPE = "voice_call"
+
 
 @router.post(
     "/voices/upload",
     summary="Upload a custom voice sample",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_UPLOAD,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def upload_voice(
@@ -103,7 +118,14 @@ async def upload_voice(
     summary="Encode stored voice reference for a provider",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_ENCODE,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def encode_voice_reference(
@@ -144,7 +166,14 @@ async def encode_voice_reference(
     summary="List user's custom voices",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_LIST,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def list_voices(request: Request, current_user: User = Depends(get_request_user)):
@@ -171,7 +200,14 @@ async def list_voices(request: Request, current_user: User = Depends(get_request
     summary="Get voice details",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_GET,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def get_voice_details(
@@ -205,7 +241,14 @@ async def get_voice_details(
     summary="Delete a custom voice",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_DELETE,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def delete_voice(
@@ -241,7 +284,14 @@ async def delete_voice(
     summary="Generate voice preview",
     dependencies=[
         Depends(check_rate_limit),
-        Depends(require_token_scope("any", require_if_present=True, endpoint_id="audio.speech", count_as="call")),
+        Depends(
+            require_token_scope(
+                "any",
+                require_if_present=True,
+                endpoint_id=VOICE_SCOPE_PREVIEW,
+                count_as=VOICE_COUNTER_TYPE,
+            )
+        ),
     ],
 )
 async def preview_voice(
@@ -254,6 +304,7 @@ async def preview_voice(
     """
     Generate a short preview of a custom voice.
     """
+    request_id = ensure_request_id(request)
     try:
         from tldw_Server_API.app.core.TTS.voice_manager import get_voice_manager
 
@@ -270,17 +321,22 @@ async def preview_voice(
             model=voice.provider, input=text, voice=f"custom:{voice_id}", response_format="mp3", stream=True
         )
 
-        audio_stream = await tts_service.generate_speech(
+        audio_stream = tts_service.generate_speech(
             preview_request,
             provider=None,
             fallback=True,
             user_id=current_user.id,
+            request_id=request_id,
         )
 
         return StreamingResponse(
             audio_stream,
             media_type="audio/mpeg",
-            headers={"Content-Disposition": f"inline; filename=preview_{voice_id}.mp3", "X-Voice-Name": voice.name},
+            headers={
+                "Content-Disposition": f"inline; filename=preview_{voice_id}.mp3",
+                "X-Voice-Name": voice.name,
+                "X-Request-Id": request_id,
+            },
         )
 
     except HTTPException:

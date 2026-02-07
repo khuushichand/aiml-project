@@ -1,5 +1,5 @@
 version: 1.0.0
-updated_at: 2026-02-05T00:00:00Z
+updated_at: 2026-02-07T00:00:00Z
 scopes:
   - id: media.ingest
     description: Ingest new media assets via upload, URL fetch, or pipeline triggers.
@@ -260,6 +260,104 @@ scopes:
     ownership_predicates:
       - same_org
     doc_url: https://docs.example.com/privileges/audio-speech
+  - id: audio.voices.upload
+    description: Upload and register custom voice reference assets.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-upload
+  - id: audio.voices.encode
+    description: Encode provider-specific artifacts for a stored custom voice.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-encode
+  - id: audio.voices.list
+    description: List custom voices available to the authenticated user.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-list
+  - id: audio.voices.get
+    description: Retrieve metadata for a specific custom voice.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: moderate
+    rate_limit_class: standard
+    default_roles:
+      - admin
+      - analyst
+      - developer
+      - viewer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-get
+  - id: audio.voices.delete
+    description: Delete a custom voice and associated artifacts.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: high
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-delete
+  - id: audio.voices.preview
+    description: Generate short preview audio from a stored custom voice.
+    resource_tags:
+      - audio
+      - tts
+      - voices
+    sensitivity_tier: moderate
+    rate_limit_class: elevated
+    default_roles:
+      - admin
+      - analyst
+      - developer
+    feature_flag_id: null
+    ownership_predicates:
+      - same_org
+    doc_url: https://docs.example.com/privileges/audio-voices-preview
   - id: audio.history
     description: List and manage per-user TTS history entries.
     resource_tags:

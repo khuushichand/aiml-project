@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.Evaluations.metrics_retrieval import (
     recall_at_k,
 )
 from tldw_Server_API.app.core.RAG.rag_service.advanced_reranking import RerankingStrategy
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 _ABTEST_NONCRITICAL_EXCEPTIONS = (
     OSError,
@@ -309,8 +310,7 @@ async def build_collections_vector_only(
     # Test-mode fallback: if no media_ids provided, synthesize a tiny corpus
     # from the queries themselves so reranking logic can be exercised.
     try:
-        import os as _os
-        if not corpus_texts and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}:
+        if not corpus_texts and env_flag_enabled("TESTING"):
             # Use index-based synthetic media IDs to avoid collisions
             corpus_texts = [(100000 + i, q.text) for i, q in enumerate(config.queries or [])]
     except _ABTEST_NONCRITICAL_EXCEPTIONS:

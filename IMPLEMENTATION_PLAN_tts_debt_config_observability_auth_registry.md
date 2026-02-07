@@ -20,13 +20,13 @@
 **Goal**: Close TTS observability debt with structured tracing and provider/fallback diagnostics.
 **Success Criteria**: Request-level correlation IDs propagate through TTS/voice flows, fallback outcomes are categorized, high-value metrics and logs are emitted consistently, and dashboards/alerts are documented.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS/test_tts_service_v2.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 5: Auth/Rate-Limit Granularity
 **Goal**: Move voice operations from coarse `audio.speech` gating to explicit voice-route privilege/rate-limit semantics.
 **Success Criteria**: New privilege IDs exist for voice actions, `audio_voices.py` uses route-specific `endpoint_id` values, per-API-key counters are isolated for voice operations, and audit events include endpoint/action context.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS_NEW/integration/test_voice_routes_rate_limit.py tldw_Server_API/tests/AuthNZ`
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 6: Persistent Voice Registry Backing Store
 **Goal**: Replace runtime-only registry dependency with persistent registry records suitable for multi-node consistency.
@@ -79,4 +79,34 @@
   - Result: `58 passed`.
 - Regression check for endpoint stub compatibility:
   - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_audio_usage_events.py`
+  - Result: `1 passed`.
+- Verified Stage 4 integration slice:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/integration/test_tts_endpoints.py -k "generate_without_provider or generate_with_voice_settings or generate_alignment_metadata_endpoint"`
+  - Result: `3 passed`.
+- Started Stage 5 auth/rate-limit granularity:
+  - Replaced `audio.speech` endpoint gating in `audio_voices.py` with route-specific endpoint IDs:
+    - `audio.voices.upload`, `audio.voices.encode`, `audio.voices.list`,
+      `audio.voices.get`, `audio.voices.delete`, `audio.voices.preview`
+  - Isolated voice API key quota counters via `count_as="voice_call"` across voice routes.
+  - Added endpoint/action context propagation:
+    - `require_token_scope` now writes endpoint/action/scope hints to `request.state`.
+    - API key validation/audit now accepts `usage_details` and persists these details in usage audit rows.
+    - `authenticate_api_key_user` forwards request endpoint/action context to API key validation when available.
+  - Fixed `audio_voices.preview_voice` to return an async generator directly (removed invalid `await` on `generate_speech`) and forwarded `request_id` into TTS generation/response headers.
+  - Updated virtual-key endpoint docs for new voice endpoint IDs:
+    - `Docs/API-related/Virtual_Keys.md`
+    - `Docs/Published/API-related/Virtual_Keys.md`
+  - Registered new voice endpoint privilege IDs in `Config_Files/privilege_catalog.yaml` to satisfy startup privilege metadata validation:
+    - `audio.voices.upload`, `audio.voices.encode`, `audio.voices.list`,
+      `audio.voices.get`, `audio.voices.delete`, `audio.voices.preview`
+  - Added/updated tests:
+    - `tests/TTS_NEW/integration/test_voice_routes_rate_limit.py` now asserts route-level endpoint IDs and `voice_call` counters.
+    - `tests/AuthNZ/unit/test_scoped_token_enforcement.py` now asserts endpoint/action context reaches API key usage validation.
+- Verified Stage 5 targeted tests:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS_NEW/integration/test_voice_routes_rate_limit.py`
+  - Result: `2 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/AuthNZ/unit/test_scoped_token_enforcement.py -k "require_token_scope_and_get_request_user_record_usage_once or require_token_scope_enforces_bearer_api_key"`
+  - Result: `2 passed`.
+- Regression verification after privilege-catalog update:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_audio_usage_events.py -k tts_usage_event_logged`
   - Result: `1 passed`.

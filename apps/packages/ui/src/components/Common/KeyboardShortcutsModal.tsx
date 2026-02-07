@@ -46,22 +46,9 @@ export function KeyboardShortcutsModal() {
     }
   }, [open])
 
-  // Listen for platform modifier + Shift + ? to open the modal
+  // Handle Escape key to close (keyboard shortcut to open is handled by Layout.tsx)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't trigger if user is typing in an input
-      const target = e.target as HTMLElement
-      const isInputField =
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.isContentEditable
-
-      const modPressed = isMac ? e.metaKey : e.ctrlKey
-      if (e.key === "?" && e.shiftKey && modPressed && !isInputField) {
-        e.preventDefault()
-        setOpen(true)
-      }
-
       if (e.key === "Escape" && openRef.current) {
         setOpen(false)
       }

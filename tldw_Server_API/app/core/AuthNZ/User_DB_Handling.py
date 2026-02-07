@@ -1049,7 +1049,39 @@ async def authenticate_api_key_user(request: Request, api_key: str) -> User:
         api_mgr = await get_api_key_manager()
         client_ip = resolve_client_ip(request, settings)
 
-        key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+        usage_details: dict[str, Any] | None = None
+        try:
+            endpoint_id = getattr(request.state, "_auth_endpoint_id", None)
+            action = getattr(request.state, "_auth_action", None)
+            scope_name = getattr(request.state, "_auth_scope_name", None)
+            if endpoint_id is not None or action is not None or scope_name is not None:
+                usage_details = {}
+                if endpoint_id is not None:
+                    usage_details["endpoint_id"] = str(endpoint_id)
+                if action is not None:
+                    usage_details["action"] = str(action)
+                if scope_name is not None:
+                    usage_details["scope"] = str(scope_name)
+                path = getattr(getattr(request, "url", None), "path", None) or getattr(request, "scope", {}).get("path")
+                if path:
+                    usage_details["path"] = str(path)
+                method = getattr(request, "method", None)
+                if method:
+                    usage_details["method"] = str(method).upper()
+        except _USER_DB_NONCRITICAL_EXCEPTIONS:
+            usage_details = None
+
+        if usage_details is None:
+            key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
+        else:
+            try:
+                key_info = await api_mgr.validate_api_key(
+                    api_key=api_key,
+                    ip_address=client_ip,
+                    usage_details=usage_details,
+                )
+            except TypeError:
+                key_info = await api_mgr.validate_api_key(api_key=api_key, ip_address=client_ip)
         if not key_info:
             logger.warning("Multi-User Mode: Invalid X-API-KEY presented.")
             raise HTTPException(
@@ -1373,7 +1405,7 @@ async def get_request_user(
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
         if (
             not _prod
-            and is_truthy(_os.getenv("TESTING", ""))
+            and env_flag_enabled("TESTING")
             and not is_truthy(_os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true"))
             and _is_strict_test_bypass_context()
         ):
@@ -1392,8 +1424,8 @@ async def get_request_user(
         import os as _os
         _prod = _is_production_like_env()
         if _prod and (
-            is_truthy(_os.getenv("TEST_MODE", ""))
-            or is_truthy(_os.getenv("TESTING", ""))
+            env_flag_enabled("TEST_MODE")
+            or env_flag_enabled("TESTING")
         ) and not getattr(get_request_user, "_warned_testflags_prod", False):
             logger.warning(
                 "TEST flags detected while tldw_production=true; "
