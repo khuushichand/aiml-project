@@ -234,9 +234,6 @@ const normalizeTurnTakingMode = (value: unknown): "single" | "round_robin" => {
 const normalizeCharacterIdValue = (value: unknown): string | null => {
   const text = String(value ?? "").trim()
   if (!text) return null
-  if (/^\d+$/.test(text)) {
-    return text
-  }
   return text
 }
 
@@ -358,6 +355,20 @@ export function ConversationTab({
     historyId,
     serverChatId
   })
+  const handleAsyncError = React.useCallback(
+    (error: unknown) => {
+      notification.error({
+        message: t("common:error", { defaultValue: "Error" }),
+        description:
+          (isErrorWithMessage(error)
+            ? error.message
+            : t("common:somethingWentWrong", {
+                defaultValue: "Something went wrong"
+              }))
+      })
+    },
+    [notification, t]
+  )
   const [authorNoteDraft, setAuthorNoteDraft] = React.useState("")
   const [authorNoteMode, setAuthorNoteMode] = React.useState<
     "before_system" | "depth"
@@ -654,25 +665,33 @@ export function ConversationTab({
   }, [characterMemoryById, memoryCharacterId])
 
   const persistAuthorNote = async (value: string) => {
-    await updateSettings({
-      authorNote: value.trim()
-    })
+    try {
+      await updateSettings({
+        authorNote: value.trim()
+      })
+    } catch (error: unknown) {
+      handleAsyncError(error)
+    }
   }
 
   const persistAuthorNotePosition = async (
     mode: "before_system" | "depth",
     depth: number
   ) => {
-    if (mode === "depth") {
-      await updateSettings({
-        authorNotePosition: {
-          mode: "depth",
-          depth: sanitizeDepth(depth)
-        }
-      })
-      return
+    try {
+      if (mode === "depth") {
+        await updateSettings({
+          authorNotePosition: {
+            mode: "depth",
+            depth: sanitizeDepth(depth)
+          }
+        })
+        return
+      }
+      await updateSettings({ authorNotePosition: "before_system" })
+    } catch (error: unknown) {
+      handleAsyncError(error)
     }
-    await updateSettings({ authorNotePosition: "before_system" })
   }
   const persistGreetingScope = async (value: "chat" | "character") => {
     await updateSettings({ greetingScope: value })
@@ -811,15 +830,7 @@ export function ConversationTab({
       onVersionChange(getUpdateChatVersion(updated))
       queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
     } catch (error: unknown) {
-      notification.error({
-        message: t("common:error", { defaultValue: "Error" }),
-        description:
-          (isErrorWithMessage(error)
-            ? error.message
-            : t("common:somethingWentWrong", {
-                defaultValue: "Something went wrong"
-              }))
-      })
+      handleAsyncError(error)
     }
   }
 
@@ -835,15 +846,7 @@ export function ConversationTab({
       onVersionChange(getUpdateChatVersion(updated))
       queryClient.invalidateQueries({ queryKey: ["serverChatHistory"] })
     } catch (error: unknown) {
-      notification.error({
-        message: t("common:error", { defaultValue: "Error" }),
-        description:
-          (isErrorWithMessage(error)
-            ? error.message
-            : t("common:somethingWentWrong", {
-                defaultValue: "Something went wrong"
-              }))
-      })
+      handleAsyncError(error)
     }
   }
 
@@ -1480,14 +1483,13 @@ export function ConversationTab({
         })}
       >
         <div className="space-y-2 max-h-40 overflow-y-auto rounded-md border border-border/60 bg-surface2/30 p-2">
-          {isPinnedMessagesError && (
+          {isPinnedMessagesError ? (
             <div className="text-xs text-danger">
               {t("playground:composer.pinnedMessages.loadError", {
                 defaultValue: "Failed to load pinned messages."
               })}
             </div>
-          )}
-          {!isPinnedMessagesError && pinnedMessages.length === 0 ? (
+          ) : pinnedMessages.length === 0 ? (
             <div className="text-xs text-text-muted">
               {t("playground:composer.pinnedMessages.empty", {
                 defaultValue: "No pinned messages in this chat."

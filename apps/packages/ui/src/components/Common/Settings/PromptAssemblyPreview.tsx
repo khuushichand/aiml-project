@@ -167,6 +167,8 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
 }) => {
   const { t } = useTranslation(["playground", "common"])
   const [open, setOpen] = React.useState(false)
+  const id = React.useId()
+  const panelId = `${id}-prompt-assembly-preview-panel`
   const { messageSteeringMode, messageSteeringForceNarrate } =
     useStoreMessageOption()
   const resolvedSteering = React.useMemo(
@@ -213,7 +215,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
         className="flex w-full items-center justify-between px-3 py-2 text-left"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        aria-controls="prompt-assembly-preview-panel"
+        aria-controls={panelId}
       >
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-text">
@@ -243,7 +245,7 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
 
       {open && (
         <div
-          id="prompt-assembly-preview-panel"
+          id={panelId}
           className="border-t border-border/60 px-3 py-3 text-xs"
         >
           {!serverChatId && (
