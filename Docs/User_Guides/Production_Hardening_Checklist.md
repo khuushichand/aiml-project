@@ -37,7 +37,7 @@ CORS & CSRF
  - Set CORS via env: `ALLOWED_ORIGINS=https://your.domain.com,https://admin.your.domain.com` or JSON array `ALLOWED_ORIGINS='["https://your.domain.com", "https://admin.your.domain.com"]'`.
 
 Rate Limiting & Abuse Prevention
-- Global rate limiter is enabled by default via RG unless explicitly disabled with `RG_ENABLED=0` (tests may disable RG automatically unless explicitly enabled).
+- RG (rate gating) global rate limiter is enabled by default in production unless you disable it with `RG_ENABLED=0` or in `config.txt`; in test environments, RG is disabled by default unless you explicitly enable it (for example via `RG_ENABLED=1` or `config.txt`).
 - RG can be disabled via env for compatibility/rollback. When disabled, the system continues to operate using non-RG limiter paths.
 - Tune per-module rate limiters (Chat/RAG/Evals) via their respective settings.
 - Consider a network-level rate limit at the reverse proxy for additional protection.

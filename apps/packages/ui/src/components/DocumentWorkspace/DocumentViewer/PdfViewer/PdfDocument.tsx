@@ -228,17 +228,27 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         let offset = 0
         let firstHeight = 0
         let firstWidth = 0
-        for (let i = 1; i <= pdfInstance.numPages; i++) {
+        const batchSize = 10
+        for (let start = 1; start <= pdfInstance.numPages; start += batchSize) {
           if (cancelled) return
-          const page = await pdfInstance.getPage(i)
-          const viewport = page.getViewport({ scale: s })
-          if (i === 1) {
-            firstHeight = viewport.height
-            firstWidth = viewport.width
+          const end = Math.min(start + batchSize - 1, pdfInstance.numPages)
+          const pages = await Promise.all(
+            Array.from({ length: end - start + 1 }, (_, index) => pdfInstance.getPage(start + index))
+          )
+          if (cancelled) return
+
+          for (let index = 0; index < pages.length; index++) {
+            if (cancelled) return
+            const pageNumber = start + index
+            const viewport = pages[index].getViewport({ scale: s })
+            if (pageNumber === 1) {
+              firstHeight = viewport.height
+              firstWidth = viewport.width
+            }
+            heights.push(viewport.height)
+            offsets.push(offset)
+            offset += viewport.height + pageGap
           }
-          heights.push(viewport.height)
-          offsets.push(offset)
-          offset += viewport.height + pageGap
         }
         if (!cancelled) {
           setPageHeights(heights)
