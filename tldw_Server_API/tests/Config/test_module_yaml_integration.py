@@ -68,6 +68,68 @@ def test_tts_precedence_env_over_config_and_yaml(tmp_path, monkeypatch):
     assert cfg.default_provider == "env_provider"
 
 
+def test_tts_config_txt_legacy_keys_map_to_canonical_fields(tmp_path):
+
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text("providers: {}\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[TTS-Settings]",
+                "default_tts_provider = legacy_provider",
+                "default_tts_voice = legacy_voice",
+                "default_tts_speed = 1.25",
+                "local_tts_device = cuda",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+    cfg = manager.get_config()
+
+    assert cfg.default_provider == "legacy_provider"
+    assert cfg.default_voice == "legacy_voice"
+    assert cfg.default_speed == 1.25
+    assert cfg.local_device == "cuda"
+
+
+def test_tts_config_txt_canonical_keys_override_legacy_aliases(tmp_path):
+
+    yaml_path = tmp_path / "tts_providers_config.yaml"
+    yaml_path.write_text("providers: {}\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.txt"
+    config_path.write_text(
+        "\n".join(
+            [
+                "[TTS-Settings]",
+                "default_provider = canonical_provider",
+                "default_tts_provider = legacy_provider",
+                "default_voice = canonical_voice",
+                "default_tts_voice = legacy_voice",
+                "default_speed = 1.1",
+                "default_tts_speed = 1.9",
+                "local_device = cpu",
+                "local_tts_device = cuda",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    manager = TTSConfigManager(yaml_path=yaml_path, config_txt_path=config_path)
+    cfg = manager.get_config()
+
+    assert cfg.default_provider == "canonical_provider"
+    assert cfg.default_voice == "canonical_voice"
+    assert cfg.default_speed == 1.1
+    assert cfg.local_device == "cpu"
+
+
 def test_embeddings_precedence_env_over_config_over_yaml(tmp_path, monkeypatch):
 
     config_dir = tmp_path

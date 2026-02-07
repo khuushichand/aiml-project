@@ -35,6 +35,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
 
 #
 # Local Imports
@@ -314,7 +315,7 @@ def _is_test_context() -> bool:
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
     for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled(flag):
             return True
     return False
 
@@ -330,7 +331,7 @@ def _is_strict_test_bypass_context() -> bool:
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
     for flag in ("TEST_MODE", "TLDW_TEST_MODE"):
-        if os.getenv(flag, "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled(flag):
             return True
     try:
         if getattr(get_settings(), "TEST_MODE", False):
@@ -1372,8 +1373,8 @@ async def get_request_user(
         # Test-mode bypass for evaluations when admin gating is explicitly disabled
         if (
             not _prod
-            and _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
-            and _os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true").lower() not in {"1", "true", "yes", "on"}
+            and is_truthy(_os.getenv("TESTING", ""))
+            and not is_truthy(_os.getenv("EVALS_HEAVY_ADMIN_ONLY", "true"))
             and _is_strict_test_bypass_context()
         ):
             logger.info(
@@ -1391,8 +1392,8 @@ async def get_request_user(
         import os as _os
         _prod = _is_production_like_env()
         if _prod and (
-            _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or _os.getenv("TESTING", "").lower() in {"1", "true", "yes", "on"}
+            is_truthy(_os.getenv("TEST_MODE", ""))
+            or is_truthy(_os.getenv("TESTING", ""))
         ) and not getattr(get_request_user, "_warned_testflags_prod", False):
             logger.warning(
                 "TEST flags detected while tldw_production=true; "

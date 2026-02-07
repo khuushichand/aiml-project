@@ -494,7 +494,7 @@ class TestCache:
         svc.check_text("cached_word", "user1")
         # Force cache timestamp to be in the past
         with svc._lock:
-            svc._cache_timestamps["user1"] = 0.0
+            svc._cache_timestamps["user1:"] = 0.0
         # Add another rule
         _create_rule(db, patterns=["new_word"])
         result = svc.check_text("new_word", "user1")
@@ -544,3 +544,206 @@ class TestDefaultResultFields:
         assert r.display_mode == "inline_banner"
         assert r.crisis_resources is None
         assert r.escalation_triggered is False
+
+
+# ── Deactivation Token Fields ────────────────────────────────
+
+
+class TestDeactivationTokenFields:
+    def test_token_roundtrip(self, db, svc):
+        rule = _create_rule(db, patterns=["word"])
+        assert rule.deactivation_confirmation_token is None
+        assert rule.deactivation_requested_at is None
+        # Set token
+        db.update_self_monitoring_rule(
+            rule.id,
+            deactivation_confirmation_token="abc123",
+            deactivation_requested_at="2026-02-07T12:00:00+00:00",
+        )
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.deactivation_confirmation_token == "abc123"
+        assert fetched.deactivation_requested_at == "2026-02-07T12:00:00+00:00"
+
+    def test_token_update_and_clear(self, db, svc):
+        rule = _create_rule(db, patterns=["word"])
+        db.update_self_monitoring_rule(
+            rule.id,
+            deactivation_confirmation_token="token1",
+            deactivation_requested_at="2026-02-07T12:00:00+00:00",
+        )
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.deactivation_confirmation_token == "token1"
+        # Clear token
+        db.update_self_monitoring_rule(
+            rule.id,
+            deactivation_confirmation_token=None,
+            deactivation_requested_at=None,
+        )
+        fetched2 = db.get_self_monitoring_rule(rule.id)
+        assert fetched2.deactivation_confirmation_token is None
+        assert fetched2.deactivation_requested_at is None
+
+
+# ── Self-Monitoring Schedule Filtering ─────────────────────────
+
+
+class TestSelfMonScheduleFiltering:
+    def test_rule_skipped_outside_schedule(self, db, svc):
+        """Rule linked to governance policy with non-matching day is skipped."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("UTC"))
+        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        other_day = day_names[(now.weekday() + 3) % 7]
+        gp = db.create_governance_policy(
+            owner_user_id="user1",
+            name="Weekday Policy",
+            policy_mode="self",
+            schedule_days=other_day,
+            schedule_timezone="UTC",
+        )
+        _create_rule(db, patterns=["trigger"], governance_policy_id=gp.id)
+        result = svc.check_text("trigger word", "user1")
+        assert result.triggered is False
+
+
+# ── Self-Monitoring Chat-Type Filtering ────────────────────────
+
+
+class TestSelfMonChatTypeFiltering:
+    def test_rule_skipped_for_wrong_chat_type(self, db, svc):
+        gp = db.create_governance_policy(
+            owner_user_id="user1",
+            name="Character Only",
+            policy_mode="self",
+            scope_chat_types="character",
+        )
+        _create_rule(db, patterns=["trigger"], governance_policy_id=gp.id)
+        result = svc.check_text("trigger word", "user1", chat_type="regular")
+        assert result.triggered is False
+
+    def test_rule_matches_correct_chat_type(self, db, svc):
+        gp = db.create_governance_policy(
+            owner_user_id="user1",
+            name="Character Only",
+            policy_mode="self",
+            scope_chat_types="character",
+        )
+        _create_rule(db, patterns=["trigger"], governance_policy_id=gp.id)
+        result = svc.check_text("trigger word", "user1", chat_type="character")
+        assert result.triggered is True
+
+
+# ── Confirmation Bypass ────────────────────────────────────────
+
+
+class TestConfirmationBypass:
+    def test_request_returns_token(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="confirmation",
+            cooldown_minutes=99999,
+        )
+        result = svc.request_deactivation(rule.id, "user1")
+        assert result["ok"] is True
+        assert result["status"] == "awaiting_confirmation"
+        assert "confirmation_token" in result
+        # Rule should still be enabled
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.enabled is True
+        assert fetched.deactivation_confirmation_token == result["confirmation_token"]
+
+    def test_confirm_with_correct_token_disables(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="confirmation",
+            cooldown_minutes=99999,
+        )
+        req = svc.request_deactivation(rule.id, "user1")
+        token = req["confirmation_token"]
+        confirm = svc.confirm_deactivation(rule.id, "user1", token)
+        assert confirm["ok"] is True
+        assert confirm["status"] == "disabled"
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.enabled is False
+        assert fetched.deactivation_confirmation_token is None
+
+    def test_confirm_with_wrong_token_fails(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="confirmation",
+            cooldown_minutes=99999,
+        )
+        svc.request_deactivation(rule.id, "user1")
+        result = svc.confirm_deactivation(rule.id, "user1", "wrong_token")
+        assert result["ok"] is False
+        assert "Invalid" in result["error"]
+
+    def test_confirm_wrong_user_fails(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="confirmation",
+            cooldown_minutes=99999,
+        )
+        req = svc.request_deactivation(rule.id, "user1")
+        token = req["confirmation_token"]
+        result = svc.confirm_deactivation(rule.id, "wrong_user", token)
+        assert result["ok"] is False
+
+
+# ── Partner Approval Bypass ────────────────────────────────────
+
+
+class TestPartnerApprovalBypass:
+    def test_request_returns_token_and_partner(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="partner_approval",
+            bypass_partner_user_id="partner1",
+            cooldown_minutes=99999,
+        )
+        result = svc.request_deactivation(rule.id, "user1")
+        assert result["ok"] is True
+        assert result["status"] == "awaiting_partner_approval"
+        assert "confirmation_token" in result
+        assert result["partner_user_id"] == "partner1"
+
+    def test_approve_by_correct_partner_disables(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="partner_approval",
+            bypass_partner_user_id="partner1",
+            cooldown_minutes=99999,
+        )
+        req = svc.request_deactivation(rule.id, "user1")
+        token = req["confirmation_token"]
+        approve = svc.approve_deactivation(rule.id, "partner1", token)
+        assert approve["ok"] is True
+        assert approve["status"] == "disabled"
+        fetched = db.get_self_monitoring_rule(rule.id)
+        assert fetched.enabled is False
+
+    def test_approve_by_wrong_partner_fails(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="partner_approval",
+            bypass_partner_user_id="partner1",
+            cooldown_minutes=99999,
+        )
+        req = svc.request_deactivation(rule.id, "user1")
+        token = req["confirmation_token"]
+        result = svc.approve_deactivation(rule.id, "wrong_partner", token)
+        assert result["ok"] is False
+        assert "Not the designated partner" in result["error"]
+
+    def test_approve_with_wrong_token_fails(self, db, svc):
+        rule = _create_rule(
+            db, patterns=["word"],
+            bypass_protection="partner_approval",
+            bypass_partner_user_id="partner1",
+            cooldown_minutes=99999,
+        )
+        svc.request_deactivation(rule.id, "user1")
+        result = svc.approve_deactivation(rule.id, "partner1", "wrong_token")
+        assert result["ok"] is False
+        assert "Invalid" in result["error"]

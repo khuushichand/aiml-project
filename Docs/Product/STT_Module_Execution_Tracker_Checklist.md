@@ -1,6 +1,6 @@
 # STT Module - Execution Tracker Checklist
 
-Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (section: **Staged Implementation Plan (Execution Roadmap)**). Stages 1-4 are complete (15/15 items complete).
+Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (section: **Staged Implementation Plan (Execution Roadmap)**). Stages 1-5 are complete (19/19 items complete).
 
 ## Stage 1 - M1 Closure: WS Turn Detection Tuning + Compatibility
 
@@ -31,7 +31,7 @@ Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (sect
 
 ## Stage 5 - Production Hardening + Release Readiness
 
-- [ ] Produce final release report covering stage acceptance outcomes and residual risks.
-- [ ] Publish known-issues list with severity and workaround/owner fields.
-- [ ] Document rollback guidance for STT/WS/TTS changes.
-- [ ] Complete operations/support handoff notes.
+- [x] Produce final release report covering stage acceptance outcomes and residual risks. (`Docs/Product/STT_Module_Release_Report_20260207.md`)
+- [x] Publish known-issues list with severity and workaround/owner fields. (`Docs/Product/STT_Module_Known_Issues_20260207.md`)
+- [x] Document rollback guidance for STT/WS/TTS changes. (`Docs/Operations/STT_TTS_Rollback_Guide_20260207.md`)
+- [x] Complete operations/support handoff notes. (`Docs/Operations/STT_Module_Ops_Support_Handoff_20260207.md`)

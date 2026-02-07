@@ -20,6 +20,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+from tldw_Server_API.app.core.testing import env_flag_enabled
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
@@ -164,8 +165,6 @@ async def get_prompt_studio_user(
     Returns:
         User context dictionary
     """
-    import os
-
     # Debug trace to aid tests
     with contextlib.suppress(_PROMPT_STUDIO_CONTEXT_EXCEPTIONS):
         logger.debug(
@@ -178,7 +177,7 @@ async def get_prompt_studio_user(
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     client_id_value = x_client_id if isinstance(x_client_id, str) else None
-    if os.getenv("TEST_MODE", "").lower() == "true":
+    if env_flag_enabled("TEST_MODE"):
         try:
             maybe_user = get_current_active_user()  # may be sync or async, or None
             if asyncio.iscoroutine(maybe_user):
@@ -239,7 +238,7 @@ async def get_prompt_studio_user(
     path = (request.url.path or "")
     method = request.method.upper()
     if not authz and not api_key_hdr:
-        test_mode = os.getenv("TEST_MODE", "").lower() == "true"
+        test_mode = env_flag_enabled("TEST_MODE")
         # Explicitly require auth for project list endpoint (without trailing slash) to satisfy tests
         if path == "/api/v1/prompt-studio/projects" and method == "GET":
             raise HTTPException(
@@ -368,11 +367,10 @@ async def get_prompt_studio_db(
     client_id = user_context["client_id"]
 
     # Allow anonymous only in explicit settings or during tests
-    import os
     if (
         user_id == "anonymous"
         and not settings.get("ALLOW_ANONYMOUS_PROMPT_STUDIO", False)
-        and not os.getenv("TEST_MODE", "").lower() == "true"
+        and not env_flag_enabled("TEST_MODE")
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -489,8 +487,7 @@ async def check_rate_limit(
         HTTPException: If rate limit exceeded
     """
     # Bypass in tests or when globally disabled
-    import os as _os
-    if _os.getenv("TEST_MODE", "").lower() == "true":
+    if env_flag_enabled("TEST_MODE"):
         return True
     if not security_config.enable_rate_limiting:
         return True

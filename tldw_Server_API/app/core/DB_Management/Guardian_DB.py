@@ -64,6 +64,14 @@ def _new_id() -> str:
     return uuid4().hex[:16]
 
 
+def _safe_get(row: Any, key: str, default: Any = None) -> Any:
+    """Safely read a column from a sqlite3.Row, returning default if missing."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
 # ── Data classes ─────────────────────────────────────────────
 
 @dataclass
@@ -822,6 +830,7 @@ class GuardianDB:
             "policy_type", "category", "pattern", "pattern_type",
             "action", "phase", "severity", "notify_guardian",
             "notify_context", "message_to_dependent", "enabled", "metadata",
+            "governance_policy_id",
         }
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if not updates:
@@ -1307,7 +1316,8 @@ class GuardianDB:
             "escalation_session_action", "escalation_window_days",
             "escalation_window_threshold", "escalation_window_action",
             "min_context_length", "enabled", "pending_deactivation_at",
-            "governance_policy_id",
+            "governance_policy_id", "deactivation_confirmation_token",
+            "deactivation_requested_at",
         }
         updates = {k: v for k, v in kwargs.items() if k in allowed_fields}
         if not updates:
@@ -1403,6 +1413,8 @@ class GuardianDB:
             min_context_length=row["min_context_length"],
             enabled=bool(row["enabled"]),
             pending_deactivation_at=row["pending_deactivation_at"],
+            deactivation_confirmation_token=_safe_get(row, "deactivation_confirmation_token"),
+            deactivation_requested_at=_safe_get(row, "deactivation_requested_at"),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

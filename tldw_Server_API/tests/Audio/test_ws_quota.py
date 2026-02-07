@@ -1,8 +1,33 @@
 import json
 import base64
+import time
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _receive_ws_message(ws, *, timeout_s: float = 5.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            return ws.portal.call(ws._send_rx.receive_nowait)
+        except Exception as exc:
+            if exc.__class__.__name__ == "WouldBlock":
+                time.sleep(0.01)
+                continue
+            raise
+    raise AssertionError("Timed out waiting for websocket frame")
+
+
+def _receive_json_until_non_ping(ws, *, max_frames: int = 12) -> dict:
+    for _ in range(max_frames):
+        message = _receive_ws_message(ws)
+        ws._raise_on_close(message)
+        data = json.loads(message["text"])
+        if isinstance(data, dict) and data.get("type") == "ping":
+            continue
+        return data
+    raise AssertionError("Did not receive non-ping JSON frame within limit")
 
 
 @pytest.mark.asyncio
@@ -33,7 +58,7 @@ async def test_ws_quota_exceeded_structured_error(monkeypatch):
             audio = (np.zeros(160, dtype=np.float32)).tobytes()
             ws.send_text(json.dumps({"type": "audio", "data": base64.b64encode(audio).decode("ascii")}))
             # Expect an error payload indicating quota exceeded
-            data = ws.receive_json()
+            data = _receive_json_until_non_ping(ws)
             assert isinstance(data, dict)
             assert data.get("type") == "error"
             assert data.get("error_type") == "quota_exceeded"

@@ -92,6 +92,11 @@ from tldw_Server_API.app.services.auth_service import (
     update_user_password_hash,
 )
 from tldw_Server_API.app.services.registration_service import RegistrationService
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _env_flag_enabled,
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_test_mode as _is_test_mode,
+)
 
 _AUTH_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -329,12 +334,12 @@ async def _ensure_user_org_membership(user_id: int, username: Optional[str] = No
 def _is_pytest_context() -> bool:
     """Return True when running under pytest or explicit test-mode flags."""
     try:
-        if os.getenv("PYTEST_CURRENT_TEST") is not None:
+        if _is_explicit_pytest_runtime():
             return True
-        for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-            raw = os.getenv(flag, "")
-            if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
-                return True
+        if _is_test_mode():
+            return True
+        if _env_flag_enabled("TESTING"):
+            return True
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return False
     return False
@@ -624,7 +629,7 @@ async def _register_runtime_diag(request: Request, response: Response):
     - X-TLDW-CSRF-Enabled: 'true' or 'false' from runtime settings
     - X-TLDW-Register-Duration-ms: handler duration in ms (set after return)
     """
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = _is_test_mode()
     if not test_mode:
         # No-op when not in test mode
         return
@@ -662,7 +667,7 @@ def _finalize_register_diag(request: Request, response: Response):
 
 async def _login_runtime_diag(request: Request, response: Response):
     """Diagnostics for login (TEST_MODE only): annotate DB backend and CSRF state, capture start time."""
-    test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+    test_mode = _is_test_mode()
     if not test_mode:
         return
     import time as _t
@@ -864,8 +869,8 @@ async def login(
                     success=success,
                 )
                 # Persist immediately for observability (tests/admin tools) without relying on background loops.
-                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
-                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                flush_on_login = _env_flag_enabled("AUDIT_FLUSH_ON_LOGIN")
+                test_mode = _is_test_mode()
                 if flush_on_login or test_mode:
                     await svc.flush()
             except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
@@ -901,7 +906,7 @@ async def login(
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 extra_headers["X-TLDW-Login-Reason"] = "user-not-found"
                 # Stage marker to aid triage in test runs
                 extra_headers["X-TLDW-Login-Stage"] = "user_fetch"
@@ -948,7 +953,7 @@ async def login(
                 )
 
         # Verify password
-        is_test_mode = os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
+        is_test_mode = _is_test_mode()
         is_valid, needs_rehash = password_service.verify_password(form_data.password, user['password_hash'])
         # In TEST_MODE, double-check with a fresh PasswordService to rule out stale settings
         if not is_valid and is_test_mode:
@@ -1013,7 +1018,7 @@ async def login(
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 _finalize_login_diag(request, response)
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 extra_headers["X-TLDW-Login-Reason"] = "invalid-password"
                 # Stage marker to aid triage in test runs
                 extra_headers["X-TLDW-Login-Stage"] = "verify_password"
@@ -1220,7 +1225,7 @@ async def login(
         logger.exception("Login error")
         log_counter("auth_login_unexpected_error")
         log_histogram("auth_login_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):  # expose details in tests
+        if _is_test_mode():  # expose details in tests
             try:
                 response.headers["X-TLDW-Login-Error"] = "internal-error"
                 _finalize_login_diag(request, response)
@@ -1402,7 +1407,7 @@ async def list_user_sessions(
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list user sessions: {e}")
         # In test mode, surface the underlying error to aid debugging
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to retrieve sessions: {e}"
@@ -1528,7 +1533,7 @@ async def refresh_token(
     log_counter("auth_refresh_attempt")
     try:
         # TEST_MODE diagnostics (set DB and CSRF headers for easier triage)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool as _get_pool
                 pool = await _get_pool()
@@ -1553,7 +1558,7 @@ async def refresh_token(
                     raise InvalidTokenError("Invalid refresh token format")
                 user_id = int(getattr(settings, "SINGLE_USER_FIXED_ID", 1))
             else:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "validate"
                         response.headers["X-TLDW-Refresh-Reason"] = "invalid-format"
@@ -1565,7 +1570,7 @@ async def refresh_token(
             try:
                 token_payload = jwt_service.decode_refresh_token(payload.refresh_token)
             except _AUTH_NONCRITICAL_EXCEPTIONS as _e:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = f"invalid-token:{type(_e).__name__}"
@@ -1575,7 +1580,7 @@ async def refresh_token(
 
             # Check if token is blacklisted
             if await session_manager.is_token_blacklisted(payload.refresh_token, token_payload.get("jti")):
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "blacklist"
                         response.headers["X-TLDW-Refresh-Reason"] = "revoked"
@@ -1586,7 +1591,7 @@ async def refresh_token(
             # JWT standard uses 'sub' for subject (user ID)
             user_id = token_payload.get("sub") or token_payload.get("user_id")
             if not user_id:
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = "missing-user-id"
@@ -1598,7 +1603,7 @@ async def refresh_token(
             try:
                 user_id = int(user_id)
             except (ValueError, TypeError):
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers["X-TLDW-Refresh-Stage"] = "decode"
                         response.headers["X-TLDW-Refresh-Reason"] = "invalid-user-id"
@@ -1612,7 +1617,7 @@ async def refresh_token(
         user = await fetch_active_user_by_id(db, user_id)
 
         if not user:
-            if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+            if _is_test_mode():
                 try:
                     response.headers["X-TLDW-Refresh-Stage"] = "fetch-user"
                     response.headers["X-TLDW-Refresh-Reason"] = "user-not-found"
@@ -1676,7 +1681,7 @@ async def refresh_token(
                 )
             except _AUTH_NONCRITICAL_EXCEPTIONS as _sess_e:
                 # Treat missing/invalid session mapping as invalid token usage
-                if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+                if _is_test_mode():
                     try:
                         response.headers.setdefault("X-TLDW-Refresh-Stage", "session")
                         response.headers.setdefault("X-TLDW-Refresh-Reason", f"session-error:{type(_sess_e).__name__}")
@@ -1716,7 +1721,7 @@ async def refresh_token(
         log_counter("auth_refresh_success")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
         # TEST_MODE: include simple duration metric header (non-breaking)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Refresh-Duration-ms"] = str(int((time.perf_counter() - start_time) * 1000))
         return TokenResponse(
@@ -1730,7 +1735,7 @@ async def refresh_token(
         logger.warning(f"Token refresh failed: {e}")
         log_counter("auth_refresh_token_error", labels={"type": type(e).__name__})
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 response.headers.setdefault("X-TLDW-Refresh-Stage", "error")
                 response.headers.setdefault("X-TLDW-Refresh-Reason", type(e).__name__)
@@ -1745,7 +1750,7 @@ async def refresh_token(
         logger.error(f"Token refresh error: {e}")
         log_counter("auth_refresh_unexpected_error")
         log_histogram("auth_refresh_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 response.headers["X-TLDW-Refresh-Stage"] = "unexpected"
                 response.headers["X-TLDW-Refresh-Reason"] = "internal-error"
@@ -2902,8 +2907,8 @@ async def mfa_login(
                     user_agent=ua,
                     success=success,
                 )
-                flush_on_login = os.getenv("AUDIT_FLUSH_ON_LOGIN", "").lower() in {"1", "true", "yes", "on"}
-                test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+                flush_on_login = _env_flag_enabled("AUDIT_FLUSH_ON_LOGIN")
+                test_mode = _is_test_mode()
                 if flush_on_login or test_mode:
                     await svc.flush()
             except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
@@ -3091,7 +3096,7 @@ async def register(
         log_counter("auth_register_duplicate")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
         # Attach diagnostics (if enabled)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "duplicate-user"
         _finalize_register_diag(http_request, response)
@@ -3110,7 +3115,7 @@ async def register(
         logger.warning(f"Registration failed - weak password: {e}")
         log_counter("auth_register_weak_password")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "weak-password"
         _finalize_register_diag(http_request, response)
@@ -3122,7 +3127,7 @@ async def register(
         logger.warning(f"Registration failed - invalid code: {e}")
         log_counter("auth_register_invalid_code")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "invalid-registration-code"
         _finalize_register_diag(http_request, response)
@@ -3134,7 +3139,7 @@ async def register(
         logger.error(f"Registration error: {e}")
         log_counter("auth_register_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "registration-error"
         _finalize_register_diag(http_request, response)
@@ -3151,12 +3156,12 @@ async def register(
         logger.error(f"Unexpected registration error: {e}")
         log_counter("auth_register_unexpected_error")
         log_histogram("auth_register_duration", time.perf_counter() - start_time)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
                 response.headers["X-TLDW-Register-Error"] = "internal-error"
         duration = time.perf_counter() - start_time
         _finalize_register_diag(http_request, response)
-        if os.getenv("TEST_MODE", "").lower() in ("1","true","yes"):
+        if _is_test_mode():
             try:
                 pool = await get_db_pool()
                 db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"

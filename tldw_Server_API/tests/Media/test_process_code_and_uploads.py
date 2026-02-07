@@ -101,6 +101,29 @@ def test_process_docs_streaming_respects_validator_limits(client_with_single_use
     assert payload.get("errors_count", 0) >= 1
 
 
+def test_process_code_logs_upload_errors_when_test_mode_is_single_letter_y(
+    client_with_single_user,
+    monkeypatch,
+):
+    from tldw_Server_API.app.api.v1.endpoints.media import process_code as process_code_mod
+
+    client, _ = client_with_single_user
+    monkeypatch.setenv("TEST_MODE", "y")
+    logged: list[str] = []
+    monkeypatch.setattr(
+        process_code_mod.logger,
+        "warning",
+        lambda message, *args, **kwargs: logged.append(str(message)),
+        raising=True,
+    )
+
+    files = [("files", ("bad.exe", b"MZ\x90\x00", "application/octet-stream"))]
+    response = client.post("/api/v1/media/process-code", files=files, data={})
+
+    assert response.status_code in (200, 207), response.text
+    assert any("TEST_MODE: process-code upload_errors=" in msg for msg in logged)
+
+
 @pytest.mark.asyncio
 async def test_pdf_analysis_without_explicit_api_key(monkeypatch):
     # Unit level: exercise process_pdf_task so that analysis runs with api_name only

@@ -2,11 +2,11 @@
 
 - **Meta**
   - Owner: Core Voice & API Team
-  - Status: In Progress (see `Docs/Product/STT_Module_IMPLEMENTATION_PLAN.md` for staged execution and status details)
+  - Status: Release Readiness Complete (Stage 5 closed; follow-ups tracked via known-issues)
   - Implementation Progress:
     - Provider registry + adapters implemented (`stt_provider_adapter.py`) and used by REST `/api/v1/audio/transcriptions`, ingestion persistence, and Jobs (CPU and GPU workers).
     - Normalized STT artifact shape in place (`to_normalized_stt_artifact`, adapter `transcribe_batch`) and used internally by REST, `/media/add` ingestion, and Jobs; transcripts now upserted into `Transcripts` keyed by `(media_id, whisper_model)` with the full artifact stored in `Transcripts.transcription`.
-    - Unified batch helpers for ingestion and Jobs (`run_stt_batch_via_registry`, `run_stt_job_via_registry`) wired into `perform_transcription` and `audio_jobs_worker`/`audio_transcribe_gpu_worker`; remaining work is centered on release hardening.
+    - Unified batch helpers for ingestion and Jobs (`run_stt_batch_via_registry`, `run_stt_job_via_registry`) wired into `perform_transcription` and `audio_jobs_worker`/`audio_transcribe_gpu_worker`; Stage 5 hardening/release artifacts are published in `Docs/Product/STT_Module_Release_Report_20260207.md`.
 
 - **Project Summary**
   - Speech-to-Text (STT) powers `/api/v1/audio/transcriptions` and `/api/v1/audio/stream/transcribe`.
@@ -14,7 +14,7 @@
   - The STT module should unify these providers, expose consistent REST/WebSocket behaviors, and integrate cleanly with Jobs, Media ingestion, Embeddings, and AuthNZ.
 
 - **Problem Statement**
-  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. Current state: REST + WS parity exists, PCM TTS is available, and STT/TTS/voice-to-voice metrics are wired. Remaining gaps are primarily release hardening and production-readiness packaging.
+  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. Current state: REST + WS parity exists, PCM TTS is available, STT/TTS/voice-to-voice metrics are wired, and release-hardening artifacts are complete. Remaining gaps are limited to tracked post-release follow-ups in the known-issues list.
 
 - **Goals**
   - Complete turn detection/auto-commit in unified WS STT for lower final latency (fail-open if VAD unavailable).
@@ -158,6 +158,9 @@
  4. **M4 - Docs & Harness**: refreshed STT/TTS docs plus a lightweight voice-to-voice latency harness consuming existing metrics; documented CLI/outputs.
      - **Acceptance**: `Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (or equivalent) runs against the reference setup and outputs JSON with at least p50/p90 for `stt_final_latency_seconds`, `tts_ttfb_seconds`, and `voice_to_voice_seconds`; short mode suitable for CI; docs reference the harness and the VAD/metrics knobs.
      - **Status**: Implemented. See `Helper_Scripts/voice_latency_harness/run.py`, `Helper_Scripts/voice_latency_harness/README.md`, and sample output `Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc`.
+ 5. **M5 - Production Hardening & Release Readiness**: release-report closure, known-issues publication, rollback playbook, and operations/support handoff.
+    - **Acceptance**: All four artifacts exist and are cross-linked from the execution tracker; known issues include severity + workaround + owner; rollback includes concrete STT/WS/TTS actions with validation steps.
+    - **Status**: Implemented. See `Docs/Product/STT_Module_Release_Report_20260207.md`, `Docs/Product/STT_Module_Known_Issues_20260207.md`, `Docs/Operations/STT_TTS_Rollback_Guide_20260207.md`, and `Docs/Operations/STT_Module_Ops_Support_Handoff_20260207.md`.
 
 - **Risks & Mitigations**
   - Provider downtime/unavailability → multi-provider fallbacks, local deterministic mock, error escalation.

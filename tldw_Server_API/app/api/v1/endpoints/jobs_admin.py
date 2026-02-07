@@ -28,6 +28,11 @@ from tldw_Server_API.app.api.v1.API_Deps.auth_deps import (
 from tldw_Server_API.app.core.Audit.unified_audit_service import AuditContext, AuditEventType
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
 
 _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -57,7 +62,7 @@ router = APIRouter(
 
 
 def _is_truthy(v: str | None) -> bool:
-    return str(v or "").lower() in {"1", "true", "yes", "y", "on"}
+    return _shared_is_truthy(v)
 
 
 def _make_admin_user_from_principal(principal: AuthPrincipal) -> dict[str, Any]:
@@ -284,8 +289,8 @@ async def prune_jobs_endpoint(
         admin_user = _enforce_domain_scope_unified(principal, domain_val)
         # Confirm header for destructive action (skip when dry_run or in TEST_MODE)
         if not bool((raw_body or {}).get("dry_run")):
-            is_test = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
-            require_confirm_env = str(os.getenv("JOBS_REQUIRE_CONFIRM", "")).lower() in {"1", "true", "yes", "y", "on"}
+            is_test = is_test_mode()
+            require_confirm_env = env_flag_enabled("JOBS_REQUIRE_CONFIRM")
             try:
                 older = int((raw_body or {}).get("older_than_days") or 0)
             except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
@@ -294,7 +299,7 @@ async def prune_jobs_endpoint(
             # or when pruning with immediate threshold (older_than_days <= 0)
             if (require_confirm_env and not is_test) or (older <= 0):
                 hdr = str(request.headers.get("x-confirm", "")).lower()
-                if hdr not in {"1", "true", "yes", "y", "on"}:
+                if not _is_truthy(hdr):
                     raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         # Now validate the request body
         req = PruneRequest(**(raw_body or {}))
@@ -315,9 +320,13 @@ async def prune_jobs_endpoint(
         )
         # Optionally refresh gauges for a fully-scoped prune (avoid heavy recompute by default)
         try:
-            if not req.dry_run and req.domain and req.queue and req.job_type and str(
-                os.getenv("JOBS_UPDATE_GAUGES_ON_PRUNE", "")
-            ).lower() in {"1","true","yes","y","on"}:
+            if (
+                not req.dry_run
+                and req.domain
+                and req.queue
+                and req.job_type
+                and env_flag_enabled("JOBS_UPDATE_GAUGES_ON_PRUNE")
+            ):
                 jm._update_gauges(domain=req.domain, queue=req.queue, job_type=req.job_type)
         except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
             pass
@@ -643,7 +652,7 @@ async def rotate_crypto_endpoint(
     # Require confirmation for destructive changes
     if not body.dry_run:
         hdr = str(request.headers.get("x-confirm", "")).lower()
-        if hdr not in {"1", "true", "yes", "y", "on"}:
+        if not _is_truthy(hdr):
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
     db_url = os.getenv("JOBS_DB_URL")
     backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -836,7 +845,7 @@ async def stream_job_events(
 
     # In test mode, bound the stream duration to avoid teardown hangs in CI/sandbox
     try:
-        _test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}
+        _test_mode = is_test_mode()
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
         _test_mode = False
     try:
@@ -1026,7 +1035,7 @@ async def ttl_sweep_endpoint(
         admin_user = _enforce_domain_scope_unified(principal, domain_val)
         # Confirm header for destructive action (check before model validation for consistent 400s)
         hdr = str(request.headers.get("x-confirm", "")).lower()
-        if hdr not in {"1", "true", "yes", "y", "on"}:
+        if not _is_truthy(hdr):
             # Special-case: when domain-scoped RBAC is enforced and request is scoped
             # in TEST_MODE, allow a no-op (affected=0) response without destructive
             # changes. This preserves the guardrail while enabling RBAC-focused checks
@@ -1034,7 +1043,7 @@ async def ttl_sweep_endpoint(
             # behavior (400 without X-Confirm) unchanged.
             domain_scoped = _is_truthy(os.getenv("JOBS_DOMAIN_SCOPED_RBAC"))
             forced = _is_truthy(os.getenv("JOBS_RBAC_FORCE"))
-            is_test = _is_truthy(os.getenv("TEST_MODE"))
+            is_test = is_test_mode()
             if is_test and domain_scoped and forced and (raw or {}).get("domain"):
                 return TTLSweepResponse(affected=0)
             raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
@@ -1469,7 +1478,7 @@ async def batch_cancel_endpoint(
         # Require confirm header unless dry_run
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
-            if hdr not in {"1", "true", "yes", "y", "on"}:
+            if not _is_truthy(hdr):
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -1501,7 +1510,7 @@ async def batch_cancel_endpoint(
                         count = int(c.get("count") or 0) if isinstance(c, dict) else int(c[0] if c else 0)
                         return BatchCancelResponse(affected=count)
                     # Counters pre-measure per group
-                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                     grp_ready = []
                     grp_sched = []
                     grp_proc = []
@@ -1589,7 +1598,7 @@ async def batch_cancel_endpoint(
                     r = cur.fetchone()
                     return BatchCancelResponse(affected=int(r[0] if r else 0))
                 # Counters pre-measure
-                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                 grp_ready2 = []
                 grp_sched2 = []
                 grp_proc2 = []
@@ -1684,7 +1693,7 @@ async def batch_reschedule_endpoint(
         admin_user = _enforce_domain_scope_unified(principal, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
-            if hdr not in {"1", "true", "yes", "y", "on"}:
+            if not _is_truthy(hdr):
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -1710,7 +1719,7 @@ async def batch_reschedule_endpoint(
                         )
                         r = cur.fetchone()
                         return BatchRescheduleResponse(affected=int(r[0] if r else 0))
-                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                     grp_ready = []
                     if counters_enabled:
                         cur.execute(
@@ -1755,7 +1764,7 @@ async def batch_reschedule_endpoint(
                     )
                     r = cur.fetchone()
                     return BatchRescheduleResponse(affected=int(r[0] if r else 0))
-                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                 grp_ready2 = []
                 if counters_enabled:
                     grp_ready2 = conn.execute(
@@ -1885,7 +1894,7 @@ async def batch_requeue_quarantined_endpoint(
         admin_user = _enforce_domain_scope_unified(principal, req.domain)
         if not req.dry_run:
             hdr = str(request.headers.get("x-confirm", "")).lower()
-            if hdr not in {"1", "true", "yes", "y", "on"}:
+            if not _is_truthy(hdr):
                 raise HTTPException(status_code=400, detail="Confirmation required: set X-Confirm: true")
         db_url = os.getenv("JOBS_DB_URL")
         backend = "postgres" if (db_url and db_url.startswith("postgres")) else None
@@ -1914,7 +1923,7 @@ async def batch_requeue_quarantined_endpoint(
                             count = int(r.get("c") or 0) if isinstance(r, dict) else int(r[0] if r else 0)
                             return BatchRequeueQuarantinedResponse(affected=count)
                         # Compute group counts to adjust counters post-update when enabled
-                        counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                        counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                         grp_rows: list = []
                         if counters_enabled:
                             cur.execute(
@@ -1969,7 +1978,7 @@ async def batch_requeue_quarantined_endpoint(
                     return BatchRequeueQuarantinedResponse(affected=int(r[0] if r else 0))
                 with conn:
                     # Measure groups for counters before update
-                    counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1","true","yes","y","on"}
+                    counters_enabled = env_flag_enabled("JOBS_COUNTERS_ENABLED")
                     grp_rows2 = []
                     if counters_enabled:
                         grp_rows2 = conn.execute(

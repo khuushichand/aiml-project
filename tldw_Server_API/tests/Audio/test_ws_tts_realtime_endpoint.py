@@ -189,3 +189,38 @@ async def test_websocket_tts_realtime_provider_format_mismatch(monkeypatch: pyte
     assert err.get("error_type") == "bad_request"
     assert ws.close_code == 4400
     assert session.finish_count >= 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_websocket_tts_realtime_error_without_compat_alias(monkeypatch: pytest.MonkeyPatch):
+    request_id = "req-no-compat-alias"
+    payloads = [{"type": "config", "model": "vibevoice-realtime-0.5b", "format": "aac"}]
+    ws = DummyWebSocket(payloads, headers={"x-request-id": request_id})
+
+    async def _auth_stub(*_args, **_kwargs):
+        return True, 1
+
+    async def _can_start_stream_stub(_user_id):
+        return True, None
+
+    async def _finish_stream_stub(_user_id):
+        return None
+
+    async def _get_tts_service_stub():
+        return DummyRealtimeService()
+
+    monkeypatch.setattr(audio, "_audio_ws_authenticate", _auth_stub)
+    monkeypatch.setattr(audio, "can_start_stream", _can_start_stream_stub)
+    monkeypatch.setattr(audio, "finish_stream", _finish_stream_stub)
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service_stub)
+    monkeypatch.setenv("AUDIO_WS_COMPAT_ERROR_TYPE", "0")
+
+    await audio.websocket_tts_realtime(ws, token=None)
+
+    err = next((msg for msg in ws.sent_json if msg.get("type") == "error"), None)
+    assert err is not None
+    assert err.get("request_id") == request_id
+    assert err.get("code") == "bad_request"
+    assert err.get("error_type") is None
+    assert ws.close_code == 4400

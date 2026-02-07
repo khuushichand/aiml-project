@@ -488,6 +488,7 @@ Non‑prod defaults
 | `STREAM_IDLE_TIMEOUT_S`         | (disabled)          | Idle timeout for SSE streams (seconds) |
 | `AUDIO_WS_IDLE_TIMEOUT_S`       | (disabled)          | Optional idle timeout for Audio WebSocket (seconds); overrides `STREAM_IDLE_TIMEOUT_S` for audio handler |
 | `AUDIO_WS_QUOTA_CLOSE_1008`     | `0`                 | When `1`, Audio WS closes with 1008 for quota/rate-limit instead of legacy 4003 |
+| `AUDIO_WS_COMPAT_ERROR_TYPE`    | `1`                 | When `1`, Audio WS error payloads include legacy `error_type` alias in addition to canonical `code`; set `0` to disable alias during migration |
 | `STREAM_MAX_DURATION_S`         | (disabled)          | Maximum duration for SSE streams (seconds) |
 | `STREAM_QUEUE_MAXSIZE`          | `256`               | Default bounded queue size for SSE streams |
 | `STREAM_PROVIDER_CONTROL_PASSTHRU` | `0`              | Preserve provider SSE control lines (`event/id/retry`) when `1` |

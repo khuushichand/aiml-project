@@ -67,6 +67,23 @@ def test_resolver_can_skip_module_preference(monkeypatch):
     assert debug_info["selected_source"] != "module_override"
 
 
+def test_resolver_tldw_test_mode_y_prefers_module_keys(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    monkeypatch.setattr(chat_request_schemas, "API_KEYS", {"openai": "module-test-key"}, raising=False)
+    monkeypatch.setattr(chat_endpoint, "API_KEYS", {"openai": "module-test-key"}, raising=False)
+    monkeypatch.setattr(chat_request_schemas, "get_api_keys", lambda: {"openai": "env-key"})
+
+    resolved_key, debug_info = resolve_provider_api_key("openai")
+
+    assert resolved_key == "module-test-key"
+    assert debug_info["selected_source"] == "module_override"
+    assert debug_info["test_flags"]["test_mode"] is True
+
+
 def test_get_api_keys_supports_hyphenated_provider_env_vars(monkeypatch):
 
 

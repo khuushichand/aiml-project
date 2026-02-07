@@ -7,7 +7,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 # ── Guardian Relationship Schemas ────────────────────────────
 
 class GuardianRelationshipCreate(BaseModel):
@@ -45,6 +44,7 @@ class DissolveRequest(BaseModel):
 
 class SupervisedPolicyCreate(BaseModel):
     relationship_id: str = Field(..., description="Guardian relationship this policy belongs to")
+    governance_policy_id: str | None = Field(None, description="Optional governance policy group")
     policy_type: Literal["block", "notify"] = "block"
     category: str = Field("", description="Topic category (e.g. 'explicit_content', 'self_harm')")
     pattern: str = Field("", description="Regex or literal pattern to match")
@@ -62,6 +62,7 @@ class SupervisedPolicyCreate(BaseModel):
 
 
 class SupervisedPolicyUpdate(BaseModel):
+    governance_policy_id: str | None = None
     policy_type: Literal["block", "notify"] | None = None
     category: str | None = None
     pattern: str | None = None
@@ -78,6 +79,7 @@ class SupervisedPolicyUpdate(BaseModel):
 class SupervisedPolicyResponse(BaseModel):
     id: str
     relationship_id: str
+    governance_policy_id: str | None = None
     policy_type: str
     category: str
     pattern: str
@@ -336,6 +338,14 @@ class CrisisResourceList(BaseModel):
         "please call emergency services (911) or contact the resources listed. "
         "These resources are provided for informational purposes only."
     )
+
+
+class DeactivationConfirmRequest(BaseModel):
+    token: str = Field(..., description="Confirmation token from deactivation request")
+
+
+class DeactivationApproveRequest(BaseModel):
+    token: str = Field(..., description="Confirmation token from deactivation request")
 
 
 class DetailResponse(BaseModel):

@@ -109,7 +109,6 @@ def test_app_startup_fails_fast_when_lazy_evaluations_warmup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _clear_test_flags(monkeypatch)
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests::authnz::lazy_warmup_failfast")
 
     from tldw_Server_API.app import main as main_mod
     from tldw_Server_API.app.core.Evaluations import connection_pool as eval_pool
@@ -125,3 +124,14 @@ def test_app_startup_fails_fast_when_lazy_evaluations_warmup_fails(
     with pytest.raises(RuntimeError, match="forced warmup failure|lazy subsystem warmup failed"):
         with TestClient(main_mod.app):
             pass
+
+
+def test_main_loguru_reconfig_override_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_test_flags(monkeypatch)
+    monkeypatch.setenv("TLDW_ALLOW_LOGURU_RECONFIG", "y")
+
+    from tldw_Server_API.app import main as main_mod
+
+    assert main_mod._caller_allowed_for_loguru_config() is True

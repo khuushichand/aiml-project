@@ -73,6 +73,11 @@ from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
+from tldw_Server_API.app.core.testing import env_flag_enabled
+
+
+def _await_webhook_inline_in_test_mode() -> bool:
+    return env_flag_enabled("TEST_MODE")
 
 
 class EvaluationType(str, Enum):
@@ -693,7 +698,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -701,7 +705,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
@@ -800,7 +804,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -808,7 +811,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,
@@ -903,7 +906,6 @@ class UnifiedEvaluationService:
             if self.enable_webhooks:
                 try:
                     import asyncio as _asyncio
-                    import os as _os
                     effective_user_id = webhook_user_id_from_value(webhook_user_id) or webhook_user_id_from_value(user_id) or user_id
                     if effective_user_id == "single_user":
                         try:
@@ -911,7 +913,7 @@ class UnifiedEvaluationService:
                             effective_user_id = f"user_{_app_settings.get('SINGLE_USER_FIXED_ID', '1')}"
                         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS:
                             effective_user_id = "user_1"
-                    if self.webhook_manager and _os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes"):
+                    if self.webhook_manager and _await_webhook_inline_in_test_mode():
                         await self.webhook_manager.send_webhook(
                             user_id=effective_user_id,
                             event=WebhookEvent.EVALUATION_COMPLETED,

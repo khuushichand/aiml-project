@@ -289,6 +289,7 @@ def create_policy(
             notify_context=body.notify_context,
             message_to_dependent=body.message_to_dependent,
             enabled=body.enabled,
+            governance_policy_id=body.governance_policy_id,
         )
         db.log_action(
             relationship_id=body.relationship_id,
@@ -460,6 +461,7 @@ def _policy_response(pol) -> SupervisedPolicyResponse:
     return SupervisedPolicyResponse(
         id=pol.id,
         relationship_id=pol.relationship_id,
+        governance_policy_id=pol.governance_policy_id,
         policy_type=pol.policy_type,
         category=pol.category,
         pattern=pol.pattern,

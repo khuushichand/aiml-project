@@ -111,6 +111,7 @@ from tldw_Server_API.app.core.Logging.log_context import ensure_request_id, ensu
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import SSEStream
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
 from tldw_Server_API.app.core.Usage.usage_tracker import (
     backfill_legacy_tokens_to_ledger,
     log_llm_usage,
@@ -636,9 +637,7 @@ def _is_test_context() -> bool:
             return True
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
-    return str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"} or str(
-        os.getenv("TEST_MODE", "")
-    ).lower() in {"1", "true", "yes", "on"}
+    return env_flag_enabled("TESTING") or env_flag_enabled("TEST_MODE")
 
 
 def _should_skip_missing_key(
@@ -770,7 +769,7 @@ def _build_user_metadata(user: User | None) -> dict[str, Any] | None:
     """
     try:
         # Bypass rate limiting propagation in tests
-        if str(os.getenv("TESTING", "")).lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled("TESTING"):
             return None
         if user is None:
             return None
@@ -1410,7 +1409,7 @@ def decide_and_apply_l2(
     normalize_requested: bool | None = None
     try:
         env_val = os.getenv("LLM_EMBEDDINGS_L2_NORMALIZE", "")
-        normalize_requested = str(env_val).lower() in {"1", "true", "yes", "on"}
+        normalize_requested = is_truthy(env_val)
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         # Preserve default behavior on error; log with context
         logger.warning(
@@ -1448,9 +1447,9 @@ def _should_enforce_policy(user: User | None = None) -> bool:
     # 1) Explicit env override takes highest precedence
     env_val = os.getenv("EMBEDDINGS_ENFORCE_POLICY")
     if env_val is not None:
-        return env_val.lower() in ("true", "1", "yes")
+        return is_truthy(env_val)
     # 2) In TESTING, always enforce (even for admin) for deterministic behavior
-    if os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
+    if env_flag_enabled("TESTING"):
         return True
     # 3) Settings-level boolean if provided
     try:
@@ -1461,7 +1460,11 @@ def _should_enforce_policy(user: User | None = None) -> bool:
         pass
     # 4) Admin bypass unless strict enforcement requested
     try:
-        if user and getattr(user, 'is_admin', False) and os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false").lower() not in ("true", "1", "yes"):
+        if (
+            user
+            and getattr(user, "is_admin", False)
+            and not is_truthy(os.getenv("EMBEDDINGS_ENFORCE_POLICY_STRICT", "false"))
+        ):
             return False
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
@@ -1964,7 +1967,11 @@ async def create_embeddings_batch_async(
 
         # Process in batches with circuit breaker (or synthesize in test mode for OpenAI)
         all_new_embeddings = []
-        if provider == "openai" and os.getenv("TESTING", "").lower() == "true" and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true":
+        if (
+            provider == "openai"
+            and env_flag_enabled("TESTING")
+            and not env_flag_enabled("USE_REAL_OPENAI_IN_TESTS")
+        ):
             import numpy as _np
             mdl = (model_id or "text-embedding-3-small").lower()
             dim = 1536
@@ -2344,8 +2351,8 @@ async def create_embedding_endpoint(
         # Special-case for OpenAI in test mode: synthesize vectors deterministically
         use_synthetic_openai = (
             provider == "openai"
-            and os.getenv("TESTING", "").lower() == "true"
-            and os.getenv("USE_REAL_OPENAI_IN_TESTS", "").lower() != "true"
+            and env_flag_enabled("TESTING")
+            and not env_flag_enabled("USE_REAL_OPENAI_IN_TESTS")
         )
 
         embeddings: list[list[float]] = []
@@ -2360,7 +2367,7 @@ async def create_embedding_endpoint(
         # precedence over synthetic OpenAI vectors when enabled to honor explicit
         # configuration in tests and production.
         try:
-            adapters_enabled = str(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", "")).lower() in {"1", "true", "yes", "on"}
+            adapters_enabled = is_truthy(os.getenv("LLM_EMBEDDINGS_ADAPTERS_ENABLED", ""))
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             adapters_enabled = False
         if adapters_enabled:

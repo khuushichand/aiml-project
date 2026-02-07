@@ -21,7 +21,12 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file
-from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
@@ -668,7 +673,7 @@ def load_settings():
     def _to_bool(value: Optional[str], default: bool = False) -> bool:
         if value is None:
             return default
-        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(value)
 
     def _safe_int(value: object, default: int) -> int:
         try:
@@ -684,11 +689,11 @@ def load_settings():
     def _env_or_cfg_bool(env_key: str, cfg_key: str, default: bool) -> bool:
         env_val = os.getenv(env_key)
         if env_val is not None:
-            return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(env_val)
         cfg_val = get_config_value("TTS-Settings", cfg_key)
         if cfg_val is None:
             return default
-        return str(cfg_val).strip().lower() in {"1", "true", "yes", "on"}
+        return is_truthy(cfg_val)
 
     def _env_or_cfg_int(env_key: str, cfg_key: str, default: int) -> int:
         env_val = os.getenv(env_key)
@@ -888,7 +893,7 @@ def load_settings():
             try:
                 if _cp.has_section('Character-Chat') and _cp.has_option('Character-Chat', key):
                     raw = str(_cp.get('Character-Chat', key)).strip().lower()
-                    return True, raw in {"1","true","yes","on"}
+                    return True, is_truthy(raw)
             except _CONFIG_NONCRITICAL_EXCEPTIONS:
                 pass
             return False, False
@@ -1144,8 +1149,8 @@ def load_settings():
         # Precedence: ENV > config.txt [Notes] > defaults
         "NOTES_TITLE_LLM_ENABLED": (lambda _env, _cp: (
             # env override first
-            (str(_env).strip().lower() in {"1", "true", "yes", "on"}) if _env is not None else (
-                (str(_cp.get('Notes', 'title_llm_enabled', fallback='false')).strip().lower() in {"1", "true", "yes", "on"})
+            is_truthy(_env) if _env is not None else (
+                is_truthy(_cp.get('Notes', 'title_llm_enabled', fallback='false'))
                 if _cp and hasattr(_cp, 'get') and _cp.has_section('Notes') else False
             )
         ))(
@@ -1171,7 +1176,7 @@ def load_settings():
         "SANDBOX_STORE_BACKEND": SANDBOX_STORE_BACKEND,
         "SANDBOX_STORE_DB_PATH": SANDBOX_STORE_DB_PATH,
         # --- HYDE/doc2query (per-chunk) feature flags ---
-        "HYDE_ENABLED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ENABLED", "false")),
+        "HYDE_ENABLED": is_truthy(os.getenv("HYDE_ENABLED", "false")),
         "HYDE_QUESTIONS_PER_CHUNK": int(os.getenv("HYDE_QUESTIONS_PER_CHUNK", "0")),
         "HYDE_PROVIDER": os.getenv("HYDE_PROVIDER"),
         "HYDE_MODEL": os.getenv("HYDE_MODEL"),
@@ -1182,9 +1187,9 @@ def load_settings():
         # Retrieval side HYDE controls
         "HYDE_WEIGHT_QUESTION_MATCH": float(os.getenv("HYDE_WEIGHT_QUESTION_MATCH", "0.05")),
         "HYDE_K_FRACTION": float(os.getenv("HYDE_K_FRACTION", "0.5")),
-        "HYDE_ONLY_IF_NEEDED": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
+        "HYDE_ONLY_IF_NEEDED": is_truthy(os.getenv("HYDE_ONLY_IF_NEEDED", "true")),
         "HYDE_SCORE_FLOOR": float(os.getenv("HYDE_SCORE_FLOOR", "0.30")),
-        "HYDE_DEDUPE_BY_PARENT": (lambda v: (str(v).lower() in ("1","true","yes","on")))(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
+        "HYDE_DEDUPE_BY_PARENT": is_truthy(os.getenv("HYDE_DEDUPE_BY_PARENT", "false")),
         # Add other configs from comprehensive_config as needed
         "OPENAI_API_KEY": comprehensive_config.get("openai_api", {}).get("api_key", os.getenv("OPENAI_API_KEY")),
         "TTS_HISTORY_ENABLED": tts_history_enabled,
@@ -1689,7 +1694,7 @@ def load_settings():
         def _parse_bool(value: Optional[str], default: bool) -> bool:
             if value is None:
                 return default
-            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+            return is_truthy(value)
 
         def _parse_json(value: Optional[str]):
             if value is None or str(value).strip() == "":
@@ -1753,7 +1758,7 @@ def load_settings():
         try:
             import os as _os
             import sys as _sys
-            _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode() or ("pytest" in _sys.modules)
+            _in_test = is_explicit_pytest_runtime() or is_test_mode() or ("pytest" in _sys.modules)
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
             _in_test = False
 
@@ -2185,7 +2190,7 @@ def rg_enabled(default: bool = True) -> bool:
             import sys as _sys
 
             _test_mode = is_test_mode()
-            _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
+            _pytest_active = is_explicit_pytest_runtime() or ("pytest" in _sys.modules)
             if _test_mode or _pytest_active:
                 return False
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
@@ -2570,7 +2575,7 @@ def _route_toggle_policy() -> dict:
     # ENV overrides
     env_stable_only = os.getenv('ROUTES_STABLE_ONLY')
     if env_stable_only is not None:
-        cfg_stable_only = str(env_stable_only).strip().lower() in {"true", "1", "yes", "on"}
+        cfg_stable_only = is_truthy(env_stable_only)
 
     cfg_disable |= _parse_list(os.getenv('ROUTES_DISABLE'))
     cfg_enable |= _parse_list(os.getenv('ROUTES_ENABLE'))
@@ -2620,7 +2625,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
     # In test environments, force-enable certain routes commonly used by tests
     try:
         _test_mode = is_test_mode()
-        _pytest_active = bool(os.getenv('PYTEST_CURRENT_TEST')) or 'pytest' in sys.modules
+        _pytest_active = is_explicit_pytest_runtime() or 'pytest' in sys.modules
         # Force-enable a small set of routes that tests rely on, regardless of
         # stable/experimental gating or import order. This avoids 404s when
         # the app module is imported before fixtures set ROUTES_ENABLE.
@@ -3289,7 +3294,7 @@ def load_and_log_configs():
         def _env_or_cfg_bool(env_key: str, section: str, key: str, default: bool) -> bool:
             env_val = os.getenv(env_key)
             if env_val is not None:
-                return str(env_val).strip().lower() in {"1", "true", "yes", "on"}
+                return is_truthy(env_val)
             return _get_bool(section, key, default)
 
         def _env_or_cfg_int(env_key: str, section: str, key: str, default: int) -> int:

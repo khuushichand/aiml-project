@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -22,6 +21,7 @@ from tldw_Server_API.app.api.v1.schemas.admin_schemas import (
 from tldw_Server_API.app.api.v1.schemas.auth_schemas import MessageResponse
 from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthPrincipal
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.services import admin_users_service
 
 router = APIRouter()
@@ -69,7 +69,7 @@ async def list_users(
         Paginated list of users
     """
     # TEST_MODE diagnostics: annotate DB backend and admin dependency success
-    if str(os.getenv("TEST_MODE", "")).lower() in ("1", "true", "yes"):
+    if is_test_mode():
         try:
             pool = await get_db_pool()
             db_backend = "postgres" if getattr(pool, "pool", None) is not None else "sqlite"
@@ -106,7 +106,7 @@ async def list_users(
         )
     except HTTPException as e:
         try:
-            if str(os.getenv("TEST_MODE", "")).lower() in ("1", "true", "yes"):
+            if is_test_mode():
                 response.headers["X-TLDW-Admin-Error"] = str(e)
         except Exception as diag_exc:
             logger.debug("TEST_MODE header assignment failed: {}", diag_exc)
@@ -114,7 +114,7 @@ async def list_users(
     except Exception as e:
         logger.error("Failed to list users: {}", e)
         try:
-            if str(os.getenv("TEST_MODE", "")).lower() in ("1", "true", "yes"):
+            if is_test_mode():
                 response.headers["X-TLDW-Admin-Error"] = str(e)
         except Exception as diag_exc:
             logger.debug("TEST_MODE header assignment failed: {}", diag_exc)

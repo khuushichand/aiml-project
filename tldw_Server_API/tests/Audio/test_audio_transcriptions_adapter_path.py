@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -27,6 +28,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.setenv("AUTH_MODE", "single_user")
     monkeypatch.setenv("SINGLE_USER_API_KEY", TEST_API_KEY)
+    monkeypatch.setenv("SINGLE_USER_TEST_API_KEY", TEST_API_KEY)
     monkeypatch.setenv("SINGLE_USER_FIXED_ID", "1")
 
     from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import get_request_user, User
@@ -57,7 +59,7 @@ def test_audio_transcriptions_uses_adapter_base_dir(
         ):
             assert hotwords is None
             assert base_dir is not None
-            assert base_dir == audio_ep.PathLib(audio_path).parent
+            assert base_dir == Path(audio_path).parent
             return {
                 "text": "stub transcript",
                 "language": language or "en",

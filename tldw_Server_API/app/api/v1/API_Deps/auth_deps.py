@@ -1947,8 +1947,34 @@ def require_token_scope(
                         return "write"
                     return None
 
+                # Single-user compatibility: allow the configured primary/test API key
+                # without requiring a persisted API key record in AuthNZ tables.
+                # Keep the same IP allowlist guard as regular single-user auth paths.
+                settings = get_settings()
+                if getattr(settings, "AUTH_MODE", None) == "single_user":
+                    allowed_keys: set[str] = set()
+                    primary_key = getattr(settings, "SINGLE_USER_API_KEY", None)
+                    if primary_key:
+                        allowed_keys.add(primary_key)
+                    env_primary_key = os.getenv("SINGLE_USER_API_KEY") or os.getenv("API_KEY")
+                    if env_primary_key:
+                        allowed_keys.add(env_primary_key)
+                    if _is_test_mode():
+                        test_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+                        if test_key:
+                            allowed_keys.add(test_key)
+                    if api_key in allowed_keys:
+                        client_ip = resolve_client_ip(request, settings)
+                        if not is_single_user_ip_allowed(client_ip, settings):
+                            raise HTTPException(
+                                status_code=status.HTTP_401_UNAUTHORIZED,
+                                detail="Invalid or missing API Key",
+                            )
+                        if allow_admin_bypass:
+                            return None
+
                 api_mgr = await get_api_key_manager()
-                client_ip = resolve_client_ip(request, get_settings())
+                client_ip = resolve_client_ip(request, settings)
                 info = await api_mgr.validate_api_key(
                     api_key=api_key,
                     ip_address=client_ip,

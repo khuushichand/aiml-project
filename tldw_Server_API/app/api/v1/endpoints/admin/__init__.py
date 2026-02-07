@@ -79,6 +79,7 @@ from tldw_Server_API.app.core.Chat.chat_service import (
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import InputError, KanbanDB, KanbanDBError
 from tldw_Server_API.app.core.exceptions import ResourceNotFoundError
+from tldw_Server_API.app.core.testing import is_test_mode
 from tldw_Server_API.app.core.Usage.pricing_catalog import reset_pricing_catalog
 from tldw_Server_API.app.services import admin_profiles_service, admin_scope_service
 from tldw_Server_API.app.services.admin_data_ops_service import (
@@ -252,10 +253,7 @@ async def _ensure_sqlite_authnz_ready_if_test_mode() -> None:
     """
     try:
         # Only act in obvious test contexts to avoid production overhead
-        is_test = (
-            os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes")
-            or os.getenv("PYTEST_CURRENT_TEST") is not None
-        )
+        is_test = is_test_mode() or os.getenv("PYTEST_CURRENT_TEST") is not None
         if not is_test:
             return
 
@@ -1139,8 +1137,7 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create permission: {e}")
         # In tests, include error details for quicker diagnosis
-        import os as _os
-        if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if is_test_mode():
             raise HTTPException(status_code=500, detail=f"Failed to create permission: {e}") from e
         raise HTTPException(status_code=500, detail="Failed to create permission") from e
 
@@ -1349,7 +1346,7 @@ async def upsert_user_override(
         from tldw_Server_API.app.core.AuthNZ.settings import get_settings as _get_settings
         _settings = _get_settings()
         # In tests or single-user dev, surface error details to aid debugging
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or str(_settings.AUTH_MODE) == "single_user":
+        if is_test_mode() or str(_settings.AUTH_MODE) == "single_user":
             raise HTTPException(status_code=500, detail=f"Failed to upsert user override: {e}") from e
         raise HTTPException(status_code=500, detail="Failed to upsert user override") from e
 
@@ -1373,7 +1370,7 @@ async def delete_user_override(
         return {"message": "Override deleted"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to delete override for user {user_id}: {e}")
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if is_test_mode():
             raise HTTPException(status_code=500, detail=f"Failed to delete user override: {e}") from e
         raise HTTPException(status_code=500, detail="Failed to delete user override") from e
 

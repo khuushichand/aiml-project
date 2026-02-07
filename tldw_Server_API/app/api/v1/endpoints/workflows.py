@@ -80,6 +80,12 @@ from tldw_Server_API.app.core.Resource_Governance.daily_caps import check_daily_
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+    is_truthy,
+)
 from tldw_Server_API.app.core.Workflows import RunMode, WorkflowEngine, WorkflowScheduler
 from tldw_Server_API.app.core.Workflows.adapters._common import artifacts_base_dir, is_subpath
 from tldw_Server_API.app.core.Workflows.adapters._registry import get_parallelizable
@@ -824,7 +830,7 @@ async def _wait_for_run_completion(
             timeout_seconds = float(_env_override)
         else:
             # Trim timeouts under pytest/TEST_MODE to keep suites responsive
-            if os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+            if is_explicit_pytest_runtime() or is_test_mode():
                 timeout_seconds = min(timeout_seconds, 120.0)
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.debug(f"Workflows endpoint: failed to adjust run timeout; using defaults: {e}")
@@ -879,7 +885,7 @@ async def _enforce_workflows_daily_cap(
     Raises HTTPException(429) with legacy-compatible headers on denial.
     """
     try:
-        if os.getenv("WORKFLOWS_DISABLE_QUOTAS", "").lower() in {"1", "true", "yes", "on"}:
+        if env_flag_enabled("WORKFLOWS_DISABLE_QUOTAS"):
             return
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Workflows quota: WORKFLOWS_DISABLE_QUOTAS check failed: {}", exc)
@@ -1384,7 +1390,7 @@ async def run_saved(
                 cfg = s0.get("config") or {}
                 fe = cfg.get("force_error")
                 if isinstance(fe, str):
-                    fe = fe.strip().lower() in {"1", "true", "yes", "on"}
+                    fe = is_truthy(fe)
                 tmpl = str(cfg.get("template", ""))
                 if fe or tmpl.strip().lower() == "bad":
                     # If an on_failure route is defined and refers to a valid step, let the engine handle it
@@ -1482,9 +1488,9 @@ async def run_saved(
     # In test environments, run the workflow inline to ensure deterministic completion
     try:
         _test_mode = (
-            os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TLDW_TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            is_explicit_pytest_runtime()
+            or env_flag_enabled("TLDW_TEST_MODE")
+            or env_flag_enabled("TEST_MODE")
         )
         if _test_mode and run.status in {None, "", "queued"}:
             await engine.start_run(run_id, run_mode)
@@ -2234,7 +2240,7 @@ async def replay_webhook_dlq(
 
     # Test-mode short-circuit
     import os as _os
-    if _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"} and _os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "").lower() in {"1", "true", "yes", "on"}:
+    if is_test_mode() and is_truthy(_os.getenv("WORKFLOWS_TEST_REPLAY_SUCCESS", "")):
         try:
             db.delete_webhook_dlq(dlq_id=dlq_id)
         except sqlite3.Error as exc:
@@ -2389,7 +2395,7 @@ async def replay_webhook_dlq(
 
 
 def _artifact_validation_strict(validation_mode: Optional[str]) -> bool:
-    env_strict = str(os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}
+    env_strict = is_truthy(os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true"))
     run_val = str(validation_mode or "").lower()
     non_block = run_val == "non-block"
     return env_strict and not non_block
@@ -2716,7 +2722,7 @@ async def download_artifact(
                 # Respect validation mode override
                 run_val = getattr(run, 'validation_mode', None)
                 non_block = isinstance(run_val, str) and run_val.lower() == 'non-block'
-                if not non_block and str(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")).lower() in {"1", "true", "yes", "on"}:
+                if not non_block and is_truthy(_os.getenv("WORKFLOWS_ARTIFACT_VALIDATE_STRICT", "true")):
                     raise HTTPException(status_code=409, detail="Artifact checksum mismatch")
                 else:
                     with contextlib.suppress(_WORKFLOWS_NONCRITICAL_EXCEPTIONS):
@@ -3544,7 +3550,7 @@ async def get_workflows_config(
         v = os.getenv(name, "")
         if not v:
             return default
-        return v.lower() in {"1", "true", "yes", "y", "on"}
+        return is_truthy(v)
 
     backend_type = "sqlite"
     backend = get_content_backend_instance()

@@ -34,6 +34,7 @@ from ..tts_exceptions import (
     TTSModelNotFoundError,
     TTSProviderNotConfiguredError,
 )
+from ..tts_resource_manager import get_resource_manager as _get_resource_manager
 from ..tts_validation import validate_tts_request
 from ..utils import parse_bool
 
@@ -72,6 +73,11 @@ _KOKORO_NONCRITICAL_EXCEPTIONS = (
 )
 
 _KOKORO_REPO_WARNING_PREFIX = "WARNING: Defaulting repo_id to "
+
+
+async def get_resource_manager():
+    """Compatibility wrapper so tests can monkeypatch the adapter-level symbol."""
+    return await _get_resource_manager()
 
 
 @contextmanager
@@ -585,7 +591,6 @@ class KokoroAdapter(TTSAdapter):
 
             # Register model with resource manager (best-effort)
             try:
-                from ..tts_resource_manager import get_resource_manager
                 resource_manager = await get_resource_manager()
                 if self.kokoro_instance:
                     register_result = resource_manager.register_model(
@@ -675,7 +680,6 @@ class KokoroAdapter(TTSAdapter):
             logger.info(f"{self.provider_name}: Kokoro PyTorch model loaded on {dev} (t={time.time() - start:.2f}s)")
             # Register model with resource manager (best-effort)
             try:
-                from ..tts_resource_manager import get_resource_manager
                 resource_manager = await get_resource_manager()
                 if self.kokoro_pt_model is not None:
                     register_result = resource_manager.register_model(
@@ -701,7 +705,6 @@ class KokoroAdapter(TTSAdapter):
                 logger.info(f"{self.provider_name}: Loaded generic PyTorch model on {self.device}")
                 # Register model with resource manager (best-effort)
                 try:
-                    from ..tts_resource_manager import get_resource_manager
                     resource_manager = await get_resource_manager()
                     if self.model_pt is not None:
                         register_result = resource_manager.register_model(

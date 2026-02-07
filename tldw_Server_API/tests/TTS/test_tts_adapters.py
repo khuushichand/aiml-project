@@ -34,7 +34,8 @@ from tldw_Server_API.app.core.TTS.adapter_registry import (
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2, close_tts_service_v2
 
 
-REAL_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+_RUN_EXTERNAL_API_TESTS = os.getenv("RUN_EXTERNAL_API_TESTS", "0") == "1"
+REAL_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") if _RUN_EXTERNAL_API_TESTS else None
 
 
 @pytest.fixture(autouse=True)

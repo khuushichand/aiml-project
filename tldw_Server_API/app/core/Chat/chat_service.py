@@ -73,6 +73,10 @@ from tldw_Server_API.app.core.LLM_Calls import adapter_registry as _adapter_regi
 from tldw_Server_API.app.core.LLM_Calls.streaming import wrap_sync_stream
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _shared_is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
 from tldw_Server_API.app.core.Usage.pricing_catalog import list_provider_models
 from tldw_Server_API.app.core.Usage.usage_tracker import log_llm_usage
 from tldw_Server_API.app.core.Utils.cpu_bound_handler import process_large_json_async
@@ -114,7 +118,7 @@ def _coerce_int(value: str | None, default: int) -> int:
 def _coerce_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    return _shared_is_truthy(value)
 
 
 _MAX_HISTORY_MESSAGES = max(1, _coerce_int(_chat_config.get("max_history_messages"), 200))
@@ -425,7 +429,7 @@ def normalize_request_provider_and_model(
             # Resolve against known models when no explicit override present
             resolved = _resolve_alias(provider_for_mapping, target_model_part)
         if resolved and resolved != model_str:
-            allow_cross = str(os.getenv("CHAT_ALLOW_CROSS_PROVIDER_ALIASING", "0")).lower() in {"1", "true", "yes", "on"}
+            allow_cross = _shared_is_truthy(os.getenv("CHAT_ALLOW_CROSS_PROVIDER_ALIASING", "0"))
             if inline_provider:
                 # Preserve inline provider prefix until final normalization below
                 combined = f"{inline_provider}/{resolved}"
@@ -581,9 +585,9 @@ def resolve_provider_api_key(
         is_pytest = bool(os.getenv("PYTEST_CURRENT_TEST"))
     except _CHAT_NONCRITICAL_EXCEPTIONS:
         is_pytest = False
-    is_test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-    use_module_overrides = prefer_module_keys_in_tests and (is_pytest or is_test_mode)
-    debug_info["test_flags"] = {"pytest": is_pytest, "test_mode": is_test_mode}
+    test_mode_enabled = _shared_is_test_mode()
+    use_module_overrides = prefer_module_keys_in_tests and (is_pytest or test_mode_enabled)
+    debug_info["test_flags"] = {"pytest": is_pytest, "test_mode": test_mode_enabled}
 
     try:
         from tldw_Server_API.app.api.v1.schemas import chat_request_schemas as _schemas_mod  # type: ignore
@@ -1100,6 +1104,7 @@ async def moderate_input_messages(
     supervised_policy_engine: Any | None = None,
     self_monitoring_service: Any | None = None,
     dependent_user_id: str | None = None,
+    chat_type: str | None = None,
 ) -> None:
     """Apply input moderation and redaction to user message text parts in-place.
 
@@ -1120,13 +1125,39 @@ async def moderate_input_messages(
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
 
     # Guardian policy overlay: merge supervised rules into eff_policy
+    _guardian_rule_name_visible = None
     if supervised_policy_engine and dependent_user_id:
         try:
             eff_policy = supervised_policy_engine.build_moderation_policy_overlay(
-                dependent_user_id, eff_policy
+                dependent_user_id, eff_policy, chat_type=chat_type,
             )
         except _CHAT_NONCRITICAL_EXCEPTIONS as e:
             logger.debug(f"Guardian policy overlay skipped: {e}")
+        # Guardian notification dispatch: check supervised policies directly
+        # and send notification to guardian if a rule triggers.
+        # Also stores transparent rule_name for enriched block messages.
+        try:
+            from tldw_Server_API.app.core.Moderation.supervised_policy import (
+                dispatch_guardian_notification,
+            )
+            _first_text = None
+            if request_data and request_data.messages:
+                for _m in request_data.messages:
+                    if getattr(_m, "role", None) == "user":
+                        _mt = getattr(_m, "content", None)
+                        if isinstance(_mt, str) and _mt.strip():
+                            _first_text = _mt
+                            break
+            if _first_text:
+                _sup_result = supervised_policy_engine.check_text(
+                    _first_text, dependent_user_id, phase="input", chat_type=chat_type,
+                )
+                if _sup_result.rule_name_visible:
+                    _guardian_rule_name_visible = _sup_result.rule_name_visible
+                if _sup_result.notify_guardian and _sup_result.action != "pass":
+                    dispatch_guardian_notification(_sup_result, dependent_user_id)
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Guardian notification dispatch skipped: {e}")
     conv_id = None
     try:
         conv_id = getattr(request_data, "conversation_id", None)
@@ -1170,6 +1201,7 @@ async def moderate_input_messages(
                         user_id=str(req_user_id or client_id),
                         phase="input",
                         conversation_id=str(conv_id) if conv_id else None,
+                        chat_type=chat_type,
                     ),
                 )
                 if sm_result.action == "block":
@@ -1256,7 +1288,10 @@ async def moderate_input_messages(
             pass
 
         if resolved_action == "block":
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Input violates moderation policy")
+            block_detail = "Input violates moderation policy"
+            if _guardian_rule_name_visible:
+                block_detail = f"[{_guardian_rule_name_visible}] {block_detail}"
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=block_detail)
         if resolved_action == "redact":
             return redacted if isinstance(redacted, str) else moderation_service.redact_text(text, eff_policy)
         return text
@@ -2668,7 +2703,7 @@ async def execute_streaming_call(
 
     # Feature-flagged: route through unified SSE abstraction for pilot
     try:
-        use_unified = str(os.getenv("STREAMS_UNIFIED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        use_unified = _shared_is_truthy(os.getenv("STREAMS_UNIFIED", "0"))
     except _CHAT_NONCRITICAL_EXCEPTIONS:
         use_unified = False
 

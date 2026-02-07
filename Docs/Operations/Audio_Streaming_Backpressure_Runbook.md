@@ -38,6 +38,20 @@ Related controls:
   - `TTS_REALTIME_AUTO_FLUSH_MS`
   - `TTS_REALTIME_AUTO_FLUSH_TOKENS`
 
+## Baseline Profiles
+Use these as starting points before workload-specific tuning:
+
+| Profile | Suggested Queue Max | When to Use | Expected Tradeoff |
+|---|---|---|---|
+| Low-latency interactive | `8` | Voice assistant or conversational UX with low jitter | Lowest buffering latency, higher underrun risk under bursty readers |
+| Balanced default | `12` | Mixed traffic where moderate reader variance is expected | Better underrun tolerance with small latency increase |
+| Throughput-heavy | `16` | High concurrency or known slow-reader clients | Fewer drops, higher buffering latency and memory |
+
+Guardrails:
+- Do not exceed `64` without measured justification.
+- Step changes by at most `+/-4` between observations.
+- Keep one profile per environment (dev/staging/prod) and record it in rollout notes.
+
 ## Tuning Procedure
 1. Establish baseline over 15-30 minutes:
    - p50/p90 `tts_ttfb_seconds`
@@ -52,6 +66,13 @@ Related controls:
 4. If quota closes spike:
    - Validate user tier/concurrency limits and stream release behavior
    - Confirm disconnect cleanup paths are executing (`finish_stream` calls)
+
+## Validation Gates
+A queue-depth change is accepted only when all checks pass for the same observation window:
+- `audio_stream_underruns_total` rate decreases or remains stable.
+- `tts_ttfb_seconds` p50 and p90 do not regress beyond agreed latency budget.
+- `audio_stream_errors_total` does not show a correlated increase.
+- No increase in stuck/active stream leakage after disconnect tests.
 
 ## Guardrails
 - Avoid queue sizes > `64` unless measured need is clear.

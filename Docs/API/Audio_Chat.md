@@ -67,7 +67,7 @@ Purpose: low-latency voice commands with partial STT, streaming LLM deltas, and 
 ## Server Frames
 - STT partial/final frames mirror `/audio/stream/transcribe` plus `full_transcript` with `voice_to_voice_start` + `auto_commit`.
 - LLM streaming: `llm_delta` for each text chunk; `llm_message` + `assistant_summary` at end.
-- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use `{type:"error", error_type:"...", message, quota?}`.
+- TTS streaming: binary audio frames; bracketed by `tts_start` / `tts_done`. Errors use canonical `{type:"error", code:"...", message, data?}`; compatibility alias `error_type` is included when `AUDIO_WS_COMPAT_ERROR_TYPE=1`.
 
 ## Limits & Metrics
 - Auth/quotas: API key/JWT/single-user key; per-user concurrency guard; minute accounting per chunk with bounded fail-open; quota/rate errors close with 4003 (1008 when `AUDIO_WS_QUOTA_CLOSE_1008=1`).

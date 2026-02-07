@@ -39,6 +39,11 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     DEFAULT_MEDIA_TYPE_CONFIG,
 )
 from tldw_Server_API.app.core.Metrics import get_metrics_registry
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled,
+    is_explicit_pytest_runtime,
+    is_test_mode,
+)
 
 try:  # Align HTTP 413 compatibility with legacy endpoint module
     HTTP_413_TOO_LARGE = status.HTTP_413_CONTENT_TOO_LARGE
@@ -346,7 +351,7 @@ async def add_media_orchestrate(
 
     # TEST_MODE diagnostics for auth and DB context
     try:
-        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+        if is_test_mode():
             _dbp = getattr(db, "db_path_str", getattr(db, "db_path", "?"))
             logger.info(
                 "TEST_MODE: add_media db_path={} user_id={}",
@@ -982,11 +987,7 @@ async def add_media_orchestrate(
 
         # TEST_MODE: emit diagnostic headers to assist tests
         try:
-            if (
-                str(os.getenv("TEST_MODE", "")).lower()
-                in {"1", "true", "yes", "on"}
-                and response is not None
-            ):
+            if is_test_mode() and response is not None:
                 try:
                     _dbp = getattr(
                         db, "db_path_str", getattr(db, "db_path", "?")
@@ -1542,10 +1543,9 @@ async def process_batch_media(
 
                 block_override: bool | None = None
                 if (
-                    os.getenv("PYTEST_CURRENT_TEST")
-                    or os.getenv("TESTING")
-                    or str(os.getenv("TEST_MODE", "")).lower()
-                    in {"1", "true", "yes", "on"}
+                    is_explicit_pytest_runtime()
+                    or env_flag_enabled("TESTING")
+                    or is_test_mode()
                 ):
                     block_override = False
 
@@ -2254,8 +2254,7 @@ async def process_document_like_item(
                 # still execute the ingestion path.
                 detail = getattr(exc, "detail", "")
                 if (
-                    str(os.getenv("TEST_MODE", "")).lower()
-                    in {"1", "true", "yes", "on"}
+                    is_test_mode()
                     and isinstance(detail, str)
                     and "Host could not be resolved" in detail
                 ):

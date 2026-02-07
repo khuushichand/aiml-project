@@ -50,6 +50,7 @@ from tldw_Server_API.app.core.exceptions import (
 )
 from tldw_Server_API.app.core.LLM_Calls.deprecation import log_legacy_once
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.testing import is_truthy as _shared_is_truthy
 
 _CHAT_ORCHESTRATOR_COERCE_EXCEPTIONS = (
     AttributeError,
@@ -428,7 +429,7 @@ def chat_api_call(
             _key_val
             and isinstance(_key_val, str)
             and len(_key_val) > 8
-            and _os_keys.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}
+            and _shared_is_truthy(_os_keys.getenv("ALLOW_MASKED_KEY_LOG", ""))
         ):
             logging.debug(
                 "Chat API Call - API Key (masked): %s...%s",
@@ -637,13 +638,13 @@ _SYNC_CORO_TIMEOUT_SECONDS = _get_sync_coro_timeout()
 def _async_only_enabled() -> bool:
     """Return True when CHAT_COMMANDS_ASYNC_ONLY is enabled."""
     value = os.getenv("CHAT_COMMANDS_ASYNC_ONLY", "")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return _shared_is_truthy(value)
 
 
 def _sync_in_event_loop_strict() -> bool:
     """Return True when CHAT_SYNC_IN_EVENT_LOOP_STRICT is enabled."""
     value = os.getenv("CHAT_SYNC_IN_EVENT_LOOP_STRICT", "")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return _shared_is_truthy(value)
 
 
 def _run_coro_sync(coro: Awaitable[_T], timeout: float = _SYNC_CORO_TIMEOUT_SECONDS) -> _T:
@@ -1030,7 +1031,7 @@ def _chat_sync_impl(
         logging.debug(f"Debug - Chat Function - Temperature: {temperature}")
         # Avoid logging secrets unless explicitly enabled
         try:
-            if api_key and os.getenv("ALLOW_MASKED_KEY_LOG", "").lower() in {"1", "true", "yes", "on"}:
+            if api_key and _shared_is_truthy(os.getenv("ALLOW_MASKED_KEY_LOG", "")):
                 logging.debug("Debug - Chat Function - API Key (masked): %s...%s", api_key[:4], api_key[-4:])
         except _CHAT_ORCHESTRATOR_NONCRITICAL_EXCEPTIONS as key_log_err:
             logging.debug(f"Could not log masked API key: {key_log_err}")

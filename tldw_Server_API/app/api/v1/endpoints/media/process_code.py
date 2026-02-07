@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.pipeline import (
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Upload_Sink import (
     CODE_FILE_EXTENSIONS,
 )
+from tldw_Server_API.app.core.testing import is_test_mode
 
 router = APIRouter()
 
@@ -88,11 +88,7 @@ async def process_code_endpoint(
 
             # TEST_MODE diagnostics for upload validation behavior
             try:
-                if (
-                    str(os.getenv("TEST_MODE", "")).lower()
-                    in {"1", "true", "yes", "on"}
-                    and upload_errors
-                ):
+                if is_test_mode() and upload_errors:
                     logger.warning(f"TEST_MODE: process-code upload_errors={upload_errors}")
             except Exception:
                 pass
@@ -215,12 +211,7 @@ async def process_code_endpoint(
                 except Exception as exc:
                     # TEST_MODE diagnostics for read errors after successful save
                     try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "on",
-                        }:
+                        if is_test_mode():
                             logger.warning(
                                 "TEST_MODE: process-code read-error "
                                 f"file='{filename}' path='{local_path}': {type(exc).__name__}: {exc}"

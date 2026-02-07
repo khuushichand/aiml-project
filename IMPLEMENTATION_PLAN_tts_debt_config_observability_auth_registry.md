@@ -2,19 +2,19 @@
 **Goal**: Lock scope, ownership, and sequencing across testing debt, config consolidation, observability, auth granularity, and persistent registry work.
 **Success Criteria**: Agreed design decisions for canonical config source, trace/metric schema, privilege model granularity, and registry persistence approach.
 **Tests**: N/A (design stage).
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 2: TTS Test Debt Closure
 **Goal**: Eliminate open testing debt for validation edge cases, resource manager/circuit breaker behavior, and provider smoke coverage.
 **Success Criteria**: New tests cover dangerous input validation paths, provider-specific limits, resource manager bounds, circuit breaker transitions, and smoke contracts for key providers.
 **Tests**: `python -m pytest -q tldw_Server_API/tests/TTS tldw_Server_API/tests/TTS_NEW`
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 3: Config Consolidation (YAML vs config.txt)
 **Goal**: Remove duplication ambiguity by defining a single canonical TTS config model with explicit precedence rules and compatibility mapping.
 **Success Criteria**: Loader enforces schema validation, precedence is documented and test-verified, compatibility shim for legacy `config.txt` is deterministic, and migration/deprecation notices are in docs.
-**Tests**: `python -m pytest -q tldw_Server_API/tests/TTS/test_tts_config.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
-**Status**: Not Started
+**Tests**: `python -m pytest -q tldw_Server_API/tests/Config/test_module_yaml_integration.py tldw_Server_API/tests/Config/test_effective_config_api.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
+**Status**: In Progress
 
 ## Stage 4: Observability & Tracing Hardening
 **Goal**: Close TTS observability debt with structured tracing and provider/fallback diagnostics.
@@ -39,3 +39,19 @@
 **Success Criteria**: PRD and setup docs are current, rollout checklist is complete, regression suite passes in CI, and any deprecations have explicit timelines.
 **Tests**: `python -m pytest -q`
 **Status**: Not Started
+
+---
+
+## Progress Log
+
+### 2026-02-07
+- Stage 2 baseline is green again after fixing TTS/TTS_NEW regressions and a collection-blocking indentation error in `tests/TTS_NEW/integration/test_audio_auth.py`.
+- Verified Stage 2 command:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/TTS tldw_Server_API/tests/TTS_NEW`
+  - Result: `526 passed, 21 skipped, 1 xfailed, 1 xpassed`.
+- Started Stage 3 compatibility shim work in `app/core/TTS/tts_config.py`:
+  - Added deterministic key alias handling for config.txt `[TTS-Settings]` values (`default_provider/default_tts_provider`, `default_voice/default_tts_voice`, `default_speed/default_tts_speed`, `local_device/local_tts_device/tts_device`).
+  - Added tests to validate legacy alias mapping and deterministic precedence in `tests/Config/test_module_yaml_integration.py`.
+- Verified Stage 3 slice:
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Config/test_module_yaml_integration.py tldw_Server_API/tests/Config/test_effective_config_api.py tldw_Server_API/tests/TTS_NEW/unit/test_tts_service.py`
+  - Result: `38 passed`.

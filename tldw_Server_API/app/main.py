@@ -27,6 +27,12 @@ from loguru import logger
 from starlette.responses import FileResponse
 from starlette.staticfiles import StaticFiles
 
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _shared_env_flag_enabled,
+    is_explicit_pytest_runtime as _shared_is_explicit_pytest_runtime,
+    is_truthy as _shared_is_truthy,
+)
+
 _LOGGING_SETUP_EXCEPTIONS = (
     AttributeError,
     OSError,
@@ -417,12 +423,10 @@ def _unwrap_stderr(stream):
 # Reset Loguru and configure a single, thread-safe sink
 logger.remove()
 _log_level = "DEBUG"
-_force_color = _early_os.getenv("FORCE_COLOR", "").lower() in {"1", "true", "yes", "on"} or _early_os.getenv(
-    "PY_COLORS", ""
-).lower() in {"1", "true", "yes", "on"}
+_force_color = _shared_env_flag_enabled("FORCE_COLOR") or _shared_env_flag_enabled("PY_COLORS")
 _sink_choice = _early_os.getenv("LOG_STREAM", "stderr").lower()
 _stderr = _unwrap_stderr(sys.__stderr__ or sys.stderr)
-_sink = sys.stdout if _sink_choice in {"1", "true", "yes", "on", "stdout"} else _stderr
+_sink = sys.stdout if _shared_is_truthy(_sink_choice) or _sink_choice == "stdout" else _stderr
 _use_color = _force_color or (
     _sink.isatty() and _early_os.getenv("LOG_COLOR", "1").lower() not in {"0", "false", "no", "off"}
 )
@@ -506,9 +510,9 @@ _ALLOWED_LOGURU_CALLERS = {
 
 
 def _caller_allowed_for_loguru_config() -> bool:
-    if os.getenv("TLDW_ALLOW_LOGURU_RECONFIG", "").lower() in {"1", "true", "yes", "on"}:
+    if _shared_env_flag_enabled("TLDW_ALLOW_LOGURU_RECONFIG"):
         return True
-    if os.getenv("PYTEST_CURRENT_TEST"):
+    if _shared_is_explicit_pytest_runtime():
         return True
     frame = logging.currentframe()
     if frame is not None:
@@ -1195,9 +1199,7 @@ Optional JSON-structured logs sink (enable with LOG_JSON=true)
 try:
     import os as _jsonlog_os
 
-    if _jsonlog_os.getenv("LOG_JSON", "").lower() in {"1", "true", "yes", "on"} or _jsonlog_os.getenv(
-        "ENABLE_JSON_LOGS", ""
-    ).lower() in {"1", "true", "yes", "on"}:
+    if _shared_env_flag_enabled("LOG_JSON") or _shared_env_flag_enabled("ENABLE_JSON_LOGS"):
         logger.add(
             _SafeStreamWrapper(sys.stdout),
             level=_log_level,
@@ -1561,8 +1563,7 @@ async def lifespan(app: FastAPI):
             # Best-effort audit: warn on API routes not covered by RG route_map.
             try:
                 def _should_audit_rg_route_map() -> bool:
-                    raw = os.getenv("RG_ROUTE_MAP_AUDIT", "true").strip().lower()
-                    return raw in {"1", "true", "yes", "on"}
+                    return _shared_is_truthy(os.getenv("RG_ROUTE_MAP_AUDIT", "true"))
 
                 def _route_map_matches(path: str, by_path: dict) -> bool:
                     for pat in by_path:
@@ -1759,14 +1760,11 @@ async def lifespan(app: FastAPI):
             try:
                 env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
                 if env_queued is not None:
-                    queued_execution_enabled = env_queued.strip().lower() in {"1", "true", "yes", "on"}
+                    queued_execution_enabled = _shared_is_truthy(env_queued)
                 else:
-                    queued_execution_enabled = str(chat_cfg.get("queued_execution", "False")).strip().lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "on",
-                    }
+                    queued_execution_enabled = _shared_is_truthy(
+                        str(chat_cfg.get("queued_execution", "False"))
+                    )
             except _STARTUP_GUARD_EXCEPTIONS:
                 queued_execution_enabled = False
             if queued_execution_enabled:
@@ -2631,7 +2629,7 @@ async def lifespan(app: FastAPI):
 
     # Start usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
-        _disable_usage_agg = _env_os.getenv("DISABLE_USAGE_AGGREGATOR", "").lower() in {"1", "true", "yes", "on"}
+        _disable_usage_agg = _shared_env_flag_enabled("DISABLE_USAGE_AGGREGATOR")
         if _disable_usage_agg:
             logger.info("Usage aggregator disabled via DISABLE_USAGE_AGGREGATOR")
         else:
@@ -2645,12 +2643,7 @@ async def lifespan(app: FastAPI):
 
     # Start LLM usage aggregator (if enabled, and not disabled via env or test-mode)
     try:
-        _disable_llm_usage_agg = _env_os.getenv("DISABLE_LLM_USAGE_AGGREGATOR", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        _disable_llm_usage_agg = _shared_env_flag_enabled("DISABLE_LLM_USAGE_AGGREGATOR")
         if _disable_llm_usage_agg:
             logger.info("LLM usage aggregator disabled via DISABLE_LLM_USAGE_AGGREGATOR")
         else:
@@ -2665,12 +2658,7 @@ async def lifespan(app: FastAPI):
     # Start personalization consolidation service if enabled
     try:
         _personalization_enabled = bool(_app_settings.get("PERSONALIZATION_ENABLED", True))
-        _skip_consolidation = _env_os.getenv("DISABLE_PERSONALIZATION_CONSOLIDATION", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        _skip_consolidation = _shared_env_flag_enabled("DISABLE_PERSONALIZATION_CONSOLIDATION")
         if not _personalization_enabled or _skip_consolidation:
             logger.info("Personalization consolidation disabled (flag or env)")
         else:
@@ -2684,7 +2672,7 @@ async def lifespan(app: FastAPI):
 
     # Ensure PG RLS policies (optional, guarded by env)
     try:
-        _ensure_rls = _env_os.getenv("RAG_ENSURE_PG_RLS", "").lower() in {"1", "true", "yes", "on"}
+        _ensure_rls = _shared_env_flag_enabled("RAG_ENSURE_PG_RLS")
         if _ensure_rls:
             from tldw_Server_API.app.core.DB_Management.backends.base import DatabaseConfig
             from tldw_Server_API.app.core.DB_Management.backends.factory import DatabaseBackendFactory
@@ -2705,12 +2693,7 @@ async def lifespan(app: FastAPI):
 
     # Start RAG quality eval scheduler (nightly dashboards)
     try:
-        _disable_quality_eval = _env_os.getenv("RAG_QUALITY_EVAL_ENABLED", "false").lower() not in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        _disable_quality_eval = not _shared_is_truthy(_env_os.getenv("RAG_QUALITY_EVAL_ENABLED", "false"))
         if _disable_quality_eval:
             logger.info("RAG quality eval scheduler disabled (RAG_QUALITY_EVAL_ENABLED != true)")
         else:
@@ -2724,7 +2707,7 @@ async def lifespan(app: FastAPI):
 
     # Start Outputs purge scheduler (daily maintenance)
     try:
-        _enable_outputs_purge = _env_os.getenv("OUTPUTS_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        _enable_outputs_purge = _shared_is_truthy(_env_os.getenv("OUTPUTS_PURGE_ENABLED", "false"))
         if not _enable_outputs_purge:
             logger.info("Outputs purge scheduler disabled (OUTPUTS_PURGE_ENABLED != true)")
         else:
@@ -2747,7 +2730,9 @@ async def lifespan(app: FastAPI):
 
     # Start Kanban activity cleanup scheduler (retention cleanup)
     try:
-        _enable_kanban_activity_cleanup = _env_os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        _enable_kanban_activity_cleanup = _shared_is_truthy(
+            _env_os.getenv("KANBAN_ACTIVITY_CLEANUP_ENABLED", "false")
+        )
         if not _enable_kanban_activity_cleanup:
             logger.info("Kanban activity cleanup scheduler disabled (KANBAN_ACTIVITY_CLEANUP_ENABLED != true)")
         else:
@@ -2763,7 +2748,7 @@ async def lifespan(app: FastAPI):
 
     # Start Kanban soft-delete purge scheduler
     try:
-        _enable_kanban_purge = _env_os.getenv("KANBAN_PURGE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        _enable_kanban_purge = _shared_is_truthy(_env_os.getenv("KANBAN_PURGE_ENABLED", "false"))
         if not _enable_kanban_purge:
             logger.info("Kanban purge scheduler disabled (KANBAN_PURGE_ENABLED != true)")
         else:
@@ -2777,7 +2762,7 @@ async def lifespan(app: FastAPI):
 
     # Start File artifacts export GC scheduler (expired export cleanup)
     try:
-        _enable_files_export_gc = _env_os.getenv("FILES_EXPORT_GC_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+        _enable_files_export_gc = _shared_is_truthy(_env_os.getenv("FILES_EXPORT_GC_ENABLED", "false"))
         if not _enable_files_export_gc:
             logger.info("File artifacts export GC scheduler disabled (FILES_EXPORT_GC_ENABLED != true)")
         else:
@@ -2794,7 +2779,7 @@ async def lifespan(app: FastAPI):
 
     # Start Jobs prune scheduler (daily maintenance)
     try:
-        _enable_jobs_prune = _env_os.getenv("JOBS_PRUNE_ENFORCE", "false").lower() in {"1", "true", "yes", "on"}
+        _enable_jobs_prune = _shared_is_truthy(_env_os.getenv("JOBS_PRUNE_ENFORCE", "false"))
         if not _enable_jobs_prune:
             logger.info("Jobs prune scheduler disabled (JOBS_PRUNE_ENFORCE != true)")
         else:
@@ -2821,7 +2806,7 @@ async def lifespan(app: FastAPI):
     # Start AuthNZ scheduler (retention/cleanup tasks) with env guard
     _authnz_sched_started = False
     try:
-        _disable_authnz_sched = _env_os.getenv("DISABLE_AUTHNZ_SCHEDULER", "").lower() in {"1", "true", "yes", "on"}
+        _disable_authnz_sched = _shared_env_flag_enabled("DISABLE_AUTHNZ_SCHEDULER")
         if _disable_authnz_sched:
             logger.info("AuthNZ scheduler disabled via DISABLE_AUTHNZ_SCHEDULER env var")
         else:
@@ -2986,7 +2971,7 @@ async def lifespan(app: FastAPI):
                     "TLDW_TEST_MODE": _os.getenv("TLDW_TEST_MODE", ""),
                     "WORKFLOWS_DISABLE_RATE_LIMITS": _os.getenv("WORKFLOWS_DISABLE_RATE_LIMITS", ""),
                 }
-                _enabled = [k for k, v in _test_flags.items() if str(v).lower() in {"1", "true", "yes", "on"}]
+                _enabled = [k for k, v in _test_flags.items() if _shared_is_truthy(v)]
                 if _enabled:
                     logger.warning(
                         f"Test-mode toggles enabled in production: {', '.join(_enabled)} - disable these for secure deployments"
@@ -3349,7 +3334,7 @@ async def lifespan(app: FastAPI):
         if "db_pool" in locals():
             import os as _os
 
-            _in_pytest = bool(_os.getenv("PYTEST_CURRENT_TEST"))
+            _in_pytest = _shared_is_explicit_pytest_runtime()
             if not _in_pytest:
                 await db_pool.close()
                 logger.info("App Shutdown: Auth database pool closed")

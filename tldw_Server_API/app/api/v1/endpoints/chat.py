@@ -191,6 +191,11 @@ from tldw_Server_API.app.core.Moderation.moderation_service import get_moderatio
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
 from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _shared_env_flag_enabled,
+    is_test_mode as _shared_is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
 from tldw_Server_API.app.core.Usage.usage_tracker import backfill_legacy_tokens_to_ledger
 
 from . import chat_dictionaries, chat_documents
@@ -239,12 +244,7 @@ router.include_router(chat_documents.router)
 
 def _chat_connectors_enabled() -> bool:
     """Feature flag for chat connectors v2 (email/issue/wiki exports)."""
-    return str(os.getenv("CHAT_CONNECTORS_V2_ENABLED", "false")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return _shared_env_flag_enabled("CHAT_CONNECTORS_V2_ENABLED")
 
 # Load configuration values from config
 import contextlib
@@ -289,10 +289,10 @@ TREE_MESSAGE_CAP_MAX: int = int(_chat_config.get("tree_message_cap_max", 500))
 def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
     v = os.getenv(env_name)
     if isinstance(v, str) and v.strip():
-        return v.strip().lower() in {"1", "true", "yes", "on"}
+        return _shared_is_truthy(v)
     try:
         raw = _chat_commands_config.get(cfg_key) if _chat_commands_config else None
-        return str(raw).strip().lower() in {"1", "true", "yes", "on"} if raw is not None else fallback
+        return _shared_is_truthy(raw) if raw is not None else fallback
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         return fallback
 
@@ -300,14 +300,14 @@ def _cfg_bool_cmds(env_name: str, cfg_key: str, fallback: bool) -> bool:
 _env_queued = os.getenv("CHAT_QUEUED_EXECUTION")
 try:
     QUEUED_EXECUTION: bool = (
-        (_env_queued.strip().lower() in {"1", "true", "yes", "on"}) if _env_queued is not None
-        else _chat_config.get('queued_execution', 'False').lower() == 'true'
+        (_shared_is_truthy(_env_queued)) if _env_queued is not None
+        else _shared_is_truthy(_chat_config.get("queued_execution", "False"))
     )
 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
     QUEUED_EXECUTION = False
 
 def _to_bool(val: str) -> bool:
-    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _shared_is_truthy(val)
 
 
 def _resolve_base64_image_limit_enforcement() -> bool:
@@ -507,7 +507,7 @@ async def _maybe_rg_shadow_chat_decision(
         return
 
     try:
-        if str(os.getenv("RG_SHADOW_CHAT", "") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        if not _shared_is_truthy(os.getenv("RG_SHADOW_CHAT", "") or ""):
             return
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001 - defensive: RG shadow must not affect control flow
         logger.debug("RG shadow: env flag check failed, skipping shadow comparison: {}", exc)
@@ -768,7 +768,7 @@ def _get_default_provider() -> str:
     env_val = os.getenv("DEFAULT_LLM_PROVIDER")
     if env_val:
         return env_val
-    if os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes"}:
+    if _shared_is_test_mode():
         return "local-llm"
     return DEFAULT_LLM_PROVIDER
 
@@ -1690,7 +1690,7 @@ async def create_chat_completion(
         # limits to validate 429 behavior. So we only bypass the limiter for mocks
         # when not running in TEST_MODE.
         try:
-            _is_test_mode = _to_bool(os.getenv("TEST_MODE", ""))
+            _is_test_mode = _shared_is_test_mode()
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
             _is_test_mode = False
 
@@ -2046,7 +2046,7 @@ async def create_chat_completion(
             # auto-switching from 'local-llm' to 'openai' if an OpenAI key
             # is present. This is primarily to satisfy integration tests that
             # expect config-driven defaults.
-            _test_mode_flag = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            _test_mode_flag = _shared_is_test_mode()
             _autoswitch_enabled = ALLOW_AUTOSWITCH_TO_OPENAI or _test_mode_flag
             if (
                 _autoswitch_enabled
@@ -2115,7 +2115,7 @@ async def create_chat_completion(
                 def provider_requires_api_key(_provider: str) -> bool:  # type: ignore[misc]
                     return True
             # Allow explicit mock forcing in tests even if provider key is absent
-            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             _auto_mock_family = target_api_provider in {"openai", "groq", "mistral"}
             if provider_requires_api_key(target_api_provider) and not provider_api_key and not (_force_mock or (_test_mode_flag and _auto_mock_family)):
                 logger.error(f"API key for provider '{target_api_provider}' is missing or not configured.")
@@ -2328,7 +2328,7 @@ async def create_chat_completion(
 
             # Request Queue Integration (Admission control / backpressure)
             # ------------------------------------------------------------------------
-            is_test_mode = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
+            is_test_mode_flag = _shared_is_test_mode()
             try:
                 queue_candidate = get_request_queue()
             except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
@@ -2336,8 +2336,8 @@ async def create_chat_completion(
 
             queue = None
             if queue_candidate is not None:
-                if is_test_mode:
-                    allow_queue_env = os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", "").lower() in {"1", "true", "yes", "on"}
+                if is_test_mode_flag:
+                    allow_queue_env = _shared_is_truthy(os.getenv("FORCE_CHAT_QUEUE_IN_TESTS", ""))
                     queue_module = getattr(queue_candidate.__class__, "__module__", "")
                     allow_queue_override = getattr(queue_candidate, "allow_in_test_mode", False)
                     allow_queue_stub = (
@@ -2432,7 +2432,7 @@ async def create_chat_completion(
             # ------------------------------------------------------------------------
 
             mock_friendly_keys = {"sk-mock-key-12345", "test-openai-key", "mock-openai-key"}
-            _force_mock = os.getenv("CHAT_FORCE_MOCK", "").strip().lower() in {"1", "true", "yes", "on"}
+            _force_mock = _shared_is_truthy(os.getenv("CHAT_FORCE_MOCK", ""))
             use_mock_provider = (
                 (
                     _test_mode_flag and (

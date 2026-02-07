@@ -34,7 +34,13 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 -
+fix(audio-ws): make transcribe startup resilient to Nemo probe failures
 
+- Treat Nemo availability probe import errors as non-fatal in `websocket_transcribe`
+- Default to Whisper when Nemo probing cannot be resolved at runtime
+- Prevent WS startup aborts that caused downstream quota/metrics/concurrency test failures
+- Document the fail-safe fallback behavior in the audio streaming protocol docs
+-
 
 ## [0.1.20] 2026-02-07
 
@@ -99,6 +105,13 @@ and this project adheres to Some kind of Versioning
   - Lint only-changed target and script; large doc set added/updated (PRDs, guides).
   - FlashRank reranker model vendored under models/flashrank with unignore rules.
   - New env vars for ACP sandbox, TTS history, and RAG FlashRank cache/model selection.
+- Web Scraping Module
+  - Hardened legacy fallback contracts in web_scraping_service.py (line 46) and web_scraping_service.py (line 276).
+  - Added explicit fallback metadata (engine, fallback_context) in web_scraping_service.py (line 392) and web_scraping_service.py (line 497).
+  - Added predictable fallback max_pages cap for legacy URL Level/Sitemap in web_scraping_service.py (line 340).
+  - Preserved request max_pages pass-through in ingest orchestration in web_scraping_service.py (line 721) and web_scraping_service.py (line 772).
+  - Added fallback-focused tests in test_legacy_fallback_behavior.py (line 44).
+  - Fixed auth header fixture for friendly ingest crawl-flag tests in test_friendly_ingest_crawl_flags.py (line 19) by merging default headers and adding X-API-KEY.
 
 ### Removed
 

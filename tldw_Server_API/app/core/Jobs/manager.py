@@ -23,6 +23,10 @@ from tldw_Server_API.app.core.Security.crypto import (
     encrypt_json_blob,
     encrypt_json_blob_with_key,
 )
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
 
 from .audit_bridge import submit_job_audit_event
 from .event_stream import emit_job_event
@@ -122,15 +126,12 @@ class JobManager:
     _RLS_DOMAIN_ALLOWLIST: ContextVar[str | None] = ContextVar("jobs_rls_domain_allowlist", default=None)
     _RLS_OWNER_USER_ID: ContextVar[str | None] = ContextVar("jobs_rls_owner_user_id", default=None)
 
-    _TRUTHY = {"1", "true", "yes", "y", "on"}
     # Test-mode only: remember last acquired job per (domain,queue) to stabilize duplicate acquires
     _LAST_ACQUIRED_TEST: dict[tuple[str, str], dict[str, Any]] = {}
 
     @staticmethod
     def _is_truthy(val: str | None) -> bool:
-        if val is None:
-            return False
-        return str(val).strip().lower() in JobManager._TRUTHY
+        return _shared_is_truthy(val)
 
     def __init__(
         self,
@@ -354,7 +355,7 @@ class JobManager:
             _set_or_reset("app.domain_allowlist", dom)
             owner = JobManager._RLS_OWNER_USER_ID.get()
             _set_or_reset("app.owner_user_id", owner)
-            if os.getenv("JOBS_PG_RLS_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
+            if JobManager._is_truthy(os.getenv("JOBS_PG_RLS_DEBUG", "")):
                 try:
                     cur.execute(
                         "SELECT "
@@ -516,7 +517,7 @@ class JobManager:
         else:
             raise ValueError("Unsupported action; expected pause|resume|drain")  # noqa: TRY003
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -574,13 +575,7 @@ class JobManager:
         try:
             conn = self._connect()
             try:
-                counters_enabled = str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "y",
-                    "on",
-                }
+                counters_enabled = JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                 if self.backend == "postgres":
                     with self._pg_cursor(conn) as cur:
                         if counters_enabled:
@@ -673,7 +668,7 @@ class JobManager:
         enabled: bool = True,
     ) -> None:
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -784,10 +779,10 @@ class JobManager:
     # --- Encryption helpers ---
     def _should_encrypt(self, domain: str | None) -> bool:
         try:
-            if str(os.getenv("JOBS_ENCRYPT", "")).lower() in {"1", "true", "yes", "y", "on"}:
+            if JobManager._is_truthy(os.getenv("JOBS_ENCRYPT", "")):
                 return True
             if domain:  # noqa: SIM102
-                if str(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                if JobManager._is_truthy(os.getenv(f"JOBS_ENCRYPT_{str(domain).upper()}", "")):
                     return True
         except _JOB_NONCRITICAL_EXCEPTIONS:
             pass
@@ -914,7 +909,7 @@ class JobManager:
 
         Returns (possibly-redacted-object, found_any, findings).
         """
-        redact = str(os.getenv("JOBS_SECRET_REDACT", "")).lower() in {"1", "true", "yes", "y", "on"}
+        redact = JobManager._is_truthy(os.getenv("JOBS_SECRET_REDACT", ""))
         patterns, deny_keys = self._secret_patterns()
         findings: list[str] = []
 
@@ -1055,7 +1050,7 @@ class JobManager:
         # Secret hygiene (reject/redact)
         try:
             cleaned, found, where = self._scan_and_redact_secrets(payload)
-            if found and str(os.getenv("JOBS_SECRET_REJECT", "")).lower() in {"1", "true", "yes", "y", "on"}:
+            if found and JobManager._is_truthy(os.getenv("JOBS_SECRET_REJECT", "")):
                 raise ValueError(f"Payload appears to contain secrets at: {where[:3]}{'...' if len(where) > 3 else ''}")  # noqa: TRY003
             payload = cleaned if found else payload
         except _JOB_NONCRITICAL_EXCEPTIONS as _sec_e:
@@ -1063,7 +1058,7 @@ class JobManager:
 
         # JSON payload size cap
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         # Optional encryption at rest for payload
         payload = self._maybe_encrypt_json(payload, domain)
         payload_json = json.dumps(payload)
@@ -1209,13 +1204,7 @@ class JobManager:
                                 pass
                             # Counters bump (PG, idempotent insert occurred)
                             try:
-                                if was_insert and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if was_insert and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     is_sched = bool(avail_param)
                                     cur.execute(
                                         (
@@ -1258,13 +1247,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.created",
                                         job=d,
@@ -1340,7 +1323,7 @@ class JobManager:
                             increment_created({"domain": domain, "queue": queue, "job_type": job_type})
                         # Counters bump (PG, non-idempotent path)
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 is_sched = bool(avail_param)
                                 cur.execute(
                                     (
@@ -1381,7 +1364,7 @@ class JobManager:
                             pass
                         # Emit event for in-process listeners when outbox is disabled
                         try:
-                            if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
+                            if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                 emit_job_event(
                                     "job.created",
                                     job=d,
@@ -1536,7 +1519,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     is_sched = bool(avail_param_sqlite)
                                     # Upsert counters: initialize ready/scheduled appropriately, then increment on conflict
                                     conn.execute(
@@ -1585,7 +1568,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {"1", "true", "yes", "y", "on"}:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.created",
                                         job={**d, "request_id": request_id, "trace_id": trace_id},
@@ -2191,7 +2174,7 @@ class JobManager:
         `leased_until` is NULL or in the past.
         """
         # Honor global acquire gate for graceful shutdown
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         if _test_mode:
             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                 logger.info(
@@ -2244,7 +2227,7 @@ class JobManager:
             req = int(lease_seconds)
         except _JOB_NONCRITICAL_EXCEPTIONS:
             req = 0
-        if req <= 0 and str(os.getenv("JOBS_ADAPTIVE_LEASE_ENABLE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+        if req <= 0 and JobManager._is_truthy(os.getenv("JOBS_ADAPTIVE_LEASE_ENABLE", "")):
             try:
                 req = self._adaptive_lease_seconds(domain, queue, None)
             except _JOB_NONCRITICAL_EXCEPTIONS:
@@ -2263,13 +2246,7 @@ class JobManager:
                 with conn:  # noqa: SIM117
                     with self._pg_cursor(conn) as cur:
                         d = None  # type: ignore[assignment]
-                        if str(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_PG_SINGLE_UPDATE_ACQUIRE", "")):
                             # Build ordering clause with optional env overrides
                             prio_dir = self._priority_dir_for(domain, backend="pg")
                             tie = self._tie_break_for(domain, backend="pg")
@@ -2374,7 +2351,7 @@ class JobManager:
                             pass
                         # Counters: adjust queued->processing
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2434,13 +2411,7 @@ class JobManager:
             else:
                 with conn:
                     # Optional one-shot acquisition path for SQLite to reduce contention
-                    if str(os.getenv("JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE", "")).lower() in {
-                        "1",
-                        "true",
-                        "yes",
-                        "y",
-                        "on",
-                    }:
+                    if JobManager._is_truthy(os.getenv("JOBS_SQLITE_SINGLE_UPDATE_ACQUIRE", "")):
                         lease_id = str(_uuid.uuid4())
                         sub = (
                             "SELECT id FROM jobs WHERE domain = ? AND queue = ? AND ("
@@ -2509,7 +2480,7 @@ class JobManager:
                             self._assert_invariants(d)
                         # Counters queued->processing
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2623,7 +2594,7 @@ class JobManager:
                                     f"[JM TEST] acquired id={d.get('id')} status={d.get('status')} leased_until={d.get('leased_until')} worker_id={d.get('worker_id')} lease_id={d.get('lease_id')}"
                                 )
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(d.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -2893,7 +2864,7 @@ class JobManager:
             res_obj = result
 
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         try:
             res_json = json.dumps(res_obj)
         except (TypeError, ValueError) as exc:
@@ -2943,7 +2914,7 @@ class JobManager:
         """
         # Strong exactly-once finalize (optional): require a completion_token when enabled
         if (
-            str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
+            JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", ""))
             and not completion_token
         ):
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -2951,7 +2922,7 @@ class JobManager:
             enforce = self._should_enforce_ack()
         # Cap result size if configured
         max_bytes = int(os.getenv("JOBS_MAX_JSON_BYTES", "1048576") or "1048576")
-        truncate = str(os.getenv("JOBS_JSON_TRUNCATE", "")).lower() in {"1", "true", "yes", "y", "on"}
+        truncate = JobManager._is_truthy(os.getenv("JOBS_JSON_TRUNCATE", ""))
         res_obj = result
         res_ok = False
         if res_obj is not None:
@@ -2970,7 +2941,7 @@ class JobManager:
                         raise ValueError(f"Result too large: {res_bytes} bytes > limit {max_bytes}")  # noqa: TRY003
         # Optional encryption at rest for result (requires domain; will be resolved per-backend)
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -3146,13 +3117,7 @@ class JobManager:
                                     pass
                                 # Decrement processing counter
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                         if completed_from_processing:
                                             cur.execute(
                                                 "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -3377,13 +3342,7 @@ class JobManager:
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     if completed_from_processing:
                                         conn.execute(
                                             "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -3444,13 +3403,7 @@ class JobManager:
                                 pass
                             # Emit event for in-process listeners when outbox is disabled
                             try:
-                                if str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() not in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if not JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", "")):
                                     emit_job_event(
                                         "job.completed",
                                         job={
@@ -3700,7 +3653,7 @@ class JobManager:
                 conn.close()
 
     def batch_fail_jobs(self, items: list[dict[str, Any]], *, enforce: bool | None = None) -> int:
-        if str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}:
+        if JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")):
             for it in items:
                 if not it.get("completion_token"):
                     raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -3797,7 +3750,7 @@ class JobManager:
         """
         # Strong exactly-once finalize (optional): require a completion_token when enabled
         if (
-            str(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "")).lower() in {"1", "true", "yes", "y", "on"}
+            JobManager._is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", ""))
             and not completion_token
         ):
             raise ValueError("completion_token required by JOBS_REQUIRE_COMPLETION_TOKEN")  # noqa: TRY003
@@ -3806,7 +3759,7 @@ class JobManager:
         if enforce is None:
             enforce = self._should_enforce_ack()
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -3832,20 +3785,14 @@ class JobManager:
                             row = cur.fetchone()
                             current = int(row["retry_count"]) if row else 0
                             exp_backoff = max(1, int(backoff_seconds * (2**current)))
-                            test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
+                            test_mode = _is_test_mode()
                             jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                             delay = exp_backoff + jitter
                             # In tests, enforce a generous minimum when the caller requested
                             # immediate retry (backoff_seconds=0) so that newer jobs can be
                             # acquired before recently failed ones.
                             if test_mode:
-                                _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }
+                                _outbox = JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", ""))
                                 # Permit immediate retry in tests when caller requests backoff=0
                                 # unless outbox mode is enabled (which needs a larger gap).
                                 if not _outbox and exp_backoff <= 1:
@@ -3959,13 +3906,7 @@ class JobManager:
                                             pass
                                         # Counters: processing -> queued (ready/scheduled) or quarantined
                                         try:
-                                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                                "1",
-                                                "true",
-                                                "yes",
-                                                "y",
-                                                "on",
-                                            }:
+                                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                                 dmn = elem.get("domain")
                                                 qq = elem.get("queue")
                                                 jt = elem.get("job_type")
@@ -4029,7 +3970,7 @@ class JobManager:
                                             pass
                                 except _JOB_NONCRITICAL_EXCEPTIONS:
                                     pass
-                                if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                                if _is_test_mode():
                                     try:
                                         # Snapshot after scheduling retry (PG)
                                         cur.execute("SELECT failure_timeline FROM jobs WHERE id = %s", (int(job_id),))
@@ -4159,13 +4100,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):  # noqa: SIM102
                                         if not failed_from_queued:
                                             cur.execute(
                                                 "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -4204,7 +4139,7 @@ class JobManager:
                                     self._cancel_dependent_jobs(d.get("uuid"), reason="dependency_failed")
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             try:
                                 cur.execute("SELECT COUNT(*) AS c FROM jobs")
                                 _total = (cur.fetchone() or {}).get("c", 0)
@@ -4243,19 +4178,13 @@ class JobManager:
                         row = conn.execute("SELECT retry_count FROM jobs WHERE id = ?", (job_id,)).fetchone()
                         current = int(row[0]) if row else 0
                         exp_backoff = max(1, int(backoff_seconds * (2**current)))
-                        test_mode = str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}
+                        test_mode = _is_test_mode()
                         jitter = 0 if exp_backoff <= 2 or test_mode else random.randint(0, max(1, exp_backoff // 4))
                         delay = exp_backoff + jitter
                         base_thresh = int(os.getenv("JOBS_QUARANTINE_THRESHOLD", "2") or "2")
                         thresh = base_thresh
                         if test_mode:
-                            _outbox = str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }
+                            _outbox = JobManager._is_truthy(os.getenv("JOBS_EVENTS_OUTBOX", ""))
                             if not _outbox and exp_backoff <= 1:
                                 delay = 0
                             try:
@@ -4366,13 +4295,7 @@ class JobManager:
                                         pass
                                     # Counters: processing -> queued (ready/scheduled) or quarantined
                                     try:
-                                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                            "1",
-                                            "true",
-                                            "yes",
-                                            "y",
-                                            "on",
-                                        }:
+                                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                             # Use current streak value after increment to decide counters update
                                             try:
                                                 row_fs = conn.execute(
@@ -4438,8 +4361,7 @@ class JobManager:
                                         # Update last-acquired snapshot for test-mode fallbacks to preserve timeline growth
                                         try:
                                             if (
-                                                str(os.getenv("TEST_MODE", "")).lower()
-                                                in {"1", "true", "yes", "y", "on"}
+                                                _is_test_mode()
                                                 and rowl
                                             ):
                                                 rnow = conn.execute(
@@ -4453,7 +4375,7 @@ class JobManager:
                                         pass
                             except _JOB_NONCRITICAL_EXCEPTIONS:
                                 pass
-                            if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                            if _is_test_mode():
                                 try:
                                     _row = conn.execute(
                                         "SELECT failure_timeline FROM jobs WHERE id = ?", (int(job_id),)
@@ -4565,13 +4487,7 @@ class JobManager:
                                     pass
                                 # Counters: processing -> failed (terminal)
                                 try:
-                                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {  # noqa: SIM102
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }:
+                                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):  # noqa: SIM102
                                         if not failed_from_queued:
                                             conn.execute(
                                                 "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -4631,7 +4547,7 @@ class JobManager:
                                     pass
                         except _JOB_NONCRITICAL_EXCEPTIONS:
                             pass
-                        if str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             try:
                                 _total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
                                 _dist = {
@@ -4662,7 +4578,7 @@ class JobManager:
         Emits gauge updates on successful cancellation for the job's domain/queue/job_type.
         """
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -4697,13 +4613,7 @@ class JobManager:
                                 pass
                             # Counters: queued (ready/scheduled) -> cancelled
                             try:
-                                if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if rowd and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     _now2 = self._clock.now_utc()
                                     _av2 = _parse_dt(rowd.get("available_at")) if rowd else None
                                     if _av2 is not None and _av2.tzinfo is None:
@@ -4776,8 +4686,7 @@ class JobManager:
                             if (
                                 ok
                                 and row0
-                                and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower()
-                                in {"1", "true", "yes", "y", "on"}
+                                and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                             ):
                                 cur.execute(
                                     "UPDATE job_counters SET processing_count = GREATEST(processing_count - 1, 0), updated_at = NOW() WHERE domain=%s AND queue=%s AND job_type=%s",
@@ -4850,13 +4759,7 @@ class JobManager:
                             pass
                         # Counters: queued (ready/scheduled) -> cancelled
                         try:
-                            if rowd and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if rowd and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now3 = self._clock.now_utc()
                                 _av3 = _parse_dt(rowd["available_at"]) if rowd and rowd["available_at"] else None
                                 if _av3 is not None and _av3.tzinfo is None:
@@ -4947,8 +4850,7 @@ class JobManager:
                             if (
                                 ok
                                 and row0
-                                and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower()
-                                in {"1", "true", "yes", "y", "on"}
+                                and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", ""))
                             ):
                                 conn.execute(
                                     "UPDATE job_counters SET processing_count = CASE WHEN processing_count>0 THEN processing_count-1 ELSE 0 END, updated_at = DATETIME('now') WHERE domain=? AND queue=? AND job_type=?",
@@ -5035,13 +4937,7 @@ class JobManager:
                             with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                                 self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
                         try:
-                            if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if ok and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 _now = self._clock.now_utc()
                                 _av = _parse_dt(row.get("available_at"))
                                 if _av is not None and _av.tzinfo is None:
@@ -5107,13 +5003,7 @@ class JobManager:
                         with contextlib.suppress(_JOB_NONCRITICAL_EXCEPTIONS):
                             self._update_gauges(domain=row["domain"], queue=row["queue"], job_type=row["job_type"])
                     try:
-                        if ok and str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if ok and JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             _now = self._clock.now_utc()
                             _av = _parse_dt(row["available_at"]) if row["available_at"] else None
                             if _av is not None and _av.tzinfo is None:
@@ -5179,7 +5069,7 @@ class JobManager:
         if not statuses:
             return 0
         conn = self._connect()
-        _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+        _test_mode = _is_test_mode()
         try:
             if self.backend == "postgres":
                 with conn:  # noqa: SIM117
@@ -5223,29 +5113,17 @@ class JobManager:
                                     logger.info(f"[JM TEST MUT] prune_jobs dry_run count={_cnt}")
                             return _cnt
                         # Optional archive copy
-                        if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                             cur.execute(
                                 f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
                                 tuple(params),
                             )
                             # Optional compression for archived payload/result (Postgres)
                             try:
-                                if str(os.getenv("JOBS_ARCHIVE_COMPRESS", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS", "")):
                                     import gzip
 
-                                    drop_json = str(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", "")).lower() in {
-                                        "1",
-                                        "true",
-                                        "yes",
-                                        "y",
-                                        "on",
-                                    }
+                                    drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
                                     cur.execute(f"SELECT id, payload, result FROM jobs{where_clause}", tuple(params))
                                     rows_cr = cur.fetchall() or []
                                     for r in rows_cr:
@@ -5279,7 +5157,7 @@ class JobManager:
                                 pass
                         # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 # Ready queued
                                 cur.execute(
                                     f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= NOW()) GROUP BY domain,queue,job_type",
@@ -5381,7 +5259,7 @@ class JobManager:
                     where_clause = " WHERE " + " AND ".join(where_parts)
                     # Diagnostics in TEST_MODE: show which rows match the prune filter (SQLite)
                     try:
-                        if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if _is_test_mode():
                             dbg_rows = conn.execute(
                                 f"SELECT id, status, completed_at, created_at FROM jobs{where_clause}",
                                 tuple(params),
@@ -5421,24 +5299,18 @@ class JobManager:
                                 logger.info(f"[JM TEST MUT] prune_jobs dry_run count={int(count)}")
                         return count
                     # Optional archive copy
-                    if str(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                    if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_BEFORE_DELETE", "")):
                         conn.execute(
                             f"INSERT INTO jobs_archive (id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at) SELECT id, uuid, domain, queue, job_type, owner_user_id, project_id, batch_group, idempotency_key, payload, result, status, priority, max_retries, retry_count, available_at, started_at, leased_until, lease_id, worker_id, acquired_at, error_message, last_error, cancel_requested_at, cancelled_at, cancellation_reason, progress_percent, progress_message, created_at, updated_at, completed_at FROM jobs{where_clause}",
                             tuple(params),
                         )
                         # Optional compression for archived payload/result (SQLite: base64-gz prefix)
                         try:
-                            if str(os.getenv("JOBS_ARCHIVE_COMPRESS", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS", "")):
                                 import base64
                                 import gzip
 
-                                drop_json = str(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }
+                                drop_json = JobManager._is_truthy(os.getenv("JOBS_ARCHIVE_COMPRESS_DROP_JSON", ""))
                                 qsel = f"SELECT id, payload, result FROM jobs{where_clause}"
                                 for rid, pl, rs in conn.execute(qsel, tuple(params)).fetchall() or []:
                                     try:
@@ -5468,7 +5340,7 @@ class JobManager:
                             pass
                     # Counters: subtract queued/processing/quarantined rows if they are part of prune set
                     try:
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             for r in (
                                 conn.execute(
                                     f"SELECT domain, queue, job_type, COUNT(*) FROM jobs{where_clause} AND status='queued' AND (available_at IS NULL OR available_at <= DATETIME('now')) GROUP BY domain,queue,job_type",
@@ -5594,13 +5466,7 @@ class JobManager:
                                 params.append(job_type)
                             # Counters: queued (ready/scheduled) -> cancelled/failed, and metrics increments
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} AND (available_at IS NULL OR available_at <= %s) GROUP BY domain,queue,job_type",
                                         tuple(params + [now_ts]),
@@ -5691,13 +5557,7 @@ class JobManager:
                                 params2.append(job_type)
                             # Counters: processing -> cancelled/failed, and metrics increments
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     cur.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) c FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
                                         tuple(params2),
@@ -5784,7 +5644,7 @@ class JobManager:
                             params3.append(job_type)
                         # Counters adjustments (ready/scheduled) before status change
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 # ready subset (available_at <= now)
                                 ready_rows = (
                                     conn.execute(
@@ -5848,7 +5708,7 @@ class JobManager:
                         )
                         cur = conn.execute(sql, tuple(params3))
                         try:
-                            _tm = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+                            _tm = _is_test_mode()
                             if _tm:
                                 logger.info(
                                     f"[TEST] TTL(age) SQLite updated rows={cur.rowcount} for where={where} params={params3}"
@@ -5875,7 +5735,7 @@ class JobManager:
                             params4.append(job_type)
                         # Counters adjustments for processing and metrics
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 proc_rows = (
                                     conn.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {' AND '.join(where)} GROUP BY domain,queue,job_type",
@@ -5916,7 +5776,7 @@ class JobManager:
                         )
                         cur2 = conn.execute(sql2, tuple(params4))
                         try:
-                            _tm = os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "y", "on"}
+                            _tm = _is_test_mode()
                             if _tm:
                                 logger.info(
                                     f"[TEST] TTL(runtime) SQLite updated rows={cur2.rowcount} for where={where} params={params4}"
@@ -6021,7 +5881,7 @@ class JobManager:
                     if set_now:
                         # When moving to now, queued scheduled -> queued ready: update counters if enabled
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 now_ts = self._clock.now_utc()
                                 cur.execute(
                                     (
@@ -6072,7 +5932,7 @@ class JobManager:
                     if set_now:
                         # Counters: queued scheduled -> queued ready for matching scope
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 now_str = self._clock.now_utc().astimezone(_tz.utc).strftime("%Y-%m-%d %H:%M:%S")
                                 for r in (
                                     conn.execute(
@@ -6158,13 +6018,7 @@ class JobManager:
                         return count
                     with conn:
                         failed_groups: list[dict[str, Any]] = []
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             try:
                                 cur.execute(
                                     (
@@ -6198,13 +6052,7 @@ class JobManager:
                         if not only_failed:
                             # Counters: queued scheduled -> queued ready
                             try:
-                                if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                    "1",
-                                    "true",
-                                    "yes",
-                                    "y",
-                                    "on",
-                                }:
+                                if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                     now_ts = self._clock.now_utc()
                                     cur.execute(
                                         (
@@ -6255,7 +6103,7 @@ class JobManager:
                     return count
                 with conn:
                     failed_groups_sqlite: list[Any] = []
-                    if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                    if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                         try:
                             failed_groups_sqlite = (
                                 conn.execute(
@@ -6290,7 +6138,7 @@ class JobManager:
                     if not only_failed:
                         # Counters: queued scheduled -> queued ready
                         try:
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 for r in (
                                     conn.execute(
                                         f"SELECT domain, queue, job_type, COUNT(*) FROM jobs WHERE {wh} AND status='queued' AND available_at > DATETIME('now') GROUP BY domain,queue,job_type",
@@ -6709,13 +6557,7 @@ class JobManager:
                                 queue=row.get("queue"),
                                 job_type=row.get("job_type"),
                             )
-                            if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                                "1",
-                                "true",
-                                "yes",
-                                "y",
-                                "on",
-                            }:
+                            if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                                 if state == "processing":
                                     cur.execute(
                                         (
@@ -6809,13 +6651,7 @@ class JobManager:
                             queue=row["queue"],
                             job_type=row["job_type"],
                         )
-                        if str(os.getenv("JOBS_COUNTERS_ENABLED", "")).lower() in {
-                            "1",
-                            "true",
-                            "yes",
-                            "y",
-                            "on",
-                        }:
+                        if JobManager._is_truthy(os.getenv("JOBS_COUNTERS_ENABLED", "")):
                             if state == "processing":
                                 conn.execute(
                                     (

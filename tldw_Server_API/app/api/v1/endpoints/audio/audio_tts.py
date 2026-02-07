@@ -5,6 +5,7 @@ import contextlib
 import inspect
 import json
 import time
+from types import ModuleType
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -30,6 +31,7 @@ from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Logging.log_context import ensure_request_id
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.TTS.tts_exceptions import TTSError
 from tldw_Server_API.app.core.TTS.tts_service_v2 import TTSServiceV2, get_tts_service_v2
 from tldw_Server_API.app.core.TTS.utils import (
     build_tts_segments_payload,
@@ -49,6 +51,7 @@ _AUDIO_TTS_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     json.JSONDecodeError,
+    TTSError,
     HTTPException,
     QuotaExceededError,
     StorageError,
@@ -65,17 +68,47 @@ router = APIRouter(
 
 
 def _audio_shim_attr(name: str):
-    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
-    try:
-        if name in getattr(audio_shim, "__dict__", {}):
-            return getattr(audio_shim, name)
-    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
-        pass
+    def _is_override(value: Any) -> bool:
+        if value is None or isinstance(value, ModuleType):
+            return False
+        mod_name = getattr(value, "__module__", None)
+        if isinstance(mod_name, str) and mod_name:
+            return not mod_name.startswith("tldw_Server_API.")
+        return True
+
+    mod_has = False
+    mod_value: Any = None
     try:
         from tldw_Server_API.app.api.v1.endpoints.audio import audio as audio_mod
 
         if hasattr(audio_mod, name):
-            return getattr(audio_mod, name)
+            mod_has = True
+            mod_value = getattr(audio_mod, name)
+    except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
+        mod_has = False
+        mod_value = None
+    from tldw_Server_API.app.api.v1.endpoints import audio as audio_shim
+    pkg_dict = getattr(audio_shim, "__dict__", {})
+    pkg_has = name in pkg_dict
+    pkg_value = pkg_dict.get(name) if pkg_has else None
+
+    if pkg_has and mod_has and pkg_value is not mod_value:
+        pkg_override = _is_override(pkg_value)
+        mod_override = _is_override(mod_value)
+        if mod_override and not pkg_override:
+            return mod_value
+        if pkg_override and not mod_override:
+            return pkg_value
+        if mod_override and pkg_override:
+            return mod_value
+
+    if pkg_has:
+        return pkg_value
+    if mod_has:
+        return mod_value
+    try:
+        if hasattr(audio_shim, name):
+            return getattr(audio_shim, name)
     except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS:
         pass
     if not hasattr(audio_shim, name):
@@ -452,6 +485,8 @@ async def create_speech(
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
             _raise_for_tts_error(exc, request_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            _raise_for_tts_error(exc, request_id)
 
     async def _stream_chunks(initial_chunk: bytes):
         stream_failed: Optional[str] = None
@@ -476,6 +511,9 @@ async def create_speech(
             stream_failed = _tts_history_error_message(exc)
             raise
         except _AUDIO_TTS_NONCRITICAL_EXCEPTIONS as exc:
+            stream_failed = _tts_history_error_message(exc)
+            _raise_for_tts_error(exc, request_id)
+        except Exception as exc:  # pragma: no cover - defensive fallback
             stream_failed = _tts_history_error_message(exc)
             _raise_for_tts_error(exc, request_id)
         finally:

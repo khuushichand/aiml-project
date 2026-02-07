@@ -12,6 +12,8 @@ Features:
 - Crisis resource integration (988 Lifeline, Crisis Text Line)
 - Cooldown protection against impulsive rule disabling
 - Multiple display modes (inline_banner, sidebar_note, etc.)
+- Governance policy integration (schedule and chat-type scope filtering)
+- Confirmation and partner_approval bypass deactivation flows
 
 Integration: Called by chat pipeline after standard moderation to
 evaluate user's self-monitoring rules.
@@ -23,15 +25,19 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 
 from tldw_Server_API.app.core.Character_Chat.regex_safety import validate_regex_safety
 from tldw_Server_API.app.core.DB_Management.Guardian_DB import (
+    GovernancePolicy,
     GuardianDB,
     SelfMonitoringRule,
-    SelfMonitoringAlert,
-    EscalationState,
+)
+from tldw_Server_API.app.core.Moderation.governance_utils import (
+    chat_type_matches,
+    is_schedule_active,
 )
 
 _SELFMON_NONCRITICAL_EXCEPTIONS = (
@@ -119,8 +125,11 @@ class SelfMonitoringService:
     def invalidate_cache(self, user_id: str | None = None) -> None:
         with self._lock:
             if user_id:
-                self._compiled_cache.pop(str(user_id), None)
-                self._cache_timestamps.pop(str(user_id), None)
+                prefix = f"{user_id}:"
+                keys_to_remove = [k for k in self._compiled_cache if k.startswith(prefix)]
+                for k in keys_to_remove:
+                    self._compiled_cache.pop(k, None)
+                    self._cache_timestamps.pop(k, None)
             else:
                 self._compiled_cache.clear()
                 self._cache_timestamps.clear()
@@ -128,18 +137,38 @@ class SelfMonitoringService:
     def _get_compiled_rules(
         self,
         user_id: str,
-    ) -> list[tuple[SelfMonitoringRule, list[re.Pattern], list[re.Pattern]]]:
+        chat_type: str | None = None,
+    ) -> list[tuple[SelfMonitoringRule, list[re.Pattern], list[re.Pattern], GovernancePolicy | None]]:
         uid = str(user_id)
+        cache_key = f"{uid}:{chat_type or ''}"
         now = datetime.now(timezone.utc).timestamp()
         with self._lock:
-            cached_at = self._cache_timestamps.get(uid, 0.0)
-            if uid in self._compiled_cache and (now - cached_at) < self._cache_ttl_seconds:
-                return self._compiled_cache[uid]
+            cached_at = self._cache_timestamps.get(cache_key, 0.0)
+            if cache_key in self._compiled_cache and (now - cached_at) < self._cache_ttl_seconds:
+                return self._compiled_cache[cache_key]
 
         rules = self._db.list_self_monitoring_rules(uid, enabled_only=True)
-        compiled: list[tuple[SelfMonitoringRule, list[re.Pattern], list[re.Pattern]]] = []
+        compiled: list[tuple[SelfMonitoringRule, list[re.Pattern], list[re.Pattern], GovernancePolicy | None]] = []
 
         for rule in rules:
+            # Governance policy filtering
+            gp: GovernancePolicy | None = None
+            if rule.governance_policy_id:
+                try:
+                    gp = self._db.get_governance_policy(rule.governance_policy_id)
+                except _SELFMON_NONCRITICAL_EXCEPTIONS:
+                    gp = None
+                if gp:
+                    if not gp.enabled:
+                        continue
+                    if not is_schedule_active(
+                        gp.schedule_start, gp.schedule_end,
+                        gp.schedule_days, gp.schedule_timezone,
+                    ):
+                        continue
+                    if not chat_type_matches(gp.scope_chat_types, chat_type):
+                        continue
+
             include_pats: list[re.Pattern] = []
             exclude_pats: list[re.Pattern] = []
             for pat_str in (rule.patterns or []):
@@ -167,11 +196,11 @@ class SelfMonitoringService:
                 except re.error:
                     continue
             if include_pats:
-                compiled.append((rule, include_pats, exclude_pats))
+                compiled.append((rule, include_pats, exclude_pats, gp))
 
         with self._lock:
-            self._compiled_cache[uid] = compiled
-            self._cache_timestamps[uid] = now
+            self._compiled_cache[cache_key] = compiled
+            self._cache_timestamps[cache_key] = now
         return compiled
 
     def check_text(
@@ -190,7 +219,7 @@ class SelfMonitoringService:
         if not text or not text.strip():
             return SelfMonitoringCheckResult()
 
-        compiled_rules = self._get_compiled_rules(user_id)
+        compiled_rules = self._get_compiled_rules(user_id, chat_type=chat_type)
         if not compiled_rules:
             return SelfMonitoringCheckResult()
 
@@ -198,7 +227,7 @@ class SelfMonitoringService:
         action_priority = {"notify": 1, "redact": 2, "block": 3}
         best_priority = 0
 
-        for rule, include_pats, exclude_pats in compiled_rules:
+        for rule, include_pats, exclude_pats, _gp in compiled_rules:
             # Phase filtering
             if rule.phase != "both" and rule.phase != phase:
                 continue
@@ -295,7 +324,7 @@ class SelfMonitoringService:
         # If any rule triggers redact, compute redacted text
         if result.action == "redact":
             redacted = text
-            for rule, include_pats, _exclude_pats in compiled_rules:
+            for rule, include_pats, _exclude_pats, _gp in compiled_rules:
                 if rule.action != "redact":
                     continue
                 for pat in include_pats:
@@ -441,9 +470,13 @@ class SelfMonitoringService:
             return True
 
     def request_deactivation(self, rule_id: str, user_id: str) -> dict[str, Any]:
-        """Request deactivation of a rule with cooldown protection.
+        """Request deactivation of a rule with bypass protection.
 
-        Returns status and when deactivation will take effect.
+        Handles all bypass modes:
+        - "none": disable immediately
+        - "cooldown": existing cooldown logic
+        - "confirmation": generate token, require confirm_deactivation()
+        - "partner_approval": generate token, require approve_deactivation()
         """
         rule = self._db.get_self_monitoring_rule(rule_id)
         if not rule:
@@ -451,30 +484,131 @@ class SelfMonitoringService:
         if rule.user_id != str(user_id):
             return {"ok": False, "error": "Not your rule"}
 
-        if self.can_disable_rule(rule):
+        bypass = rule.bypass_protection or "none"
+
+        # "none" — disable immediately regardless of cooldown
+        if bypass == "none":
             self._db.update_self_monitoring_rule(rule_id, enabled=False)
             self.invalidate_cache(str(user_id))
             return {"ok": True, "status": "disabled_immediately"}
 
-        # Schedule deactivation after cooldown
-        try:
-            created = datetime.fromisoformat(rule.created_at)
-            deactivation_at = created + timedelta(minutes=rule.cooldown_minutes)
+        # "cooldown" — existing logic: check cooldown timer
+        if bypass == "cooldown":
+            if self.can_disable_rule(rule):
+                self._db.update_self_monitoring_rule(rule_id, enabled=False)
+                self.invalidate_cache(str(user_id))
+                return {"ok": True, "status": "disabled_immediately"}
+            try:
+                created = datetime.fromisoformat(rule.created_at)
+                deactivation_at = created + timedelta(minutes=rule.cooldown_minutes)
+                self._db.update_self_monitoring_rule(
+                    rule_id,
+                    pending_deactivation_at=deactivation_at.isoformat(),
+                )
+                return {
+                    "ok": True,
+                    "status": "pending_deactivation",
+                    "deactivation_at": deactivation_at.isoformat(),
+                    "reason": (
+                        f"This rule has a {rule.cooldown_minutes}-minute cooldown. "
+                        f"It will be disabled at {deactivation_at.isoformat()}."
+                    ),
+                }
+            except _SELFMON_NONCRITICAL_EXCEPTIONS as e:
+                return {"ok": False, "error": str(e)}
+
+        # "confirmation" — generate token, user must confirm
+        if bypass == "confirmation":
+            token = uuid4().hex[:16]
+            now_iso = datetime.now(timezone.utc).isoformat()
             self._db.update_self_monitoring_rule(
                 rule_id,
-                pending_deactivation_at=deactivation_at.isoformat(),
+                deactivation_confirmation_token=token,
+                deactivation_requested_at=now_iso,
             )
             return {
                 "ok": True,
-                "status": "pending_deactivation",
-                "deactivation_at": deactivation_at.isoformat(),
-                "reason": (
-                    f"This rule has a {rule.cooldown_minutes}-minute cooldown. "
-                    f"It will be disabled at {deactivation_at.isoformat()}."
-                ),
+                "status": "awaiting_confirmation",
+                "confirmation_token": token,
             }
-        except _SELFMON_NONCRITICAL_EXCEPTIONS as e:
-            return {"ok": False, "error": str(e)}
+
+        # "partner_approval" — generate token, partner must approve
+        if bypass == "partner_approval":
+            token = uuid4().hex[:16]
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._db.update_self_monitoring_rule(
+                rule_id,
+                deactivation_confirmation_token=token,
+                deactivation_requested_at=now_iso,
+            )
+            return {
+                "ok": True,
+                "status": "awaiting_partner_approval",
+                "confirmation_token": token,
+                "partner_user_id": rule.bypass_partner_user_id,
+            }
+
+        # Unknown bypass mode — fail safe
+        return {"ok": False, "error": f"Unknown bypass_protection mode: {bypass}"}
+
+    def confirm_deactivation(
+        self, rule_id: str, user_id: str, token: str,
+    ) -> dict[str, Any]:
+        """Confirm deactivation of a rule (confirmation bypass mode).
+
+        The user who owns the rule provides the token they received
+        from request_deactivation().
+        """
+        rule = self._db.get_self_monitoring_rule(rule_id)
+        if not rule:
+            return {"ok": False, "error": "Rule not found"}
+        if rule.user_id != str(user_id):
+            return {"ok": False, "error": "Not your rule"}
+        if rule.bypass_protection != "confirmation":
+            return {"ok": False, "error": "Rule does not use confirmation bypass"}
+        if not rule.deactivation_confirmation_token:
+            return {"ok": False, "error": "No pending deactivation request"}
+        if rule.deactivation_confirmation_token != token:
+            return {"ok": False, "error": "Invalid confirmation token"}
+
+        # Token matches — disable rule and clear token
+        self._db.update_self_monitoring_rule(
+            rule_id,
+            enabled=False,
+            deactivation_confirmation_token=None,
+            deactivation_requested_at=None,
+        )
+        self.invalidate_cache(str(user_id))
+        return {"ok": True, "status": "disabled"}
+
+    def approve_deactivation(
+        self, rule_id: str, approver_user_id: str, token: str,
+    ) -> dict[str, Any]:
+        """Approve deactivation of a rule (partner_approval bypass mode).
+
+        The designated partner user provides the token to approve.
+        """
+        rule = self._db.get_self_monitoring_rule(rule_id)
+        if not rule:
+            return {"ok": False, "error": "Rule not found"}
+        if rule.bypass_protection != "partner_approval":
+            return {"ok": False, "error": "Rule does not use partner_approval bypass"}
+        if rule.bypass_partner_user_id != str(approver_user_id):
+            return {"ok": False, "error": "Not the designated partner"}
+        if not rule.deactivation_confirmation_token:
+            return {"ok": False, "error": "No pending deactivation request"}
+        if rule.deactivation_confirmation_token != token:
+            return {"ok": False, "error": "Invalid confirmation token"}
+
+        # Token matches — disable rule and clear token
+        self._db.update_self_monitoring_rule(
+            rule_id,
+            enabled=False,
+            deactivation_confirmation_token=None,
+            deactivation_requested_at=None,
+        )
+        self.invalidate_cache(rule.user_id)
+        return {"ok": True, "status": "disabled"}
 
     def get_crisis_resources(self) -> dict[str, Any]:
         """Return crisis resources and disclaimer."""

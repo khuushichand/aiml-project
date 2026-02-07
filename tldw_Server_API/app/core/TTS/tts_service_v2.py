@@ -196,6 +196,24 @@ class TTSServiceV2:
         except _TTS_NONCRITICAL_EXCEPTIONS:
             return None
 
+    @staticmethod
+    def _normalize_language_code(language: Optional[Any]) -> Optional[str]:
+        """Normalize incoming language codes (e.g. pt-BR -> pt, en_US -> en)."""
+        if language is None:
+            return None
+        try:
+            normalized = str(language).strip()
+        except _TTS_NONCRITICAL_EXCEPTIONS:
+            return None
+        if not normalized:
+            return None
+        normalized = normalized.replace("_", "-").lower()
+        if "-" in normalized:
+            base = normalized.split("-", 1)[0].strip()
+            if base:
+                return base
+        return normalized
+
     def _attach_response_metadata(
         self,
         target: Any,
@@ -1833,7 +1851,7 @@ class TTSServiceV2:
             AudioFormat.MP3
         )
         # Optional language code mapping (lang_code primary; extra_params.language override)
-        language = getattr(request, 'lang_code', None)
+        language = self._normalize_language_code(getattr(request, 'lang_code', None))
         # Optional voice reference decoding (base64)
         voice_ref_bytes = None
         if getattr(request, 'voice_reference', None):
@@ -1849,15 +1867,20 @@ class TTSServiceV2:
         if isinstance(extras, dict):
             extra_language = extras.get("language")
             if isinstance(extra_language, str):
-                if extra_language.strip():
-                    language = extra_language.strip()
+                normalized_extra_language = self._normalize_language_code(extra_language)
+                if normalized_extra_language:
+                    language = normalized_extra_language
+                    extras["language"] = normalized_extra_language
             elif extra_language is not None:
                 try:
                     coerced_language = str(extra_language)
                 except _TTS_NONCRITICAL_EXCEPTIONS:
                     coerced_language = None
                 if coerced_language:
-                    language = coerced_language
+                    normalized_extra_language = self._normalize_language_code(coerced_language)
+                    if normalized_extra_language:
+                        language = normalized_extra_language
+                        extras["language"] = normalized_extra_language
             if getattr(request, "reference_duration_min", None) is not None:
                 extras["reference_duration_min"] = request.reference_duration_min
 

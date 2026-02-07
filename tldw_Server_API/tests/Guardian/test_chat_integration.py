@@ -701,3 +701,156 @@ class TestOutputSelfMonitoringE2E:
 
         content = response["choices"][0]["message"]["content"]
         assert content == "This is perfectly safe output"
+
+
+# ── 11. Chat-type passthrough to self-monitoring ──────────────
+
+
+class TestChatTypePassthrough:
+    @pytest.mark.asyncio
+    async def test_chat_type_reaches_self_monitoring(self, db, selfmon):
+        """chat_type param should be passed through to self_monitoring_service.check_text."""
+        gp = db.create_governance_policy(
+            owner_user_id="user1",
+            name="Character Only",
+            policy_mode="self",
+            scope_chat_types="character",
+        )
+        db.create_self_monitoring_rule(
+            user_id="user1",
+            name="char_block",
+            category="test",
+            patterns=["trigger"],
+            action="block",
+            block_message="Blocked in character chat",
+            governance_policy_id=gp.id,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("trigger word here")
+        request = _make_request(user_id="user1")
+
+        # With chat_type="regular", rule scoped to "character" should NOT fire
+        await moderate_input_messages(
+            request_data=request_data,
+            request=request,
+            moderation_service=moderation_svc,
+            topic_monitoring_service=None,
+            metrics=_make_metrics(),
+            audit_service=None,
+            audit_context=None,
+            client_id="user1",
+            self_monitoring_service=selfmon,
+            chat_type="regular",
+        )
+        assert request_data.messages[0].content == "trigger word here"
+
+        # With chat_type="character", rule SHOULD fire and block
+        selfmon.invalidate_cache()
+        request_data2 = _make_request_data("trigger word here")
+        with pytest.raises(HTTPException) as exc_info:
+            await moderate_input_messages(
+                request_data=request_data2,
+                request=request,
+                moderation_service=moderation_svc,
+                topic_monitoring_service=None,
+                metrics=_make_metrics(),
+                audit_service=None,
+                audit_context=None,
+                client_id="user1",
+                self_monitoring_service=selfmon,
+                chat_type="character",
+            )
+        assert exc_info.value.status_code == 400
+
+
+# ── 12. Guardian notification dispatched in pipeline ──────────
+
+
+class TestGuardianNotificationInPipeline:
+    @pytest.mark.asyncio
+    async def test_notification_dispatched_on_match(self, db, engine):
+        """When supervised policy matches with notify_guardian=True, dispatch is called."""
+        rel = _setup_active_relationship(db)
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="bad content",
+            action="block",
+            severity="critical",
+            notify_guardian=True,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("this has bad content in it")
+        request = _make_request(user_id="child1")
+
+        mock_notification_svc = MagicMock()
+        mock_notification_svc.notify_or_batch.return_value = "logged"
+        mock_notification_svc.enabled = True
+        mock_notification_svc.min_severity = "info"
+        mock_notification_svc._meets_threshold = lambda s: True
+
+        with patch(
+            "tldw_Server_API.app.core.Monitoring.notification_service.get_notification_service",
+            return_value=mock_notification_svc,
+        ):
+            with pytest.raises(HTTPException):
+                await moderate_input_messages(
+                    request_data=request_data,
+                    request=request,
+                    moderation_service=moderation_svc,
+                    topic_monitoring_service=None,
+                    metrics=_make_metrics(),
+                    audit_service=None,
+                    audit_context=None,
+                    client_id="child1",
+                    supervised_policy_engine=engine,
+                    dependent_user_id="child1",
+                )
+        mock_notification_svc.notify_or_batch.assert_called_once()
+        payload = mock_notification_svc.notify_or_batch.call_args[0][0]
+        assert payload["type"] == "guardian_alert"
+        assert payload["dependent_user_id"] == "child1"
+
+
+# ── 13. Transparent block message ──────────────────────────────
+
+
+class TestTransparentBlockMessage:
+    @pytest.mark.asyncio
+    async def test_block_includes_rule_name_when_transparent(self, db, engine):
+        """When governance policy is transparent, block error should include rule name."""
+        rel = _setup_active_relationship(db)
+        gp = db.create_governance_policy(
+            owner_user_id="guardian1",
+            name="School Policy",
+            policy_mode="guardian",
+            transparent=True,
+        )
+        db.create_policy(
+            relationship_id=rel.id,
+            pattern="forbidden",
+            action="block",
+            severity="critical",
+            governance_policy_id=gp.id,
+        )
+
+        moderation_svc = _make_moderation_service(ModerationPolicy(enabled=False))
+        request_data = _make_request_data("this is forbidden content")
+        request = _make_request(user_id="child1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await moderate_input_messages(
+                request_data=request_data,
+                request=request,
+                moderation_service=moderation_svc,
+                topic_monitoring_service=None,
+                metrics=_make_metrics(),
+                audit_service=None,
+                audit_context=None,
+                client_id="child1",
+                supervised_policy_engine=engine,
+                dependent_user_id="child1",
+            )
+        assert exc_info.value.status_code == 400
+        assert "School Policy" in exc_info.value.detail

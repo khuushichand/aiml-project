@@ -2218,7 +2218,7 @@ async def handle_unified_websocket(
     stream = WebSocketStream(
         websocket,
         heartbeat_interval_s=None,  # use env default
-        compat_error_type=True,     # include error_type for rollout compatibility
+        compat_error_type=str(os.getenv("AUDIO_WS_COMPAT_ERROR_TYPE", "1")).strip().lower() in {"1", "true", "yes", "on"},
         close_on_done=True,
         idle_timeout_s=_idle_timeout,
         labels={"component": "audio", "endpoint": "audio_unified_ws"},

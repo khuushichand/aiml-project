@@ -365,3 +365,45 @@ async def test_add_media_orchestrate_document_concurrency_limit(monkeypatch, fak
 
     assert response.status_code == status.HTTP_200_OK
     assert state["max"] <= 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_process_batch_media_test_mode_accepts_single_letter_y(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "y")
+    monkeypatch.delenv("TESTING", raising=False)
+
+    captured: dict[str, Any] = {}
+
+    def _fake_evaluate_url_policy(url: str, block_private_override: bool | None = None):
+        captured["url"] = url
+        captured["block_private_override"] = block_private_override
+        return SimpleNamespace(allowed=False, reason="blocked-for-test")
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.Security.egress.evaluate_url_policy",
+        _fake_evaluate_url_policy,
+        raising=True,
+    )
+
+    url = "https://example.com/demo.mp3"
+    results = await ingestion_persistence.process_batch_media(
+        media_type="audio",
+        urls=[url],
+        uploaded_file_paths=[],
+        source_to_ref_map={url: url},
+        form_data=SimpleNamespace(overwrite_existing=False, transcription_model=None),
+        chunk_options=None,
+        loop=asyncio.get_running_loop(),
+        db_path=str(tmp_path / "media.db"),
+        client_id="test-client",
+        temp_dir=tmp_path,
+    )
+
+    assert captured.get("url") == url
+    assert captured.get("block_private_override") is False
+    assert len(results) == 1
+    assert "URL blocked by security policy" in str(results[0].get("error"))

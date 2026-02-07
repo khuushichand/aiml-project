@@ -49,6 +49,19 @@ async def test_notes_adapter_create_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_notes_adapter_test_mode_accepts_single_letter_y(monkeypatch):
+    """Test notes adapter simulation when TEST_MODE uses unified truthy 'y'."""
+    monkeypatch.setenv("TEST_MODE", "y")
+
+    from tldw_Server_API.app.core.Workflows.adapters.knowledge import run_notes_adapter
+
+    result = await run_notes_adapter({"action": "list"}, {"user_id": "1"})
+
+    assert result.get("simulated") is True
+    assert result.get("count") == 0
+
+
+@pytest.mark.asyncio
 async def test_notes_adapter_create_with_template(monkeypatch):
     """Test notes adapter create action with templated values."""
     monkeypatch.setenv("TEST_MODE", "1")

@@ -73,3 +73,27 @@ def test_get_prompt_studio_user_unauthenticated_401(monkeypatch):
     client = TestClient(app)
     r = client.get("/ps/me")
     assert r.status_code == 401
+
+
+def test_get_prompt_studio_user_test_mode_accepts_single_letter_y(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "y")
+
+    app = _make_app()
+    client = TestClient(app)
+    r = client.get("/ps/me")
+
+    assert r.status_code == 200, r.text
+    assert r.json().get("user_id") == "test-user-123"
+
+
+@pytest.mark.asyncio
+async def test_prompt_studio_rate_limit_bypass_accepts_single_letter_y(monkeypatch):
+    monkeypatch.setenv("TEST_MODE", "y")
+
+    allowed = await deps.check_rate_limit(
+        operation="default",
+        user_context={"user_id": "test-user"},
+        security_config=deps.get_security_config(),
+    )
+
+    assert allowed is True

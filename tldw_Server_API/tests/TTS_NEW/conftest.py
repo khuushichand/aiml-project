@@ -389,8 +389,11 @@ def test_client(test_env_vars, bypass_api_limits):
 @pytest.fixture
 def auth_headers():
     """Authentication headers for API requests."""
+    from tldw_Server_API.app.core.AuthNZ.settings import get_settings
+
+    settings = get_settings()
     return {
-        "Authorization": "Bearer test-api-key",
+        "X-API-KEY": settings.SINGLE_USER_API_KEY,
         "Content-Type": "application/json"
     }
 

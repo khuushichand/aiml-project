@@ -200,6 +200,17 @@ class TTSConfigManager:
         logger.info(f"TTS configuration loaded with {len(self._config.providers)} providers")
         logger.debug(f"TTS config sources: {sources}")
 
+    @staticmethod
+    def _get_first_present(
+        section: Any,
+        keys: tuple[str, ...],
+    ) -> Any:
+        """Return the first present key value from a config section."""
+        for key in keys:
+            if key in section:
+                return section[key]
+        return None
+
     def _load_config_txt(self) -> dict[str, Any]:
         """Load settings from config.txt"""
         config_dict = {}
@@ -225,18 +236,35 @@ class TTSConfigManager:
 
             if tts_section:
                 # Map config.txt settings to our schema
-                if "default_tts_provider" in tts_section:
-                    config_dict['default_provider'] = tts_section['default_tts_provider']
+                # Deterministic alias precedence: canonical key first, then legacy key.
+                provider_value = self._get_first_present(
+                    tts_section,
+                    ("default_provider", "default_tts_provider"),
+                )
+                if provider_value is not None:
+                    config_dict['default_provider'] = provider_value
 
-                if "default_tts_voice" in tts_section:
-                    config_dict['default_voice'] = tts_section['default_tts_voice']
+                voice_value = self._get_first_present(
+                    tts_section,
+                    ("default_voice", "default_tts_voice"),
+                )
+                if voice_value is not None:
+                    config_dict['default_voice'] = voice_value
 
-                if "default_tts_speed" in tts_section:
+                speed_value = self._get_first_present(
+                    tts_section,
+                    ("default_speed", "default_tts_speed"),
+                )
+                if speed_value is not None:
                     with contextlib.suppress(ValueError):
-                        config_dict['default_speed'] = float(tts_section['default_tts_speed'])
+                        config_dict['default_speed'] = float(speed_value)
 
-                if "local_tts_device" in tts_section:
-                    config_dict['local_device'] = tts_section['local_tts_device']
+                device_value = self._get_first_present(
+                    tts_section,
+                    ("local_device", "local_tts_device", "tts_device"),
+                )
+                if device_value is not None:
+                    config_dict['local_device'] = device_value
 
                     # Apply device setting to local providers
                     if 'providers' not in config_dict:
@@ -254,7 +282,7 @@ class TTSConfigManager:
                     ]:
                         if provider not in config_dict['providers']:
                             config_dict['providers'][provider] = {}
-                        config_dict['providers'][provider]['device'] = tts_section['local_tts_device']
+                        config_dict['providers'][provider]['device'] = device_value
 
                 # Global switch: auto download local models
                 if "auto_download_local_models" in tts_section:

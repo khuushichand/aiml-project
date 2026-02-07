@@ -36,6 +36,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from loguru import logger
 
@@ -138,6 +139,43 @@ def _compute_next_run(cron: str | None, timezone_str: str | None) -> str | None:
 _truncate = truncate_text
 _hash_content = hash_text_sha256
 _word_count = word_count
+
+# Tracking query parameters to strip during URL normalization
+_TRACKING_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_source_platform", "utm_creative_format",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid",
+    "mc_cid", "mc_eid", "oly_anon_id", "oly_enc_id",
+    "vero_id", "twclid", "igshid", "s_cid",
+    "_hsenc", "_hsmi", "hsa_cam", "hsa_grp", "hsa_mt", "hsa_src",
+    "hsa_ad", "hsa_acc", "hsa_net", "hsa_ver", "hsa_la", "hsa_ol", "hsa_kw",
+    "ref", "ref_src",
+})
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for dedup: lowercase scheme/host, strip www, remove tracking params, strip trailing slash."""
+    try:
+        parsed = urlparse(url)
+        scheme = (parsed.scheme or "https").lower()
+        hostname = (parsed.hostname or "").lower()
+        if hostname.startswith("www."):
+            hostname = hostname[4:]
+        port = parsed.port
+        if port and ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+            port = None
+        netloc = f"{hostname}:{port}" if port else hostname
+        path = parsed.path.rstrip("/") or "/"
+        # Filter out tracking query params, keep the rest sorted for consistency
+        if parsed.query:
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            filtered = {k: v for k, v in params.items() if k.lower() not in _TRACKING_PARAMS}
+            query = urlencode(sorted(filtered.items()), doseq=True) if filtered else ""
+        else:
+            query = ""
+        return urlunparse((scheme, netloc, path, "", query, ""))
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        return url
 
 
 def _resolve_collections_origin(

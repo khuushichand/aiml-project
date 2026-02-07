@@ -136,6 +136,7 @@ Audio Chat (non-streaming)
 
 Streaming Audio / TTS
 - `AUDIO_WS_QUOTA_CLOSE_1008`: When set, close WebSocket quota/rate-limit violations with code `1008` (default `4003`) for streaming audio routes.
+- `AUDIO_WS_COMPAT_ERROR_TYPE`: When `1` (default), include legacy `error_type` alias in Audio WS error payloads alongside canonical `code`; set `0` to disable alias during client migration.
 - `TTS_PHONEME_OVERRIDES_PATH`: Optional YAML/JSON file with phoneme overrides (defaults to `Config_Files/tts_phonemes.yaml|yml|json`).
 - `KOKORO_ENABLE_PHONEME_OVERRIDES`: Toggle Kokoro phoneme override application (`true|false`, default `true`).
 - `TTS_HISTORY_ENABLED`: Enable per-user TTS history (`true|false`, default `true`).

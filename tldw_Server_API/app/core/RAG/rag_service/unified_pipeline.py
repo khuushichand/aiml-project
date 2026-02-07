@@ -26,6 +26,11 @@ from typing import Any, Callable, Literal, Optional, cast
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import (
+    is_test_mode as _shared_is_test_mode,
+    is_truthy as _shared_is_truthy,
+)
+
 # Optional dependency placeholders (typed as Any to keep mypy tolerant for missing deps).
 _get_telemetry_manager: Any = None
 _spell_check_query: Any = None
@@ -1325,8 +1330,8 @@ async def unified_rag_pipeline(
         # If running in production, enable stricter guardrails by default
         try:
             import os as _os
-            _prod_env = str(_os.getenv("tldw_production", "false")).strip().lower() in {"1", "true", "yes", "on"}
-            _strict_env = str(_os.getenv("RAG_GUARDRAILS_STRICT", "false")).strip().lower() in {"1", "true", "yes", "on"}
+            _prod_env = _shared_is_truthy(_os.getenv("tldw_production", "false"))
+            _strict_env = _shared_is_truthy(_os.getenv("RAG_GUARDRAILS_STRICT", "false"))
             if _prod_env or _strict_env:
                 if not enable_numeric_fidelity:
                     enable_numeric_fidelity = True
@@ -4340,7 +4345,7 @@ async def unified_rag_pipeline(
                         except (TypeError, ValueError):
                             budget_tokens = None
                         if isinstance(budget_strict, str):
-                            budget_strict = budget_strict.strip().lower() in {"1", "true", "yes", "on"}
+                            budget_strict = _shared_is_truthy(budget_strict)
                         job_budget = resolve_claims_job_budget(
                             settings=settings_obj,
                             max_cost_usd=budget_usd,
@@ -5474,13 +5479,8 @@ async def unified_batch_pipeline(
     # Near-duplicate clustering via cosine similarity of embeddings (best-effort)
     clusters: dict[int, list[int]] = {}
     import os as _os
-    _disable_cluster = str(_os.getenv("RAG_BATCH_DISABLE_CLUSTERING", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    _test_mode = str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    _disable_cluster = _shared_is_truthy(_os.getenv("RAG_BATCH_DISABLE_CLUSTERING", ""))
+    _test_mode = _shared_is_test_mode()
     if _disable_cluster or _test_mode:
         clusters = {i: [i] for i in range(len(unique_keys))}
     else:
