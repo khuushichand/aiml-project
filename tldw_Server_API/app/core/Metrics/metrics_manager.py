@@ -72,6 +72,13 @@ class MetricsRegistry:
             buffer_maxlen = 10000
         if buffer_maxlen <= 0:
             buffer_maxlen = None
+        raw_series_cap = os.getenv("METRICS_CUMULATIVE_SERIES_MAX_PER_METRIC", "10000")
+        try:
+            cumulative_series_cap = int(raw_series_cap)
+        except ValueError:
+            cumulative_series_cap = 10000
+        if cumulative_series_cap <= 0:
+            cumulative_series_cap = None
 
         self._lock = threading.RLock()
         self.metrics: dict[str, MetricDefinition] = {}
@@ -81,6 +88,9 @@ class MetricsRegistry:
         # Cumulative aggregates for Prometheus export (monotonic counters, full histograms).
         self._cumulative_counters: dict[str, dict[tuple[tuple[str, str], ...], float]] = defaultdict(dict)
         self._cumulative_histograms: dict[str, dict[tuple[tuple[str, str], ...], dict[str, Any]]] = defaultdict(dict)
+        self._cumulative_series_cap: int | None = cumulative_series_cap
+        self._cumulative_series_dropped: dict[str, int] = defaultdict(int)
+        self._cumulative_series_warned: set[str] = set()
         self.callbacks: dict[str, list[Callable]] = defaultdict(list)
         self._legacy_cb_alias_metrics = {
             "circuit_breaker_state",
@@ -1627,19 +1637,50 @@ class MetricsRegistry:
 
             label_key = self._normalize_label_key(labels)
             if definition.type in (MetricType.COUNTER, MetricType.UP_DOWN_COUNTER):
-                current = self._cumulative_counters[metric_name].get(label_key, 0.0)
-                self._cumulative_counters[metric_name][label_key] = current + value
+                series = self._cumulative_counters[metric_name]
+                if (
+                    label_key not in series
+                    and self._cumulative_series_cap is not None
+                    and len(series) >= self._cumulative_series_cap
+                ):
+                    self._cumulative_series_dropped[metric_name] += 1
+                    if metric_name not in self._cumulative_series_warned:
+                        logger.warning(
+                            "Cumulative series cap reached for metric {} (cap={}); dropping new label sets",
+                            metric_name,
+                            self._cumulative_series_cap,
+                        )
+                        self._cumulative_series_warned.add(metric_name)
+                else:
+                    current = series.get(label_key, 0.0)
+                    series[label_key] = current + value
             elif definition.type == MetricType.HISTOGRAM:
-                hist = self._cumulative_histograms[metric_name].get(label_key)
-                if not hist:
-                    hist = {"count": 0, "sum": 0.0, "buckets": defaultdict(int)}
-                    self._cumulative_histograms[metric_name][label_key] = hist
-                hist["count"] += 1
-                hist["sum"] += value
-                if definition.buckets:
-                    for bucket in definition.buckets:
-                        if value <= bucket:
-                            hist["buckets"][bucket] += 1
+                series = self._cumulative_histograms[metric_name]
+                hist = series.get(label_key)
+                if hist is None:
+                    if (
+                        self._cumulative_series_cap is not None
+                        and len(series) >= self._cumulative_series_cap
+                    ):
+                        self._cumulative_series_dropped[metric_name] += 1
+                        if metric_name not in self._cumulative_series_warned:
+                            logger.warning(
+                                "Cumulative series cap reached for metric {} (cap={}); dropping new label sets",
+                                metric_name,
+                                self._cumulative_series_cap,
+                            )
+                            self._cumulative_series_warned.add(metric_name)
+                        hist = None
+                    else:
+                        hist = {"count": 0, "sum": 0.0, "buckets": defaultdict(int)}
+                        series[label_key] = hist
+                if hist is not None:
+                    hist["count"] += 1
+                    hist["sum"] += value
+                    if definition.buckets:
+                        for bucket in definition.buckets:
+                            if value <= bucket:
+                                hist["buckets"][bucket] += 1
 
             instrument = self.instruments.get(metric_name)
             callbacks = list(self.callbacks.get(metric_name, []))
@@ -1933,6 +1974,8 @@ class MetricsRegistry:
             self.values.clear()
             self._cumulative_counters.clear()
             self._cumulative_histograms.clear()
+            self._cumulative_series_dropped.clear()
+            self._cumulative_series_warned.clear()
 
 
 # Global metrics registry instance

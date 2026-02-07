@@ -42,8 +42,13 @@ def _parse_date_param(value: str | None, label: str, end_of_day: bool = False) -
             dt = datetime.fromisoformat(raw)
             if end_of_day:
                 dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-            return dt
-        return datetime.fromisoformat(raw)
+        else:
+            dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid {label} date format")
 

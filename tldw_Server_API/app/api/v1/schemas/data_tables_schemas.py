@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -17,6 +18,7 @@ ColumnType = Literal["text", "number", "date", "url", "boolean", "currency"]
 SourceType = Literal["chat", "document", "rag_query"]
 DataTableExportFormat = Literal["csv", "json", "xlsx"]
 DataTableRowData = dict[str, Any] | list[Any]
+DATA_TABLES_MAX_ROWS_LIMIT = int(os.getenv("DATA_TABLES_MAX_ROWS", "2000") or "2000")
 
 
 class DataTableColumnHint(BaseModel):
@@ -48,7 +50,7 @@ class DataTableGenerateRequest(BaseModel):
     sources: list[DataTableSourceInput]
     column_hints: list[DataTableColumnHint] | None = None
     model: str | None = None
-    max_rows: int | None = Field(default=None, ge=1, le=20000)
+    max_rows: int | None = Field(default=None, ge=1, le=DATA_TABLES_MAX_ROWS_LIMIT)
 
     if model_validator is not None:
         @model_validator(mode="after")
@@ -72,7 +74,7 @@ class DataTableRegenerateRequest(BaseModel):
 
     prompt: str | None = None
     model: str | None = None
-    max_rows: int | None = Field(default=None, ge=1, le=20000)
+    max_rows: int | None = Field(default=None, ge=1, le=DATA_TABLES_MAX_ROWS_LIMIT)
 
 
 class DataTableUpdateRequest(BaseModel):

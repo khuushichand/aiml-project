@@ -33,6 +33,17 @@ and this project adheres to Some kind of Versioning
 	- Fixed test infrastructure shims for audio/tokenizer/transcription helpers.
 - DBs modified
 	- Media DB v2: per-user SQLite DB at Media_DB_v2.db (and Postgres equivalent when configured).
+- MCP Unified hardening:
+  - `/api/v1/mcp/auth/refresh` now requires body-based `refresh_token` payloads (query-token transport rejected).
+  - Write-tool idempotency now binds each `idempotencyKey` to the initial argument fingerprint and returns `INVALID_PARAMS` on mismatched replays.
+  - Module registry lookups now use concurrency-safe snapshots to prevent `dictionary changed size during iteration` under concurrent module registration churn.
+  - Sandbox stream Redis fanout now requires explicit `SANDBOX_WS_REDIS_FANOUT` opt-in (no implicit enablement from global Redis settings).
+- Evaluations module hardening:
+  - Parallel batch mode now enforces strict fail-fast when `continue_on_error=false` by canceling remaining tasks and stopping new scheduling.
+  - Evaluation runner now safely normalizes `metrics` values, including `metrics=None`, across execution and aggregate/stat calculations.
+  - RAG pipeline eval runs now use per-run user context for ephemeral vector index creation/cleanup and pipeline calls.
+  - OCR-PDF usage accounting now records against the correct limiter namespace (`evals:ocr_pdf`).
+  - Access policy aligned: `/api/v1/evaluations/health` remains public, `/api/v1/evaluations/metrics` is authenticated (`EVALS_READ`), and dataset endpoints enforce `EVALS_READ`/`EVALS_MANAGE` consistently.
 
 ### Removed
 

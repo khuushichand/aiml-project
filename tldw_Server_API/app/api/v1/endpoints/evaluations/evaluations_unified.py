@@ -43,6 +43,7 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import (
     resolve_byok_credentials,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_READ
 from tldw_Server_API.app.core.Chat.chat_service import resolve_provider_api_key
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Evaluations.audit_adapter import (
@@ -81,7 +82,6 @@ _EVALS_NONCRITICAL_EXCEPTIONS = (
     ValueError,
     UnicodeDecodeError,
     json.JSONDecodeError,
-    HTTPException,
 )
 
 # Create router
@@ -100,6 +100,7 @@ from .evaluations_auth import (
     check_evaluation_rate_limit,
     enforce_heavy_evaluations_admin,
     get_eval_request_user,
+    require_eval_permissions,
     sanitize_error_message,
     verify_api_key,
 )
@@ -707,13 +708,16 @@ async def health_check():
         )
 
 
-@router.get("/metrics")
-async def get_metrics(request: Request):
+@router.get("/metrics", dependencies=[Depends(require_eval_permissions(EVALS_READ))])
+async def get_metrics(
+    request: Request,
+    user_id: str = Depends(verify_api_key),
+    current_user: User = Depends(get_eval_request_user),
+):
     """Get Prometheus metrics"""
     try:
-        from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths as _DP
-        uid = _DP.get_single_user_id()
-        svc = get_unified_evaluation_service_for_user(uid)
+        _ = user_id
+        svc = get_unified_evaluation_service_for_user(current_user.id)
         metrics_summary = await svc.get_metrics_summary()
 
         # Handle failure from service so error message is never exposed
@@ -1511,24 +1515,27 @@ async def batch_evaluate(
         # Process evaluations based on parallel setting (use parallel_workers > 1 as indicator)
         if request.parallel_workers > 1:
             # Run evaluations in parallel
-            tasks_with_meta = []
-            for eval_request in request.items:
-                provider_name, provider_api_key, explicit_key, byok_resolution = await _extract_provider_and_key(
-                    eval_request,
-                    eval_type,
-                )
+            tasks_with_meta: list[
+                tuple[int, dict[str, Any], str, Optional[str], Optional[ResolvedByokCredentials], Optional[str]]
+            ] = []
+            results_by_index: dict[int, dict[str, Any]] = {}
 
+            def _build_parallel_task(
+                eval_request: dict[str, Any],
+                provider_name: str,
+                provider_api_key: Optional[str],
+            ):
                 if eval_type == "geval":
-                    task = service.evaluate_geval(
+                    return service.evaluate_geval(
                         source_text=eval_request.get("source_text", ""),
                         summary=eval_request.get("summary", ""),
                         metrics=eval_request.get("metrics", ["coherence"]),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id
+                        user_id=user_id,
                     )
-                elif eval_type == "rag":
-                    task = service.evaluate_rag(
+                if eval_type == "rag":
+                    return service.evaluate_rag(
                         query=eval_request.get("query", ""),
                         contexts=eval_request.get("retrieved_contexts", []),
                         response=eval_request.get("generated_response", ""),
@@ -1536,82 +1543,195 @@ async def batch_evaluate(
                         metrics=eval_request.get("metrics", ["relevance", "faithfulness"]),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id
+                        user_id=user_id,
                     )
-                elif eval_type == "response_quality":
-                    task = service.evaluate_response_quality(
+                if eval_type == "response_quality":
+                    return service.evaluate_response_quality(
                         prompt=eval_request.get("prompt", ""),
                         response=eval_request.get("response", ""),
                         expected_format=eval_request.get("expected_format"),
                         custom_criteria=eval_request.get("evaluation_criteria"),
                         api_name=provider_name,
                         api_key=provider_api_key,
-                        user_id=user_id
+                        user_id=user_id,
                     )
-                elif eval_type == "ocr":
-                    task = service.evaluate_ocr(
+                if eval_type == "ocr":
+                    return service.evaluate_ocr(
                         items=eval_request.get("items", []),
                         metrics=eval_request.get("metrics"),
                         ocr_options=eval_request.get("ocr_options"),
                         thresholds=eval_request.get("thresholds"),
                         user_id=user_id,
                     )
-                elif eval_type == "propositions":
-                    task = service.evaluate_propositions(
+                if eval_type == "propositions":
+                    return service.evaluate_propositions(
                         extracted=eval_request.get("extracted", []),
                         reference=eval_request.get("reference", []),
                         method=eval_request.get("method", "semantic"),
                         threshold=eval_request.get("threshold", 0.7),
                         user_id=user_id,
                     )
-                else:
+                return None
+
+            for item_index, eval_request in enumerate(request.items):
+                provider_name, provider_api_key, explicit_key, byok_resolution = await _extract_provider_and_key(
+                    eval_request,
+                    eval_type,
+                )
+
+                if eval_type not in {"geval", "rag", "response_quality", "ocr", "propositions"}:
                     # Unknown type, create failed result
-                    results.append({
+                    results_by_index[item_index] = {
                         "evaluation_id": None,
                         "status": "failed",
                         "error": f"Unknown evaluation type: {eval_type}"
-                    })
+                    }
                     failed_count += 1
+                    if not request.continue_on_error:
+                        break
                     continue
 
-                tasks_with_meta.append((task, byok_resolution, explicit_key))
+                tasks_with_meta.append(
+                    (
+                        item_index,
+                        eval_request,
+                        provider_name,
+                        provider_api_key,
+                        byok_resolution,
+                        explicit_key,
+                    )
+                )
 
             # Wait for all tasks
             if tasks_with_meta:
-                semaphore = asyncio.Semaphore(request.parallel_workers)
+                in_flight: dict[asyncio.Task[Any], tuple[int, Optional[ResolvedByokCredentials], Optional[str]]] = {}
+                next_task_offset = 0
+                fail_fast_cancelled = False
+                cancel_reason = "Cancelled due to strict fail-fast after a prior item failure."
 
-                async def _run_bounded(coro):
-                    async with semaphore:
-                        return await coro
-
-                task_results = await asyncio.gather(
-                    *(
-                        _run_bounded(task)
-                        for task, _, _ in tasks_with_meta
-                    ),
-                    return_exceptions=True,
-                )
-
-                for result, (_, byok_resolution, explicit_key) in zip(
-                    task_results,
-                    tasks_with_meta,
-                    strict=True,
-                ):
-                    if isinstance(result, Exception):
-                        results.append({
+                while len(in_flight) < request.parallel_workers and next_task_offset < len(tasks_with_meta):
+                    (
+                        item_index,
+                        task_request,
+                        task_provider_name,
+                        task_provider_api_key,
+                        byok_resolution,
+                        explicit_key,
+                    ) = tasks_with_meta[next_task_offset]
+                    next_task_offset += 1
+                    task_coro = _build_parallel_task(task_request, task_provider_name, task_provider_api_key)
+                    if task_coro is None:
+                        results_by_index[item_index] = {
                             "evaluation_id": None,
                             "status": "failed",
-                            "error": str(result)
-                        })
+                            "error": f"Unknown evaluation type: {eval_type}",
+                        }
                         failed_count += 1
-                    else:
-                        if byok_resolution and byok_resolution.uses_byok and not explicit_key:
-                            await byok_resolution.touch_last_used()
-                        results.append({
-                            "evaluation_id": result.get("evaluation_id"),
-                            "status": "completed",
-                            "results": result.get("results", {})
-                        })
+                        if not request.continue_on_error:
+                            fail_fast_cancelled = True
+                            break
+                        continue
+                    running_task = asyncio.create_task(task_coro)
+                    in_flight[running_task] = (item_index, byok_resolution, explicit_key)
+
+                while in_flight:
+                    done, _ = await asyncio.wait(set(in_flight.keys()), return_when=asyncio.FIRST_COMPLETED)
+
+                    for done_task in done:
+                        item_index, byok_resolution, explicit_key = in_flight.pop(done_task)
+                        try:
+                            result = done_task.result()
+                        except asyncio.CancelledError:
+                            if item_index not in results_by_index:
+                                results_by_index[item_index] = {
+                                    "evaluation_id": None,
+                                    "status": "failed",
+                                    "error": cancel_reason,
+                                }
+                                failed_count += 1
+                        except _EVALS_NONCRITICAL_EXCEPTIONS as e:
+                            results_by_index[item_index] = {
+                                "evaluation_id": None,
+                                "status": "failed",
+                                "error": str(e),
+                            }
+                            failed_count += 1
+                            if not request.continue_on_error:
+                                fail_fast_cancelled = True
+                        except Exception as e:
+                            results_by_index[item_index] = {
+                                "evaluation_id": None,
+                                "status": "failed",
+                                "error": str(e),
+                            }
+                            failed_count += 1
+                            if not request.continue_on_error:
+                                fail_fast_cancelled = True
+                        else:
+                            if byok_resolution and byok_resolution.uses_byok and not explicit_key:
+                                await byok_resolution.touch_last_used()
+                            results_by_index[item_index] = {
+                                "evaluation_id": result.get("evaluation_id"),
+                                "status": "completed",
+                                "results": result.get("results", {})
+                            }
+
+                    if fail_fast_cancelled:
+                        remaining_tasks = list(in_flight.keys())
+                        for remaining_task in remaining_tasks:
+                            remaining_task.cancel()
+                        if remaining_tasks:
+                            await asyncio.gather(*remaining_tasks, return_exceptions=True)
+                        for remaining_task in remaining_tasks:
+                            item_index, _, _ = in_flight.pop(remaining_task)
+                            if item_index not in results_by_index:
+                                results_by_index[item_index] = {
+                                    "evaluation_id": None,
+                                    "status": "failed",
+                                    "error": cancel_reason,
+                                }
+                                failed_count += 1
+
+                        while next_task_offset < len(tasks_with_meta):
+                            item_index, _, _, _, _, _ = tasks_with_meta[next_task_offset]
+                            next_task_offset += 1
+                            if item_index not in results_by_index:
+                                results_by_index[item_index] = {
+                                    "evaluation_id": None,
+                                    "status": "failed",
+                                    "error": cancel_reason,
+                                }
+                                failed_count += 1
+                        break
+
+                    while len(in_flight) < request.parallel_workers and next_task_offset < len(tasks_with_meta):
+                        (
+                            item_index,
+                            task_request,
+                            task_provider_name,
+                            task_provider_api_key,
+                            byok_resolution,
+                            explicit_key,
+                        ) = tasks_with_meta[next_task_offset]
+                        next_task_offset += 1
+                        task_coro = _build_parallel_task(task_request, task_provider_name, task_provider_api_key)
+                        if task_coro is None:
+                            results_by_index[item_index] = {
+                                "evaluation_id": None,
+                                "status": "failed",
+                                "error": f"Unknown evaluation type: {eval_type}",
+                            }
+                            failed_count += 1
+                            if not request.continue_on_error:
+                                fail_fast_cancelled = True
+                                break
+                            continue
+                        running_task = asyncio.create_task(task_coro)
+                        in_flight[running_task] = (item_index, byok_resolution, explicit_key)
+
+                for item_index in range(len(request.items)):
+                    if item_index in results_by_index:
+                        results.append(results_by_index[item_index])
         else:
             # Run evaluations sequentially
             for eval_request in request.items:
@@ -1896,7 +2016,7 @@ async def evaluate_ocr_pdf_endpoint(
         try:
             usage = result.get("usage") if isinstance(result, dict) else None
             if usage and isinstance(usage, dict):
-                await limiter.record_actual_usage(user_id, "evals:ocr", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
+                await limiter.record_actual_usage(user_id, "evals:ocr_pdf", int(usage.get("total_tokens", 0)), float(usage.get("cost", 0.0) or 0.0))
         except _EVALS_NONCRITICAL_EXCEPTIONS:
             pass
         try:

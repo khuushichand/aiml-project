@@ -136,3 +136,32 @@ def test_deepseek_app_config_timeout(monkeypatch):
     }
     _ = a.chat(req)
     assert captured.get("timeout") == 88
+
+
+def test_google_app_config_base_url_and_timeout(monkeypatch):
+    from tldw_Server_API.app.core.LLM_Calls.providers.google_adapter import GoogleAdapter
+    import tldw_Server_API.app.core.LLM_Calls.providers.google_adapter as mod
+
+    captured: Dict[str, Any] = {}
+
+    def _factory(*a, timeout=None, **k):
+        captured.setdefault("timeout", timeout)
+        return _FakeClient(captured)
+
+    monkeypatch.setattr(mod, "http_client_factory", _factory, raising=True)
+
+    a = GoogleAdapter()
+    req = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "model": "gemini-1.5-flash",
+        "api_key": "k",
+        "app_config": {
+            "google_api": {
+                "api_base_url": "https://google.mock/v1beta",
+                "api_timeout": 45,
+            }
+        },
+    }
+    _ = a.chat(req)
+    assert captured.get("timeout") == 45
+    assert str(captured.get("url", "")).startswith("https://google.mock/v1beta/models/gemini-1.5-flash:generateContent")

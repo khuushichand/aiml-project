@@ -372,6 +372,15 @@ class CharacterChatStreamPersistRequest(BaseModel):
     """
     assistant_content: str = Field(..., min_length=1, max_length=1_000_000, description="Assistant text to persist (max 1MB)")
     user_message_id: Optional[str] = Field(None, description="Optional parent user message id to link threading")
+    speaker_character_id: Optional[int] = Field(
+        None,
+        gt=0,
+        description="Optional speaker character ID for multi-character chats.",
+    )
+    speaker_character_name: Optional[str] = Field(
+        None,
+        description="Optional speaker character display name for multi-character chats.",
+    )
     tool_calls: Optional[list[dict[str, Any]]] = Field(None, description="Optional tool_calls metadata to store")
     usage: Optional[dict[str, int]] = Field(None, description="Optional token usage stats: prompt_tokens, completion_tokens, total_tokens")
     chat_rating: Optional[int] = Field(None, ge=1, le=5, description="Optional conversation rating to set (1-5)")

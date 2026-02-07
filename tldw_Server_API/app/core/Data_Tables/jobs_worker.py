@@ -273,12 +273,13 @@ def _dedupe_column_names(names: Sequence[str]) -> list[str]:
     output: list[str] = []
     for name in names:
         base = str(name or "").strip() or "Column"
-        if base not in counts:
-            counts[base] = 1
+        key = _normalize_column_key(base)
+        if key not in counts:
+            counts[key] = 1
             output.append(base)
             continue
-        counts[base] += 1
-        output.append(f"{base} ({counts[base]})")
+        counts[key] += 1
+        output.append(f"{base} ({counts[key]})")
     return output
 
 

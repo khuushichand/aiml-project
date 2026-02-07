@@ -469,7 +469,8 @@ class UnifiedEvaluationService:
                 "dataset_id": evaluation.get("dataset_id"),
                 "dataset_override": dataset_override,
                 "config": config or {},
-                "webhook_url": webhook_url
+                "webhook_url": webhook_url,
+                "created_by": created_by,
             }
 
             # Start async evaluation

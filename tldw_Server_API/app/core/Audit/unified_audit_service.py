@@ -69,6 +69,11 @@ _AUDIT_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     asyncio.CancelledError,
 )
 
+
+class AuditReadError(RuntimeError):
+    """Raised when audit read/export queries fail and cannot be served safely."""
+
+
 #
 # Local Imports
 try:
@@ -1890,7 +1895,7 @@ class UnifiedAuditService:
                 return [dict(row) for row in rows]
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to query audit events (keyset): {e}")
-            return []
+            raise AuditReadError("Failed to query audit events (keyset)") from e
 
     async def _ensure_db_pool(self) -> aiosqlite.Connection:
         """Ensure a persistent aiosqlite connection is available."""
@@ -2382,8 +2387,17 @@ class UnifiedAuditService:
                         await asyncio.sleep(backoff_base * (attempt + 1))
                         continue
                     raise
+                except asyncio.CancelledError:
+                    raise
                 except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     raise
+        except asyncio.CancelledError:
+            # Preserve buffered events when cancellation interrupts a flush.
+            async with self.buffer_lock:
+                max_buffer = self.buffer_size * 2
+                combined = events + self.event_buffer
+                self.event_buffer = combined[:max_buffer]
+            raise
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to flush audit events: {e}")
             self.stats["flush_failures"] += 1
@@ -2547,6 +2561,8 @@ class UnifiedAuditService:
                     ) as cur:
                         row = await cur.fetchone()
                         old_events_count = int(row[0]) if row else 0
+                except asyncio.CancelledError:
+                    raise
                 except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
@@ -2557,6 +2573,8 @@ class UnifiedAuditService:
                     ) as cur:
                         row = await cur.fetchone()
                         old_stats_count = int(row[0]) if row else 0
+                except asyncio.CancelledError:
+                    raise
                 except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
@@ -2586,9 +2604,13 @@ class UnifiedAuditService:
                         size_mb = (self.db_path.stat().st_size / (1024 * 1024))
                         if size_mb > float(self.max_db_mb):
                             logger.warning(f"Audit DB size {size_mb:.1f}MB exceeds configured limit {self.max_db_mb}MB")
+                except asyncio.CancelledError:
+                    raise
                 except _AUDIT_NONCRITICAL_EXCEPTIONS:
                     pass
 
+        except asyncio.CancelledError:
+            raise
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to cleanup old audit logs: {e}")
 
@@ -2744,7 +2766,7 @@ class UnifiedAuditService:
                     estimated_cost=_safe_float(record.get("estimated_cost")),
                     result_count=_safe_int(record.get("result_count")),
                     risk_score=_safe_int(record.get("risk_score"), 0) or 0,
-                    pii_detected=bool(record.get("pii_detected") or False),
+                    pii_detected=_coerce_bool(record.get("pii_detected"), False),
                     compliance_flags=compliance_flags,
                     metadata=metadata,
                 )
@@ -2776,6 +2798,9 @@ class UnifiedAuditService:
                     if not filtered_records:
                         return 0
 
+                    for record in filtered_records:
+                        record["pii_detected"] = _coerce_bool(record.get("pii_detected"), False)
+
                     self._ensure_record_tenant_ids(filtered_records)
                     await db.executemany(self._event_insert_sql, filtered_records)
                     if stats_events:
@@ -2802,30 +2827,45 @@ class UnifiedAuditService:
                     return await _do_write()
 
             temp_path = fb_path.with_suffix(".tmp")
+            bad_path = fb_path.with_suffix(".bad.jsonl")
             inserted = 0
             had_error = False
             wrote_temp = False
+            malformed_lines = 0
 
             async def _replay_stream(
                 db: aiosqlite.Connection,
                 use_db_lock: bool,
             ) -> int:
                 """Replay lines in a streaming fashion, rewriting only unprocessed lines."""
-                nonlocal inserted, had_error, wrote_temp
+                nonlocal inserted, had_error, wrote_temp, malformed_lines
                 records_chunk: list[dict[str, Any]] = []
                 stats_events: list[AuditEvent] = []
                 lines_chunk: list[str] = []
 
                 try:
-                    with fb_path.open("r", encoding="utf-8") as src, temp_path.open("w", encoding="utf-8") as dst:
+                    with (
+                        fb_path.open("r", encoding="utf-8") as src,
+                        temp_path.open("w", encoding="utf-8") as dst,
+                        bad_path.open("a", encoding="utf-8") as bad,
+                    ):
+                        def _quarantine_line(raw_line: str) -> None:
+                            nonlocal malformed_lines
+                            if not raw_line:
+                                return
+                            bad.write(raw_line if raw_line.endswith("\n") else raw_line + "\n")
+                            malformed_lines += 1
+
                         for line in src:
                             if not line:
                                 continue
                             try:
                                 data = json.loads(line)
                             except _AUDIT_NONCRITICAL_EXCEPTIONS:
+                                _quarantine_line(line)
                                 continue
                             if not isinstance(data, dict):
+                                _quarantine_line(line)
                                 continue
 
                             records_chunk.append(data)
@@ -2909,6 +2949,12 @@ class UnifiedAuditService:
 
             if inserted and not had_error:
                 logger.info(f"Replayed {inserted} audit events from fallback queue")
+            if malformed_lines > 0:
+                logger.warning(
+                    "Quarantined {} malformed audit fallback lines to {}",
+                    malformed_lines,
+                    bad_path,
+                )
             return inserted
 
     async def query_events(
@@ -2956,7 +3002,7 @@ class UnifiedAuditService:
                 return [dict(row) for row in rows]
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to query audit events: {e}")
-            return []
+            raise AuditReadError("Failed to query audit events") from e
 
     async def count_events(
         self,
@@ -2998,7 +3044,7 @@ class UnifiedAuditService:
                 return int(row[0]) if row else 0
         except _AUDIT_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to count audit events: {e}")
-            return 0
+            raise AuditReadError("Failed to count audit events") from e
 
     async def export_events(
         self,
@@ -3052,6 +3098,9 @@ class UnifiedAuditService:
         # When not streaming, enforce a capped row limit to avoid unbounded memory usage.
         if not stream and max_rows is None:
             max_rows = self.non_stream_max_rows
+        if max_rows is not None:
+            if max_rows <= 0:
+                raise ValueError("max_rows must be > 0 when provided")
 
         # Fixed CSV header schema for consistency across export paths
         CSV_HEADERS: list[str] = list(self._csv_headers)
@@ -3585,6 +3634,12 @@ async def audit_operation(
     """Context manager for auditing operations with automatic timing"""
     start_time = time.perf_counter()
     event_id = None
+    # Reserve internal kwargs to prevent duplicate keyword argument errors.
+    safe_kwargs = dict(kwargs)
+    for reserved in ("result", "duration_ms", "error_message"):
+        if reserved in safe_kwargs:
+            logger.warning("audit_operation ignored reserved kwarg '{}'", reserved)
+            safe_kwargs.pop(reserved, None)
 
     # Log start event when specified explicitly (fail-fast if audit is mandatory).
     if start_event_type is not None:
@@ -3592,12 +3647,14 @@ async def audit_operation(
             event_type=start_event_type,
             context=context,
             result="started",
-            **kwargs,
+            **safe_kwargs,
         )
 
     try:
         yield event_id
-    except _AUDIT_NONCRITICAL_EXCEPTIONS as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
         # Log failure without masking the original exception.
         pass
         duration_ms = (time.perf_counter() - start_time) * 1000
@@ -3608,7 +3665,7 @@ async def audit_operation(
                 result="failure",
                 error_message=str(exc),
                 duration_ms=duration_ms,
-                **kwargs,
+                **safe_kwargs,
             )
         except _AUDIT_NONCRITICAL_EXCEPTIONS as log_exc:
             logger.error(
@@ -3625,7 +3682,7 @@ async def audit_operation(
         context=context,
         result="success",
         duration_ms=duration_ms,
-        **kwargs,
+        **safe_kwargs,
     )
 
 

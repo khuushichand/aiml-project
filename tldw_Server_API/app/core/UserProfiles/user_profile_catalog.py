@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError, model_validator, validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 _ALLOWED_EDITORS = {"user", "admin", "org_admin", "team_admin", "platform_admin"}
 
@@ -66,16 +66,19 @@ class UserProfileCatalogEntry(BaseModel):
     ui: str | None = None
     deprecated: bool = False
 
-    @validator("key", "label", "type", "sensitivity")
-    def _not_empty(self, value: str) -> str:
+    @field_validator("key", "label", "type", "sensitivity")
+    @classmethod
+    def _not_empty(cls, value: str) -> str:
         if not str(value).strip():
             raise ValueError("Field cannot be empty.")
         return value
 
-    @validator("editable_by", each_item=True)
-    def _validate_editable_by(self, value: str) -> str:
-        if value not in _ALLOWED_EDITORS:
-            raise ValueError(f"Invalid editable_by role: {value}")
+    @field_validator("editable_by")
+    @classmethod
+    def _validate_editable_by(cls, value: list[str]) -> list[str]:
+        for role in value:
+            if role not in _ALLOWED_EDITORS:
+                raise ValueError(f"Invalid editable_by role: {role}")
         return value
 
 
@@ -86,8 +89,9 @@ class UserProfileCatalog(BaseModel):
     updated_at: datetime
     entries: list[UserProfileCatalogEntry]
 
-    @validator("version")
-    def _validate_version(self, value: str) -> str:
+    @field_validator("version")
+    @classmethod
+    def _validate_version(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Catalog version cannot be empty.")
         return value

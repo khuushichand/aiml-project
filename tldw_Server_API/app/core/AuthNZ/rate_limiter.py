@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
@@ -71,6 +71,71 @@ class RateLimiter:
     ) -> tuple[bool, dict[str, Any]]:
         """No-op per-user rate limit check (RG handles ingress limits)."""
         return True, {"rate_limit_source": "resource_governor"}
+
+    @staticmethod
+    def _window_start_for_minutes(now: datetime, window_minutes: int) -> datetime:
+        # Normalize to a fixed bucket start to keep counters deterministic.
+        minute_epoch = int(now.timestamp() // 60)
+        bucket = minute_epoch - (minute_epoch % max(1, int(window_minutes)))
+        return datetime.fromtimestamp(bucket * 60, tz=timezone.utc).replace(second=0, microsecond=0)
+
+    async def check_rate_limit_fallback(
+        self,
+        *,
+        identifier: str,
+        endpoint: str,
+        limit: int | None = None,
+        window_minutes: int | None = None,
+        fail_open: bool = True,
+    ) -> tuple[bool, dict[str, Any]]:
+        """
+        DB-backed fallback limiter for auth endpoint abuse controls.
+
+        This path is intended for explicit fallback usage when RG ingress
+        governance is unavailable for a request.
+        """
+        if not getattr(self.settings, "RATE_LIMIT_ENABLED", True):
+            return True, {"rate_limit_source": "authnz_fallback_db", "disabled": True}
+
+        if not self._initialized:
+            await self.initialize()
+
+        limit_value = int(limit or getattr(self.settings, "RATE_LIMIT_PER_MINUTE", 60))
+        window_value = int(window_minutes or 1)
+        if limit_value <= 0 or window_value <= 0:
+            return True, {"rate_limit_source": "authnz_fallback_db", "disabled": True}
+
+        now = datetime.now(timezone.utc)
+        window_start = self._window_start_for_minutes(now, window_value)
+        reset_at = window_start + timedelta(minutes=window_value)
+        retry_after = max(1, int((reset_at - now).total_seconds()))
+
+        try:
+            repo = self._get_rate_limits_repo()
+            current_count = await repo.increment_rate_limit_window(
+                identifier=identifier,
+                endpoint=endpoint,
+                window_start=window_start,
+            )
+            allowed = int(current_count) <= limit_value
+            return allowed, {
+                "rate_limit_source": "authnz_fallback_db",
+                "limit": limit_value,
+                "window_minutes": window_value,
+                "current_count": int(current_count),
+                "remaining": max(0, limit_value - int(current_count)),
+                "retry_after": retry_after,
+                "window_start": window_start.isoformat(),
+                "reset_at": reset_at.isoformat(),
+            }
+        except Exception as exc:
+            logger.warning(f"AuthNZ fallback rate limit failed for {endpoint} [{identifier}]: {exc}")
+            if fail_open:
+                return True, {
+                    "rate_limit_source": "authnz_fallback_db",
+                    "error": "fallback_limiter_unavailable",
+                }
+            raise RateLimitError("Fallback rate limiter unavailable")
 
     async def record_failed_attempt(
         self,

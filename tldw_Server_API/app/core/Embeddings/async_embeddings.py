@@ -24,7 +24,6 @@ from tldw_Server_API.app.core.Embeddings.simplified_config import get_config
 from tldw_Server_API.app.core.Utils.tokenizer import count_tokens as _count_tokens
 
 _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS = (
-    asyncio.CancelledError,
     AssertionError,
     AttributeError,
     ConnectionError,
@@ -392,8 +391,10 @@ class AsyncLocalProvider(AsyncEmbeddingProvider):
                         continue
                     to_drop.append(name)
 
-            # Evict when we're at or above the limit to make room for the incoming model.
-            while len(self.models) - len(to_drop) >= self.max_models_in_memory:
+            # Reserve capacity only when `keep` names a model that is not loaded yet.
+            reserve_slot = 1 if keep is not None and keep not in self.models else 0
+            target_loaded = max(0, self.max_models_in_memory - reserve_slot)
+            while len(self.models) - len(to_drop) > target_loaded:
                 candidates = [
                     (name, last_used) for name, last_used in self.model_last_used.items()
                     if name != keep and self.model_in_use.get(name, 0) <= 0 and name not in to_drop
@@ -464,6 +465,7 @@ class AsyncEmbeddingService:
     def __init__(self, config: Optional[Any] = None):
         """Initialize async embedding service"""
         self.config = config or get_config()
+        self.pool_manager = get_pool_manager()
         self.cache = get_multi_tier_cache()
         self.batcher = get_batcher()
         self.recovery_manager = get_recovery_manager()
@@ -990,5 +992,8 @@ async def periodic_health_check():
                 if info["status"] == "unhealthy":
                     logger.warning(f"Provider {provider} is unhealthy: {info.get('error')}")
 
+        except asyncio.CancelledError:
+            # Propagate cancellation so shutdown can stop this task promptly.
+            raise
         except _ASYNC_EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error in periodic health check: {e}")

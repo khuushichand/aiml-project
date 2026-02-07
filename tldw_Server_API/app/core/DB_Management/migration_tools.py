@@ -57,6 +57,19 @@ _DEFAULT_SKIP_SUFFIXES = (
 )
 
 
+def _sqlite_quote_identifier(identifier: str) -> str:
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _escape_backend_identifier(backend: DatabaseBackend, identifier: str) -> str:
+    escape = getattr(backend, "escape_identifier", None)
+    if callable(escape):
+        return escape(identifier)
+    escaped = str(identifier).replace('"', '""')
+    return f'"{escaped}"'
+
+
 def migrate_sqlite_to_postgres(
     sqlite_path: Path | str,
     postgres_config: DatabaseConfig,
@@ -319,9 +332,11 @@ def _truncate_tables(
 ) -> None:
     for table_name in reversed(list(insertion_order)):
         meta = tables.get(table_name)
+        table_ident = _escape_backend_identifier(backend, table_name)
+        user_col_ident = _escape_backend_identifier(backend, "user_id")
         has_user_id = bool(meta and any(col.lower() == "user_id" for col in meta.columns))
         if user_id and has_user_id:
-            sql = f'DELETE FROM {table_name} WHERE user_id = %s'
+            sql = f'DELETE FROM {table_ident} WHERE {user_col_ident} = %s'
             params = (user_id,)
         elif user_id and not has_user_id:
             logger.info(
@@ -330,7 +345,7 @@ def _truncate_tables(
             )
             continue
         else:
-            sql = f'DELETE FROM {table_name}'
+            sql = f'DELETE FROM {table_ident}'
             params = None
         try:
             backend.execute(sql, params, connection=pg_conn)
@@ -346,17 +361,19 @@ def _copy_table(
     batch_size: int,
     user_id: str | None = None,
 ) -> None:
-    column_list = ', '.join([f'"{col}"' for col in meta.columns])
-    select_sql = f'SELECT {column_list} FROM "{meta.source_name}"'
+    sqlite_column_list = ', '.join(_sqlite_quote_identifier(col) for col in meta.columns)
+    sqlite_table_name = _sqlite_quote_identifier(meta.source_name)
+    select_sql = f'SELECT {sqlite_column_list} FROM {sqlite_table_name}'
     select_params: tuple[Any, ...] = ()
     has_user_id = any(col.lower() == "user_id" for col in meta.columns)
     if user_id and has_user_id:
-        select_sql = f'{select_sql} WHERE "user_id" = ?'
+        select_sql = f'{select_sql} WHERE {_sqlite_quote_identifier("user_id")} = ?'
         select_params = (user_id,)
-    insert_columns = ', '.join(meta.pg_columns)
+    insert_table = _escape_backend_identifier(backend, meta.name)
+    insert_columns = ', '.join(_escape_backend_identifier(backend, col) for col in meta.pg_columns)
     placeholders = ', '.join(['%s'] * len(meta.pg_columns))
     insert_sql = (
-        f'INSERT INTO {meta.name} ({insert_columns}) '
+        f'INSERT INTO {insert_table} ({insert_columns}) '
         f'VALUES ({placeholders}) ON CONFLICT DO NOTHING'
     )
 
@@ -412,10 +429,14 @@ def _sync_sequences(
 ) -> None:
     for meta in tables.values():
         for column in meta.sequence_columns:
+            table_ident = _escape_backend_identifier(backend, meta.name)
+            column_ident = _escape_backend_identifier(backend, column)
+            serial_table_name = meta.name.replace("'", "''")
+            serial_column_name = column.replace("'", "''")
             sql = (
                 f"SELECT setval("
-                f"pg_get_serial_sequence('{meta.name}', '{column}'), "
-                f"COALESCE((SELECT MAX({column}) FROM {meta.name}), 0) + 1, false)"
+                f"pg_get_serial_sequence('{serial_table_name}', '{serial_column_name}'), "
+                f"COALESCE((SELECT MAX({column_ident}) FROM {table_ident}), 0) + 1, false)"
             )
             try:
                 backend.execute(sql, connection=pg_conn)

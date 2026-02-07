@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -450,6 +451,172 @@ async def test_execute_streaming_call_queue_fallback(monkeypatch):
         entry.get("selected_provider") == "openai" and entry.get("queued") is True
         for entry in metrics.fallback_successes
     )
+
+
+@pytest.mark.asyncio
+async def test_execute_streaming_call_finalize_runs_without_refund_cb(monkeypatch):
+    metrics = _DummyMetrics()
+    provider_manager = _DummyProviderManager()
+    captured: dict[str, object] = {}
+
+    def llm_call_func():
+        def _stream():
+            yield 'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _stream()
+
+    def fake_create_streaming_response_with_timeout(*_args, finalize_callback=None, **_kwargs):
+        captured["finalize_callback"] = finalize_callback
+
+        async def _gen():
+            if callable(finalize_callback):
+                await finalize_callback(success=False, cancelled=False, error=True)
+            yield "data: [DONE]\n\n"
+
+        return _gen()
+
+    async def save_message_fn(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "create_streaming_response_with_timeout", fake_create_streaming_response_with_timeout)
+    monkeypatch.setattr(chat_service, "get_request_queue", lambda: None)
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    resp = await execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "openai",
+            "messages_payload": [],
+            "model": "gpt-test",
+            "streaming": True,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-test",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=provider_manager,
+        templated_llm_payload=[],
+        should_persist=False,
+        final_conversation_id="conv-finalize-1",
+        character_card_for_context=None,
+        chat_db=None,
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client-test",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=llm_call_func,
+        refresh_provider_params=lambda _provider: ({}, None),
+        moderation_getter=lambda: _DummyModeration(),
+    )
+
+    assert isinstance(resp, StreamingResponse)
+
+    agen = resp.body_iterator
+    try:
+        await agen.__anext__()
+    except StopAsyncIteration:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            # Best effort close. Some test wrappers may already exhaust/close the iterator.
+            await agen.aclose()
+
+    assert callable(captured.get("finalize_callback"))
+    assert any(call[3] == "stream_error" for call in metrics.llm_calls)
+    assert provider_manager.failure_records
+
+
+@pytest.mark.asyncio
+async def test_execute_streaming_call_refund_cb_still_conditional(monkeypatch):
+    metrics = _DummyMetrics()
+    provider_manager = _DummyProviderManager()
+    refund_calls: list[dict[str, bool]] = []
+
+    def llm_call_func():
+        def _stream():
+            yield 'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return _stream()
+
+    async def rg_refund_cb(*, cancelled: bool, error: bool):
+        refund_calls.append({"cancelled": cancelled, "error": error})
+
+    def fake_create_streaming_response_with_timeout(*_args, finalize_callback=None, **_kwargs):
+        async def _gen():
+            if callable(finalize_callback):
+                await finalize_callback(success=False, cancelled=True, error=False)
+            yield "data: [DONE]\n\n"
+
+        return _gen()
+
+    async def save_message_fn(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "create_streaming_response_with_timeout", fake_create_streaming_response_with_timeout)
+    monkeypatch.setattr(chat_service, "get_request_queue", lambda: None)
+
+    request = SimpleNamespace(
+        method="POST",
+        url=SimpleNamespace(path="/api/v1/chat/completions"),
+        headers={},
+        state=SimpleNamespace(user_id=None, api_key_id=None),
+    )
+
+    resp = await execute_streaming_call(
+        current_loop=asyncio.get_running_loop(),
+        cleaned_args={
+            "api_endpoint": "openai",
+            "messages_payload": [],
+            "model": "gpt-test",
+            "streaming": True,
+        },
+        selected_provider="openai",
+        provider="openai",
+        model="gpt-test",
+        request_json="{}",
+        request=request,
+        metrics=metrics,
+        provider_manager=provider_manager,
+        templated_llm_payload=[],
+        should_persist=False,
+        final_conversation_id="conv-finalize-2",
+        character_card_for_context=None,
+        chat_db=None,
+        save_message_fn=save_message_fn,
+        audit_service=None,
+        audit_context=None,
+        client_id="client-test",
+        queue_execution_enabled=False,
+        enable_provider_fallback=False,
+        llm_call_func=llm_call_func,
+        refresh_provider_params=lambda _provider: ({}, None),
+        moderation_getter=lambda: _DummyModeration(),
+        rg_refund_cb=rg_refund_cb,
+    )
+
+    agen = resp.body_iterator
+    try:
+        await agen.__anext__()
+    except StopAsyncIteration:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            await agen.aclose()
+
+    assert refund_calls == [{"cancelled": True, "error": False}]
+    assert any(call[3] == "stream_cancelled" for call in metrics.llm_calls)
 
 
 def test_merge_api_keys_prefers_dynamic_over_module():

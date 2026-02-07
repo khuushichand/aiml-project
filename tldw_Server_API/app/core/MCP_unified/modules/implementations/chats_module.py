@@ -21,7 +21,14 @@ _CHATS_HEALTHCHECK_EXCEPTIONS = (
     TypeError,
     ValueError,
 )
-_CHATS_CLOSE_EXCEPTIONS = (OSError, RuntimeError, SQLiteError, TypeError, ValueError)
+_CHATS_CLOSE_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    SQLiteError,
+    TypeError,
+    ValueError,
+    AttributeError,
+)
 
 
 class ChatsModule(BaseModule):
@@ -312,7 +319,9 @@ class ChatsModule(BaseModule):
             }
         finally:
             try:
-                db.close_all_connections()
+                close_all = getattr(db, "close_all_connections", None)
+                if callable(close_all):
+                    close_all()
             except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats search: {}", exc)
 
@@ -412,6 +421,8 @@ class ChatsModule(BaseModule):
             return {"meta": meta, "content": meta["snippet"], "attachments": None}
         finally:
             try:
-                db.close_all_connections()
+                close_all = getattr(db, "close_all_connections", None)
+                if callable(close_all):
+                    close_all()
             except _CHATS_CLOSE_EXCEPTIONS as exc:
                 logger.debug("Failed to close ChaChaNotes DB connections after chats get: {}", exc)

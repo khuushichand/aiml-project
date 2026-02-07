@@ -425,7 +425,10 @@ class ChatbookService:
             except ValueError:
                 continue
 
-        raise SecurityError("Chatbook file path is outside allowed import directories")
+        raise SecurityError(
+            "Chatbook file path is outside allowed import directories",
+            violation_type="import_path_outside_allowed_directories",
+        )
 
     def _build_import_file_token(self, resolved_path: Path) -> str:
         """Return a tokenized relative path for import job payloads."""
@@ -2427,6 +2430,7 @@ class ChatbookService:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             now_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')
             deleted_count = 0
+            no_progress_batches = 0
 
             while True:
                 cursor = self.db.execute_query(
@@ -2438,6 +2442,7 @@ class ChatbookService:
                 if not results:
                     break
 
+                updated_status_count = 0
                 for row in results:
                     # Support both dict and tuple rows
                     if isinstance(row, dict):
@@ -2467,8 +2472,25 @@ class ChatbookService:
                             ('expired', job_id),
                             commit=True,
                         )
+                        updated_status_count += 1
                     except _CHATBOOK_NONCRITICAL_EXCEPTIONS as _e:
                         logger.warning(f"Failed to mark job {job_id} expired: {_e}")
+
+                if updated_status_count == 0:
+                    no_progress_batches += 1
+                    logger.warning(
+                        f"cleanup_expired_exports made no progress for user={self.user_id} "
+                        f"(batch_size={len(results)}, attempt={no_progress_batches})"
+                    )
+                else:
+                    no_progress_batches = 0
+
+                if no_progress_batches >= 2:
+                    logger.warning(
+                        f"Aborting cleanup_expired_exports loop for user={self.user_id} "
+                        "after repeated no-progress batches"
+                    )
+                    break
 
                 # If we got fewer results than batch_size, we're done
                 if len(results) < batch_size:

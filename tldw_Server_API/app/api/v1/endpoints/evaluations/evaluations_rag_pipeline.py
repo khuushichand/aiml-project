@@ -34,7 +34,6 @@ _TS_PARSE_EXCEPTIONS = (TypeError, ValueError)
 _PIPELINE_ENDPOINT_EXCEPTIONS = (
     AttributeError,
     ConnectionError,
-    HTTPException,
     KeyError,
     LookupError,
     OSError,

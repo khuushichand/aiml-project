@@ -79,59 +79,60 @@ def _prepare_character_data_for_db_storage(
             else:
                 try:
                     image_bytes = base64.b64decode(base64_str_clean, validate=True)
+                    try:
+                        # Verify decoded bytes are a real image before accepting them.
+                        with Image.open(io.BytesIO(image_bytes)) as verify_img:
+                            verify_img.verify()
+                    except Exception as img_err:
+                        logger.error("Invalid image_base64 data for character: {}", img_err)
+                        raise InputError("Invalid image_base64 data: decoded payload is not a valid image") from img_err
 
                     try:
-                        img = Image.open(io.BytesIO(image_bytes))
-                        has_alpha = "A" in img.getbands()
-                        if has_alpha and img.mode != "RGBA":
-                            img = img.convert("RGBA")
-                        elif not has_alpha and img.mode not in ["RGB", "L"]:
-                            img = img.convert("RGB")
+                        with Image.open(io.BytesIO(image_bytes)) as img:
+                            has_alpha = "A" in img.getbands()
+                            if has_alpha and img.mode != "RGBA":
+                                img = img.convert("RGBA")
+                            elif not has_alpha and img.mode not in ["RGB", "L"]:
+                                img = img.convert("RGB")
 
-                        max_size = (512, 768)
-                        if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
-                            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                            max_size = (512, 768)
+                            if img.size[0] > max_size[0] or img.size[1] > max_size[1]:
+                                img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                                logger.info(
+                                    "Resized character image from %s to fit within %s",
+                                    img.size,
+                                    max_size,
+                                )
+
+                            output = io.BytesIO()
+                            if has_alpha:
+                                # Use lossless compression for images with alpha to preserve transparency
+                                img.save(
+                                    output,
+                                    format="WEBP",
+                                    lossless=True,
+                                    method=6,
+                                )
+                            else:
+                                img.save(
+                                    output,
+                                    format="WEBP",
+                                    quality=85,
+                                    method=6,
+                                    optimize=True,
+                                )
+                            db_data["image"] = output.getvalue()
                             logger.info(
-                                "Resized character image from %s to fit within %s",
-                                img.size,
-                                max_size,
+                                "Optimized character image: %s -> %s bytes",
+                                len(image_bytes),
+                                len(db_data["image"]),
                             )
-
-                        output = io.BytesIO()
-                        if has_alpha:
-                            # Use lossless compression for images with alpha to preserve transparency
-                            img.save(
-                                output,
-                                format="WEBP",
-                                lossless=True,
-                                method=6,
-                            )
-                        else:
-                            img.save(
-                                output,
-                                format="WEBP",
-                                quality=85,
-                                method=6,
-                                optimize=True,
-                            )
-                        db_data["image"] = output.getvalue()
-                        logger.info(
-                            "Optimized character image: %s -> %s bytes",
-                            len(image_bytes),
-                            len(db_data["image"]),
-                        )
                     except Exception as img_err:
                         logger.warning("Could not optimise image, using original bytes: {}", img_err)
                         db_data["image"] = image_bytes
                 except (binascii.Error, ValueError) as exc:
-                    if db_data.get("image"):
-                        logger.warning(
-                            "Invalid image_base64 data provided; using existing image bytes instead: {}",
-                            exc,
-                        )
-                    else:
-                        logger.error("Invalid image_base64 data for character: {}", exc)
-                        raise InputError(f"Invalid image_base64 data: {exc}")
+                    logger.error("Invalid image_base64 data for character: {}", exc)
+                    raise InputError(f"Invalid image_base64 data: {exc}")
         else:
             db_data["image"] = None
     elif not is_update and "image" not in db_data:

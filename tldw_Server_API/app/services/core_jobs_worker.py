@@ -130,7 +130,24 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                         await asyncio.sleep(max(1.0, slp))
                 return asyncio.create_task(_loop())
 
+            def _safe_remove_export_file(path_value: str | None) -> None:
+                """Best-effort cleanup for export archives created after cancellation."""
+                if not path_value:
+                    return
+                try:
+                    export_path = Path(path_value).resolve()
+                    export_dir = Path(svc.export_dir).resolve()
+                    if os.path.commonpath([str(export_path), str(export_dir)]) != str(export_dir):
+                        logger.warning(f"Refusing to delete export outside export dir: {export_path}")
+                        return
+                    if export_path.exists() and export_path.is_file():
+                        export_path.unlink()
+                except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as cleanup_err:
+                    logger.debug(f"Core Jobs Worker: failed to remove cancelled export file {path_value}: {cleanup_err}")
+
             if action == "export":
+                _renew_task = None
+                file_path: str | None = None
                 try:
                     ej = svc._get_export_job(chatbooks_job_id)
                 except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
@@ -156,84 +173,87 @@ async def run_chatbooks_core_jobs_worker(stop_event: asyncio.Event | None = None
                         svc._save_export_job(ej)
                     jm.finalize_cancelled(int(job["id"]), reason="cancel requested before start")
                     continue
-                # Build selections
-                cs = {}
-                for k, v in (payload.get("content_selections") or {}).items():
-                    with contextlib.suppress(_CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS):
-                        cs[ContentType(k)] = v
-                # Start periodic lease renewal during heavy processing
-                _renew_task = await _start_renewal(int(job["id"]))
-                ok, msg, file_path = await svc._create_chatbook_sync_wrapper(
-                    name=payload.get("name"),
-                    description=payload.get("description"),
-                    content_selections=cs,
-                    author=payload.get("author"),
-                    include_media=bool(payload.get("include_media")),
-                    media_quality=str(payload.get("media_quality", "compressed")),
-                    include_embeddings=bool(payload.get("include_embeddings")),
-                    include_generated_content=bool(payload.get("include_generated_content", True)),
-                    tags=payload.get("tags") or [],
-                    categories=payload.get("categories") or [],
-                )
-                if ok:
-                    # Mid-flight cancel check (honor cancellation request or terminal state)
-                    cur = jm.get_job(int(job["id"])) or {}
-                    if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
-                        if ej:
-                            ej.status = ExportStatus.CANCELLED
-                            ej.completed_at = datetime.utcnow()
-                            svc._save_export_job(ej)
-                        jm.finalize_cancelled(int(job["id"]), reason="cancel requested during processing")
-                        continue
-                    try:
-                        ej = svc._get_export_job(chatbooks_job_id)
-                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
-                        ej = None
-                    if ej and ej.status != ExportStatus.CANCELLED:
-                        ej.status = ExportStatus.COMPLETED
-                        ej.completed_at = datetime.utcnow()
-                        ej.output_path = file_path
+                try:
+                    # Build selections
+                    cs = {}
+                    for k, v in (payload.get("content_selections") or {}).items():
+                        with contextlib.suppress(_CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS):
+                            cs[ContentType(k)] = v
+                    # Start periodic lease renewal during heavy processing
+                    _renew_task = await _start_renewal(int(job["id"]))
+                    ok, msg, file_path = await svc._create_chatbook_sync_wrapper(
+                        name=payload.get("name"),
+                        description=payload.get("description"),
+                        content_selections=cs,
+                        author=payload.get("author"),
+                        include_media=bool(payload.get("include_media")),
+                        media_quality=str(payload.get("media_quality", "compressed")),
+                        include_embeddings=bool(payload.get("include_embeddings")),
+                        include_generated_content=bool(payload.get("include_generated_content", True)),
+                        tags=payload.get("tags") or [],
+                        categories=payload.get("categories") or [],
+                    )
+                    if ok:
+                        # Mid-flight cancel check (honor cancellation request or terminal state)
+                        cur = jm.get_job(int(job["id"])) or {}
+                        if cur.get("cancel_requested_at") or (cur.get("status") and str(cur.get("status")).lower() != "processing"):
+                            if ej:
+                                ej.status = ExportStatus.CANCELLED
+                                ej.completed_at = datetime.utcnow()
+                                svc._save_export_job(ej)
+                            _safe_remove_export_file(file_path)
+                            jm.finalize_cancelled(int(job["id"]), reason="cancel requested during processing")
+                            continue
                         try:
-                            ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
+                            ej = svc._get_export_job(chatbooks_job_id)
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
+                            ej = None
+                        if ej and ej.status != ExportStatus.CANCELLED:
+                            ej.status = ExportStatus.COMPLETED
+                            ej.completed_at = datetime.utcnow()
+                            ej.output_path = file_path
+                            try:
+                                ej.file_size_bytes = Path(file_path).stat().st_size if file_path else None
+                            except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
+                                logger.debug(f"Core Jobs Worker: stat exported file failed: {e}")
+                                try:
+                                    get_metrics_registry().increment(
+                                        "app_warning_events_total",
+                                        labels={"component": "core_jobs_worker", "event": "export_stat_failed"},
+                                    )
+                                except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
+                                    logger.debug("metrics increment failed for export_stat_failed")
+                            now_utc = datetime.now(timezone.utc)
+                            ej.expires_at = svc._get_export_expiry(now_utc)
+                            download_expires_at = svc._get_download_expiry(now_utc, ej.expires_at)
+                            ej.download_url = svc._build_download_url(ej.job_id, download_expires_at)
+                            svc._save_export_job(ej)
+                        jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
+                    else:
+                        try:
+                            ej = svc._get_export_job(chatbooks_job_id)
                         except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
-                            logger.debug(f"Core Jobs Worker: stat exported file failed: {e}")
+                            logger.debug(f"Core Jobs Worker: get export job (post-fail) failed {chatbooks_job_id}: {e}")
+                            ej = None
+                        if ej:
+                            ej.status = ExportStatus.FAILED
+                            ej.completed_at = datetime.utcnow()
+                            ej.error_message = msg
+                            svc._save_export_job(ej)
+                        jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
+                finally:
+                    if _renew_task is not None:
+                        try:
+                            _renew_task.cancel()
+                        except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
+                            logger.debug(f"Core Jobs Worker: failed to cancel renew task: {e}")
                             try:
                                 get_metrics_registry().increment(
                                     "app_warning_events_total",
-                                    labels={"component": "core_jobs_worker", "event": "export_stat_failed"},
+                                    labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
                                 )
                             except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
-                                logger.debug("metrics increment failed for export_stat_failed")
-                        now_utc = datetime.now(timezone.utc)
-                        ej.expires_at = svc._get_export_expiry(now_utc)
-                        download_expires_at = svc._get_download_expiry(now_utc, ej.expires_at)
-                        ej.download_url = svc._build_download_url(ej.job_id, download_expires_at)
-                        svc._save_export_job(ej)
-                    jm.complete_job(int(job["id"]), result={"path": file_path}, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-                else:
-                    try:
-                        ej = svc._get_export_job(chatbooks_job_id)
-                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
-                        logger.debug(f"Core Jobs Worker: get export job (post-fail) failed {chatbooks_job_id}: {e}")
-                        ej = None
-                    if ej:
-                        ej.status = ExportStatus.FAILED
-                        ej.completed_at = datetime.utcnow()
-                        ej.error_message = msg
-                        svc._save_export_job(ej)
-                    jm.fail_job(int(job["id"]), error=str(msg), retryable=False, worker_id=worker_id, lease_id=str(lease_id), completion_token=str(lease_id))
-                # Stop renewal
-                try:
-                    _renew_task.cancel()
-                except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS as e:
-                    logger.debug(f"Core Jobs Worker: failed to cancel renew task: {e}")
-                    try:
-                        get_metrics_registry().increment(
-                            "app_warning_events_total",
-                            labels={"component": "core_jobs_worker", "event": "renew_task_cancel_failed"},
-                        )
-                    except _CORE_JOBS_WORKER_NONCRITICAL_EXCEPTIONS:
-                        logger.debug("metrics increment failed for renew_task_cancel_failed")
+                                logger.debug("metrics increment failed for renew_task_cancel_failed")
             elif action == "import":
                 file_ref = payload.get("file_token") or payload.get("file_path")
                 _renew_task = None

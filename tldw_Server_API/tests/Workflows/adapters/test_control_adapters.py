@@ -780,10 +780,10 @@ class TestCacheResultAdapter:
     @pytest.mark.asyncio
     async def test_cache_get_or_set_fallback(self, monkeypatch):
         """Test cache adapter fallback when cache unavailable."""
-        # Mock chroma_client to return None
+        # Mock collection resolver to indicate cache unavailable
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chroma_client",
-            lambda: None,
+            "tldw_Server_API.app.core.Workflows.adapters.control.state._get_workflow_cache_collection",
+            lambda _name: None,
         )
 
         config = {
@@ -804,12 +804,9 @@ class TestCacheResultAdapter:
         mock_collection = MagicMock()
         mock_collection.delete = MagicMock()
 
-        mock_client = MagicMock()
-        mock_client.get_or_create_collection = MagicMock(return_value=mock_collection)
-
         monkeypatch.setattr(
-            "tldw_Server_API.app.core.Embeddings.ChromaDB_Library.chroma_client",
-            lambda: mock_client,
+            "tldw_Server_API.app.core.Workflows.adapters.control.state._get_workflow_cache_collection",
+            lambda _name: mock_collection,
         )
 
         config = {

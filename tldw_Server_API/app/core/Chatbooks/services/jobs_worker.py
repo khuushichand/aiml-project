@@ -209,7 +209,7 @@ async def _handle_import(service: ChatbookService, payload: dict[str, Any], job_
             selections,
             conflict_resolution,
             bool(payload.get("prefix_imported", False)),
-            bool(payload.get("import_media", True)),
+            bool(payload.get("import_media", False)),
             bool(payload.get("import_embeddings", False)),
         )
     finally:

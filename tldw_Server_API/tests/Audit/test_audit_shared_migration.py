@@ -484,3 +484,122 @@ async def test_migration_updates_stats_incrementally(tmp_path):
             row = await cur.fetchone()
     assert row is not None
     assert row["total_events"] == 2
+
+
+@pytest.mark.asyncio
+async def test_migration_resume_realigns_normalized_checkpoint_timestamp(tmp_path):
+    """Resume should not miss rows when stored checkpoint timestamp format differs."""
+    user_base = tmp_path / "user_dbs"
+    user_id = "1001"
+    user_db_path = user_base / user_id / "audit" / "unified_audit.db"
+    shared_db_path = tmp_path / "Databases" / "audit_shared.db"
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    svc_user = UnifiedAuditService(
+        db_path=str(user_db_path),
+        storage_mode="per_user",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=1,
+        flush_interval=0.1,
+    )
+    await svc_user.initialize(start_background_tasks=False)
+    await svc_user.stop()
+
+    ts1_raw = "2025-01-01T00:00:00-05:00"
+    ts1_normalized = "2025-01-01T05:00:00+00:00"
+    ts2_raw = "2025-01-01T01:00:00-05:00"
+
+    async with aiosqlite.connect(user_db_path) as db:
+        await db.execute(
+            "INSERT INTO audit_events (event_id, timestamp, category, event_type, severity) VALUES (?, ?, ?, ?, ?)",
+            ("evt-1", ts1_raw, "api_call", "api.request", "info"),
+        )
+        await db.execute(
+            "INSERT INTO audit_events (event_id, timestamp, category, event_type, severity) VALUES (?, ?, ?, ?, ?)",
+            ("evt-2", ts2_raw, "api_call", "api.request", "info"),
+        )
+        await db.commit()
+
+    svc_shared = UnifiedAuditService(
+        db_path=str(shared_db_path),
+        storage_mode="shared",
+        enable_pii_detection=False,
+        enable_risk_scoring=False,
+        buffer_size=10,
+        flush_interval=0.1,
+    )
+    await svc_shared.initialize(start_background_tasks=False)
+    await svc_shared.stop()
+
+    source = audit_migration.AuditMigrationSource(
+        path=user_db_path.resolve(),
+        tenant_id=user_id,
+        label=f"user:{user_id}",
+    )
+
+    async with aiosqlite.connect(shared_db_path) as shared_db:
+        shared_db.row_factory = aiosqlite.Row
+        await audit_migration._ensure_checkpoint_table(shared_db)
+        await audit_migration._save_checkpoint(
+            shared_db,
+            source.path.resolve(),
+            last_rowid=1,
+            last_event_id="evt-1",
+            last_timestamp=ts1_normalized,
+        )
+        await shared_db.commit()
+
+        counts = await audit_migration._migrate_source(
+            shared_db,
+            source,
+            columns=list(svc_shared._event_columns),
+            insert_sql=svc_shared._event_insert_sql,
+            system_tenant_id="system",
+            unidentified_tenant_id="unidentified_user",
+            chunk_size=100,
+        )
+        assert counts.failed is False
+        assert counts.events_inserted == 1
+
+        async with shared_db.execute("SELECT event_id FROM audit_events ORDER BY event_id") as cur:
+            rows = await cur.fetchall()
+        event_ids = [row["event_id"] for row in rows]
+        assert event_ids == ["evt-2"]
+
+
+def test_build_event_record_parses_falsey_pii_detected_string():
+    row = {
+        "event_id": "pii-bool-test",
+        "timestamp": datetime(2025, 1, 1, tzinfo=timezone.utc).isoformat(),
+        "category": "api_call",
+        "event_type": "api.request",
+        "severity": "info",
+        "pii_detected": "false",
+    }
+    columns = [
+        "event_id",
+        "timestamp",
+        "category",
+        "event_type",
+        "severity",
+        "tenant_user_id",
+    ]
+    record = audit_migration._build_event_record(
+        row,
+        columns,
+        tenant_override="123",
+        system_tenant_id="system",
+        unidentified_tenant_id="unidentified_user",
+    )
+    assert record["pii_detected"] is False
+
+    row["pii_detected"] = "1"
+    record_true = audit_migration._build_event_record(
+        row,
+        columns,
+        tenant_override="123",
+        system_tenant_id="system",
+        unidentified_tenant_id="unidentified_user",
+    )
+    assert record_true["pii_detected"] is True

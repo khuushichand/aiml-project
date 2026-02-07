@@ -159,3 +159,47 @@ def test_data_table_row_json_key_validation():
             table_id,
             [{"row_index": 0, "row_json": {column_ids[0]: "Alice", "unknown": 1}}],
         )
+
+
+@pytest.mark.unit
+def test_data_table_admin_updates_do_not_reassign_owner(tmp_path):
+    db_path = tmp_path / "Media_DB_v2.db"
+    owner_db = MediaDatabase(db_path=str(db_path), client_id="1")
+    table = owner_db.create_data_table(name="Owner Table", prompt="p1", owner_user_id=1)
+    table_id = int(table["id"])
+
+    admin_db = MediaDatabase(db_path=str(db_path), client_id="admin")
+    updated = admin_db.update_data_table(table_id, status="queued", owner_user_id=None)
+    assert updated is not None
+    assert updated["client_id"] == "1"
+
+    admin_db.persist_data_table_generation(
+        table_id,
+        columns=[{"column_id": "col_1", "name": "Name", "type": "text", "position": 0}],
+        rows=[{"row_id": "row_1", "row_index": 0, "row_json": {"col_1": "Alice"}}],
+        sources=[{"source_type": "chat", "source_id": "chat_1"}],
+        status="ready",
+        row_count=1,
+        owner_user_id=None,
+    )
+
+    assert owner_db.get_data_table(table_id, owner_user_id=1) is not None
+    assert admin_db.get_data_table(table_id, owner_user_id="admin") is None
+    assert len(owner_db.list_data_table_columns(table_id, owner_user_id=1)) == 1
+    assert len(owner_db.list_data_table_rows(table_id, owner_user_id=1)) == 1
+    assert len(owner_db.list_data_table_sources(table_id, owner_user_id=1)) == 1
+
+
+@pytest.mark.unit
+def test_update_data_table_can_clear_last_error():
+    db = MediaDatabase(db_path=":memory:", client_id="1")
+    table = db.create_data_table(name="Status Table", prompt="p")
+    table_id = int(table["id"])
+
+    failed = db.update_data_table(table_id, status="failed", last_error="boom", owner_user_id=1)
+    assert failed is not None
+    assert failed["last_error"] == "boom"
+
+    cleared = db.update_data_table(table_id, status="running", last_error=None, owner_user_id=1)
+    assert cleared is not None
+    assert cleared["last_error"] is None

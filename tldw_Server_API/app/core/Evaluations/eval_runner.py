@@ -208,6 +208,25 @@ class EvaluationRunner:
 
         return api_name, model_override, api_key
 
+    @staticmethod
+    def _normalize_metrics(metrics: Any, default: Optional[list[str]] = None) -> list[str]:
+        """Normalize metric configuration to a clean list of metric names."""
+        if metrics is None:
+            return list(default or [])
+        if isinstance(metrics, str):
+            metric_name = metrics.strip()
+            return [metric_name] if metric_name else []
+        if isinstance(metrics, (list, tuple, set)):
+            normalized_metrics: list[str] = []
+            for metric in metrics:
+                if metric is None:
+                    continue
+                metric_name = str(metric).strip()
+                if metric_name:
+                    normalized_metrics.append(metric_name)
+            return normalized_metrics
+        return list(default or [])
+
     @property
     def rag_evaluator(self) -> RAGEvaluator:
         """Get or create RAG evaluator instance (lazy initialization)."""
@@ -301,7 +320,8 @@ class EvaluationRunner:
                     run_id=run_id,
                     samples=samples,
                     eval_spec=eval_spec,
-                    eval_config=eval_config
+                    eval_config=eval_config,
+                    run_user_id=evaluation.get("created_by"),
                 )
 
                 # Store results and webhook
@@ -374,9 +394,10 @@ class EvaluationRunner:
                 self.db.update_run_progress(run_id, progress)
 
             # Calculate aggregate results (include failed samples)
+            eval_metrics = self._normalize_metrics(eval_spec.get("metrics"), default=[])
             aggregate = self._calculate_aggregate_results(
                 sample_results,
-                eval_spec.get("metrics", []),
+                eval_metrics,
                 eval_spec.get("threshold", 0.7)
             )
 
@@ -387,7 +408,7 @@ class EvaluationRunner:
             duration = time.time() - start_time
             results = {
                 "aggregate": aggregate,
-                "by_metric": self._calculate_metric_stats(sample_results, eval_spec.get("metrics", [])),
+                "by_metric": self._calculate_metric_stats(sample_results, eval_metrics),
                 "sample_results": sample_results,
                 "failed_samples": [r for r in sample_results if r.get("error")]
             }
@@ -516,7 +537,8 @@ class EvaluationRunner:
         run_id: str,
         samples: list[dict[str, Any]],
         eval_spec: dict[str, Any],
-        eval_config: dict[str, Any]
+        eval_config: dict[str, Any],
+        run_user_id: Optional[str] = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Run rag_pipeline across a config grid and dataset, aggregating a leaderboard.
 
@@ -564,6 +586,9 @@ class EvaluationRunner:
         except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
             metrics_timeout = 2.0
 
+        # Resolve the user scope used by vector-store operations.
+        resolved_user_id = self._resolve_rag_pipeline_user_id(run_user_id, eval_config)
+
         # Optional ephemeral indexing base namespace
         base_namespace = rp.get("index_namespace")
 
@@ -609,6 +634,7 @@ class EvaluationRunner:
                 "generation_model": (rg.get("model") or [None])[0] if isinstance(rg.get("model"), list) else rg.get("model"),
                 "generation_prompt": (rg.get("prompt_template") or [None])[0] if isinstance(rg.get("prompt_template"), list) else rg.get("prompt_template"),
                 "max_generation_tokens": (rg.get("max_tokens") or [None])[0] if isinstance(rg.get("max_tokens"), list) else (rg.get("max_tokens") or 500),
+                "user_id": resolved_user_id,
             }
 
             # Additional retrieval knobs (safe pass-through)
@@ -666,7 +692,8 @@ class EvaluationRunner:
                     chunk_index_stats = await self._build_ephemeral_index(
                         collection_name=collection_name,
                         samples=samples,
-                        chunking_cfg=ck
+                        chunking_cfg=ck,
+                        user_id=resolved_user_id,
                     )
                     upr_args_common["index_namespace"] = collection_name
                     built_collections.append(collection_name)
@@ -748,7 +775,10 @@ class EvaluationRunner:
                         contexts=ctx_texts,
                         response=response,
                         ground_truth=ground_truth,
-                        metrics=eval_spec.get("metrics", ["relevance", "faithfulness", "answer_similarity"]),
+                        metrics=self._normalize_metrics(
+                            eval_spec.get("metrics"),
+                            default=["relevance", "faithfulness", "answer_similarity"],
+                        ),
                         api_name=eval_provider,
                         model=eval_model,
                     )
@@ -951,7 +981,7 @@ class EvaluationRunner:
         try:
             if rp.get("cleanup_collections") and built_collections:
                 from tldw_Server_API.app.core.config import settings as app_settings
-                adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+                adapter = create_from_settings_for_user(app_settings, resolved_user_id)
                 await adapter.initialize()
                 for cname in built_collections:
                     try:
@@ -996,7 +1026,8 @@ class EvaluationRunner:
         self,
         collection_name: str,
         samples: list[dict[str, Any]],
-        chunking_cfg: dict[str, Any]
+        chunking_cfg: dict[str, Any],
+        user_id: str,
     ) -> dict[str, Any]:
         """Build an ephemeral index (collection) for a run-config if dataset provides a corpus.
 
@@ -1024,7 +1055,7 @@ class EvaluationRunner:
 
         # Create adapter
         from tldw_Server_API.app.core.config import settings as app_settings
-        adapter = create_from_settings_for_user(app_settings, str(app_settings.get("SINGLE_USER_FIXED_ID", "1")))
+        adapter = create_from_settings_for_user(app_settings, user_id)
         await adapter.initialize()
         await adapter.create_collection(collection_name)
 
@@ -1144,6 +1175,36 @@ class EvaluationRunner:
             "type_ratios": type_ratios,
         }
         return chunk_stats
+
+    @staticmethod
+    def _resolve_rag_pipeline_user_id(
+        run_user_id: Optional[str],
+        eval_config: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Resolve a stable user identifier for rag-pipeline vector-store calls."""
+        candidates: list[Optional[str]] = [run_user_id]
+
+        if isinstance(eval_config, dict):
+            candidates.append(eval_config.get("created_by"))
+            candidates.append(eval_config.get("user_id"))
+            run_cfg = eval_config.get("config")
+            if isinstance(run_cfg, dict):
+                candidates.append(run_cfg.get("user_id"))
+
+        for value in candidates:
+            if value is None:
+                continue
+            normalized = str(value).strip()
+            if normalized:
+                return normalized
+
+        try:
+            from tldw_Server_API.app.core.config import settings as app_settings
+
+            fallback = app_settings.get("SINGLE_USER_FIXED_ID", "1")
+            return str(fallback)
+        except _EVAL_RUNNER_NONCRITICAL_EXCEPTIONS:
+            return "1"
 
     async def _get_samples(
         self,
@@ -1341,7 +1402,10 @@ class EvaluationRunner:
 
             # Parse results
             scores: dict[str, float] = {}
-            metrics_list = eval_spec.get("metrics", ["fluency", "consistency", "relevance", "coherence"])
+            metrics_list = self._normalize_metrics(
+                eval_spec.get("metrics"),
+                default=["fluency", "consistency", "relevance", "coherence"],
+            )
 
             if isinstance(result, dict):
                 metric_blob = result.get("metrics") or result.get("scores") or {}
@@ -1410,7 +1474,10 @@ class EvaluationRunner:
                 contexts=contexts,
                 response=response,
                 ground_truth=ground_truth,
-                metrics=eval_spec.get("metrics", ["relevance", "faithfulness"]),
+                metrics=self._normalize_metrics(
+                    eval_spec.get("metrics"),
+                    default=["relevance", "faithfulness"],
+                ),
                 api_name=api_name,
                 model=model_override,
             )
@@ -2143,10 +2210,12 @@ class EvaluationRunner:
     def _calculate_aggregate_results(
         self,
         results: list[dict[str, Any]],
-        metrics: list[str],
+        metrics: Optional[list[str]],
         threshold: float
     ) -> dict[str, Any]:
         """Calculate aggregate statistics"""
+        _ = metrics
+        _ = threshold
         if not results:
             return {
                 "mean_score": 0,
@@ -2201,16 +2270,34 @@ class EvaluationRunner:
     def _calculate_metric_stats(
         self,
         results: list[dict[str, Any]],
-        metrics: list[str]
+        metrics: Optional[list[str]]
     ) -> dict[str, dict[str, float]]:
         """Calculate per-metric statistics"""
-        metric_scores = {metric: [] for metric in metrics}
+        metric_names = self._normalize_metrics(metrics, default=[])
+        if not metric_names:
+            inferred_metrics: set[str] = set()
+            for result in results:
+                scores_blob = result.get("scores")
+                if not isinstance(scores_blob, dict):
+                    continue
+                for metric_name in scores_blob:
+                    if isinstance(metric_name, str) and metric_name:
+                        inferred_metrics.add(metric_name)
+            metric_names = sorted(inferred_metrics)
+
+        metric_scores = {metric: [] for metric in metric_names}
 
         for result in results:
-            if "scores" in result:
-                for metric, score in result["scores"].items():
-                    if metric in metric_scores:
-                        metric_scores[metric].append(score)
+            scores_blob = result.get("scores")
+            if not isinstance(scores_blob, dict):
+                continue
+            for metric, score in scores_blob.items():
+                if metric not in metric_scores:
+                    continue
+                try:
+                    metric_scores[metric].append(float(score))
+                except (TypeError, ValueError):
+                    continue
 
         metric_stats = {}
         for metric, scores in metric_scores.items():

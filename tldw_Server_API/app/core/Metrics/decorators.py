@@ -7,6 +7,7 @@ traces, and performance for functions and methods.
 
 import asyncio
 import functools
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -486,14 +487,17 @@ def monitor_resource(
 
         # Maintain a local active counter per-decorated function to set the gauge robustly
         active_count = 0
+        active_count_lock = threading.Lock()
 
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
                 nonlocal active_count
                 if track_count:
-                    active_count += 1
-                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                    with active_count_lock:
+                        active_count += 1
+                        current = active_count
+                    set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                 start_time = time.monotonic() if track_usage else None
 
@@ -501,8 +505,10 @@ def monitor_resource(
                     return await func(*args, **kwargs)
                 finally:
                     if track_count:
-                        active_count = max(0, active_count - 1)
-                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                        with active_count_lock:
+                            active_count = max(0, active_count - 1)
+                            current = active_count
+                        set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                     if track_usage and start_time:
                         usage = time.monotonic() - start_time
@@ -514,8 +520,10 @@ def monitor_resource(
             def sync_wrapper(*args, **kwargs):
                 nonlocal active_count
                 if track_count:
-                    active_count += 1
-                    set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                    with active_count_lock:
+                        active_count += 1
+                        current = active_count
+                    set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                 start_time = time.monotonic() if track_usage else None
 
@@ -523,8 +531,10 @@ def monitor_resource(
                     return func(*args, **kwargs)
                 finally:
                     if track_count:
-                        active_count = max(0, active_count - 1)
-                        set_gauge(count_metric, float(active_count), labels={"resource": resource_name})
+                        with active_count_lock:
+                            active_count = max(0, active_count - 1)
+                            current = active_count
+                        set_gauge(count_metric, float(current), labels={"resource": resource_name})
 
                     if track_usage and start_time:
                         usage = time.monotonic() - start_time

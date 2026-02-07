@@ -27,6 +27,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import increment_counter
 
 from ....core.AuthNZ.User_DB_Handling import User, get_request_user
 from ....core.Chatbooks.chatbook_models import ContentType, ExportJob, ExportStatus
+from ....core.Chatbooks.exceptions import JobError
 from ....core.Chatbooks.chatbook_service import ChatbookService
 from ....core.Chatbooks.chatbook_validators import ChatbookValidator
 from ....core.Chatbooks.quota_manager import QuotaManager
@@ -726,6 +727,9 @@ async def preview_chatbook(
                 total_notes=manifest.total_notes,
                 total_characters=manifest.total_characters,
                 total_media_items=manifest.total_media_items,
+                total_prompts=manifest.total_prompts,
+                total_evaluations=manifest.total_evaluations,
+                total_embeddings=manifest.total_embeddings,
                 total_world_books=manifest.total_world_books,
                 total_dictionaries=manifest.total_dictionaries,
                 total_documents=manifest.total_documents,
@@ -1287,6 +1291,8 @@ async def cancel_export_job(
 
     except HTTPException:
         raise
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error cancelling export job {job_id} for user {user.id}")
         raise HTTPException(
@@ -1343,6 +1349,8 @@ async def cancel_import_job(
 
     except HTTPException:
         raise
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error cancelling import job {job_id} for user {user.id}")
         raise HTTPException(
@@ -1392,6 +1400,8 @@ async def remove_export_job(
         )
     except HTTPException:
         raise
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error removing export job {job_id} for user {user.id}")
         raise HTTPException(
@@ -1441,6 +1451,8 @@ async def remove_import_job(
         )
     except HTTPException:
         raise
+    except JobError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error removing import job {job_id} for user {user.id}")
         raise HTTPException(

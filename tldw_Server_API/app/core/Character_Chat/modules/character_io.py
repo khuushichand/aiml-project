@@ -56,6 +56,11 @@ _CHARACTER_IO_NONCRITICAL_EXCEPTIONS = (
     zlib.error,
     yaml.YAMLError,
 )
+_CHARACTER_IO_IMPORT_FAILURE_EXCEPTIONS = (
+    CharactersRAGDBError,
+    ConflictError,
+    InputError,
+) + _CHARACTER_IO_NONCRITICAL_EXCEPTIONS
 
 MAX_IMPORT_AVATAR_BYTES = 200 * 1024
 ALLOWED_IMPORT_IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
@@ -1347,12 +1352,15 @@ def load_chat_history_from_file_and_save_to_db(
                 logger.info("Chat history import completed but contained no valid messages.")
 
             return conversation_id, character_id
-        except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS:
+        except _CHARACTER_IO_IMPORT_FAILURE_EXCEPTIONS:
             _cleanup_failed_import()
             raise
 
     except DatabaseCountError:
         raise
+    except (CharactersRAGDBError, ConflictError, InputError) as exc:
+        logger.error("Error loading chat history: {}", exc, exc_info=True)
+        return None, None
     except _CHARACTER_IO_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Error loading chat history: {}", exc, exc_info=True)
         return None, None

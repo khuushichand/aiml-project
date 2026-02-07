@@ -191,12 +191,25 @@ class IdempotencyManager:
 
     def __init__(self) -> None:
         self._local_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._local_bindings: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._local_locks: dict[str, asyncio.Lock] = {}
         self._local_guard = asyncio.Lock()
         self._redis_client: Any | None = None
         self._redis_ready = False
         self._redis_attempted = False
         self._redis_guard = asyncio.Lock()
+
+    def _prune_local_locks(self) -> None:
+        """Drop stale local locks once their cache/binding entries are gone."""
+        active_keys = set(self._local_cache.keys()) | set(self._local_bindings.keys())
+        stale_keys = [
+            key
+            for key, lock in self._local_locks.items()
+            if key not in active_keys and not lock.locked()
+        ]
+        for key in stale_keys:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_locks[key]
 
     async def _ensure_redis(self) -> bool:
         if self._redis_attempted:
@@ -237,6 +250,7 @@ class IdempotencyManager:
         if time.time() - ts > ttl:
             with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                 del self._local_cache[cache_key]
+            self._prune_local_locks()
             return None
         with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
             self._local_cache.move_to_end(cache_key)
@@ -258,6 +272,37 @@ class IdempotencyManager:
                 self._local_cache.popitem(last=False)
             except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
                 break
+        self._prune_local_locks()
+
+    def _local_get_binding(self, binding_key: str, ttl: int) -> Optional[str]:
+        item = self._local_bindings.get(binding_key)
+        if not item:
+            return None
+        ts, arguments_hash = item
+        if time.time() - ts > ttl:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_bindings[binding_key]
+            self._prune_local_locks()
+            return None
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_bindings.move_to_end(binding_key)
+        return arguments_hash
+
+    def _local_put_binding(self, binding_key: str, arguments_hash: str, ttl: int, max_size: int) -> None:
+        now = time.time()
+        self._local_bindings[binding_key] = (now, arguments_hash)
+        with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+            self._local_bindings.move_to_end(binding_key)
+        expired = [k for k, (ts, _) in self._local_bindings.items() if now - ts > ttl]
+        for k in expired:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                del self._local_bindings[k]
+        while len(self._local_bindings) > max_size:
+            try:
+                self._local_bindings.popitem(last=False)
+            except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS:
+                break
+        self._prune_local_locks()
 
     async def _get_local_lock(self, cache_key: str) -> asyncio.Lock:
         async with self._local_guard:
@@ -292,6 +337,26 @@ class IdempotencyManager:
         with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
             await client.eval(lua_script, 1, key, token)
 
+    async def _redis_bind_arguments(self, client: Any, key: str, arguments_hash: str, ttl: int) -> bool:
+        binding_key = f"mcp:idemp:args:{key}"
+        created = await client.set(binding_key, arguments_hash, nx=True, ex=ttl)
+        if created:
+            return True
+        existing = await client.get(binding_key)
+        if existing is None:
+            # Key may have expired between checks; retry once.
+            created = await client.set(binding_key, arguments_hash, nx=True, ex=ttl)
+            if created:
+                return True
+            existing = await client.get(binding_key)
+        if existing is None:
+            return True
+        if existing == arguments_hash:
+            with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
+                await client.expire(binding_key, ttl)
+            return True
+        return False
+
     async def _run_local(
         self,
         cache_key: str,
@@ -306,15 +371,19 @@ class IdempotencyManager:
             return cached, True
 
         lock = await self._get_local_lock(cache_key)
-        async with lock:
+        try:
+            async with lock:
+                async with self._local_guard:
+                    cached = self._local_get(cache_key, ttl)
+                if cached is not None:
+                    return cached, True
+                result = await execute_fn()
+                async with self._local_guard:
+                    self._local_put(cache_key, result, ttl, max_size)
+                return result, False
+        finally:
             async with self._local_guard:
-                cached = self._local_get(cache_key, ttl)
-            if cached is not None:
-                return cached, True
-            result = await execute_fn()
-            async with self._local_guard:
-                self._local_put(cache_key, result, ttl, max_size)
-            return result, False
+                self._prune_local_locks()
 
     async def _run_redis(
         self,
@@ -374,6 +443,36 @@ class IdempotencyManager:
                 )
                 self._redis_ready = False
         return await self._run_local(cache_key, execute_fn, ttl=ttl, max_size=max_size)
+
+    async def bind_arguments(
+        self,
+        cache_key: str,
+        arguments_hash: str,
+        *,
+        ttl: int,
+        max_size: int,
+    ) -> bool:
+        if await self._ensure_redis():
+            try:
+                client = self._redis_client
+                if client is not None:
+                    return await self._redis_bind_arguments(client, cache_key, arguments_hash, ttl)
+            except RedisError as exc:
+                logger.warning(
+                    "MCP idempotency binding Redis path failed; falling back to local cache. Error: {}",
+                    _redact_redis_error(exc),
+                )
+                self._redis_ready = False
+
+        async with self._local_guard:
+            existing = self._local_get_binding(cache_key, ttl)
+            if existing is None:
+                self._local_put_binding(cache_key, arguments_hash, ttl, max_size)
+                return True
+            if existing != arguments_hash:
+                return False
+            self._local_put_binding(cache_key, arguments_hash, ttl, max_size)
+            return True
 
 
 class MCPProtocol:
@@ -1287,10 +1386,20 @@ class MCPProtocol:
         tool_name = params.get("name")
         tool_args = params.get("arguments", {})
         # Accept both camelCase and snake_case for idempotency
-        idempotency_key = params.get("idempotencyKey") or params.get("idempotency_key")
+        raw_idempotency_key = params.get("idempotencyKey")
+        if raw_idempotency_key is None:
+            raw_idempotency_key = params.get("idempotency_key")
+        idempotency_key: Optional[str] = None
 
         if not tool_name:
             raise InvalidParamsException("Tool name is required")
+
+        if raw_idempotency_key is not None:
+            if not isinstance(raw_idempotency_key, str):
+                raise InvalidParamsException("idempotencyKey must be a string")
+            idempotency_key = raw_idempotency_key.strip()
+            if not idempotency_key:
+                raise InvalidParamsException("idempotencyKey must not be empty")
 
         # Strictly validate tool name
         if not self._tool_name_re.match(tool_name):
@@ -1421,7 +1530,7 @@ class MCPProtocol:
                     raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
 
                 idempotency_cache_key = None
-                if isinstance(idempotency_key, str) and idempotency_key:
+                if idempotency_key:
                     idempotency_cache_key = self._make_idempotency_cache_key(
                         context, module_id or getattr(module, "name", "unknown"), tool_name, idempotency_key
                     )
@@ -1429,6 +1538,8 @@ class MCPProtocol:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
             # by raising a sentinel exception handled by process_request
             raise InvalidParamsException(str(ve))
+
+        args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
 
         async def _execute_tool_call() -> dict[str, Any]:
             # Optional per-tool/category rate limits (ingestion vs read)
@@ -1466,7 +1577,6 @@ class MCPProtocol:
 
             # Execute tool with circuit breaker (pass context through)
             t0 = time.time()
-            args_hash = self._hash_arguments(tool_args if isinstance(tool_args, dict) else {})
 
             try:
                 # Trace the tool call with OTEL
@@ -1547,6 +1657,16 @@ class MCPProtocol:
             cfg = get_config()
             ttl = max(1, int(getattr(cfg, "idempotency_ttl_seconds", 300)))
             max_size = max(1, int(getattr(cfg, "idempotency_cache_size", 512)))
+            if args_hash is None:
+                raise InvalidParamsException("Unable to fingerprint tool arguments for idempotency")
+            arguments_bound = await self._idempotency.bind_arguments(
+                idempotency_cache_key,
+                args_hash,
+                ttl=ttl,
+                max_size=max_size,
+            )
+            if not arguments_bound:
+                raise InvalidParamsException("Idempotency key was already used with different arguments")
             module_timeout = int(getattr(getattr(module, "config", None), "timeout_seconds", cfg.module_timeout))
             lock_ttl = max(ttl, module_timeout * 2)
             payload, from_cache = await self._idempotency.run(

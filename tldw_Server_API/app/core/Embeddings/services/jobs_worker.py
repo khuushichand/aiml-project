@@ -52,9 +52,10 @@ from tldw_Server_API.app.core.DB_Management.db_path_utils import (
     get_user_media_db_path,
 )
 from tldw_Server_API.app.core.DB_Management.Kanban_DB import _kanban_card_indexable
-from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import store_in_chroma
+from tldw_Server_API.app.core.Embeddings.ChromaDB_Library import ChromaDBManager
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Jobs.worker_sdk import WorkerConfig, WorkerSDK
+from tldw_Server_API.app.core.config import settings
 
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
@@ -282,6 +283,15 @@ def _config_version(
             str(chunk_overlap or ""),
         ]
     )
+
+
+def _embedding_config_for_user() -> dict[str, Any]:
+    cfg = settings.get("EMBEDDING_CONFIG", {}).copy()
+    user_db_base_dir = settings.get("USER_DB_BASE_DIR")
+    if not user_db_base_dir:
+        user_db_base_dir = str(DatabasePaths.get_user_db_base_dir())
+    cfg["USER_DB_BASE_DIR"] = user_db_base_dir
+    return cfg
 
 
 def _stage_idempotency_key(media_id: int, stage: str, version: str) -> str:
@@ -581,11 +591,10 @@ async def _handle_storage_job(
         stored = _read_json(storage_path)
         if isinstance(stored, dict):
             return stored
-        return {
-            "embedding_count": stored.get("embedding_count") if isinstance(stored, dict) else None,
-            "chunks_processed": stored.get("chunks_processed") if isinstance(stored, dict) else None,
-            "idempotent": True,
-        }
+        raise EmbeddingsJobError(
+            "Storage artifact invalid for idempotent reuse",
+            retryable=False,
+        )
 
     if not chunks_path.exists() or not embeddings_path.exists():
         raise EmbeddingsJobError("Embeddings artifacts missing for storage stage", retryable=False)
@@ -643,12 +652,17 @@ async def _handle_storage_job(
         metadatas.append(metadata)
 
     ids = [f"media_{media_id}_chunk_{i}" for i in range(len(chunks))]
-    store_in_chroma(
+    manager = ChromaDBManager(
+        user_id=str(user_id),
+        user_embedding_config=_embedding_config_for_user(),
+    )
+    manager.store_in_chroma(
+        collection_name=f"user_{user_id}_media_embeddings",
         texts=chunk_texts,
         embeddings=embeddings,
         ids=ids,
         metadatas=metadatas,
-        collection_name=f"user_{user_id}_media_embeddings",
+        embedding_model_id_for_dim_check=embedding_model,
     )
 
     try:
@@ -866,12 +880,17 @@ async def _handle_custom_content_job(
     metadata["embedding_model"] = embedding_model
     metadata["embedding_provider"] = embedding_provider
 
-    store_in_chroma(
+    manager = ChromaDBManager(
+        user_id=str(user_id),
+        user_embedding_config=_embedding_config_for_user(),
+    )
+    manager.store_in_chroma(
+        collection_name=str(collection_name),
         texts=[str(raw_content)],
         embeddings=embeddings_list,
         ids=[str(document_id)],
         metadatas=[metadata],
-        collection_name=str(collection_name),
+        embedding_model_id_for_dim_check=embedding_model,
     )
 
     try:

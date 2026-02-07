@@ -1294,18 +1294,22 @@ class SessionManager:
     async def revoke_all_user_sessions(
         self,
         user_id: int,
-        except_session_id: Optional[int] = None
-    ):
+        except_session_id: Optional[int] = None,
+        reason: str = "User requested logout from all devices",
+    ) -> int:
         """Revoke all sessions for a user, optionally except one"""
         if not self._initialized:
             await self.initialize()
 
+        affected = 0
         try:
             db_pool = await self._ensure_db_pool()
             repo = AuthnzSessionsRepo(db_pool)
-            await repo.revoke_all_sessions_for_user(
-                user_id=user_id,
-                except_session_id=except_session_id,
+            affected = int(
+                await repo.revoke_all_sessions_for_user(
+                    user_id=user_id,
+                    except_session_id=except_session_id,
+                )
             )
 
             # Clear from cache
@@ -1324,12 +1328,14 @@ class SessionManager:
         # After sessions are marked revoked, ensure associated JTIs are blacklisted
         try:
             blacklist = get_token_blacklist()
-            await blacklist.revoke_all_user_tokens(user_id)
+            await blacklist.revoke_all_user_tokens(user_id, reason=reason)
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as bl_error:
             if self.settings.PII_REDACT_LOGS:
                 logger.warning(f"Failed to blacklist tokens for authenticated user (details redacted): {bl_error}")
             else:
                 logger.warning(f"Failed to blacklist tokens for user {user_id}: {bl_error}")
+
+        return affected
 
     async def refresh_session(
         self,
@@ -1368,6 +1374,10 @@ class SessionManager:
             )
             if not session_data:
                 raise InvalidSessionError()
+            expected_access_hash = session_data.get("token_hash")
+            expected_refresh_hash = session_data.get("refresh_token_hash")
+            if not expected_access_hash or not expected_refresh_hash:
+                raise InvalidSessionError()
 
             # Validate token subject/session binding before updating session records.
             try:
@@ -1390,8 +1400,10 @@ class SessionManager:
                 encrypted_refresh_token = self.encrypt_token(refresh_token)
 
             # Update session with new tokens
-            await repo.update_session_tokens_for_refresh(
+            updated = await repo.update_session_tokens_for_refresh(
                 session_id=session_data["id"],
+                expected_access_hash=expected_access_hash,
+                expected_refresh_hash=expected_refresh_hash,
                 new_access_hash=new_access_hash,
                 access_jti=access_jti,
                 expires_at=expires_at,
@@ -1401,6 +1413,9 @@ class SessionManager:
                 refresh_expires_at=refresh_expires_at,
                 encrypted_refresh_token=encrypted_refresh_token,
             )
+            if not updated:
+                # Compare-and-swap failed: session was refreshed/revoked/expired concurrently.
+                raise InvalidSessionError()
 
             # Update cache
             if self.redis_client:

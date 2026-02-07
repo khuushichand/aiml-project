@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections import deque
 from contextlib import contextmanager, suppress
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -21,12 +22,16 @@ _BUFFER_LOCK = Lock()
 _SINK_ID: int | None = None
 
 _DEFAULT_LOG_FILE_ENTRIES = 5000
+_DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES = 250
 _LOG_FILE_SETTINGS_LOCK = Lock()
 _LOG_FILE_SETTINGS_INITIALIZED = False
 _LOG_FILE_MAX_ENTRIES = _DEFAULT_LOG_FILE_ENTRIES
+_LOG_FILE_COMPACT_EVERY_WRITES = _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
+_LOG_FILE_APPENDS_SINCE_COMPACT = 0
 _LOG_FILE_ENABLED = True
 _LOG_FILE_PATH = Path(get_database_dir()) / "system_logs.jsonl"
 _LOG_FILE_LOCK_TIMEOUT = 5.0
+_LOG_FILE_COMPACTION_COUNTER_LOCK = Lock()
 
 try:
     import fcntl  # type: ignore
@@ -76,6 +81,8 @@ def _extract_extra(extra: dict[str, Any]) -> dict[str, Any]:
 
 def _init_log_file_settings() -> None:
     global _LOG_FILE_MAX_ENTRIES
+    global _LOG_FILE_COMPACT_EVERY_WRITES
+    global _LOG_FILE_APPENDS_SINCE_COMPACT
     global _LOG_FILE_ENABLED
     global _LOG_FILE_PATH
     global _LOG_FILE_LOCK_TIMEOUT
@@ -90,11 +97,13 @@ def _init_log_file_settings() -> None:
         env_enabled = os.getenv("SYSTEM_LOG_FILE_ENABLED")
         env_path = os.getenv("SYSTEM_LOG_FILE_PATH")
         env_max_entries = os.getenv("SYSTEM_LOG_FILE_MAX_ENTRIES")
+        env_compact_every = os.getenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES")
         env_lock_timeout = os.getenv("SYSTEM_LOG_FILE_LOCK_TIMEOUT")
 
         config_path = None
         config_max_entries = None
-        if env_path is None or env_max_entries is None:
+        config_compact_every = None
+        if env_path is None or env_max_entries is None or env_compact_every is None:
             try:
                 from tldw_Server_API.app.core.config import load_comprehensive_config
 
@@ -104,6 +113,12 @@ def _init_log_file_settings() -> None:
                         config_path = parser.get("Logging", "system_log_file_path", fallback=None)
                     if env_max_entries is None:
                         config_max_entries = parser.get("Logging", "system_log_file_max_entries", fallback=None)
+                    if env_compact_every is None:
+                        config_compact_every = parser.get(
+                            "Logging",
+                            "system_log_file_compact_every_writes",
+                            fallback=None,
+                        )
             except Exception as exc:
                 logger.debug("System log settings config read failed: {}", exc)
 
@@ -118,6 +133,17 @@ def _init_log_file_settings() -> None:
             max_entries = _DEFAULT_LOG_FILE_ENTRIES
         _LOG_FILE_MAX_ENTRIES = max(100, max_entries)
 
+        compact_raw = env_compact_every if env_compact_every is not None else config_compact_every
+        try:
+            compact_every = int(str(compact_raw).strip()) if compact_raw else _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
+        except (TypeError, ValueError):
+            compact_every = _DEFAULT_LOG_FILE_COMPACT_EVERY_WRITES
+        compact_every = max(1, compact_every)
+        if _LOG_FILE_MAX_ENTRIES > 0:
+            compact_every = min(compact_every, _LOG_FILE_MAX_ENTRIES)
+        _LOG_FILE_COMPACT_EVERY_WRITES = compact_every
+        _LOG_FILE_APPENDS_SINCE_COMPACT = 0
+
         if env_lock_timeout:
             try:
                 _LOG_FILE_LOCK_TIMEOUT = float(env_lock_timeout)
@@ -128,8 +154,9 @@ def _init_log_file_settings() -> None:
 
 
 @contextmanager
-def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
+def _log_file_lock(timeout: float | None = None):
     _init_log_file_settings()
+    timeout_seconds = _LOG_FILE_LOCK_TIMEOUT if timeout is None else max(0.0, float(timeout))
     lock_path = _LOG_FILE_PATH.with_suffix(_LOG_FILE_PATH.suffix + ".lock")
     lock_fd = None
     try:
@@ -142,8 +169,8 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                     fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except OSError:
-                    if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                    if time.time() - start_time > timeout_seconds:
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout_seconds}s")
                     time.sleep(0.05)
         else:
             while True:
@@ -153,13 +180,13 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                 except FileExistsError:
                     try:
                         lock_stat = os.stat(lock_path)
-                        if time.time() - lock_stat.st_mtime > timeout * 2:
+                        if time.time() - lock_stat.st_mtime > timeout_seconds * 2:
                             os.unlink(lock_path)
                             continue
                     except (OSError, FileNotFoundError):
                         pass
-                    if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                    if time.time() - start_time > timeout_seconds:
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout_seconds}s")
                     time.sleep(0.05)
         yield
     finally:
@@ -186,6 +213,58 @@ def _coerce_timestamp(value: Any) -> datetime | None:
     return None
 
 
+def _normalize_timestamp(value: Any) -> datetime | None:
+    timestamp = _coerce_timestamp(value)
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def _emit_internal_diagnostic(message: str) -> None:
+    # Must not use Loguru here: this function is called from inside a Loguru sink.
+    with suppress(Exception):
+        stream = sys.__stderr__ or sys.stderr
+        stream.write(message.rstrip() + "\n")
+
+
+def _sort_timestamp_value(entry: dict[str, Any]) -> float:
+    timestamp = _normalize_timestamp(entry.get("timestamp"))
+    if timestamp is None:
+        return float("-inf")
+    return timestamp.timestamp()
+
+
+def _should_compact_after_append() -> bool:
+    if _LOG_FILE_MAX_ENTRIES <= 0:
+        return False
+    if _LOG_FILE_COMPACT_EVERY_WRITES <= 1:
+        return True
+    global _LOG_FILE_APPENDS_SINCE_COMPACT
+    with _LOG_FILE_COMPACTION_COUNTER_LOCK:
+        _LOG_FILE_APPENDS_SINCE_COMPACT += 1
+        if _LOG_FILE_APPENDS_SINCE_COMPACT < _LOG_FILE_COMPACT_EVERY_WRITES:
+            return False
+        _LOG_FILE_APPENDS_SINCE_COMPACT = 0
+    return True
+
+
+def _compact_log_file_locked() -> None:
+    if _LOG_FILE_MAX_ENTRIES <= 0:
+        return
+    try:
+        lines = _LOG_FILE_PATH.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return
+    if len(lines) <= _LOG_FILE_MAX_ENTRIES:
+        return
+    trimmed = lines[-_LOG_FILE_MAX_ENTRIES:]
+    tmp_path = _LOG_FILE_PATH.with_suffix(_LOG_FILE_PATH.suffix + ".tmp")
+    tmp_path.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
+    tmp_path.replace(_LOG_FILE_PATH)
+
+
 def _append_log_file(entry: dict[str, Any]) -> None:
     _init_log_file_settings()
     if not _LOG_FILE_ENABLED:
@@ -199,18 +278,10 @@ def _append_log_file(entry: dict[str, Any]) -> None:
         with _log_file_lock():
             with _LOG_FILE_PATH.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
-            if _LOG_FILE_MAX_ENTRIES > 0:
-                try:
-                    lines = _LOG_FILE_PATH.read_text(encoding="utf-8").splitlines()
-                except FileNotFoundError:
-                    return
-                if len(lines) > _LOG_FILE_MAX_ENTRIES:
-                    trimmed = lines[-_LOG_FILE_MAX_ENTRIES:]
-                    tmp_path = _LOG_FILE_PATH.with_suffix(_LOG_FILE_PATH.suffix + ".tmp")
-                    tmp_path.write_text("\n".join(trimmed) + "\n", encoding="utf-8")
-                    tmp_path.replace(_LOG_FILE_PATH)
+            if _should_compact_after_append():
+                _compact_log_file_locked()
     except Exception as exc:
-        logger.debug("Failed to append system log file: {}", exc)
+        _emit_internal_diagnostic(f"system_log_buffer append failed: {exc}")
 
 
 def _read_log_file_entries() -> list[dict[str, Any]]:
@@ -235,7 +306,7 @@ def _read_log_file_entries() -> list[dict[str, Any]]:
             continue
         if not isinstance(entry, dict):
             continue
-        timestamp = _coerce_timestamp(entry.get("timestamp"))
+        timestamp = _normalize_timestamp(entry.get("timestamp"))
         if timestamp is not None:
             entry["timestamp"] = timestamp
         entries.append(entry)
@@ -311,6 +382,8 @@ def query_system_logs(
     offset: int = 0,
 ) -> tuple[list[dict[str, Any]], int]:
     ensure_system_log_buffer()
+    start_norm = _normalize_timestamp(start)
+    end_norm = _normalize_timestamp(end)
     level_norm = level.strip().upper() if level else None
     service_norm = service.strip().lower() if service else None
     query_norm = query.strip().lower() if query else None
@@ -323,11 +396,11 @@ def query_system_logs(
     filtered: list[dict[str, Any]] = []
     org_id_set = {org_id} if org_id is not None else set(org_ids or [])
     for entry in entries:
-        timestamp = _coerce_timestamp(entry.get("timestamp"))
+        timestamp = _normalize_timestamp(entry.get("timestamp"))
         if timestamp:
-            if start and timestamp < start:
+            if start_norm and timestamp < start_norm:
                 continue
-            if end and timestamp > end:
+            if end_norm and timestamp > end_norm:
                 continue
         if level_norm and (entry.get("level") or "").upper() != level_norm:
             continue
@@ -342,11 +415,11 @@ def query_system_logs(
             continue
         if user_id is not None and entry.get("user_id") != user_id:
             continue
-        if timestamp and not isinstance(entry.get("timestamp"), datetime):
+        if timestamp:
             entry["timestamp"] = timestamp
         filtered.append(entry)
 
-    filtered.sort(key=lambda item: item.get("timestamp") or datetime.min, reverse=True)
+    filtered.sort(key=_sort_timestamp_value, reverse=True)
     total = len(filtered)
     safe_offset = max(0, offset)
     safe_limit = max(1, limit)

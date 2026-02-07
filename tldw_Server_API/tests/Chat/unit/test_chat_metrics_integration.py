@@ -63,6 +63,23 @@ class TestChatMetricsCollector:
         assert collector.active_requests == 0
 
     @pytest.mark.asyncio
+    async def test_track_request_clamps_after_external_reset(self):
+        """Active request count should never go negative after a reset."""
+        collector = ChatMetricsCollector()
+
+        async with collector.track_request(
+            provider="openai",
+            model="gpt-4",
+            streaming=False,
+            client_id="test_client"
+        ):
+            assert collector.active_requests == 1
+            collector.reset_active_metrics()
+            assert collector.active_requests == 0
+
+        assert collector.active_requests == 0
+
+    @pytest.mark.asyncio
     async def test_track_streaming(self):
         """Test streaming response tracking."""
         collector = ChatMetricsCollector()

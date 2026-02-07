@@ -49,6 +49,28 @@ from tldw_Server_API.app.core.Utils.Utils import logging
 
 from .base import ChatProvider, apply_tool_choice
 
+_LOCAL_HTTP_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+try:
+    import httpx as _local_httpx  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _local_httpx = None
+else:  # pragma: no cover - imported in runtime when available
+    _LOCAL_HTTP_EXCEPTIONS = _LOCAL_HTTP_EXCEPTIONS + (
+        _local_httpx.HTTPError,
+        _local_httpx.RequestError,
+        _local_httpx.HTTPStatusError,
+    )
+
+try:
+    import requests as _local_requests  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    _local_requests = None
+else:  # pragma: no cover - imported in runtime when available
+    _LOCAL_HTTP_EXCEPTIONS = _LOCAL_HTTP_EXCEPTIONS + (
+        _local_requests.exceptions.RequestException,
+        _local_requests.exceptions.HTTPError,
+    )
+
 _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
     asyncio.TimeoutError,
@@ -70,7 +92,7 @@ _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS = (
     ChatBadRequestError,
     ChatConfigurationError,
     ChatProviderError,
-)
+) + _LOCAL_HTTP_EXCEPTIONS
 
 
 def _extract_text_from_message_content(content: str | list[dict[str, Any]], provider_name: str, msg_index: int) -> str:
@@ -340,7 +362,14 @@ def _chat_with_openai_compatible_local_server(
                 base_ms = max(50, int(api_retry_delay * 1000))
                 policy = _HC_RetryPolicy(attempts=attempts, backoff_base_ms=base_ms)
                 fetch_impl = http_fetcher or _hc_fetch
-                response = fetch_impl(method="POST", url=full_api_url, headers=headers, json=payload, retry=policy)
+                response = fetch_impl(
+                    method="POST",
+                    url=full_api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                    retry=policy,
+                )
                 try:
                     response.raise_for_status()
                     data = response.json()

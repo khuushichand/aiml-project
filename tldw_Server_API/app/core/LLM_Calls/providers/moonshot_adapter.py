@@ -53,8 +53,11 @@ def _moonshot_request(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, Any] | None = None,
     base_url: str | None = None,
+    timeout: float | None = None,
 ):
-    loaded_config_data = app_config or load_and_log_configs()
+    loaded_config_data = app_config or load_and_log_configs() or {}
+    if not isinstance(loaded_config_data, dict):
+        loaded_config_data = {}
     moonshot_config = loaded_config_data.get("moonshot_api", {})
 
     final_api_key = api_key or moonshot_config.get("api_key")
@@ -186,6 +189,9 @@ def _moonshot_request(
     payload = merge_extra_body(payload, {"extra_body": extra_body})
     payload_metadata = _sanitize_payload_for_logging(payload)
     logging.debug(f"Moonshot request metadata: {payload_metadata}")
+    configured_timeout = _safe_cast(moonshot_config.get("api_timeout"), float, 90.0)
+    request_timeout = _safe_cast(timeout, float) if timeout is not None else None
+    effective_timeout = request_timeout if request_timeout is not None else configured_timeout
 
     try:
         if final_streaming:
@@ -197,9 +203,8 @@ def _moonshot_request(
                 status_forcelist=[429, 500, 502, 503, 504],
                 allowed_methods=["POST"],
             )
-            stream_timeout = _safe_cast(moonshot_config.get("api_timeout"), float, 90.0)
             try:
-                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=stream_timeout)
+                response = session.post(api_url, headers=headers, json=payload, stream=True, timeout=effective_timeout)
                 response.raise_for_status()
             except Exception:
                 session.close()
@@ -224,7 +229,7 @@ def _moonshot_request(
             allowed_methods=["POST"],
         )
         try:
-            response = session.post(api_url, headers=headers, json=payload, timeout=120)
+            response = session.post(api_url, headers=headers, json=payload, timeout=effective_timeout)
             logging.debug(f"Moonshot: Full API response status: {response.status_code}")
             response.raise_for_status()
             try:
@@ -295,8 +300,12 @@ class MoonshotAdapter(ChatProvider):
 
     def chat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         sanitized = validate_payload(self.name, request or {})
-        return _moonshot_request(**self._to_handler_args(sanitized, streaming=False))
+        handler_args = self._to_handler_args(sanitized, streaming=False)
+        handler_args["timeout"] = timeout
+        return _moonshot_request(**handler_args)
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         sanitized = validate_payload(self.name, request or {})
-        return _moonshot_request(**self._to_handler_args(sanitized, streaming=True))
+        handler_args = self._to_handler_args(sanitized, streaming=True)
+        handler_args["timeout"] = timeout
+        return _moonshot_request(**handler_args)

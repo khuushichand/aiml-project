@@ -11,6 +11,7 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_auth import (
     create_error_response,
     get_eval_request_user,
+    require_eval_permissions,
     sanitize_error_message,
     verify_api_key,
 )
@@ -20,6 +21,7 @@ from tldw_Server_API.app.api.v1.schemas.evaluation_schemas_unified import (
     DatasetResponse,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User
+from tldw_Server_API.app.core.AuthNZ.permissions import EVALS_MANAGE, EVALS_READ
 from tldw_Server_API.app.core.Evaluations.unified_evaluation_service import (
     _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS,
     get_unified_evaluation_service_for_user,
@@ -59,7 +61,12 @@ def _normalize_dataset_payload(dataset: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-@datasets_router.post("/datasets", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
+@datasets_router.post(
+    "/datasets",
+    response_model=DatasetResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
+)
 async def create_dataset(
     dataset_request: CreateDatasetRequest,
     user_id: str = Depends(verify_api_key),
@@ -109,7 +116,11 @@ async def create_dataset(
         )
 
 
-@datasets_router.get("/datasets", response_model=DatasetListResponse)
+@datasets_router.get(
+    "/datasets",
+    response_model=DatasetListResponse,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
 async def list_datasets(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
@@ -133,7 +144,11 @@ async def list_datasets(
         )
 
 
-@datasets_router.get("/datasets/{dataset_id}", response_model=DatasetResponse)
+@datasets_router.get(
+    "/datasets/{dataset_id}",
+    response_model=DatasetResponse,
+    dependencies=[Depends(require_eval_permissions(EVALS_READ))],
+)
 async def get_dataset(
     dataset_id: str,
     user_id: str = Depends(verify_api_key),
@@ -165,6 +180,7 @@ async def get_dataset(
     "/datasets/{dataset_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
+    dependencies=[Depends(require_eval_permissions(EVALS_MANAGE))],
 )
 async def delete_dataset(
     dataset_id: str,

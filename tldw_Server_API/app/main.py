@@ -1247,6 +1247,17 @@ async def lifespan(app: FastAPI):
         None: Yields once to allow the application to run; when resumed performs orderly shutdown and resource cleanup.
     """
     _startup_trace("lifespan: entered")
+    # Security hard-stop: test-mode flags must only be active during explicit
+    # pytest runtime (PYTEST_CURRENT_TEST).
+    try:
+        from tldw_Server_API.app.core.testing import validate_test_runtime_flags
+
+        validate_test_runtime_flags()
+    except RuntimeError as _test_guard_err:
+        logger.critical(f"Startup aborted due to unsafe test-mode flags: {_test_guard_err}")
+        raise
+    except _IMPORT_EXCEPTIONS as _test_guard_import_err:
+        logger.debug(f"Test-mode runtime guard import skipped: {_test_guard_import_err}")
     # Ensure in-process restarts (common in tests) reset readiness and job acquisition gates.
     # In production, the process typically exits after shutdown; in tests we reuse the app object.
     try:
@@ -1613,6 +1624,13 @@ async def lifespan(app: FastAPI):
                 )
         except _IMPORT_EXCEPTIONS as _rg_warn_err:
             logger.debug(f"ResourceGovernor init warning skipped: {_rg_warn_err}")
+
+        # Production hard-stop: require RG coverage/availability for auth endpoints.
+        from tldw_Server_API.app.core.AuthNZ.rg_startup_guard import (
+            validate_auth_rg_startup_guards,
+        )
+
+        validate_auth_rg_startup_guards(app)
 
         # Initialize session manager
         from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
@@ -5011,10 +5029,10 @@ elif _MINIMAL_TEST_APP:
         logger.debug(f"Skipping scheduler workflows router in minimal test app: {_sch_min_err}")
     # Evaluations endpoints for abtest tests
     try:
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
 
         app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-        from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import abtest_router as _abtest_router
+        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import abtest_router as _abtest_router
 
         app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
     except _IMPORT_EXCEPTIONS as _evals_min_err:
@@ -5344,10 +5362,10 @@ else:
     # Heavy routers: import only when enabled to avoid import-time side effects
     try:
         if route_enabled("evaluations"):
-            from tldw_Server_API.app.api.v1.endpoints.evaluations_unified import router as _evaluations_router
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
 
             app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-            from tldw_Server_API.app.api.v1.endpoints.evaluations_embeddings_abtest import (
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import (
                 abtest_router as _abtest_router,
             )
 

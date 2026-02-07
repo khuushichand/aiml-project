@@ -77,10 +77,13 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
+from tldw_Server_API.app.core.Resource_Governance.governor import MemoryResourceGovernor, RGRequest
+from tldw_Server_API.app.core.Resource_Governance.policy_loader import default_policy_loader
+from tldw_Server_API.app.core.Resource_Governance.tenant import hash_entity
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.services.auth_service import (
     fetch_active_user_by_id,
@@ -128,6 +131,19 @@ router = APIRouter(
     tags=["authentication"],
     responses={404: {"description": "Not found"}}
 )
+_AUTH_ENDPOINT_RG_LOCK: Optional[asyncio.Lock] = None
+
+_AUTH_RG_FALLBACK_LIMITS: dict[str, tuple[int, int]] = {
+    # policy_id -> (limit, window_minutes)
+    "authnz.default": (60, 1),
+    "authnz.forgot_password": (10, 1),
+    "authnz.reset_password": (4, 1),
+    "authnz.resend_verification": (10, 1),
+    "authnz.magic_link.request": (10, 1),
+    "authnz.magic_link.email": (3, 10),
+    "authnz.mfa.verify": (10, 1),
+    "authnz.mfa.login": (10, 1),
+}
 
 def _extract_bearer_token(auth_header: Optional[str]) -> str:
     """Parse Authorization header and return Bearer token (case-insensitive)."""
@@ -223,6 +239,34 @@ def _normalize_magic_email(email: str) -> str:
     return str(email or "").strip().lower()
 
 
+def _current_user_value(user: Any, key: str, default: Any = None) -> Any:
+    """Read a user field from either dict-backed or attribute-backed user objects."""
+    if isinstance(user, dict):
+        return user.get(key, default)
+    return getattr(user, key, default)
+
+
+def _current_user_id(user: Any) -> Optional[int]:
+    raw = _current_user_value(user, "id", None)
+    if raw is None:
+        raw = _current_user_value(user, "user_id", None)
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _current_user_username(user: Any) -> str:
+    username = _current_user_value(user, "username", None)
+    if username:
+        return str(username)
+    email = _current_user_value(user, "email", None)
+    if email:
+        return str(email).split("@", 1)[0]
+    uid = _current_user_id(user)
+    return f"user-{uid}" if uid is not None else "user"
+
+
 def _derive_username_from_email(email: str) -> str:
     local = email.split("@", 1)[0].strip().lower()
     local = re.sub(r"[^a-z0-9_-]+", "-", local).strip("-")
@@ -278,7 +322,8 @@ async def _ensure_user_org_membership(user_id: int, username: Optional[str] = No
         pool = await get_db_pool()
         repo = AuthnzOrgsTeamsRepo(db_pool=pool)
         await repo.add_org_member(org_id=org["id"], user_id=int(user_id), role="owner")
-    except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+    except Exception as exc:
+        # Best-effort bootstrap: org creation failures must not block login flows.
         logger.warning("Org bootstrap failed for user {}: {}", user_id, exc)
 
 def _is_pytest_context() -> bool:
@@ -293,6 +338,175 @@ def _is_pytest_context() -> bool:
     except _AUTH_NONCRITICAL_EXCEPTIONS:
         return False
     return False
+
+
+def _auth_request_client_ip(request: Request) -> str:
+    try:
+        settings = get_settings()
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        settings = None
+    try:
+        resolved = resolve_client_ip(request, settings)
+        if resolved:
+            return str(resolved)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        pass
+    try:
+        return request.client.host if request.client else "unknown"
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        return "unknown"
+
+
+def _auth_hashed_entity(raw_value: str) -> str:
+    try:
+        return hash_entity(raw_value)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        return raw_value
+
+
+def _auth_rg_rate_limits_enabled() -> bool:
+    try:
+        return bool(get_settings().RATE_LIMIT_ENABLED)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        return True
+
+
+def _auth_rg_policy_defined(request: Request, policy_id: str, governor: Any) -> bool:
+    if not policy_id:
+        return False
+    loader = None
+    try:
+        loader = getattr(request.app.state, "rg_policy_loader", None)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        loader = None
+    if loader is None:
+        loader = getattr(governor, "_policy_loader", None)
+    if loader is None:
+        return True
+    try:
+        policy = loader.get_policy(policy_id)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        return True
+    return bool(policy)
+
+
+async def _get_auth_endpoint_rg_governor(request: Request) -> Optional[Any]:
+    try:
+        app = request.app
+        state = getattr(app, "state", None)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        app = None
+        state = None
+    if app is None or state is None:
+        return None
+
+    try:
+        governor = getattr(state, "rg_governor", None) or getattr(state, "auth_endpoint_rg_governor", None)
+    except _AUTH_NONCRITICAL_EXCEPTIONS:
+        governor = None
+    if governor is not None:
+        return governor
+
+    global _AUTH_ENDPOINT_RG_LOCK
+
+    if _AUTH_ENDPOINT_RG_LOCK is None:
+        _AUTH_ENDPOINT_RG_LOCK = asyncio.Lock()
+
+    async with _AUTH_ENDPOINT_RG_LOCK:
+        governor = getattr(state, "rg_governor", None) or getattr(state, "auth_endpoint_rg_governor", None)
+        if governor is not None:
+            return governor
+        try:
+            loader = getattr(state, "rg_policy_loader", None)
+            if loader is None:
+                loader = default_policy_loader()
+                await loader.load_once()
+                setattr(state, "rg_policy_loader", loader)
+            fallback = MemoryResourceGovernor(policy_loader=loader)
+            setattr(state, "auth_endpoint_rg_governor", fallback)
+            return fallback
+        except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+            logger.debug("Auth endpoint RG fallback governor init failed: {}", exc)
+            return None
+
+
+async def _reserve_auth_rg_requests(
+    request: Request,
+    *,
+    policy_id: str,
+    entity: Optional[str] = None,
+    tags: Optional[dict[str, str]] = None,
+    fail_open: bool = True,
+) -> tuple[bool, Optional[int]]:
+    if not _auth_rg_rate_limits_enabled():
+        return True, None
+
+    rg_entity = entity or f"ip:{_auth_request_client_ip(request)}"
+    fallback_limit, fallback_window = _AUTH_RG_FALLBACK_LIMITS.get(
+        policy_id,
+        _AUTH_RG_FALLBACK_LIMITS["authnz.default"],
+    )
+
+    async def _fallback_rate_limit(*, reason: str) -> tuple[bool, Optional[int]]:
+        limiter = get_rate_limiter()
+        allowed, meta = await limiter.check_rate_limit_fallback(
+            identifier=rg_entity,
+            endpoint=f"auth:{policy_id}",
+            limit=fallback_limit,
+            window_minutes=fallback_window,
+            fail_open=fail_open,
+        )
+        if allowed:
+            if reason:
+                logger.debug(
+                    "Auth endpoint fallback limiter allowed request for policy={} reason={}",
+                    policy_id,
+                    reason,
+                )
+            return True, None
+        retry_after = 1
+        if isinstance(meta, dict):
+            try:
+                retry_after = max(1, int(meta.get("retry_after", 1) or 1))
+            except _AUTH_NONCRITICAL_EXCEPTIONS:
+                retry_after = 1
+        return False, retry_after
+
+    governor = await _get_auth_endpoint_rg_governor(request)
+    if governor is None:
+        return await _fallback_rate_limit(reason="governor_unavailable")
+
+    if not _auth_rg_policy_defined(request, policy_id, governor):
+        logger.debug("Auth endpoint RG policy missing; using fallback limiter for policy_id={}", policy_id)
+        return await _fallback_rate_limit(reason="policy_missing")
+
+    op_id = f"auth-rg-{policy_id}-{time.time_ns()}"
+    metadata = {
+        "policy_id": policy_id,
+        "module": "auth",
+        "endpoint": str(getattr(getattr(request, "url", None), "path", "/auth")),
+    }
+    if tags:
+        metadata.update({str(k): str(v) for k, v in tags.items()})
+
+    try:
+        decision, handle_id = await governor.reserve(
+            RGRequest(
+                entity=rg_entity,
+                categories={"requests": {"units": 1}},
+                tags=metadata,
+            ),
+            op_id=op_id,
+        )
+        if handle_id:
+            with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
+                await governor.commit(handle_id, actuals={"requests": 1}, op_id=op_id)
+        if decision.allowed:
+            return True, None
+        return False, int(decision.retry_after or 1)
+    except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug("Auth endpoint RG reserve failed for policy {}: {}", policy_id, exc)
+        return await _fallback_rate_limit(reason="rg_reserve_failed")
 
 
 async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:
@@ -596,7 +810,7 @@ async def login(
     auth_gov = await get_auth_governor()
     try:
         # Get client info
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _auth_request_client_ip(request)
         user_agent = request.headers.get("User-Agent", "Unknown")
         # PII-aware logging
         if settings.PII_REDACT_LOGS:
@@ -1051,33 +1265,36 @@ async def logout(
 
         user_id = _user_id_from(current_user)
 
-        # Attempt to revoke tokens based on the Authorization header.
-        auth_header = request.headers.get("Authorization", "") if request is not None else ""
-        token = _extract_bearer_token(auth_header)
-        blacklist = get_token_blacklist()
-        payload = {}
-        if token:
-            try:
-                # NOTE: Using sync verify_token() here is acceptable - we're extracting
-                # claims for revocation cleanup, not making authorization decisions.
-                # The user has already been authenticated via the current_user dependency.
-                payload = jwt_service.verify_token(token)
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                payload = {}
-
         if all_devices:
-            # Revoke all tokens and sessions.
-            count = await blacklist.revoke_all_user_tokens(
-                user_id=user_id,
-                reason="User requested logout from all devices",
-            )
             try:
-                await session_manager.revoke_all_user_sessions(user_id=user_id)
-            except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
-                logger.error(f"Failed to revoke user sessions during logout-all: {cleanup_exc}")
+                count = int(
+                    await session_manager.revoke_all_user_sessions(
+                        user_id=user_id,
+                        reason="User requested logout from all devices",
+                    )
+                )
+            except _AUTH_NONCRITICAL_EXCEPTIONS as revoke_exc:
+                logger.error(f"Failed to revoke user sessions during logout-all: {revoke_exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to revoke sessions during logout",
+                ) from revoke_exc
             message = f"Logged out from {count} device(s)"
         else:
             # Revoke current access token and session.
+            auth_header = request.headers.get("Authorization", "") if request is not None else ""
+            token = _extract_bearer_token(auth_header)
+            blacklist = get_token_blacklist()
+            payload = {}
+            if token:
+                try:
+                    # NOTE: Using sync verify_token() here is acceptable - we're extracting
+                    # claims for revocation cleanup, not making authorization decisions.
+                    # The user has already been authenticated via the current_user dependency.
+                    payload = jwt_service.verify_token(token)
+                except _AUTH_NONCRITICAL_EXCEPTIONS:
+                    payload = {}
+
             if token:
                 try:
                     jti = jwt_service.extract_jti(token)
@@ -1095,7 +1312,11 @@ async def logout(
                             reason="User logout",
                         )
                     except _AUTH_NONCRITICAL_EXCEPTIONS as revoke_exc:
-                        logger.debug(f"Failed to revoke access token for logout: {revoke_exc}")
+                        logger.error(f"Failed to revoke access token for logout: {revoke_exc}")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to revoke access token during logout",
+                        ) from revoke_exc
                 session_id = payload.get("session_id")
                 if session_id is not None:
                     try:
@@ -1106,12 +1327,20 @@ async def logout(
                         )
                     except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                         logger.error(f"Failed to revoke session {session_id} during logout: {cleanup_exc}")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to revoke session during logout",
+                        ) from cleanup_exc
                 else:
                     # Fallback to full session revoke if the token lacks a session id.
                     try:
                         await session_manager.revoke_all_user_sessions(user_id=user_id)
                     except _AUTH_NONCRITICAL_EXCEPTIONS as cleanup_exc:
                         logger.error(f"Failed to revoke user sessions during logout: {cleanup_exc}")
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to revoke sessions during logout",
+                        ) from cleanup_exc
 
             message = "Successfully logged out"
 
@@ -1129,12 +1358,18 @@ async def logout(
         log_histogram("auth_logout_duration", time.perf_counter() - start_time)
         return MessageResponse(message=message, details={"user_id": user_id})
 
+    except HTTPException:
+        log_counter("auth_logout_error")
+        log_histogram("auth_logout_duration", time.perf_counter() - start_time)
+        raise
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Logout error: {e}")
         log_counter("auth_logout_error")
         log_histogram("auth_logout_duration", time.perf_counter() - start_time)
-        # Even on error, return a generic logout message to avoid client lock-in.
-        return MessageResponse(message="Successfully logged out", details={"user_id": None})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to complete logout",
+        ) from e
 
 
 #######################################################################################################################
@@ -1242,15 +1477,16 @@ async def revoke_all_sessions(
     """
     try:
         count = await session_manager.revoke_all_user_sessions(
-            current_user['id'],
+            user_id=current_user['id'],
             reason="User requested logout from all devices"
         )
+        revoked_count = int(count)
 
-        logger.info(f"User {current_user['username']} revoked all {count} sessions")
+        logger.info(f"User {current_user['username']} revoked all {revoked_count} sessions")
 
         return MessageResponse(
-            message=f"Successfully revoked {count} sessions",
-            details={"sessions_revoked": count}
+            message=f"Successfully revoked {revoked_count} sessions",
+            details={"sessions_revoked": revoked_count}
         )
 
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
@@ -1466,7 +1702,7 @@ async def refresh_token(
                         token_type="refresh",
                         reason="refresh-rotated",
                         revoked_by=None,
-                        ip_address=(http_request.client.host if http_request and getattr(http_request, 'client', None) else None),
+                        ip_address=(_auth_request_client_ip(http_request) if http_request else None),
                     )
             except _AUTH_NONCRITICAL_EXCEPTIONS as _bl_e:
                 with contextlib.suppress(_AUTH_NONCRITICAL_EXCEPTIONS):
@@ -1532,7 +1768,6 @@ async def forgot_password(
     data: ForgotPasswordRequest,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
-    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> dict[str, str]:
     """
     Request password reset email.
@@ -1542,16 +1777,15 @@ async def forgot_password(
     """
     try:
         # Get client info
-        client_ip = request.client.host if request.client else "unknown"
-        # Apply simple per-IP rate limit to mitigate abuse; on exceed, return generic success
-        try:
-            allowed, _ = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{client_ip}", endpoint="auth:forgot_password", limit=10, window_minutes=1
-            )
-            if not allowed:
-                return {"message": "If the email exists, a reset link has been sent"}
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
+        client_ip = _auth_request_client_ip(request)
+        allowed, _retry_after = await _reserve_auth_rg_requests(
+            request,
+            policy_id="authnz.forgot_password",
+            entity=f"ip:{client_ip}",
+            tags={"auth_endpoint": "forgot_password"},
+        )
+        if not allowed:
+            return {"message": "If the email exists, a reset link has been sent"}
 
         # Validate email format
         validator = get_input_validator()
@@ -1649,7 +1883,6 @@ async def reset_password(
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
     password_service: PasswordService = Depends(get_password_service_dep),
-    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> dict[str, str]:
     """
     Reset password with valid token.
@@ -1657,21 +1890,19 @@ async def reset_password(
     Validates the reset token and updates the user's password.
     """
     try:
-        # Optional per-IP throttling
-        try:
-            ip_addr = request.client.host if request and getattr(request, "client", None) else "unknown"
-            allowed, _ = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{ip_addr}", endpoint="auth:reset_password", limit=20, window_minutes=5
+        ip_addr = _auth_request_client_ip(request)
+        allowed, retry_after = await _reserve_auth_rg_requests(
+            request,
+            policy_id="authnz.reset_password",
+            entity=f"ip:{ip_addr}",
+            tags={"auth_endpoint": "reset_password"},
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many password reset attempts. Please try again later.",
+                headers={"Retry-After": str(int(retry_after or 1))},
             )
-            if not allowed:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many password reset attempts. Please try again later.",
-                )
-        except HTTPException:
-            raise
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
         # Verify token cryptographically
         # NOTE: Using sync verify_token() is acceptable for password_reset tokens because:
         # 1. These are single-use tokens with additional database validation below
@@ -1881,7 +2112,6 @@ async def resend_verification(
     request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
-    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> dict[str, str]:
     """
     Resend email verification link.
@@ -1889,16 +2119,16 @@ async def resend_verification(
     Sends a new verification email if the account exists and is not verified.
     """
     try:
-        # Simple per-IP throttling to mitigate email spam
-        try:
-            client_ip = request.client.host if request.client else "unknown"
-            allowed, _ = await rate_limiter.check_rate_limit(
-                identifier=f"ip:{client_ip}", endpoint="auth:resend_verification", limit=10, window_minutes=1
-            )
-            if not allowed:
-                return {"message": "If the account exists and needs verification, an email has been sent"}
-        except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
-            logger.debug("resend_verification rate limit check failed: {}", exc)
+        # Per-IP throttling to mitigate verification email abuse.
+        client_ip = _auth_request_client_ip(request)
+        allowed, _retry_after = await _reserve_auth_rg_requests(
+            request,
+            policy_id="authnz.resend_verification",
+            entity=f"ip:{client_ip}",
+            tags={"auth_endpoint": "resend_verification"},
+        )
+        if not allowed:
+            return {"message": "If the account exists and needs verification, an email has been sent"}
         # Check if user exists and needs verification
         is_pg = await is_postgres_backend()
         if is_pg:
@@ -1959,7 +2189,6 @@ async def request_magic_link(
     request: Request,
     db=Depends(get_db_transaction),
     jwt_service: JWTService = Depends(get_jwt_service_dep),
-    rate_limiter=Depends(get_rate_limiter_dep),
 ) -> MessageResponse:
     """
     Request a magic link sign-in email.
@@ -1985,27 +2214,24 @@ async def request_magic_link(
         # Never fail the request on validation errors; keep response generic
         pass
 
-    # Rate limit by IP and email (best-effort)
-    try:
-        client_ip = request.client.host if request.client else "unknown"
-        allowed, _ = await rate_limiter.check_rate_limit(
-            identifier=f"ip:{client_ip}",
-            endpoint="auth:magic_link",
-            limit=10,
-            window_minutes=1,
-        )
-        if not allowed:
-            return MessageResponse(message="If the account exists, a sign-in link has been sent")
-        allowed, _ = await rate_limiter.check_rate_limit(
-            identifier=f"email:{email}",
-            endpoint="auth:magic_link",
-            limit=3,
-            window_minutes=10,
-        )
-        if not allowed:
-            return MessageResponse(message="If the account exists, a sign-in link has been sent")
-    except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("magic link rate limit check failed: {}", exc)
+    # Rate limit by IP and by normalized email to preserve anti-abuse behavior.
+    client_ip = _auth_request_client_ip(request)
+    ip_allowed, _retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.request",
+        entity=f"ip:{client_ip}",
+        tags={"auth_endpoint": "magic_link_request", "scope": "ip"},
+    )
+    if not ip_allowed:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
+    email_allowed, _retry_after = await _reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.email",
+        entity=f"email:{_auth_hashed_entity(email)}",
+        tags={"auth_endpoint": "magic_link_request", "scope": "email"},
+    )
+    if not email_allowed:
+        return MessageResponse(message="If the account exists, a sign-in link has been sent")
 
     user = await fetch_user_by_login_identifier(db, email)
     user_id = int(user["id"]) if user and user.get("id") is not None else None
@@ -2192,7 +2418,7 @@ async def verify_magic_link(
         user_id=user["id"],
         access_token=temp_access,
         refresh_token=temp_refresh,
-        ip_address=request.client.host if request.client else "unknown",
+        ip_address=_auth_request_client_ip(request),
         user_agent=user_agent,
     )
     session_id = temp_session_info["session_id"]
@@ -2238,7 +2464,7 @@ async def verify_magic_link(
                 token_type="magic_link",
                 reason="magic_link_used",
                 revoked_by=int(user["id"]),
-                ip_address=request.client.host if request.client else None,
+                ip_address=_auth_request_client_ip(request),
             )
     except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug("Magic link token blacklist failed: {}", exc)
@@ -2269,10 +2495,17 @@ async def setup_mfa(
         await _ensure_mfa_available()
         await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
+        user_id = _current_user_id(current_user)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
 
         # Check if MFA is already enabled
         try:
-            mfa_status = await mfa_service.get_user_mfa_status(current_user.id)
+            mfa_status = await mfa_service.get_user_mfa_status(user_id)
         except DatabaseError as exc:
             logger.debug("MFA status lookup failed due to database error; assuming disabled: {}", exc)
             mfa_status = {"enabled": False}
@@ -2286,7 +2519,7 @@ async def setup_mfa(
         secret = mfa_service.generate_secret()
 
         # Generate QR code
-        totp_uri = mfa_service.generate_totp_uri(secret, current_user.username)
+        totp_uri = mfa_service.generate_totp_uri(secret, username)
         qr_code_bytes = mfa_service.generate_qr_code(totp_uri)
         qr_code_base64 = base64.b64encode(qr_code_bytes).decode("utf-8")
 
@@ -2299,7 +2532,7 @@ async def setup_mfa(
                 "backup_codes": backup_codes,
             })
             await session_manager.store_ephemeral_value(
-                _mfa_setup_cache_key(current_user.id),
+                _mfa_setup_cache_key(user_id),
                 payload,
                 _get_mfa_setup_ttl_seconds(),
             )
@@ -2331,7 +2564,6 @@ async def verify_mfa_setup(
     data: MFAVerifyRequest,
     request: Request,
     current_user=Depends(get_current_active_user),
-    rate_limiter=Depends(get_rate_limiter_dep),
     session_manager: SessionManager = Depends(get_session_manager_dep),
 ) -> dict[str, Any]:
     """
@@ -2343,8 +2575,15 @@ async def verify_mfa_setup(
         await _ensure_mfa_available()
         await _ensure_mfa_cache_available(session_manager, get_settings())
         mfa_service = _get_mfa_service()
+        user_id = _current_user_id(current_user)
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid credentials",
+            )
+        username = _current_user_username(current_user)
 
-        cached = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(current_user.id))
+        cached = await session_manager.get_ephemeral_value(_mfa_setup_cache_key(user_id))
         if not cached:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2363,15 +2602,18 @@ async def verify_mfa_setup(
         if not secret:
             secret = cached
 
-        # Basic per-user rate limit for MFA verification attempts
-        try:
-            allowed, _meta = await rate_limiter.check_user_rate_limit(current_user.id, endpoint="auth:mfa_verify")
-            if not allowed:
-                raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts")
-        except HTTPException:
-            raise
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
+        allowed, retry_after = await _reserve_auth_rg_requests(
+            request,
+            policy_id="authnz.mfa.verify",
+            entity=f"user:{user_id}",
+            tags={"auth_endpoint": "mfa_verify"},
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many attempts",
+                headers={"Retry-After": str(int(retry_after or 1))},
+            )
         # Verify TOTP token
         if not mfa_service.verify_totp(secret, data.token):
             raise HTTPException(
@@ -2385,7 +2627,7 @@ async def verify_mfa_setup(
 
         # Enable MFA
         success = await mfa_service.enable_mfa(
-            user_id=current_user.id,
+            user_id=user_id,
             secret=secret,
             backup_codes=backup_codes,
         )
@@ -2396,20 +2638,26 @@ async def verify_mfa_setup(
                 detail="Failed to enable MFA",
             )
 
-        await session_manager.delete_ephemeral_value(_mfa_setup_cache_key(current_user.id))
+        await session_manager.delete_ephemeral_value(_mfa_setup_cache_key(user_id))
 
-        # Send email with backup codes
-        email_service = _get_email_service()
-        client_ip = request.client.host if request.client else "unknown"
+        # Send email with backup codes (best effort; MFA enablement already committed).
+        email = _current_user_value(current_user, "email")
+        if email:
+            email_service = _get_email_service()
+            client_ip = _auth_request_client_ip(request)
+            try:
+                await email_service.send_mfa_enabled_email(
+                    to_email=str(email),
+                    username=username,
+                    backup_codes=backup_codes,
+                    ip_address=client_ip,
+                )
+            except _AUTH_NONCRITICAL_EXCEPTIONS as email_exc:
+                logger.warning("MFA enabled but notification email failed for user {}: {}", user_id, email_exc)
+        else:
+            logger.info("MFA enabled for user {} without notification email (no email on profile)", user_id)
 
-        await email_service.send_mfa_enabled_email(
-            to_email=current_user.email,
-            username=current_user.username,
-            backup_codes=backup_codes,
-            ip_address=client_ip,
-        )
-
-        logger.info(f"MFA enabled for user {current_user.id}")
+        logger.info(f"MFA enabled for user {user_id}")
         return {"message": "MFA has been enabled successfully", "backup_codes": backup_codes}
 
     except HTTPException:
@@ -2472,7 +2720,7 @@ async def disable_mfa(
                 detail="Failed to disable MFA",
             )
 
-        logger.info(f"MFA disabled for user {current_user.id}")
+        logger.info(f"MFA disabled for user {user_id}")
         return {"message": "MFA has been disabled"}
 
     except HTTPException:
@@ -2528,18 +2776,18 @@ async def mfa_login(
         user_id = int(user_id)
         session_id = int(session_id)
 
-        # Basic per-user rate limit for MFA login attempts
-        try:
-            allowed, _meta = await rate_limiter.check_user_rate_limit(user_id, endpoint="auth:mfa_login")
-            if not allowed:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Too many MFA attempts. Please try again later.",
-                )
-        except HTTPException:
-            raise
-        except _AUTH_NONCRITICAL_EXCEPTIONS:
-            pass
+        allowed, retry_after = await _reserve_auth_rg_requests(
+            request,
+            policy_id="authnz.mfa.login",
+            entity=f"user:{user_id}",
+            tags={"auth_endpoint": "mfa_login"},
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many MFA attempts. Please try again later.",
+                headers={"Retry-After": str(int(retry_after or 1))},
+            )
 
         user = await fetch_active_user_by_id(db, user_id)
         if not isinstance(user, dict):
@@ -2603,7 +2851,7 @@ async def mfa_login(
         await update_user_last_login(db, user_id, datetime.utcnow())
 
         # Audit log successful login
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = _auth_request_client_ip(request)
         user_agent = request.headers.get("User-Agent", "Unknown")
         async def _safe_audit_log_login(user_id: int, username: str, ip: str, ua: str, success: bool):
             try:
@@ -2768,7 +3016,7 @@ async def register(
                     user_id=str(user_info["user_id"]),
                     correlation_id=correlation_id,
                     request_id=request_id,
-                    ip_address=(http_request.client.host if http_request.client else None),
+                    ip_address=(_auth_request_client_ip(http_request) if http_request else None),
                     user_agent=http_request.headers.get("user-agent"),
                     endpoint=str(http_request.url.path),
                     method=http_request.method,

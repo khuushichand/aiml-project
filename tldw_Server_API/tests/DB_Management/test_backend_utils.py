@@ -99,6 +99,13 @@ def test_transform_sqlite_query_for_postgres_converts_boolean_columns():
     assert "priority = 0" in transformed
 
 
+def test_transform_sqlite_query_for_postgres_converts_boolean_literals_in_multi_row_insert():
+
+    source = "INSERT INTO demo (is_active, name) VALUES (1, 'a'), (0, 'b')"
+    transformed = transform_sqlite_query_for_postgres(source)
+    assert "VALUES (TRUE, 'a'), (FALSE, 'b')" in transformed
+
+
 def test_transform_sqlite_query_for_postgres_preserves_literals_and_comments():
 
     source = (

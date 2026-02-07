@@ -348,18 +348,17 @@ def _coerce_timestamp(value: Any) -> str:
 
 
 def _checkpoint_timestamp(value: Any, previous: str | None) -> str | None:
-    """Return a safe checkpoint timestamp, preserving previous on empty values."""
+    """Return a safe checkpoint timestamp while preserving source text ordering."""
     try:
         if value is None:
             return previous
         s = str(value).strip()
         if not s:
             return previous
+        # Preserve source-side timestamp text so resume comparisons match
+        # ORDER BY timestamp,event_id semantics in the source database.
+        return s
     except _AUDIT_COERCE_EXCEPTIONS:
-        return previous
-    try:
-        return _coerce_timestamp(value)
-    except _AUDIT_NONCRITICAL_EXCEPTIONS:
         return previous
 
 
@@ -492,7 +491,7 @@ def _build_event_record(
     record["result_count"] = _pick(row, "result_count")
 
     record["risk_score"] = _pick(row, "risk_score") or 0
-    record["pii_detected"] = bool(_pick(row, "pii_detected") or False)
+    record["pii_detected"] = _safe_bool(_pick(row, "pii_detected"), False)
     record["compliance_flags"] = _safe_json_text(_pick(row, "compliance_flags"), "[]")
     record["metadata"] = _safe_json_text(_pick(row, "metadata"), "{}")
 
@@ -547,6 +546,19 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(str(value).strip())
     except (TypeError, ValueError):
         return default
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n", ""}:
+        return False
+    return default
 
 
 def _normalize_result(value: Any) -> str:
@@ -663,6 +675,22 @@ async def _migrate_source(
                 return counts
 
             last_rowid, last_event_id, last_timestamp = await _load_checkpoint(shared_db, source_key)
+            # Existing checkpoints may contain normalized UTC timestamps from older
+            # builds. Refresh from the source event_id to keep resume comparisons
+            # aligned with source timestamp text.
+            if last_timestamp is not None and last_event_id:
+                try:
+                    async with source_db.execute(
+                        "SELECT timestamp FROM audit_events WHERE event_id = ? LIMIT 1",
+                        (last_event_id,),
+                    ) as cur:
+                        checkpoint_row = await cur.fetchone()
+                    if checkpoint_row:
+                        refreshed = _checkpoint_timestamp(checkpoint_row["timestamp"], last_timestamp)
+                        if refreshed is not None:
+                            last_timestamp = refreshed
+                except _AUDIT_DB_EXCEPTIONS:
+                    pass
             if last_timestamp is None and last_rowid > 0:
                 # Attempt to upgrade legacy rowid checkpoint to timestamp+event_id.
                 async with source_db.execute(

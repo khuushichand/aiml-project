@@ -94,6 +94,9 @@ class RequestQueue:
         self._processing_semaphore = asyncio.Semaphore(max_concurrent)
         self._workers = []
         self._running = False
+        # Lifecycle contract: queue instances are one-shot.
+        # After stop(), create a fresh instance via initialize_request_queue().
+        self._stopped = False
         # Rolling recent activity (last N jobs)
         self._recent_activity = deque(maxlen=200)
         # Event to wake workers when new items arrive (avoids polling delay)
@@ -111,6 +114,11 @@ class RequestQueue:
         """
         if self._running:
             return
+        if self._stopped:
+            raise RuntimeError(
+                "RequestQueue cannot be restarted after stop(); "
+                "initialize a new queue instance instead."
+            )
 
         self._running = True
         # Ensure event starts cleared
@@ -134,6 +142,8 @@ class RequestQueue:
 
     async def stop(self):
         """Stop the queue workers."""
+        if self._stopped:
+            return
         self._running = False
 
         # Cancel all workers
@@ -145,6 +155,7 @@ class RequestQueue:
         self._workers.clear()
         with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
             self._executor.shutdown(wait=True)
+        self._stopped = True
 
         logger.info("Stopped queue workers")
 
@@ -352,6 +363,34 @@ class RequestQueue:
             logger.error(f"Streaming job {request.request_id} missing stream_channel")
             raise RuntimeError("Streaming channel not provided for streaming job")
 
+        async def _put_async_with_backpressure(item: Any, *, terminal: bool = False) -> bool:
+            """Put an item onto the stream channel with cancellation-aware backpressure.
+
+            For terminal frames (DONE/sentinel), perform bounded retries so the
+            consumer can finish cleanly without risking indefinite hangs.
+            """
+            terminal_attempts = 0
+            while True:
+                if not terminal and (request.future.cancelled() or loop.is_closed() or not self._running):
+                    return False
+                if terminal and (loop.is_closed() or not self._running):
+                    return False
+                try:
+                    timeout_s = 0.25 if terminal else 1.0
+                    await asyncio.wait_for(request.stream_channel.put(item), timeout=timeout_s)
+                    return True
+                except asyncio.TimeoutError:
+                    if terminal:
+                        terminal_attempts += 1
+                        if terminal_attempts >= 3:
+                            return False
+                        continue
+                    # Keep waiting while consumer is alive; cancellation checks at loop top.
+                    continue
+                except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
+                    logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
+                    return False
+
         async def _pump_async_iterator(async_iter):
             aiter = async_iter.__aiter__() if hasattr(async_iter, "__aiter__") else async_iter
             try:
@@ -364,10 +403,7 @@ class RequestQueue:
                         break
                     if request.future.cancelled() or loop.is_closed() or not self._running:
                         break
-                    try:
-                        await request.stream_channel.put(chunk)
-                    except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS as ch_e:
-                        logger.warning(f"Failed to enqueue stream chunk for {request.request_id}: {ch_e}")
+                    if not await _put_async_with_backpressure(chunk):
                         break
             finally:
                 # Ensure async iterators are closed on cancellation or early exit
@@ -379,7 +415,7 @@ class RequestQueue:
                     pass
                 # Signal completion
                 with contextlib.suppress(_REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS):
-                    await request.stream_channel.put(None)
+                    await _put_async_with_backpressure(None, terminal=True)
 
         def _pump_sync_iterator(sync_iter):
             def _put_with_backpressure(item: Any) -> bool:
@@ -427,9 +463,9 @@ class RequestQueue:
             error_payload = json.dumps({"error": {"message": str(e)[:500]}})
             err_msg = f'data: {error_payload}\n\n'
             try:
-                await request.stream_channel.put(err_msg)
-                await request.stream_channel.put("data: [DONE]\n\n")
-                await request.stream_channel.put(None)
+                await _put_async_with_backpressure(err_msg, terminal=True)
+                await _put_async_with_backpressure("data: [DONE]\n\n", terminal=True)
+                await _put_async_with_backpressure(None, terminal=True)
             except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Processor error starting stream for {request.request_id}: {e}")
@@ -469,9 +505,9 @@ class RequestQueue:
             # Use json.dumps to properly escape the error message and prevent JSON injection
             error_payload = json.dumps({"error": {"message": f"Stream error: {str(e)[:500]}"}})
             try:
-                await request.stream_channel.put(f'data: {error_payload}\n\n')
-                await request.stream_channel.put("data: [DONE]\n\n")
-                await request.stream_channel.put(None)
+                await _put_async_with_backpressure(f'data: {error_payload}\n\n', terminal=True)
+                await _put_async_with_backpressure("data: [DONE]\n\n", terminal=True)
+                await _put_async_with_backpressure(None, terminal=True)
             except _REQUEST_QUEUE_NONCRITICAL_EXCEPTIONS:
                 pass
             logger.error(f"Streaming processor error for {request.request_id}: {e}")

@@ -306,6 +306,52 @@ class TestAuthEndpointsIntegration:
         assert r_old.status_code == 401
 
     @pytest.mark.asyncio
+    async def test_refresh_token_rotation_concurrent_single_winner(self, isolated_test_environment):
+        """Two concurrent refresh attempts on the same token should yield one winner."""
+        client, db_name = isolated_test_environment
+
+        client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "rotconcurrent",
+                "email": "rotconcurrent@example.com",
+                "password": "R0tC0ncurr3nt!"
+            }
+        )
+
+        login_resp = client.post(
+            "/api/v1/auth/login",
+            data={
+                "username": "rotconcurrent",
+                "password": "R0tC0ncurr3nt!"
+            }
+        )
+        assert login_resp.status_code == 200
+        first_refresh = login_resp.json()["refresh_token"]
+
+        async def _refresh_once():
+            return await asyncio.to_thread(
+                client.post,
+                "/api/v1/auth/refresh",
+                json={"refresh_token": first_refresh},
+            )
+
+        r_a, r_b = await asyncio.gather(_refresh_once(), _refresh_once())
+        statuses = sorted([r_a.status_code, r_b.status_code])
+        assert statuses == [200, 401]
+
+        winner = r_a if r_a.status_code == 200 else r_b
+        winner_refresh = winner.json()["refresh_token"]
+        assert winner_refresh and winner_refresh != first_refresh
+
+        r_old = client.post("/api/v1/auth/refresh", json={"refresh_token": first_refresh})
+        assert r_old.status_code == 401
+
+        # The winner token should remain valid for the next refresh.
+        r_winner = client.post("/api/v1/auth/refresh", json={"refresh_token": winner_refresh})
+        assert r_winner.status_code == 200
+
+    @pytest.mark.asyncio
     async def test_logout_success(self, isolated_test_environment):
         """Test successful logout."""
         client, db_name = isolated_test_environment

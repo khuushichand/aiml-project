@@ -93,10 +93,14 @@ async def test_authnz_sessions_repo_validation_and_refresh_postgres(test_db_pool
     assert found is not None
     assert found["id"] == session_id
     assert found["user_id"] == int(user_id)
+    assert found["token_hash"] == "hash-access"
+    assert found["refresh_token_hash"] == "hash-refresh"
 
     new_expires = now + timedelta(hours=2)
-    await repo.update_session_tokens_for_refresh(
+    updated = await repo.update_session_tokens_for_refresh(
         session_id=found["id"],
+        expected_access_hash=found["token_hash"],
+        expected_refresh_hash=found["refresh_token_hash"],
         new_access_hash="hash-access-new",
         access_jti="access-jti-new",
         expires_at=new_expires,
@@ -106,6 +110,7 @@ async def test_authnz_sessions_repo_validation_and_refresh_postgres(test_db_pool
         refresh_expires_at=refresh_expires,
         encrypted_refresh_token="enc-refresh-new",
     )
+    assert updated is True
 
     row = await pool.fetchrow(
         """
@@ -127,6 +132,21 @@ async def test_authnz_sessions_repo_validation_and_refresh_postgres(test_db_pool
     assert row["refresh_jti"] == "refresh-jti-new"
     assert row["encrypted_token"] == "enc-access-new"
     assert row["encrypted_refresh"] == "enc-refresh-new"
+
+    stale_update = await repo.update_session_tokens_for_refresh(
+        session_id=found["id"],
+        expected_access_hash="hash-access",
+        expected_refresh_hash="hash-refresh",
+        new_access_hash="hash-access-stale",
+        access_jti="access-jti-stale",
+        expires_at=new_expires,
+        encrypted_access_token="enc-access-stale",
+        refresh_hash_update="hash-refresh-stale",
+        refresh_jti="refresh-jti-stale",
+        refresh_expires_at=refresh_expires,
+        encrypted_refresh_token="enc-refresh-stale",
+    )
+    assert stale_update is False
 
 
 @pytest.mark.asyncio

@@ -171,3 +171,24 @@ async def test_rbac_denies_unmapped_permissions(monkeypatch):
     )
     allowed = await policy.check_permission("1", Resource.MEDIA, Action.CREATE)
     assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_rbac_does_not_seed_permission_for_unknown_tool(monkeypatch):
+    class _Pool:
+        async def fetchone(self, *_args, **_kwargs):
+            return None
+
+    policy = AuthNZRBAC(db_pool=_Pool())
+    seeded = False
+
+    async def _ensure_permission_exists_stub(*_args, **_kwargs):
+        nonlocal seeded
+        seeded = True
+
+    monkeypatch.setattr(policy, "_ensure_permission_exists", _ensure_permission_exists_stub)
+
+    allowed = await policy.check_permission("1", Resource.TOOL, Action.EXECUTE, "definitely_missing_tool")
+
+    assert allowed is False
+    assert seeded is False

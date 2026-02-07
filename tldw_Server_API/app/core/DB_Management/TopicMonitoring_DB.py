@@ -306,6 +306,24 @@ class TopicMonitoringDB:
             pass
         return []
 
+    @staticmethod
+    def _row_to_dict(row: Any) -> dict[str, Any]:
+        """Safely materialize sqlite3.Row (or row-like objects) as a plain dict."""
+        if row is None:
+            return {}
+        if isinstance(row, dict):
+            return dict(row)
+        row_keys = getattr(row, "keys", None)
+        if callable(row_keys):
+            try:
+                return {k: row[k] for k in row_keys()}
+            except Exception:
+                pass
+        try:
+            return dict(row)
+        except Exception:
+            return {}
+
     def list_watchlists(
         self,
         *,
@@ -326,7 +344,7 @@ class TopicMonitoringDB:
                 ).fetchall()
                 watchlists: list[dict[str, Any]] = []
                 for row in rows:
-                    watchlists.append({k: row[k] for k in row})
+                    watchlists.append(self._row_to_dict(row))
                 if not include_rules or not watchlists:
                     return watchlists
                 ids = [str(w["id"]) for w in watchlists if w.get("id") is not None]
@@ -344,7 +362,7 @@ class TopicMonitoringDB:
                 ).fetchall()
                 rules_by_watchlist: dict[str, list[dict[str, Any]]] = {}
                 for row in rule_rows:
-                    item = {k: row[k] for k in row}
+                    item = self._row_to_dict(row)
                     item["tags"] = self._deserialize_tags(item.get("tags"))
                     rules_by_watchlist.setdefault(str(item["watchlist_id"]), []).append(item)
                 for wl in watchlists:
@@ -367,7 +385,7 @@ class TopicMonitoringDB:
                 ).fetchone()
                 if not row:
                     return None
-                wl = {k: row[k] for k in row}
+                wl = self._row_to_dict(row)
                 return wl
             finally:
                 conn.close()
@@ -398,10 +416,10 @@ class TopicMonitoringDB:
                         WHERE name = ? AND scope_type = ? AND scope_id = ?
                         """,
                         (str(name), str(scope_type), str(scope_id)),
-                    ).fetchone()
+                ).fetchone()
                 if not row:
                     return None
-                return {k: row[k] for k in row}
+                return self._row_to_dict(row)
             finally:
                 conn.close()
 

@@ -14,6 +14,7 @@ import binascii
 import io
 import json
 import os
+import struct
 import time
 import zlib
 import yaml
@@ -109,6 +110,16 @@ class MockPILImageObject:
         if self.fp:
             self.fp.close()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def verify(self):
+        return None
+
     @property
     def size(self):
         return (self.width, self.height)
@@ -119,29 +130,31 @@ def create_dummy_png_bytes(chara_data_json_str=None, is_png=True):
     if not is_png:
         return b"GIF89a\x01\x00\x01\x00\x00\x00\x00;"
 
-    base_png = (
-        b"\x89PNG\r\n\x1a\n" b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
-    )
-    # A very minimal valid IDAT chunk for a 1x1 transparent pixel
-    idat_chunk = b"\x00\x00\x00\x0cIDAT\x08\xd7c`\x00\x00\x00\x02\x00\x01\xe2!\xbc\x33"
-    iend_chunk = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    buffer = io.BytesIO()
+    PILImageReal.new("RGBA", (1, 1), (0, 0, 0, 0)).save(buffer, format="PNG")
+    png_bytes = buffer.getvalue()
 
-    if chara_data_json_str:
-        keyword = b"chara"
-        encoded_json_bytes = chara_data_json_str.encode("utf-8")
-        b64_data_bytes = base64.b64encode(encoded_json_bytes)
-        text_chunk_data = keyword + b"\x00" + b64_data_bytes
-        chunk_type = b"tEXt"  # Using tEXt for simplicity, could be zTXt or iTXt
-        chunk_len = len(text_chunk_data)
-        chunk_len_bytes = chunk_len.to_bytes(4, "big")
-        # CRC calculation: type + data
-        crc_input_data = chunk_type + text_chunk_data
-        crc_val = binascii.crc32(crc_input_data)
-        crc_val_unsigned = crc_val & 0xFFFFFFFF  # Ensure positive for to_bytes
-        crc_bytes = crc_val_unsigned.to_bytes(4, "big")
-        text_chunk = chunk_len_bytes + chunk_type + text_chunk_data + crc_bytes
-        return base_png + text_chunk + idat_chunk + iend_chunk
-    return base_png + idat_chunk + iend_chunk
+    if not chara_data_json_str:
+        return png_bytes
+
+    text_chunk_payload = b"chara\x00" + base64.b64encode(chara_data_json_str.encode("utf-8"))
+    chunk_type = b"tEXt"
+    chunk_len = struct.pack(">I", len(text_chunk_payload))
+    crc = struct.pack(">I", binascii.crc32(chunk_type + text_chunk_payload) & 0xFFFFFFFF)
+    text_chunk = chunk_len + chunk_type + text_chunk_payload + crc
+
+    pos = 8  # Skip PNG signature
+    while pos + 8 <= len(png_bytes):
+        data_len = struct.unpack(">I", png_bytes[pos:pos + 4])[0]
+        chunk_type_at_pos = png_bytes[pos + 4:pos + 8]
+        chunk_total_len = 12 + data_len  # length + type + data + crc
+        if pos + chunk_total_len > len(png_bytes):
+            break
+        if chunk_type_at_pos == b"IEND":
+            return png_bytes[:pos] + text_chunk + png_bytes[pos:]
+        pos += chunk_total_len
+
+    return png_bytes
 
 
 # --- Pytest Fixture for In-Memory DB Instance ---
@@ -722,6 +735,14 @@ def test_prepare_character_data_update_ignores_empty_image_base64(empty_value):
 
     assert db_ready["name"] == "NoOpImageUpdate"
     assert "image" not in db_ready
+
+
+def test_prepare_character_data_rejects_decodable_non_image_payload():
+    non_image_bytes = b"this-is-not-a-real-image"
+    encoded = base64.b64encode(non_image_bytes).decode("utf-8")
+
+    with pytest.raises(InputError, match="not a valid image"):
+        _prepare_character_data_for_db_storage({"name": "InvalidBinaryImage", "image_base64": encoded})
 
 
 def test_parse_character_book_unit():
@@ -1951,7 +1972,7 @@ def test_sender_override_is_treated_as_user(db):
         rich_output=True,
     )
 
-    assert len(history) == 2
+    assert len(history) == 3
     # First turn: character greeting only
     assert history[0]["character"]["content"] == "Hello Alice"
     # Second turn: ensure Alice remains the user
@@ -1959,6 +1980,10 @@ def test_sender_override_is_treated_as_user(db):
     assert history[1]["user"]["content"] == "Hi Botty"
     assert history[1]["character"]["sender"] == "Botty"
     assert history[1]["character"]["content"] == "How are you, Alice?"
+    # Third turn: trailing user message should be preserved
+    assert history[2]["user"]["sender"] == "Alice"
+    assert history[2]["user"]["content"] == "Feeling great!"
+    assert history[2]["character"] is None
 
 
 def test_load_chat_and_character_integration(db):

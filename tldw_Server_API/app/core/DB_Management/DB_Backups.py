@@ -591,7 +591,7 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    # Treat dump_file as a logical backup identifier/filename, not as a full path.
+    # Accept either a backup basename or an explicit dump path.
     backup_id = str(dump_file or "").strip()
     backup_name = _validate_backup_name(os.path.basename(backup_id), _POSTGRES_BACKUP_EXTS)
     if not backup_name:
@@ -605,16 +605,42 @@ def restore_postgres_backup(
         logger.error(msg)
         return msg
 
-    backup_dir = _get_postgres_backup_base_dir(config)
-    safe_dump_path = _safe_join(backup_dir, backup_name)
+    # Support both:
+    # - explicit dump paths returned by create_postgres_backup/admin flows
+    # - legacy basename-only lookup under the default postgres backup directory
+    backup_base_dir = _get_backup_base_dir()
+    candidate_paths: list[str] = []
+
+    has_separator = (
+        os.path.sep in backup_id
+        or (os.altsep is not None and os.altsep in backup_id)
+        or os.path.isabs(backup_id)
+    )
+    if backup_id and has_separator:
+        resolved_input = _ensure_within_base(backup_base_dir, backup_id)
+        if resolved_input:
+            candidate_paths.append(resolved_input)
+
+    legacy_backup_dir = _get_postgres_backup_base_dir(config)
+    legacy_path = _safe_join(legacy_backup_dir, backup_name)
+    if legacy_path:
+        candidate_paths.append(legacy_path)
+
+    if backup_id == backup_name:
+        base_path = _safe_join(backup_base_dir, backup_name)
+        if base_path:
+            candidate_paths.append(base_path)
+
+    deduped_candidates: list[str] = []
+    for candidate in candidate_paths:
+        if candidate not in deduped_candidates:
+            deduped_candidates.append(candidate)
+
+    safe_dump_path = next((path for path in deduped_candidates if os.path.exists(path)), None)
     if not safe_dump_path:
-        msg = "Invalid dump file path"
-        logger.error(f"{msg}: {dump_file}")
-        return msg
-    if not os.path.exists(safe_dump_path):
-        msg = f"dump not found: {safe_dump_path}"
-        logger.error(msg)
-        return msg
+        msg = "dump not found"
+        logger.error(f"{msg}: {backup_id} (searched={deduped_candidates})")
+        return f"{msg}: {backup_id}"
 
     host = config.pg_host or "localhost"
     port = str(config.pg_port or 5432)

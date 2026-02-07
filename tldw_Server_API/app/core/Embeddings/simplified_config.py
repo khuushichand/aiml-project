@@ -107,12 +107,18 @@ class EmbeddingsConfig:
     def from_yaml(cls, path: str) -> 'EmbeddingsConfig':
         """Load configuration from YAML file"""
         with open(path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            raise ValueError("Embeddings config YAML root must be a mapping/object.")
         return cls.from_dict(data)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> 'EmbeddingsConfig':
         """Create configuration from dictionary"""
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            raise ValueError("Embeddings config must be a mapping/object.")
         # Parse providers
         providers = []
         for provider_data in data.get('providers', []):

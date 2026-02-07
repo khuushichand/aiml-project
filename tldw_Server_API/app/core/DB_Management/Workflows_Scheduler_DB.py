@@ -164,6 +164,16 @@ class WorkflowsSchedulerDB:
                 cfg.backend_type = BackendType.SQLITE
                 cfg.sqlite_path = custom_path
 
+            # Do not inherit arbitrary global SQLite DB paths (e.g. DATABASE_URL
+            # for AuthNZ/content). When scheduler-specific overrides are absent,
+            # default scheduler storage should use the dedicated per-user path.
+            if (
+                not custom_url
+                and not custom_path
+                and cfg.backend_type == BackendType.SQLITE
+            ):
+                cfg.sqlite_path = str(default_path)
+
             if cfg.backend_type == BackendType.SQLITE:
                 sqlite_path_str = (cfg.sqlite_path or "").strip()
                 default_candidates = {

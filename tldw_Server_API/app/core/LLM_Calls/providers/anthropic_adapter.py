@@ -448,12 +448,16 @@ class AnthropicAdapter(ChatProvider):
                         for raw in resp.iter_lines():
                             if not raw:
                                 continue
-                            if is_done_line(raw):
+                            try:
+                                line = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS:
+                                line = str(raw)
+                            if is_done_line(line):
                                 if not done_sent:
                                     done_sent = True
                                     yield sse_done()
                                 continue
-                            ls = raw.strip()
+                            ls = line.strip()
                             if not ls or not ls.startswith("data:"):
                                 # Drop provider control lines/comments by default
                                 normalized = normalize_provider_line(ls)
@@ -561,7 +565,7 @@ class AnthropicAdapter(ChatProvider):
                     if stop_event.is_set():
                         break
                     loop.call_soon_threadsafe(queue.put_nowait, item)
-            except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as exc:
+            except Exception as exc:
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:
                 try:

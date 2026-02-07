@@ -41,3 +41,19 @@ def test_validate_dictionary_endpoint_detects_regex_error(test_client, auth_head
     assert data["ok"] is False
     codes = {e.get("code") for e in data.get("errors", [])}
     assert "regex_invalid" in codes
+
+
+@pytest.mark.integration
+def test_validate_dictionary_endpoint_requires_auth(test_client):
+    payload = {
+        "data": {
+            "name": "test",
+            "entries": [
+                {"type": "literal", "pattern": "hello", "replacement": "hi"}
+            ]
+        },
+        "schema_version": 1,
+        "strict": False,
+    }
+    r = test_client.post("/api/v1/chat/dictionaries/validate", json=payload)
+    assert r.status_code == 401

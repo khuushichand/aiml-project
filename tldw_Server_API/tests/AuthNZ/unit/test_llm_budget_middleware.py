@@ -409,6 +409,8 @@ def test_middleware_budget_check_failure_fails_closed(monkeypatch, mock_middlewa
     data = r.json()
     assert data.get("error") == "budget_check_failed"
     assert "Failed to evaluate budget enforcement" in data.get("message", "")
+    assert data.get("details", {}).get("reason") == "internal_error"
+    assert "simulated budget failure" not in r.text
 
 
 def test_middleware_key_limits_exception_fails_closed(monkeypatch, mock_middleware_dependencies):
@@ -436,6 +438,8 @@ def test_middleware_key_limits_exception_fails_closed(monkeypatch, mock_middlewa
     data = r.json()
     assert data.get("error") == "budget_limits_unavailable"
     assert "Failed to load virtual key limits" in data.get("message", "")
+    assert data.get("details", {}).get("reason") == "internal_error"
+    assert "limits unavailable" not in r.text
 
 
 def test_middleware_key_limits_missing_fails_closed(monkeypatch, mock_middleware_dependencies):

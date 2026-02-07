@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -7,6 +8,7 @@ import os
 import pytest
 
 from tldw_Server_API.app.core.AuthNZ.database import DatabasePool
+from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidSessionError
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, reset_settings
@@ -71,15 +73,36 @@ class StubPool:
 
 
 class StubConn:
-    def __init__(self, expected_hash, session_id, user_id):
-        self.expected_hash = expected_hash
+    def __init__(self, expected_refresh_hash, expected_access_hash, session_id, user_id):
+        self.expected_refresh_hash = expected_refresh_hash
+        self.expected_access_hash = expected_access_hash
         self.session_id = session_id
         self.user_id = user_id
         self.updated = False
 
-    async def fetchrow(self, query, refresh_hash):
-        assert refresh_hash == self.expected_hash
-        return {"id": self.session_id, "user_id": self.user_id}
+    async def fetchrow(self, query, *params):
+        if "SELECT id, user_id, token_hash, refresh_token_hash" in query:
+            refresh_hash = params[0]
+            assert refresh_hash == self.expected_refresh_hash
+            return {
+                "id": self.session_id,
+                "user_id": self.user_id,
+                "token_hash": self.expected_access_hash,
+                "refresh_token_hash": self.expected_refresh_hash,
+            }
+        if "UPDATE sessions" in query:
+            expected_access_hash = params[9]
+            expected_refresh_hash = params[10]
+            if (
+                expected_access_hash == self.expected_access_hash
+                and expected_refresh_hash == self.expected_refresh_hash
+            ):
+                self.expected_access_hash = params[1]
+                self.expected_refresh_hash = params[5]
+                self.updated = True
+                return {"id": self.session_id}
+            return None
+        return None
 
     async def execute(self, *args, **kwargs):
         self.updated = True
@@ -135,7 +158,7 @@ async def test_refresh_session_replaces_cached_access_token(monkeypatch):
         }
     )
 
-    stub_conn = StubConn(old_refresh_hash, session_id, user_id)
+    stub_conn = StubConn(old_refresh_hash, old_access_hash, session_id, user_id)
     stub_pool = StubPool(stub_conn)
 
     async def _ensure_db_pool_stub(self):
@@ -204,15 +227,36 @@ async def test_refresh_session_accepts_legacy_refresh_hash(monkeypatch):
     )
 
     class CandidateStubConn:
-        def __init__(self, expected_hash):
-            self.expected_hash = expected_hash
+        def __init__(self, expected_refresh_hash):
+            self.expected_refresh_hash = expected_refresh_hash
+            self.expected_access_hash = "hash:existing-access"
             self.updated = False
             self.fetch_calls: list[str] = []
 
-        async def fetchrow(self, query, candidate_hash):
-            self.fetch_calls.append(candidate_hash)
-            if candidate_hash == self.expected_hash:
-                return {"id": session_id, "user_id": user_id}
+        async def fetchrow(self, query, *params):
+            if "SELECT id, user_id, token_hash, refresh_token_hash" in query:
+                candidate_hash = params[0]
+                self.fetch_calls.append(candidate_hash)
+                if candidate_hash == self.expected_refresh_hash:
+                    return {
+                        "id": session_id,
+                        "user_id": user_id,
+                        "token_hash": self.expected_access_hash,
+                        "refresh_token_hash": self.expected_refresh_hash,
+                    }
+                return None
+            if "UPDATE sessions" in query:
+                expected_access_hash = params[9]
+                expected_refresh_hash = params[10]
+                if (
+                    expected_access_hash == self.expected_access_hash
+                    and expected_refresh_hash == self.expected_refresh_hash
+                ):
+                    self.expected_access_hash = params[1]
+                    self.expected_refresh_hash = params[5]
+                    self.updated = True
+                    return {"id": session_id}
+                return None
             return None
 
         async def execute(self, *args, **kwargs):
@@ -340,6 +384,98 @@ async def test_validate_session_rewrites_legacy_hash(monkeypatch):
     assert result_again is not None
     update_calls_after = len([q for q, _ in stub_conn.update_calls if "SET token_hash" in q])
     assert update_calls_after == update_calls_before
+
+
+@pytest.mark.asyncio
+async def test_refresh_session_concurrent_rotation_allows_single_winner(isolated_test_environment):
+    reset_settings()
+    _client, _db_name = isolated_test_environment  # ensure DB/env is provisioned for this test
+    db_url = os.getenv("DATABASE_URL", "")
+
+    settings = Settings(
+        AUTH_MODE="multi_user",
+        DATABASE_URL=db_url,
+        JWT_SECRET_KEY="session-refresh-concurrency-secret-1234567890",
+        ENABLE_REGISTRATION=True,
+        REQUIRE_REGISTRATION_CODE=False,
+        RATE_LIMIT_ENABLED=False,
+        ROTATE_REFRESH_TOKENS=True,
+    )
+
+    pool = DatabasePool(settings)
+    await pool.initialize()
+    manager = SessionManager(db_pool=pool, settings=settings)
+    await manager.initialize()
+
+    try:
+        # Ensure a user exists for FK constraints
+        async with pool.transaction() as conn:
+            await conn.execute(
+                """
+                INSERT INTO users (id, username, email, password_hash, is_active)
+                VALUES ($1, $2, $3, $4, TRUE)
+                """,
+                1,
+                "concurrency-user",
+                "concurrency-user@example.com",
+                "hashed-password",
+            )
+
+        jwt_service = JWTService(settings=settings)
+        original_access = jwt_service.create_access_token(user_id=1, username="concurrency-user", role="user")
+        original_refresh = jwt_service.create_refresh_token(user_id=1, username="concurrency-user")
+
+        created = await manager.create_session(
+            user_id=1,
+            access_token=original_access,
+            refresh_token=original_refresh,
+            ip_address="127.0.0.1",
+            user_agent="pytest-concurrency",
+        )
+        session_id = int(created["session_id"])
+
+        token_pair_a = (
+            jwt_service.create_access_token(user_id=1, username="concurrency-user", role="user"),
+            jwt_service.create_refresh_token(user_id=1, username="concurrency-user"),
+        )
+        token_pair_b = (
+            jwt_service.create_access_token(user_id=1, username="concurrency-user", role="user"),
+            jwt_service.create_refresh_token(user_id=1, username="concurrency-user"),
+        )
+
+        async def _attempt_refresh(new_access: str, new_refresh: str) -> tuple[str, dict | None]:
+            try:
+                refreshed = await manager.refresh_session(
+                    refresh_token=original_refresh,
+                    new_access_token=new_access,
+                    new_refresh_token=new_refresh,
+                )
+                return "ok", refreshed
+            except InvalidSessionError:
+                return "invalid", None
+
+        outcomes = await asyncio.gather(
+            _attempt_refresh(*token_pair_a),
+            _attempt_refresh(*token_pair_b),
+        )
+        statuses = sorted([status for status, _ in outcomes])
+        assert statuses == ["invalid", "ok"]
+
+        row = await pool.fetchone(
+            "SELECT refresh_token_hash, token_hash FROM sessions WHERE id = $1",
+            session_id,
+        )
+        assert row is not None
+        winner_refresh_hashes = {
+            manager.hash_token(token_pair_a[1]),
+            manager.hash_token(token_pair_b[1]),
+        }
+        assert row["refresh_token_hash"] in winner_refresh_hashes
+        assert row["refresh_token_hash"] != manager.hash_token(original_refresh)
+    finally:
+        await manager.shutdown()
+        await pool.close()
+        reset_settings()
 
 @pytest.mark.asyncio
 async def test_is_token_blacklisted_uses_jti_redis_key(monkeypatch):

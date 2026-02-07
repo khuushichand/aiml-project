@@ -79,6 +79,12 @@ MAX_CACHED_JOB_MANAGER_INSTANCES = 4
 _job_manager_cache: LRUCache = LRUCache(maxsize=MAX_CACHED_JOB_MANAGER_INSTANCES)
 _job_manager_lock = threading.Lock()
 
+
+def _data_tables_jobs_queue() -> str:
+    """Return the configured jobs queue for data tables workers."""
+    return (os.getenv("DATA_TABLES_JOBS_QUEUE") or "default").strip() or "default"
+
+
 def _file_artifacts_http_exception(exc: FileArtifactsError) -> HTTPException:
     """Translate file artifact errors into HTTP exceptions with status codes."""
     detail = exc.detail if exc.detail is not None else exc.code
@@ -329,7 +335,7 @@ async def _wait_for_job_completion(
         if not job:
             raise HTTPException(status_code=404, detail="job_not_found")
         status_val = str(job.get("status") or "").lower()
-        if status_val in {"completed", "failed", "cancelled"}:
+        if status_val in {"completed", "failed", "cancelled", "quarantined"}:
             return job
         await asyncio.sleep(poll_interval)
     raise HTTPException(status_code=408, detail="data_table_job_timeout")
@@ -470,7 +476,7 @@ async def generate_data_table(
 
         job = jm.create_job(
             domain="data_tables",
-            queue="default",
+            queue=_data_tables_jobs_queue(),
             job_type="data_table_generate",
             payload=payload,
             owner_user_id=str(current_user.id),
@@ -787,6 +793,8 @@ async def update_data_table_content(
         raise HTTPException(status_code=404, detail="data_table_not_found")
 
     table_id = int(table_row.get("id"))
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
 
     try:
         if not req.columns:
@@ -823,6 +831,7 @@ async def update_data_table_content(
             )
 
         rows_payload: list[dict[str, Any]] = []
+        seen_row_indexes: set[int] = set()
         for idx, row in enumerate(req.rows or []):
             if not isinstance(row, dict):
                 raise InputError("row_payload_invalid")
@@ -853,6 +862,9 @@ async def update_data_table_content(
                 row_index = int(row_index) if row_index is not None else idx
             except (TypeError, ValueError):
                 row_index = idx
+            if row_index in seen_row_indexes:
+                raise InputError("duplicate_row_index")
+            seen_row_indexes.add(row_index)
             rows_payload.append(
                 {
                     "row_id": row_id or str(uuid.uuid4()),
@@ -872,12 +884,12 @@ async def update_data_table_content(
                 status="ready",
                 row_count=len(rows_payload),
                 last_error=None,
-                owner_user_id=owner_user_id,
+                owner_user_id=mutation_owner_user_id,
             )
     except InputError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    updated_row = db.get_data_table(table_id, owner_user_id=owner_user_id) or table_row
+    updated_row = db.get_data_table(table_id, owner_user_id=mutation_owner_user_id) or table_row
     rows_limit = max(1, min(len(rows_payload) or 200, 2000))
     return _build_table_detail_response(
         updated_row,
@@ -911,15 +923,17 @@ async def update_data_table(
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
     updated = db.update_data_table(
         int(table_row.get("id")),
         name=req.name.strip() if req.name is not None else None,
         description=req.description,
-        owner_user_id=owner_user_id,
+        owner_user_id=mutation_owner_user_id,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="data_table_update_failed")
-    counts = db.get_data_table_counts([int(updated.get("id"))], owner_user_id=owner_user_id).get(
+    counts = db.get_data_table_counts([int(updated.get("id"))], owner_user_id=mutation_owner_user_id).get(
         int(updated.get("id")),
         {},
     )
@@ -950,7 +964,12 @@ async def delete_data_table(
     table_row = db.get_data_table_by_uuid(table_uuid, owner_user_id=owner_user_id)
     if not table_row:
         raise HTTPException(status_code=404, detail="data_table_not_found")
-    deleted = db.soft_delete_data_table(int(table_row.get("id")), owner_user_id=owner_user_id)
+    table_owner_client_id = str(table_row.get("client_id") or "").strip() or None
+    mutation_owner_user_id = table_owner_client_id or owner_user_id
+    deleted = db.soft_delete_data_table(
+        int(table_row.get("id")),
+        owner_user_id=mutation_owner_user_id,
+    )
     if not deleted:
         raise HTTPException(status_code=500, detail="data_table_delete_failed")
     return DataTableDeleteResponse(success=True)
@@ -1021,7 +1040,7 @@ async def regenerate_data_table(
 
     job = jm.create_job(
         domain="data_tables",
-        queue="default",
+        queue=_data_tables_jobs_queue(),
         job_type="data_table_generate",
         payload=payload,
         owner_user_id=str(current_user.id),
@@ -1035,7 +1054,7 @@ async def regenerate_data_table(
         status="queued",
         generation_model=req.model or table_row.get("generation_model"),
         prompt=prompt_override,
-        owner_user_id=owner_user_id,
+        owner_user_id=table_owner_client_id or owner_user_id,
     )
 
     if wait_for_completion:

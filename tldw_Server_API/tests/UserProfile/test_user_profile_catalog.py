@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.UserProfiles import user_profile_catalog as catalog_module
 from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import (
     clear_user_profile_catalog_cache,
@@ -46,21 +45,27 @@ def test_user_profile_catalog_invalid_role(tmp_path: Path) -> None:
         load_user_profile_catalog(catalog_path)
 
 
-def test_user_profile_catalog_endpoint_etag(tmp_path: Path, auth_headers, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_user_profile_catalog_endpoint_etag(tmp_path: Path, monkeypatch) -> None:
     catalog_path = _write_catalog(tmp_path)
     monkeypatch.setattr(catalog_module, "CATALOG_PATH", catalog_path)
     clear_user_profile_catalog_cache()
+    from tldw_Server_API.app.api.v1.endpoints.users import get_user_profile_catalog
 
-    with TestClient(app) as client:
-        resp = client.get("/api/v1/users/profile/catalog", headers=auth_headers)
-        assert resp.status_code == 200
-        etag = resp.headers.get("ETag")
-        assert etag
-        assert resp.headers.get("Cache-Control") == "max-age=3600"
+    resp = await get_user_profile_catalog(
+        current_user={"id": 1, "username": "test-user"},
+        if_none_match=None,
+    )
+    assert resp.status_code == 200
+    etag = resp.headers.get("ETag")
+    assert etag
+    assert resp.headers.get("Cache-Control") == "max-age=3600"
+    payload = json.loads(resp.body.decode("utf-8"))
+    assert payload["version"] == "1.0.0"
 
-        resp_304 = client.get(
-            "/api/v1/users/profile/catalog",
-            headers={**auth_headers, "If-None-Match": etag},
-        )
-        assert resp_304.status_code == 304
-        assert resp_304.headers.get("ETag") == etag
+    resp_304 = await get_user_profile_catalog(
+        current_user={"id": 1, "username": "test-user"},
+        if_none_match=etag,
+    )
+    assert resp_304.status_code == 304
+    assert resp_304.headers.get("ETag") == etag

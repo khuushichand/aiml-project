@@ -233,13 +233,13 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
 
         try:
             limits = await get_key_limits(int(key_id))
-        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             logger.exception("LLM budget: failed to read key limits; rejecting request")
             return JSONResponse(
                 {
                     "error": "budget_limits_unavailable",
                     "message": "Failed to load virtual key limits; request rejected",
-                    "details": {"reason": str(e)},
+                    "details": {"reason": "internal_error"},
                 },
                 status_code=503,
             )
@@ -376,7 +376,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                     "message": "Virtual key budget exceeded",
                     "details": result,
                 }, status_code=402)
-        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS as e:
+        except _LLM_BUDGET_NONCRITICAL_EXCEPTIONS:
             # Fail-closed: if we cannot evaluate the budget, do NOT allow the request.
             # Log with full exception details for operational visibility.
             logger.exception("LLM budget: budget check failed; rejecting request")
@@ -384,7 +384,7 @@ class LLMBudgetMiddleware(BaseHTTPMiddleware):
                 {
                     "error": "budget_check_failed",
                     "message": "Failed to evaluate budget enforcement; request rejected",
-                    "details": {"reason": str(e)},
+                    "details": {"reason": "internal_error"},
                 },
                 status_code=503,
             )

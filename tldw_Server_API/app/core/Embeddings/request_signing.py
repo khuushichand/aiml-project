@@ -223,7 +223,8 @@ class NonceManager:
 
     def is_valid_nonce(self, nonce: str) -> bool:
         """
-        Check if a nonce is valid (not used before).
+        Check if a nonce is valid (not used before) and consume it.
+        Backward-compatible alias for consume_nonce().
 
         Args:
             nonce: Nonce to check
@@ -231,31 +232,54 @@ class NonceManager:
         Returns:
             True if valid (not used), False otherwise
         """
-        with self._lock:
-            # Cleanup old nonces periodically (use total_seconds to handle day rollover)
-            if (datetime.utcnow() - self.last_cleanup).total_seconds() > 3600:
-                self._cleanup_old_nonces()
+        return self.consume_nonce(nonce)
 
-            # Check if nonce was used
-            if nonce in self.used_nonces:
-                return False
+    def consume_nonce(self, nonce: str) -> bool:
+        """
+        Atomically validate and consume a nonce.
+
+        Expired nonce entries are treated as reusable immediately, even if
+        periodic cleanup has not run yet.
+        """
+        with self._lock:
+            now = datetime.utcnow()
+
+            # Cleanup old nonces periodically (use total_seconds to handle day rollover)
+            if (now - self.last_cleanup).total_seconds() > 3600:
+                self._cleanup_old_nonces_locked(now)
+
+            # Check if nonce was used and still within TTL
+            existing_timestamp = self.used_nonces.get(nonce)
+            if existing_timestamp is not None:
+                if self._is_nonce_expired(existing_timestamp, now):
+                    self.used_nonces.pop(nonce, None)
+                else:
+                    return False
 
             # Mark as used
-            self.used_nonces[nonce] = datetime.utcnow()
+            self.used_nonces[nonce] = now
             return True
 
     def _cleanup_old_nonces(self):
         """Remove expired nonces"""
-        cutoff = datetime.utcnow() - timedelta(seconds=self.ttl_seconds)
+        with self._lock:
+            self._cleanup_old_nonces_locked(datetime.utcnow())
 
+    def _cleanup_old_nonces_locked(self, now: datetime):
+        """Remove expired nonces. Caller must hold self._lock."""
+        cutoff = now - timedelta(seconds=self.ttl_seconds)
         self.used_nonces = {
             nonce: timestamp
             for nonce, timestamp in self.used_nonces.items()
             if timestamp > cutoff
         }
 
-        self.last_cleanup = datetime.utcnow()
+        self.last_cleanup = now
         logger.debug(f"Cleaned up nonces, {len(self.used_nonces)} remaining")
+
+    def _is_nonce_expired(self, timestamp: datetime, now: datetime) -> bool:
+        """Check whether a nonce timestamp exceeds configured TTL."""
+        return (now - timestamp).total_seconds() > self.ttl_seconds
 
 
 class APIKeyManager:
@@ -440,19 +464,23 @@ def validate_signed_request(
     if not all([signature, timestamp, nonce]):
         return False, "Missing signature headers"
 
-    # Check nonce
-    if not nonce_manager.is_valid_nonce(nonce):
-        log_security_violation(user_id=user_id, action="request_replay_attempt", metadata={'nonce': nonce})
-        return False, "Invalid or reused nonce"
-
-    # Verify signature
-    return signer.verify_request(
+    # Verify signature first to avoid consuming nonce on invalid signatures.
+    is_valid_signature, error_message = signer.verify_request(
         user_id=user_id,
         request_data=request_data,
         signature=signature,
         timestamp=timestamp,
-        nonce=nonce
+        nonce=nonce,
     )
+    if not is_valid_signature:
+        return False, error_message
+
+    # Consume nonce only after signature verification succeeds.
+    if not nonce_manager.consume_nonce(nonce):
+        log_security_violation(user_id=user_id, action="request_replay_attempt", metadata={'nonce': nonce})
+        return False, "Invalid or reused nonce"
+
+    return True, None
 
 
 # Example usage

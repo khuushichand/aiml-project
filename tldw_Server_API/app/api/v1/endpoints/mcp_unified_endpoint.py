@@ -124,6 +124,15 @@ class AuthTokenResponse(BaseModel):
     refresh_token: Optional[str] = None
 
 
+class AuthRefreshRequest(BaseModel):
+    """Refresh authentication request payload."""
+    refresh_token: str = Field(..., description="Refresh token value. Must be sent in the JSON body.")
+    token_id: Optional[str] = Field(
+        default=None,
+        description="Optional refresh token identifier when known by the client.",
+    )
+
+
 def _get_derived_user_id(user: Optional[TokenData]) -> Optional[str]:
     """Return user.sub when available, otherwise None."""
     return user.sub if user else None
@@ -219,13 +228,14 @@ async def get_current_user(
     """
     # Try AuthNZ JWT first (multi-user)
     authnz_token_failed = False
+    token = credentials.credentials if credentials and credentials.credentials else None
     try:
-        if credentials and credentials.credentials:
+        if token:
             if request is None:
                 from starlette.requests import Request as _Request
 
                 request = _Request({"type": "http", "headers": []})
-            user = await verify_jwt_and_fetch_user(request, credentials.credentials)
+            user = await verify_jwt_and_fetch_user(request, token)
             uid = str(getattr(user, "id", None))
             if uid:
                 return TokenData(
@@ -235,13 +245,32 @@ async def get_current_user(
                     permissions=list(getattr(user, "permissions", []) or []),
                     token_type="access",
                 )
+    except HTTPException:
+        logger.debug(
+            "AuthNZ JWT verification rejected the token",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
+        if token and _is_authnz_access_token(token):
+            logger.debug(
+                "AuthNZ JWT rejected; not falling back to MCP JWT",
+                extra={"auth_method": "authnz_jwt"},
+                exc_info=True,
+            )
+            authnz_token_failed = True
+            if not x_api_key:
+                return None
+        logger.debug(
+            "AuthNZ JWT check failed; falling back to MCP JWT / API key",
+            extra={"auth_method": "authnz_jwt"},
+            exc_info=True,
+        )
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
         logger.debug(
             "AuthNZ JWT verification raised an exception",
             extra={"auth_method": "authnz_jwt"},
             exc_info=True,
         )
-        token = credentials.credentials if credentials and credentials.credentials else None
         if token and _is_authnz_access_token(token):
             logger.debug(
                 "AuthNZ JWT rejected; not falling back to MCP JWT",
@@ -1437,25 +1466,27 @@ async def create_token(
 
 @router.post("/auth/refresh", response_model=AuthTokenResponse)
 async def refresh_token(
-    refresh_token: str = Query(..., description="Refresh token"),
-    token_id: Optional[str] = Query(None, description="Refresh token id (if available)"),
+    auth_request: AuthRefreshRequest,
     _guard: None = Depends(enforce_http_security),
 ):
     """
     Refresh authentication token.
 
     Exchange a valid refresh token for a new access token using rotation.
+    The refresh token must be provided in the request JSON body.
     If `token_id` is not provided, the system attempts to locate it by scanning
     active refresh tokens (acceptable for in-memory DEV mode).
     """
     jwt_manager = get_jwt_manager()
+    refresh_token_value = auth_request.refresh_token
+    token_id = auth_request.token_id
     # Attempt to find token_id if not provided
     resolved_token_id = token_id
     try:
         if not resolved_token_id:
             # Scan in-memory store (DEV): find first token_id matching token
             for tid, rt in jwt_manager._refresh_tokens.items():  # noqa: SLF001
-                if rt.token == refresh_token and not rt.revoked:
+                if rt.token == refresh_token_value and not rt.revoked:
                     resolved_token_id = tid
                     break
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
@@ -1465,7 +1496,7 @@ async def refresh_token(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
     try:
-        new_access, new_refresh, new_tid = jwt_manager.rotate_refresh_token(refresh_token, resolved_token_id)
+        new_access, new_refresh, _new_tid = jwt_manager.rotate_refresh_token(refresh_token_value, resolved_token_id)
     except HTTPException:
         raise
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:

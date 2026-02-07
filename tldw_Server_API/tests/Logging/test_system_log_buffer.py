@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 import importlib
-from datetime import datetime, timezone
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+
+def _reload_log_buffer():
+    import tldw_Server_API.app.core.Logging.system_log_buffer as log_buffer
+
+    return importlib.reload(log_buffer)
 
 
 def test_system_log_file_query_reads_shared_file(tmp_path, monkeypatch):
@@ -10,9 +20,7 @@ def test_system_log_file_query_reads_shared_file(tmp_path, monkeypatch):
     monkeypatch.setenv("SYSTEM_LOG_FILE_PATH", str(log_path))
     monkeypatch.setenv("SYSTEM_LOG_FILE_MAX_ENTRIES", "10")
 
-    import tldw_Server_API.app.core.Logging.system_log_buffer as log_buffer
-
-    importlib.reload(log_buffer)
+    log_buffer = _reload_log_buffer()
 
     entry = {
         "timestamp": datetime.now(timezone.utc),
@@ -30,3 +38,147 @@ def test_system_log_file_query_reads_shared_file(tmp_path, monkeypatch):
     assert total >= 1
     assert any(item.get("message") == "file-backed entry" for item in items)
     assert log_path.exists()
+
+
+def test_append_log_file_compacts_periodically(tmp_path, monkeypatch):
+    log_path = tmp_path / "system_logs.jsonl"
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_PATH", str(log_path))
+    # Runtime minimum is 100 entries, so use that floor for deterministic assertions.
+    monkeypatch.setenv("SYSTEM_LOG_FILE_MAX_ENTRIES", "100")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES", "3")
+
+    log_buffer = _reload_log_buffer()
+    base_time = datetime(2026, 2, 1, 10, 0, tzinfo=timezone.utc)
+
+    for idx in range(101):
+        log_buffer._append_log_file(
+            {
+                "timestamp": base_time + timedelta(minutes=idx),
+                "level": "INFO",
+                "message": f"m{idx}",
+            }
+        )
+
+    lines_after_overflow = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines_after_overflow) == 101
+
+    log_buffer._append_log_file(
+        {
+            "timestamp": base_time + timedelta(minutes=101),
+            "level": "INFO",
+            "message": "m101",
+        }
+    )
+
+    lines_after_compact = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines_after_compact) == 100
+    assert all('"message": "m0"' not in line for line in lines_after_compact)
+    assert all('"message": "m1"' not in line for line in lines_after_compact)
+    assert any('"message": "m2"' in line for line in lines_after_compact)
+    assert any('"message": "m101"' in line for line in lines_after_compact)
+
+
+def test_append_log_file_failure_avoids_sink_reentry(monkeypatch, tmp_path):
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_PATH", str(tmp_path / "system_logs.jsonl"))
+    monkeypatch.setenv("SYSTEM_LOG_FILE_MAX_ENTRIES", "100")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_COMPACT_EVERY_WRITES", "10")
+    log_buffer = _reload_log_buffer()
+
+    called: list[str] = []
+    monkeypatch.setattr(log_buffer, "_emit_internal_diagnostic", lambda message: called.append(message))
+
+    @contextmanager
+    def _failing_lock(_timeout=None):
+        raise PermissionError("write denied")
+        yield
+
+    monkeypatch.setattr(log_buffer, "_log_file_lock", _failing_lock)
+
+    log_buffer._append_log_file(
+        {
+            "timestamp": datetime.now(timezone.utc),
+            "level": "INFO",
+            "message": "should not recurse",
+        }
+    )
+
+    assert called
+    assert "write denied" in called[0]
+
+
+def test_query_system_logs_handles_naive_start_with_aware_entries(monkeypatch):
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "false")
+    log_buffer = _reload_log_buffer()
+
+    now_aware = datetime(2026, 2, 1, 12, 0, tzinfo=timezone.utc)
+    with log_buffer._BUFFER_LOCK:
+        log_buffer._BUFFER.clear()
+        log_buffer._BUFFER.append(
+            {
+                "timestamp": now_aware,
+                "level": "INFO",
+                "message": "aware-entry",
+                "logger": "test",
+                "module": "test_module",
+            }
+        )
+
+    items, total = log_buffer.query_system_logs(start=datetime(2026, 1, 1), limit=10, offset=0)
+    assert total == 1
+    assert items[0]["message"] == "aware-entry"
+    assert items[0]["timestamp"].tzinfo is not None
+
+
+def test_query_system_logs_sorts_with_malformed_timestamps(monkeypatch):
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "false")
+    log_buffer = _reload_log_buffer()
+
+    with log_buffer._BUFFER_LOCK:
+        log_buffer._BUFFER.clear()
+        log_buffer._BUFFER.extend(
+            [
+                {
+                    "timestamp": "not-a-time",
+                    "level": "INFO",
+                    "message": "bad-timestamp",
+                },
+                {
+                    "timestamp": datetime(2026, 2, 1, 11, 0, tzinfo=timezone.utc),
+                    "level": "INFO",
+                    "message": "older",
+                },
+                {
+                    "timestamp": datetime(2026, 2, 1, 12, 0),
+                    "level": "INFO",
+                    "message": "newer-naive",
+                },
+            ]
+        )
+
+    items, total = log_buffer.query_system_logs(limit=10, offset=0)
+    assert total == 3
+    assert items[0]["message"] == "newer-naive"
+    assert items[-1]["message"] == "bad-timestamp"
+
+
+def test_log_file_lock_uses_runtime_timeout_from_env(monkeypatch, tmp_path):
+    log_path = tmp_path / "system_logs.jsonl"
+    lock_path = log_path.with_suffix(log_path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text("locked", encoding="utf-8")
+
+    monkeypatch.setenv("SYSTEM_LOG_FILE_ENABLED", "true")
+    monkeypatch.setenv("SYSTEM_LOG_FILE_PATH", str(log_path))
+    monkeypatch.setenv("SYSTEM_LOG_FILE_LOCK_TIMEOUT", "0.2")
+
+    log_buffer = _reload_log_buffer()
+    monkeypatch.setattr(log_buffer, "_HAS_FCNTL", False)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="Failed to acquire system log lock"):
+        with log_buffer._log_file_lock():
+            pass
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.5
