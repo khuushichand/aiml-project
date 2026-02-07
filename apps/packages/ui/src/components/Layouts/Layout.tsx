@@ -285,7 +285,7 @@ const OptionLayoutInner: React.FC<OptionLayoutProps> = ({
         ) : (
           <div
             className={classNames(
-              "relative flex flex-col pt-2 sm:pt-3",
+              "relative flex flex-col",
               isDocumentWorkspace ? "min-h-0 flex-1" : "min-h-[135vh]"
             )}
           >
