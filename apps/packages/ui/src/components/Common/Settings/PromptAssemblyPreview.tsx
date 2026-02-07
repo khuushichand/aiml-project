@@ -34,6 +34,38 @@ type Props = {
   settingsFingerprint: string
 }
 
+interface PromptPreviewSectionPayload {
+  name?: unknown
+  content?: unknown
+  tokens_effective?: unknown
+  tokens_estimated?: unknown
+}
+
+interface PromptPreviewConflictPayload {
+  type?: unknown
+  message?: unknown
+}
+
+interface PromptPreviewPayload {
+  sections?: unknown
+  supplemental_budget?: unknown
+  total_supplemental_effective_tokens?: unknown
+  total_supplemental_tokens?: unknown
+  budget_status?: unknown
+  warnings?: unknown
+  conflicts?: unknown
+  examples?: unknown
+}
+
+const toObject = (value: unknown): Record<string, unknown> | null =>
+  value && typeof value === "object" ? (value as Record<string, unknown>) : null
+
+const toSectionPayload = (value: unknown): PromptPreviewSectionPayload =>
+  (toObject(value) as PromptPreviewSectionPayload | null) ?? {}
+
+const toConflictPayload = (value: unknown): PromptPreviewConflictPayload =>
+  (toObject(value) as PromptPreviewConflictPayload | null) ?? {}
+
 const getBudgetToneClass = (status: PromptPreviewSummary["budgetStatus"]) => {
   if (status === "error") return "text-danger border-danger/40 bg-danger/10"
   if (status === "caution") return "text-warn border-warn/40 bg-warn/10"
@@ -50,7 +82,7 @@ const SECTION_I18N_KEYS: Record<string, string> = {
 }
 
 const toBudgetStatus = (
-  value: unknown,
+  value: PromptPreviewPayload["budget_status"],
   supplementalTokens: number,
   supplementalBudget: number
 ): PromptPreviewSummary["budgetStatus"] => {
@@ -60,16 +92,20 @@ const toBudgetStatus = (
   return "ok"
 }
 
-export const normalizePreviewPayload = (payload: any): PromptPreviewSummary => {
-  const sectionList = Array.isArray(payload?.sections) ? payload.sections : []
-  const sections = sectionList.map((section: any) => {
-    const key = String(section?.name || "unknown")
-    const content = typeof section?.content === "string" ? section.content : ""
+export const normalizePreviewPayload = (payload: unknown): PromptPreviewSummary => {
+  const parsedPayload = (toObject(payload) as PromptPreviewPayload | null) ?? {}
+  const sectionList = Array.isArray(parsedPayload.sections)
+    ? parsedPayload.sections
+    : []
+  const sections = sectionList.map((rawSection) => {
+    const section = toSectionPayload(rawSection)
+    const key = String(section.name || "unknown")
+    const content = typeof section.content === "string" ? section.content : ""
     const label = key.replace(/_/g, " ")
     const tokens =
-      typeof section?.tokens_effective === "number"
+      typeof section.tokens_effective === "number"
         ? section.tokens_effective
-        : typeof section?.tokens_estimated === "number"
+        : typeof section.tokens_estimated === "number"
           ? section.tokens_estimated
           : 0
     return {
@@ -82,33 +118,36 @@ export const normalizePreviewPayload = (payload: any): PromptPreviewSummary => {
   })
 
   const supplementalBudget =
-    typeof payload?.supplemental_budget === "number"
-      ? payload.supplemental_budget
+    typeof parsedPayload.supplemental_budget === "number"
+      ? parsedPayload.supplemental_budget
       : 1200
   const supplementalTokens =
-    typeof payload?.total_supplemental_effective_tokens === "number"
-      ? payload.total_supplemental_effective_tokens
-      : typeof payload?.total_supplemental_tokens === "number"
-        ? payload.total_supplemental_tokens
+    typeof parsedPayload.total_supplemental_effective_tokens === "number"
+      ? parsedPayload.total_supplemental_effective_tokens
+      : typeof parsedPayload.total_supplemental_tokens === "number"
+        ? parsedPayload.total_supplemental_tokens
         : sections.reduce((total, section) => total + section.tokens, 0)
   const budgetStatus = toBudgetStatus(
-    payload?.budget_status,
+    parsedPayload.budget_status,
     supplementalTokens,
     supplementalBudget
   )
-  const warnings = Array.isArray(payload?.warnings)
-    ? payload.warnings.filter((value: unknown) => typeof value === "string")
+  const warnings = Array.isArray(parsedPayload.warnings)
+    ? parsedPayload.warnings.filter((value: unknown) => typeof value === "string")
     : []
-  const conflicts = Array.isArray(payload?.conflicts)
-    ? payload.conflicts
-        .map((item: any) => ({
-          type: String(item?.type || "directive_conflict"),
-          message: String(item?.message || "")
-        }))
+  const conflicts = Array.isArray(parsedPayload.conflicts)
+    ? parsedPayload.conflicts
+        .map((rawConflict) => {
+          const conflict = toConflictPayload(rawConflict)
+          return {
+            type: String(conflict.type || "directive_conflict"),
+            message: String(conflict.message || "")
+          }
+        })
         .filter((item: PromptPreviewConflict) => item.message.length > 0)
     : []
-  const examples = Array.isArray(payload?.examples)
-    ? payload.examples.filter((value: unknown) => typeof value === "string")
+  const examples = Array.isArray(parsedPayload.examples)
+    ? parsedPayload.examples.filter((value: unknown) => typeof value === "string")
     : []
 
   return {

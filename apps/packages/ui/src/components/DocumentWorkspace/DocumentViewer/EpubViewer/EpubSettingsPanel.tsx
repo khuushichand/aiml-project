@@ -131,7 +131,7 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
             step={10}
             value={fontSize}
             onChange={setFontSize}
-            tooltip={{ formatter: (v) => (typeof v === "number" ? `${v}%` : "") }}
+            tooltip={{ formatter: (v) => (typeof v === "number" ? `${v}%` : undefined) }}
           />
           <button
             type="button"
@@ -177,7 +177,7 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
           value={lineHeight}
           onChange={setLineHeight}
           marks={{ 1.0: "1.0", 1.6: "1.6", 2.5: "2.5" }}
-          tooltip={{ formatter: (v) => (typeof v === "number" ? v.toFixed(1) : "") }}
+          tooltip={{ formatter: (v) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(1) : "") }}
         />
       </div>
 

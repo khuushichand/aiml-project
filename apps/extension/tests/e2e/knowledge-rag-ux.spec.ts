@@ -5,6 +5,25 @@ import {
   forceConnected
 } from './utils/connection'
 
+interface MessageOptionStoreState {
+  chatMode?: string
+}
+
+interface MessageOptionStore {
+  getState?: () => MessageOptionStoreState
+}
+
+interface MessageOptionWindow {
+  __tldw_useStoreMessageOption?: MessageOptionStore
+}
+
+async function readChatMode(page: import('@playwright/test').Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const w = window as unknown as MessageOptionWindow
+    return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
+  })
+}
+
 async function dismissWelcomeOverlay(page: import('@playwright/test').Page) {
   const welcomeHeading = page.getByText(/Welcome to tldw Assistant/i).first()
   const isTimeoutError = (err: unknown): err is Error =>
@@ -151,28 +170,17 @@ test.describe('Knowledge RAG workspace UX', () => {
         })
         await expect(autoRagSwitch).toBeVisible()
 
-        interface MessageOptionStore {
-          getState?: () => { chatMode?: string }
-        }
-        interface MessageOptionWindow {
-          __tldw_useStoreMessageOption?: MessageOptionStore
-        }
-        const readChatMode = () =>
-          page.evaluate(() => {
-            const w = window as unknown as MessageOptionWindow
-            return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
-          })
-        const initialMode = await readChatMode()
+        const initialMode = await readChatMode(page)
         expect(initialMode).toBe('normal')
 
         await autoRagSwitch.click()
 
-        const ragMode = await readChatMode()
+        const ragMode = await readChatMode(page)
         expect(ragMode).toBe('rag')
 
         await autoRagSwitch.click()
 
-        const backMode = await readChatMode()
+        const backMode = await readChatMode(page)
         expect(backMode).toBe('normal')
       } else {
         // When RAG is unsupported, we at least show a Diagnostics CTA

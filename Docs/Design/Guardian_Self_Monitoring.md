@@ -85,7 +85,7 @@ Each supervised policy specifies:
 
 ### Pipeline Integration
 
-`SupervisedPolicyEngine.build_moderation_policy_overlay()` merges supervised rules into a base `ModerationPolicy` object that is compatible with the existing moderation pipeline. Wiring this into all chat streaming callbacks is tracked as future work (P1).
+`SupervisedPolicyEngine.build_moderation_policy_overlay()` merges supervised rules into a base `ModerationPolicy` object that is compatible with the existing moderation pipeline. Guardian and self-monitoring checks are wired into chat input moderation (`moderate_input_messages` and the chat endpoint integration); expanding this coverage to additional entry points is tracked as follow-up work.
 
 ---
 
@@ -97,7 +97,7 @@ Self-monitoring rules add awareness features beyond blocking:
 
 - **except_patterns** — false-positive exclusions (e.g., pattern `suicide` with except `prevention`)
 - **notification_frequency** — `every_message` | `once_per_conversation` | `once_per_day` | `once_per_session`
-- **display_mode** — `banner` | `toast` | `inline` | `silent`
+- **display_mode** — `inline_banner` | `sidebar_note` | `post_session_summary` | `silent_log`
 - **escalation** — session-level and rolling-window thresholds with action escalation
 - **cooldown_minutes** — prevents impulsive disabling (must wait N minutes before deactivation)
 - **bypass_protection** — partner-based override requiring a second user to confirm deactivation
@@ -119,7 +119,7 @@ Two independent thresholds per rule:
 1. **Session threshold** — if alerts in current session exceed N, escalate action
 2. **Window threshold** — if alerts in rolling N-day window exceed M, escalate action
 
-Escalated action replaces base action (e.g., `notify` -> `warn` -> `block`).
+Escalated action replaces base action (e.g., `notify` -> `redact` -> `block`).
 
 ### Crisis Resources
 
@@ -137,23 +137,23 @@ Displayed with disclaimer: *"tldw is not a mental health service..."*
 
 ### B1: Fitness Awareness
 - Pattern: `workout|exercise|diet|fitness|calories`
-- Action: `notify`, display: `toast`
+- Action: `notify`, display: `inline_banner`
 - Frequency: `once_per_conversation`
 - Optional future integration: webhook push to a fitness tracking app
 
 ### B2: Crisis/Mental Health
 - Pattern: `\b(suicid|self.harm|kill myself)\b` (regex)
 - Except: `prevention|hotline|awareness|research`
-- Action: `warn`, severity: `critical`
+- Action: `notify` (with escalation to `block`), severity: `critical`
 - Crisis resources: enabled
 - Escalation: 3 in session -> block, 5 in 7 days -> block
 - Cooldown: 1440 minutes (24h), bypass protection on
 
 ### B3: Professional Boundaries
 - Pattern: client names, case numbers (user-configured regex)
-- Action: `warn`, display: `inline`
+- Action: `notify`, display: `inline_banner`
 - Frequency: `every_message`
-- Context snippet: `topic_only` (log that alert fired, not the content)
+- For low-interruption logging, use `display_mode = silent_log` to avoid inline UI while still recording alerts
 
 ---
 
@@ -174,20 +174,22 @@ Key models in `guardian_schemas.py`:
 
 ## Testing
 
-Coverage is concentrated in three dedicated test modules:
+Coverage is concentrated in four dedicated test modules:
 
 | File | Focus |
 |------|-------|
 | `test_guardian_db.py` | All CRUD for 7 tables, validation, cascade deletion |
 | `test_supervised_policy.py` | Pattern matching, actions, phases, cache, overlay building |
 | `test_self_monitoring.py` | Matching, dedup, escalation, cooldown, crisis resources |
+| `test_chat_integration.py` | `moderate_input_messages` integration with supervised and self-monitoring services |
 
-All tests use real SQLite databases (tmp_path fixtures) — no mocks.
+Core Guardian DB/service tests use real SQLite databases (tmp_path fixtures). The chat integration module also uses targeted fakes/mocks for moderation dependencies.
 
 To check the current collected test count for these modules:
 
 ```bash
 python3 -m pytest --collect-only -q \
+  tldw_Server_API/tests/Guardian/test_chat_integration.py \
   tldw_Server_API/tests/Guardian/test_guardian_db.py \
   tldw_Server_API/tests/Guardian/test_supervised_policy.py \
   tldw_Server_API/tests/Guardian/test_self_monitoring.py
@@ -209,12 +211,13 @@ python3 -m pytest --collect-only -q \
 | `tldw_Server_API/tests/Guardian/test_guardian_db.py` | DB tests |
 | `tldw_Server_API/tests/Guardian/test_supervised_policy.py` | Policy engine tests |
 | `tldw_Server_API/tests/Guardian/test_self_monitoring.py` | Service tests |
+| `tldw_Server_API/tests/Guardian/test_chat_integration.py` | Chat moderation integration tests |
 
 ---
 
 ## Future Work (P1/P2)
 
-- **P1**: Chat pipeline integration hooks (call `check_text()` in chat streaming callbacks)
+- **P1**: Expand guardian/self-monitoring enforcement to additional non-chat entry points
 - **P1**: Notification delivery (webhook, email, trusted contact)
 - **P1**: In-app notification UI
 - **P2**: Age-based rule relaxation schedules
