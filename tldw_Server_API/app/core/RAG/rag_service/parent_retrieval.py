@@ -442,7 +442,7 @@ class ParentDocumentRetriever:
             parent_groups[parent_id].append(chunk)
 
         # Apply diversity penalty within groups
-        for parent_id, chunks in parent_groups.items():
+        for _parent_id, chunks in parent_groups.items():
             if len(chunks) > 1:
                 # Sort by score
                 chunks.sort(key=lambda x: x.score, reverse=True)

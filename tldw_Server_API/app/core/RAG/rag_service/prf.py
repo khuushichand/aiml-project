@@ -40,7 +40,7 @@ class PRFConfig:
         try:
             alpha_val = float(self.alpha)
         except (TypeError, ValueError):
-            raise ValueError(f"PRFConfig.alpha must be a float between 0.0 and 1.0, got {self.alpha!r}")
+            raise ValueError(f"PRFConfig.alpha must be a float between 0.0 and 1.0, got {self.alpha!r}") from None
         if not 0.0 <= alpha_val <= 1.0:
             raise ValueError(f"PRFConfig.alpha must be between 0.0 and 1.0, got {alpha_val}")
         self.alpha = alpha_val

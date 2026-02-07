@@ -206,10 +206,10 @@ async def create_org(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Organization with {dup.field} '{dup.value}' already exists",
-        )
+        ) from dup
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create organization: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to create organization")
+        raise HTTPException(status_code=500, detail="Failed to create organization") from exc
 
 
 async def list_orgs(
@@ -262,7 +262,7 @@ async def list_orgs(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list organizations: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list organizations")
+        raise HTTPException(status_code=500, detail="Failed to list organizations") from exc
 
 
 async def create_team(
@@ -283,10 +283,10 @@ async def create_team(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Team with {dup.field} '{dup.value}' already exists in org {org_id}",
-        )
+        ) from dup
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create team: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to create team")
+        raise HTTPException(status_code=500, detail="Failed to create team") from exc
 
 
 async def list_teams(
@@ -303,7 +303,7 @@ async def list_teams(
         return [TeamResponse(**r) for r in rows]
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list teams: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list teams")
+        raise HTTPException(status_code=500, detail="Failed to list teams") from exc
 
 
 async def get_team(
@@ -371,7 +371,7 @@ async def update_org_watchlists_settings(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update org watchlists settings for org {org_id}: {exc}")
-        raise HTTPException(status_code=500, detail="failed_to_update_org_watchlists_settings")
+        raise HTTPException(status_code=500, detail="failed_to_update_org_watchlists_settings") from exc
 
 
 async def get_org_watchlists_settings(
@@ -408,7 +408,7 @@ async def get_org_watchlists_settings(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to fetch org watchlists settings for org {org_id}: {exc}")
-        raise HTTPException(status_code=500, detail="failed_to_fetch_org_watchlists_settings")
+        raise HTTPException(status_code=500, detail="failed_to_fetch_org_watchlists_settings") from exc
 
 
 async def add_team_member(
@@ -437,7 +437,7 @@ async def add_team_member(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to add team member: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to add team member")
+        raise HTTPException(status_code=500, detail="Failed to add team member") from exc
 
 
 async def list_team_members(
@@ -499,7 +499,7 @@ async def remove_team_member(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to remove team member user_id={user_id} from team_id={team_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to remove team member")
+        raise HTTPException(status_code=500, detail="Failed to remove team member") from exc
 
 
 async def add_org_member(
@@ -528,7 +528,7 @@ async def add_org_member(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to add org member: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to add org member")
+        raise HTTPException(status_code=500, detail="Failed to add org member") from exc
 
 
 async def list_org_members(
@@ -558,7 +558,7 @@ async def list_org_members(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list org members: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list org members")
+        raise HTTPException(status_code=500, detail="Failed to list org members") from exc
 
 
 async def remove_org_member(
@@ -601,7 +601,7 @@ async def remove_org_member(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to remove org member user_id={user_id} from org_id={org_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to remove org member")
+        raise HTTPException(status_code=500, detail="Failed to remove org member") from exc
 
 
 async def update_org_member_role(
@@ -634,7 +634,7 @@ async def update_org_member_role(
         raise
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update org member role user_id={user_id} org_id={org_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to update org member role")
+        raise HTTPException(status_code=500, detail="Failed to update org member role") from exc
 
 
 async def list_user_org_memberships(
@@ -647,4 +647,4 @@ async def list_user_org_memberships(
         return [OrgMembershipItem(**r) for r in rows]
     except _ADMIN_ORGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list org memberships for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list org memberships")
+        raise HTTPException(status_code=500, detail="Failed to list org memberships") from exc

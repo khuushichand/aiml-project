@@ -100,7 +100,7 @@ class CharactersModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except (TypeError, ValueError) as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
         if tool_name == "characters.search":
             return await self._search(args, context)
         if tool_name == "characters.get":

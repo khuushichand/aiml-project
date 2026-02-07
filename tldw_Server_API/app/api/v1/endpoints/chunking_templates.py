@@ -226,7 +226,7 @@ async def list_templates(
 
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing templates: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/{template_name}", response_model=ChunkingTemplateResponse)
@@ -279,7 +279,7 @@ async def get_template(
         raise
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting template: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("", response_model=ChunkingTemplateResponse, status_code=201)
@@ -367,12 +367,12 @@ async def create_template(
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         msg = str(e)
         if "already exists" in msg:
-            raise HTTPException(status_code=409, detail={"success": False, "error": msg, "error_code": "CONFLICT"})
+            raise HTTPException(status_code=409, detail={"success": False, "error": msg, "error_code": "CONFLICT"}) from e
         elif "Invalid template JSON" in msg:
-            raise HTTPException(status_code=400, detail={"success": False, "error": msg, "error_code": "BAD_REQUEST"})
+            raise HTTPException(status_code=400, detail={"success": False, "error": msg, "error_code": "BAD_REQUEST"}) from e
         else:
             logger.error(f"Error creating template: {e}")
-            raise HTTPException(status_code=500, detail={"success": False, "error": msg, "error_code": "SERVER_ERROR"})
+            raise HTTPException(status_code=500, detail={"success": False, "error": msg, "error_code": "SERVER_ERROR"}) from e
 
 
 @router.put("/{template_name}", response_model=ChunkingTemplateResponse)
@@ -468,7 +468,7 @@ async def update_template(
                 )
             except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
                 # Conservatively treat DB-layer exceptions as a protected/bad update
-                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates or invalid update", "error_code": "BAD_REQUEST"})
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot modify built-in templates or invalid update", "error_code": "BAD_REQUEST"}) from None
         else:
             # In-memory update
             success = False
@@ -546,7 +546,7 @@ async def update_template(
         raise
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error updating template: {e}")
-        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"})
+        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"}) from e
 
 
 @router.delete("/{template_name}", status_code=204)
@@ -612,7 +612,7 @@ async def delete_template(
                     hard_delete=hard_delete
                 )
             except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates or invalid delete", "error_code": "BAD_REQUEST"})
+                raise HTTPException(status_code=400, detail={"success": False, "error": "Cannot delete built-in templates or invalid delete", "error_code": "BAD_REQUEST"}) from None
         else:
             success = False
             for bucket in _FALLBACK_TEMPLATES.values():
@@ -653,7 +653,7 @@ async def delete_template(
         raise
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting template: {e}")
-        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"})
+        raise HTTPException(status_code=500, detail={"success": False, "error": str(e), "error_code": "SERVER_ERROR"}) from e
 
 
 @router.post("/apply", response_model=ApplyTemplateResponse)
@@ -775,7 +775,7 @@ async def apply_template(
         raise
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error applying template: {e}")
-        raise HTTPException(status_code=400, detail={"success": False, "error": f"Template application error: {str(e)}", "error_code": "BAD_REQUEST"})
+        raise HTTPException(status_code=400, detail={"success": False, "error": f"Template application error: {str(e)}", "error_code": "BAD_REQUEST"}) from e
 
 
 @router.post("/validate", response_model=TemplateValidationResponse)
@@ -1016,7 +1016,7 @@ async def match_templates(
         ranked.sort(key=lambda x: (x['score'], x.get('priority', 0)), reverse=True)
         return {"matches": ranked}
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 class LearnTemplateRequest(BaseModel):
@@ -1070,4 +1070,4 @@ async def learn_template(
                 }
         return {"template": tmpl, "saved": req.save}
     except _CHUNKING_TEMPLATES_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

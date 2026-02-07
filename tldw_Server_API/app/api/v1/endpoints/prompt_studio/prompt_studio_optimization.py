@@ -144,7 +144,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 bw_int = int(bw)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="beam_width must be an integer >= 2")
+                raise HTTPException(status_code=400, detail="beam_width must be an integer >= 2") from None
             if bw_int < 2:
                 raise HTTPException(status_code=400, detail="beam_width must be >= 2")
         # Optional pruning threshold within [0,1]
@@ -153,7 +153,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 pt_f = float(pt)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="prune_threshold must be a float between 0 and 1")
+                raise HTTPException(status_code=400, detail="prune_threshold must be a float between 0 and 1") from None
             if not (0.0 <= pt_f <= 1.0):
                 raise HTTPException(status_code=400, detail="prune_threshold must be in [0, 1]")
         # Optional max_candidates >= beam_width if both provided
@@ -162,7 +162,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mc_i = int(mc)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="max_candidates must be an integer >= 2")
+                raise HTTPException(status_code=400, detail="max_candidates must be an integer >= 2") from None
             if mc_i < 2:
                 raise HTTPException(status_code=400, detail="max_candidates must be >= 2")
             if bw is not None and int(bw) > mc_i:
@@ -173,7 +173,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 dr_f = float(dr)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="diversity_rate must be a float between 0 and 1")
+                raise HTTPException(status_code=400, detail="diversity_rate must be a float between 0 and 1") from None
             if not (0.0 <= dr_f <= 1.0):
                 raise HTTPException(status_code=400, detail="diversity_rate must be in [0, 1]")
         # Optional length_penalty (>= 0, typical range [0,2])
@@ -182,7 +182,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 lp_f = float(lp)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="length_penalty must be a non-negative number")
+                raise HTTPException(status_code=400, detail="length_penalty must be a non-negative number") from None
             if not (0.0 <= lp_f <= 2.0):
                 raise HTTPException(status_code=400, detail="length_penalty must be in [0, 2]")
         # Optional candidate_reranker policy
@@ -199,7 +199,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 cr_f = float(cr)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="cooling_rate must be a float between 0 and 1")
+                raise HTTPException(status_code=400, detail="cooling_rate must be a float between 0 and 1") from None
             if not (0.0 < cr_f <= 1.0):
                 raise HTTPException(status_code=400, detail="cooling_rate must be in (0, 1]")
         it = _get("initial_temp")
@@ -207,7 +207,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 it_f = float(it)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="initial_temp must be a positive number")
+                raise HTTPException(status_code=400, detail="initial_temp must be a positive number") from None
             if it_f <= 0:
                 raise HTTPException(status_code=400, detail="initial_temp must be > 0")
         # Optional schedule type
@@ -222,7 +222,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mt_f = float(mt)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="min_temp must be a non-negative number")
+                raise HTTPException(status_code=400, detail="min_temp must be a non-negative number") from None
             if mt_f < 0:
                 raise HTTPException(status_code=400, detail="min_temp must be >= 0")
             if _get("initial_temp") is not None and float(_get("initial_temp")) < mt_f:
@@ -233,7 +233,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 ss_f = float(step_size)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="step_size must be a positive number")
+                raise HTTPException(status_code=400, detail="step_size must be a positive number") from None
             if ss_f <= 0:
                 raise HTTPException(status_code=400, detail="step_size must be > 0")
         epochs = _get("epochs")
@@ -241,7 +241,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 ep_i = int(epochs)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="epochs must be a positive integer")
+                raise HTTPException(status_code=400, detail="epochs must be a positive integer") from None
             if ep_i < 1:
                 raise HTTPException(status_code=400, detail="epochs must be >= 1")
         # If linear schedule and we have initial/min temps, epochs and step_size, ensure consistency
@@ -263,7 +263,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 ps_i = int(ps)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="population_size must be an integer >= 2")
+                raise HTTPException(status_code=400, detail="population_size must be an integer >= 2") from None
             if ps_i < 2:
                 raise HTTPException(status_code=400, detail="population_size must be >= 2")
         mr = _get("mutation_rate")
@@ -271,7 +271,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mr_f = float(mr)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="mutation_rate must be a float between 0 and 1")
+                raise HTTPException(status_code=400, detail="mutation_rate must be a float between 0 and 1") from None
             if not (0.0 <= mr_f <= 1.0):
                 raise HTTPException(status_code=400, detail="mutation_rate must be in [0, 1]")
         # Optional crossover_rate in [0,1]
@@ -280,7 +280,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 cr_f = float(cr)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="crossover_rate must be a float between 0 and 1")
+                raise HTTPException(status_code=400, detail="crossover_rate must be a float between 0 and 1") from None
             if not (0.0 <= cr_f <= 1.0):
                 raise HTTPException(status_code=400, detail="crossover_rate must be in [0, 1]")
         # Optional elitism >= 0
@@ -289,7 +289,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 el_i = int(el)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="elitism must be a non-negative integer")
+                raise HTTPException(status_code=400, detail="elitism must be a non-negative integer") from None
             if el_i < 0:
                 raise HTTPException(status_code=400, detail="elitism must be >= 0")
         # Optional selection policy
@@ -321,7 +321,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mt_i = int(max_trials)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer") from None
             if mt_i < 1:
                 raise HTTPException(status_code=400, detail="max_trials must be >= 1")
         # Optional bounds for common params (max_tokens_range)
@@ -332,7 +332,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mn, mx = int(mtr[0]), int(mtr[1])
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers") from None
             if not (1 <= mn < mx <= 100000):
                 raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
 
@@ -343,7 +343,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mt_i = int(mt)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="max_trials must be a positive integer")
+                raise HTTPException(status_code=400, detail="max_trials must be a positive integer") from None
             if mt_i < 1:
                 raise HTTPException(status_code=400, detail="max_trials must be >= 1")
         # Optional bounds for common params (max_tokens_range)
@@ -354,7 +354,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 mn, mx = int(mtr[0]), int(mtr[1])
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers")
+                raise HTTPException(status_code=400, detail="max_tokens_range must contain integers") from None
             if not (1 <= mn < mx <= 100000):
                 raise HTTPException(status_code=400, detail="max_tokens_range must satisfy 1 <= min < max <= 100000")
 
@@ -378,7 +378,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 iv = int(value)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail=f"{name} must be an integer")
+                raise HTTPException(status_code=400, detail=f"{name} must be an integer") from None
             if ge is not None and iv < ge:
                 raise HTTPException(status_code=400, detail=f"{name} must be >= {ge}")
             if le is not None and iv > le:
@@ -389,7 +389,7 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
             try:
                 fv = float(value)
             except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS:
-                raise HTTPException(status_code=400, detail=f"{name} must be a number")
+                raise HTTPException(status_code=400, detail=f"{name} must be a number") from None
             if gt is not None and not (fv > gt):
                 raise HTTPException(status_code=400, detail=f"{name} must be > {gt}")
             if ge_f is not None and fv < ge_f:
@@ -683,7 +683,7 @@ async def create_optimization(
         except HTTPException:
             raise
         except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as _e:  # pragma: no cover - safety
-            raise HTTPException(status_code=400, detail=str(_e))
+            raise HTTPException(status_code=400, detail=str(_e)) from _e
 
         optimization_record = db.create_optimization(
             project_id=project_id,
@@ -756,11 +756,11 @@ async def create_optimization(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create optimization: {exc}",
-            )
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create optimization",
-        )
+        ) from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:  # pragma: no cover - safety
@@ -768,7 +768,7 @@ async def create_optimization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create optimization",
-        )
+        ) from exc
 
 @router.get(
     "/list/{project_id}",
@@ -844,13 +844,13 @@ async def list_optimizations(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list optimizations",
-        )
+        ) from exc
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Unexpected error listing optimizations: {exc}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list optimizations",
-        )
+        ) from exc
 
 @router.get("/get/{optimization_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Optimization details", "content": {"application/json": {"examples": {"get": {"summary": "Optimization", "value": {"success": True, "data": {"id": 701, "optimizer_type": "iterative", "status": "running"}}}}}}}}
@@ -894,7 +894,7 @@ async def get_optimization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get optimization",
-        )
+        ) from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
@@ -902,7 +902,7 @@ async def get_optimization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get optimization",
-        )
+        ) from exc
 
 # Compatibility: GET job status by job_id returning direct job data
 @router.get("/{job_id}")
@@ -1008,7 +1008,7 @@ async def cancel_optimization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel optimization",
-        )
+        ) from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
@@ -1021,7 +1021,7 @@ async def cancel_optimization(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to cancel optimization",
-        )
+        ) from exc
 
 ########################################################################################################################
 # Optimization Strategy Endpoints
@@ -1192,12 +1192,12 @@ async def get_optimization_history(
         )
     except DatabaseError as exc:
         logger.error(f"Database error fetching optimization history {optimization_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to fetch optimization history")
+        raise HTTPException(status_code=500, detail="Failed to fetch optimization history") from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Unexpected error fetching optimization history {optimization_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to fetch optimization history")
+        raise HTTPException(status_code=500, detail="Failed to fetch optimization history") from exc
 
 ########################################################################################################################
 # Iteration Events (persisted)
@@ -1271,12 +1271,12 @@ async def add_optimization_iteration(
         return StandardResponse(success=True, data=record)
     except DatabaseError as exc:
         logger.error(f"Database error recording iteration for optimization {optimization_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to add iteration")
+        raise HTTPException(status_code=500, detail="Failed to add iteration") from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Unexpected error adding iteration: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to add iteration")
+        raise HTTPException(status_code=500, detail="Failed to add iteration") from exc
 
 
 @router.get(
@@ -1340,12 +1340,12 @@ async def list_optimization_iterations(
         return StandardResponse(success=True, data={"iterations": result.get("iterations", [])}, metadata=metadata.model_dump())
     except DatabaseError as exc:
         logger.error(f"Database error listing optimization iterations for {optimization_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list iterations")
+        raise HTTPException(status_code=500, detail="Failed to list iterations") from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Unexpected error listing iterations: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list iterations")
+        raise HTTPException(status_code=500, detail="Failed to list iterations") from exc
 @router.post(
     "/compare",
     response_model=StandardResponse,
@@ -1470,7 +1470,7 @@ async def compare_strategies(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compare strategies",
-        )
+        ) from exc
     except HTTPException:
         raise
     except _OPTIMIZATION_NONCRITICAL_EXCEPTIONS as exc:
@@ -1478,7 +1478,7 @@ async def compare_strategies(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to compare strategies",
-        )
+        ) from exc
 
 # Backward/compatibility alias used by tests: /compare-strategies
 router.add_api_route(

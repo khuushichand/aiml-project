@@ -24,7 +24,7 @@ def _ensure_positive_int(value: Any, field: str) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
-        raise ValueError(f"{field} must be a positive integer")
+        raise ValueError(f"{field} must be a positive integer") from None
     if parsed <= 0:
         raise ValueError(f"{field} must be a positive integer")
     return parsed
@@ -428,7 +428,7 @@ class KanbanModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except (TypeError, ValueError) as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
         try:
             if tool_name == "kanban.boards.list":
                 return await self._list_boards(args, context)

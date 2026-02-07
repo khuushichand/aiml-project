@@ -405,7 +405,7 @@ class MediaModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, arguments)
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         # Log tool execution
         logger.info(f"Executing media tool: {tool_name}", extra={"audit": True})

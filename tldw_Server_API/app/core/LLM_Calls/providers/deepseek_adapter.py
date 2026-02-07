@@ -294,7 +294,7 @@ class DeepSeekAdapter(ChatProvider):
                     status,
                     text,
                 )
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = self._apply_config_defaults(request or {})
@@ -350,7 +350,7 @@ class DeepSeekAdapter(ChatProvider):
                     status,
                     text,
                 )
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     def normalize_error(self, exc: Exception):  # type: ignore[override]
         def _redact_secrets(text: str) -> str:

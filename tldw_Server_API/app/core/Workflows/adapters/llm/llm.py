@@ -276,7 +276,7 @@ async def run_llm_with_tools_adapter(config: dict[str, Any], context: dict[str, 
         final_response = None
         iteration = 0
 
-        for iteration in range(max_tool_calls + 1):
+        for _iteration in range(max_tool_calls + 1):
             if callable(context.get("is_cancelled")) and context["is_cancelled"]():
                 return {"__status__": "cancelled"}
 

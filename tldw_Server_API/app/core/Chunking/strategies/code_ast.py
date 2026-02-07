@@ -159,7 +159,9 @@ class PythonASTCodeChunkingStrategy(BaseChunkingStrategy):
             prev = ''
             for i, ch in enumerate(chunks):
                 if i == 0:
-                    out.append(ch); prev = ch; continue
+                    out.append(ch)
+                    prev = ch
+                    continue
                 tail = prev[-overlap_chars:] if prev else ''
                 out.append(f"{tail}{ch}" if tail else ch)
                 prev = ch

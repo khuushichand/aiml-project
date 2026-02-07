@@ -410,7 +410,7 @@ class FlashcardsModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except _FLASHCARDS_VALIDATION_EXCEPTIONS as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         if tool_name == "flashcards.decks.list":
             return await self._list_decks(args, context)

@@ -397,7 +397,7 @@ class AnthropicAdapter(ChatProvider):
                     data = resp.json()
                     return self._normalize_to_openai_shape(data)
             except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")
@@ -540,7 +540,7 @@ class AnthropicAdapter(ChatProvider):
                         yield from finalize_stream(response=resp, done_already=done_sent)
                 return
             except _ANTHROPIC_NONCRITICAL_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         # If native HTTP is explicitly disabled, raise a clear error rather than
         # delegating to legacy paths to avoid recursion and mixed behaviors.
         raise RuntimeError("AnthropicAdapter native HTTP disabled by configuration")

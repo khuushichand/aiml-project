@@ -694,13 +694,20 @@ class WatchlistsDatabase:
         tags = [r.get("name") for r in tags_rows if r.get("name")]
         return SourceRow(tags=tags, **row)  # type: ignore[arg-type]
 
-    def list_sources(self, q: str | None, tag_names: list[str] | None, limit: int, offset: int) -> tuple[list[SourceRow], int]:
+    def list_sources(self, q: str | None, tag_names: list[str] | None, limit: int, offset: int, group_ids: list[int] | None = None) -> tuple[list[SourceRow], int]:
         where = ["user_id = ?"]
         params: list[Any] = [self.user_id]
         if q:
             where.append("(name LIKE ? OR url LIKE ?)")
             like = f"%{q}%"
             params.extend([like, like])
+        # Group filter: OR semantics (source belongs to any of the given groups)
+        if group_ids:
+            placeholders = ",".join(["?"] * len(group_ids))
+            where.append(
+                f"EXISTS (SELECT 1 FROM source_groups sg WHERE sg.source_id = sources.id AND sg.group_id IN ({placeholders}))"
+            )
+            params.extend(group_ids)
         # Tag filter: require all tags
         if tag_names:
             normalized_tags = []
@@ -851,6 +858,31 @@ class WatchlistsDatabase:
                     (source_id, gid, source_id, gid),
                 )
         return clean_ids
+
+    def get_source_group_ids(self, source_id: int) -> list[int]:
+        """Return group IDs for a single source, ordered."""
+        rows = self.backend.execute(
+            "SELECT group_id FROM source_groups WHERE source_id = ? ORDER BY group_id",
+            (source_id,),
+        ).rows
+        return [int(r.get("group_id")) for r in rows if r.get("group_id") is not None]
+
+    def get_source_group_ids_batch(self, source_ids: list[int]) -> dict[int, list[int]]:
+        """Return {source_id: [group_ids]} for multiple sources in one query."""
+        if not source_ids:
+            return {}
+        placeholders = ",".join(["?"] * len(source_ids))
+        rows = self.backend.execute(
+            f"SELECT source_id, group_id FROM source_groups WHERE source_id IN ({placeholders}) ORDER BY source_id, group_id",
+            tuple(source_ids),
+        ).rows
+        result: dict[int, list[int]] = {sid: [] for sid in source_ids}
+        for r in rows:
+            sid = int(r.get("source_id"))
+            gid = int(r.get("group_id"))
+            if sid in result:
+                result[sid].append(gid)
+        return result
 
     def delete_source(self, source_id: int) -> bool:
         res = self.backend.execute("DELETE FROM sources WHERE id = ? AND user_id = ?", (source_id, self.user_id))

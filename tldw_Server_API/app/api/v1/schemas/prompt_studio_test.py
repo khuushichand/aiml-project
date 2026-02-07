@@ -98,7 +98,7 @@ class RunTestCasesSimpleRequest(BaseModel):
                 try:
                     out.append(int(t))
                 except (ValueError, TypeError):
-                    raise ValueError(f"test_case_ids must contain only integers, got: {t}")
+                    raise ValueError(f"test_case_ids must contain only integers, got: {t}") from None
             return out
         return v
 

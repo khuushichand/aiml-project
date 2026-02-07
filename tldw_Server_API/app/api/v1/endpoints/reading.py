@@ -435,7 +435,7 @@ async def save_reading_item(
         return _to_reading_item(result.item)
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_save_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_save_failed")
+        raise HTTPException(status_code=400, detail="reading_save_failed") from exc
 
 
 @router.get(
@@ -473,7 +473,7 @@ async def list_reading_items(
         if end_dt:
             date_to_iso = end_dt.isoformat()
     except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="invalid_date_range")
+        raise HTTPException(status_code=422, detail="invalid_date_range") from None
     resolved_limit = limit if limit is not None else size
     resolved_offset = offset if offset is not None else max(0, (page - 1) * size)
     if limit is not None:
@@ -646,10 +646,10 @@ async def get_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_get_failed")
+        raise HTTPException(status_code=400, detail="reading_get_failed") from exc
     return _to_reading_detail(row)
 
 
@@ -680,10 +680,10 @@ async def summarize_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summary_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
+        raise HTTPException(status_code=400, detail="reading_item_fetch_failed") from exc
 
     metadata = _parse_metadata(row)
     text = _select_text_for_action(row, metadata, None)
@@ -716,7 +716,7 @@ async def summarize_reading_item(
         )
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_summarize_failed: {exc}")
-        raise HTTPException(status_code=503, detail="reading_summarize_failed")
+        raise HTTPException(status_code=503, detail="reading_summarize_failed") from exc
 
     if not isinstance(summary, str):
         summary = str(summary)
@@ -765,10 +765,10 @@ async def tts_reading_item(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_tts_get_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_item_fetch_failed")
+        raise HTTPException(status_code=400, detail="reading_item_fetch_failed") from exc
 
     metadata = _parse_metadata(row)
     text = _select_text_for_action(row, metadata, payload.text_source)
@@ -784,7 +784,7 @@ async def tts_reading_item(
     try:
         sanitized_text = validator.sanitize_text(text)
     except TTSValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not sanitized_text.strip():
         raise HTTPException(status_code=400, detail="reading_tts_empty_input")
@@ -877,10 +877,10 @@ async def update_reading_item(
         )
         return _to_reading_item(row)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_update_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_update_failed")
+        raise HTTPException(status_code=400, detail="reading_update_failed") from exc
 
 
 @router.delete(
@@ -902,10 +902,10 @@ async def delete_reading_item(
         row = service.update_item(item_id, status="archived")
         return ReadingDeleteResponse(status=row.status or "archived", item_id=item_id, hard=False)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
     except _READING_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"reading_delete_failed: {exc}")
-        raise HTTPException(status_code=400, detail="reading_delete_failed")
+        raise HTTPException(status_code=400, detail="reading_delete_failed") from exc
 
 
 @router.post(
@@ -923,7 +923,7 @@ async def create_reading_archive(
     try:
         row = service.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="reading_item_not_found")
+        raise HTTPException(status_code=404, detail="reading_item_not_found") from None
 
     metadata = _parse_metadata(row)
     clean_html = metadata.get("clean_html") if isinstance(metadata, dict) else None

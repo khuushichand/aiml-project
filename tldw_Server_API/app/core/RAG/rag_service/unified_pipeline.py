@@ -1459,7 +1459,7 @@ async def unified_rag_pipeline(
                             rc.put(query, rewrites=rew, intent=intent_label, corpus=index_namespace)
                 except ValueError as exc:
                     logger.debug(f"Rewrite cache write disabled for user_id={user_id}: {exc}")
-                except (AttributeError, TypeError, ValueError):
+                except (AttributeError, TypeError):
                     pass
                 result.expanded_queries = [q for q in expanded_queries if q != query]
                 if result.expanded_queries:
@@ -5077,7 +5077,7 @@ async def unified_rag_pipeline(
                                 result.documents = store.boost_documents(result.documents, corpus=index_namespace)
                         except ValueError as exc:
                             logger.debug(f"Personalization boost disabled for user_id={feedback_user_id or user_id}: {exc}")
-                        except (AttributeError, RuntimeError, TypeError, ValueError):
+                        except (AttributeError, RuntimeError, TypeError):
                             pass
                     # Record anonymized search analytics
                     with contextlib.suppress(AttributeError, ConnectionError, OSError, RuntimeError, TypeError, ValueError, asyncio.TimeoutError):
@@ -5798,35 +5798,47 @@ def compute_temporal_range_from_query(query: str) -> Optional[dict[str, str]]:
         end_dt = None
         now = datetime.utcnow()
         if "yesterday" in qlower:
-            start_dt = now - timedelta(days=1); end_dt = now
+            start_dt = now - timedelta(days=1)
+            end_dt = now
         elif "last week" in qlower or "past week" in qlower:
-            start_dt = now - timedelta(days=7); end_dt = now
+            start_dt = now - timedelta(days=7)
+            end_dt = now
         elif "last month" in qlower:
-            y = now.year; m = now.month - 1 if now.month > 1 else 12; y = y if now.month > 1 else y - 1
+            y = now.year
+            m = now.month - 1 if now.month > 1 else 12
+            y = y if now.month > 1 else y - 1
             start_dt = datetime(y, m, 1)
             _, last_day = calendar.monthrange(y, m)
             end_dt = datetime(y, m, last_day, 23, 59, 59)
         elif "past month" in qlower:
-            start_dt = now - timedelta(days=30); end_dt = now
+            start_dt = now - timedelta(days=30)
+            end_dt = now
         m_quarter = re.search(r"\bq([1-4])\s*(20\d{2}|19\d{2})\b", qlower)
         if m_quarter:
-            qn = int(m_quarter.group(1)); y = int(m_quarter.group(2)); qm = {1:1,2:4,3:7,4:10}[qn]
+            qn = int(m_quarter.group(1))
+            y = int(m_quarter.group(2))
+            qm = {1:1,2:4,3:7,4:10}[qn]
             start_dt = datetime(y, qm, 1)
-            end_month = qm + 2; _, last_day = calendar.monthrange(y, end_month)
+            end_month = qm + 2
+            _, last_day = calendar.monthrange(y, end_month)
             end_dt = datetime(y, end_month, last_day, 23, 59, 59)
         month_names = {m.lower(): i for i, m in enumerate(calendar.month_name) if m}
         m_month_year = re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(20\d{2}|19\d{2})\b", qlower)
         if m_month_year:
-            mon = month_names.get(m_month_year.group(1)); y = int(m_month_year.group(2))
+            mon = month_names.get(m_month_year.group(1))
+            y = int(m_month_year.group(2))
             if mon:
                 start_dt = datetime(y, mon, 1)
                 _, last_day = calendar.monthrange(y, mon)
                 end_dt = datetime(y, mon, last_day, 23, 59, 59)
         m_year = re.search(r"\b(20\d{2}|19\d{2})\b", qlower)
         if m_year and start_dt is None and end_dt is None:
-            y = int(m_year.group(1)); start_dt = datetime(y,1,1); end_dt = datetime(y,12,31,23,59,59)
+            y = int(m_year.group(1))
+            start_dt = datetime(y,1,1)
+            end_dt = datetime(y,12,31,23,59,59)
         if start_dt is None and end_dt is None:
-            start_dt = now - timedelta(days=7); end_dt = now
+            start_dt = now - timedelta(days=7)
+            end_dt = now
         if start_dt is None or end_dt is None:
             return None
         return {"start": start_dt.isoformat(), "end": end_dt.isoformat()}

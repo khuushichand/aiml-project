@@ -153,7 +153,7 @@ class DiaAdapter(TTSAdapter):
                     f"GPU error initializing {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "device": self.device}
-                )
+                ) from e
             raise
         except Exception as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
@@ -162,7 +162,7 @@ class DiaAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def _load_dia_model(self) -> bool:
         """Load Dia processor and model. Split out for easier testing/mocking."""
@@ -175,7 +175,7 @@ class DiaAdapter(TTSAdapter):
                 "Failed to import required dependencies",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install transformers torch"}
-            )
+            ) from e
 
         # Load processor
         logger.info(f"{self.provider_name}: Loading processor from {self.model_path}")

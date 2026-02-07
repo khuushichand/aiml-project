@@ -479,7 +479,7 @@ async def list_roles(db=Depends(get_db_transaction)) -> list[RoleResponse]:
         return [RoleResponse(**row) for row in rows]
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list roles: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list roles")
+        raise HTTPException(status_code=500, detail="Failed to list roles") from e
 
 
 @router.post("/roles", response_model=RoleResponse)
@@ -488,10 +488,10 @@ async def create_role(payload: RoleCreateRequest, db=Depends(get_db_transaction)
         row = await svc_create_role(db, payload.name, payload.description, False)
         return RoleResponse(**row)
     except DuplicateRoleError as dup:
-        raise HTTPException(status_code=409, detail=f"Role '{dup.name}' already exists")
+        raise HTTPException(status_code=409, detail=f"Role '{dup.name}' already exists") from dup
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create role: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create role")
+        raise HTTPException(status_code=500, detail="Failed to create role") from e
 
 
 @router.delete("/roles/{role_id}")
@@ -501,7 +501,7 @@ async def delete_role(role_id: int, db=Depends(get_db_transaction)) -> dict:
         return {"message": "Role deleted"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete role")
+        raise HTTPException(status_code=500, detail="Failed to delete role") from e
 
 
 @router.get("/roles/{role_id}/permissions", response_model=list[PermissionResponse])
@@ -512,7 +512,7 @@ async def list_role_permissions(role_id: int, db=Depends(get_db_transaction)) ->
         return [PermissionResponse(**r) for r in rows]
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list permissions for role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list role permissions")
+        raise HTTPException(status_code=500, detail="Failed to list role permissions") from e
 
 
 @router.get("/permissions/tools", response_model=list[ToolPermissionResponse])
@@ -523,7 +523,7 @@ async def list_tool_permissions(db=Depends(get_db_transaction)) -> list[ToolPerm
         return [ToolPermissionResponse(**r) for r in rows]
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list tool permissions: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list tool permissions")
+        raise HTTPException(status_code=500, detail="Failed to list tool permissions") from e
 
 
 @router.post("/permissions/tools", response_model=ToolPermissionResponse)
@@ -564,7 +564,7 @@ async def create_tool_permission(payload: ToolPermissionCreateRequest, db=Depend
             return ToolPermissionResponse(name=r[0], description=r[1], category=r[2])
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create tool permission: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create tool permission")
+        raise HTTPException(status_code=500, detail="Failed to create tool permission") from e
 
 
 @router.delete("/permissions/tools/{perm_name}")
@@ -579,7 +579,7 @@ async def delete_tool_permission(perm_name: str, db=Depends(get_db_transaction))
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete tool permission {perm_name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete tool permission")
+        raise HTTPException(status_code=500, detail="Failed to delete tool permission") from e
 
 
 @router.post("/roles/{role_id}/permissions/tools", response_model=ToolPermissionResponse)
@@ -604,7 +604,7 @@ async def grant_tool_permission_to_role(role_id: int, payload: ToolPermissionGra
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant tool permission to role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to grant tool permission")
+        raise HTTPException(status_code=500, detail="Failed to grant tool permission") from e
 
 
 @router.delete("/roles/{role_id}/permissions/tools/{tool_name}")
@@ -621,7 +621,7 @@ async def revoke_tool_permission_from_role(role_id: int, tool_name: str, db=Depe
         return {"message": "Tool permission revoked", "name": name}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke tool permission from role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke tool permission")
+        raise HTTPException(status_code=500, detail="Failed to revoke tool permission") from e
 
 
 @router.get("/roles/{role_id}/permissions/tools", response_model=list[ToolPermissionResponse])
@@ -656,7 +656,7 @@ async def list_role_tool_permissions(role_id: int, db=Depends(get_db_transaction
             return [ToolPermissionResponse(name=r[0], description=r[1], category=r[2]) for r in rows]
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list role tool permissions for role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list role tool permissions")
+        raise HTTPException(status_code=500, detail="Failed to list role tool permissions") from e
 
 
 @router.post("/roles/{role_id}/permissions/tools/batch", response_model=list[ToolPermissionResponse])
@@ -700,7 +700,7 @@ async def grant_tool_permissions_batch(role_id: int, payload: ToolPermissionBatc
         return results
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to batch grant tool permissions to role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to grant tool permissions")
+        raise HTTPException(status_code=500, detail="Failed to grant tool permissions") from e
 
 
 @router.post("/roles/{role_id}/permissions/tools/batch/revoke")
@@ -729,7 +729,7 @@ async def revoke_tool_permissions_batch(role_id: int, payload: ToolPermissionBat
         return {"revoked": revoked, "count": len(revoked)}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to batch revoke tool permissions from role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke tool permissions")
+        raise HTTPException(status_code=500, detail="Failed to revoke tool permissions") from e
 
 
 def _normalize_tool_prefix(raw_prefix: str) -> str:
@@ -763,7 +763,7 @@ async def grant_tool_permissions_by_prefix(role_id: int, payload: ToolPermission
         return results
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant tool permissions by prefix to role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to grant permissions by prefix")
+        raise HTTPException(status_code=500, detail="Failed to grant permissions by prefix") from e
 
 
 @router.post("/roles/{role_id}/permissions/tools/prefix/revoke")
@@ -788,7 +788,7 @@ async def revoke_tool_permissions_by_prefix(role_id: int, payload: ToolPermissio
         return {"revoked": names, "count": len(names)}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke tool permissions by prefix from role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke permissions by prefix")
+        raise HTTPException(status_code=500, detail="Failed to revoke permissions by prefix") from e
 
 
 @router.get("/roles/matrix", response_model=RolePermissionMatrixResponse)
@@ -912,7 +912,7 @@ async def get_roles_matrix(
         return RolePermissionMatrixResponse(roles=roles, permissions=permissions, grants=grants, total_roles=total_roles)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to build roles/permissions matrix: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch role-permission matrix")
+        raise HTTPException(status_code=500, detail="Failed to fetch role-permission matrix") from e
 
 
 @router.get("/roles/matrix-boolean", response_model=RolePermissionBooleanMatrixResponse)
@@ -1044,7 +1044,7 @@ async def get_roles_matrix_boolean(
         )
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to build boolean matrix: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch boolean matrix")
+        raise HTTPException(status_code=500, detail="Failed to fetch boolean matrix") from e
 
 
 
@@ -1076,7 +1076,7 @@ async def list_permissions(category: str | None = None, search: str | None = Non
             params.append(category)
         if search:
             if is_pg:
-                clauses.append("(name ILIKE $%d OR description ILIKE $%d)" % (len(params)+1, len(params)+1))
+                clauses.append(f"(name ILIKE ${len(params)+1} OR description ILIKE ${len(params)+1})")
                 params.append(f"%{search}%")
             else:
                 clauses.append("(name LIKE ? OR description LIKE ?)")
@@ -1092,7 +1092,7 @@ async def list_permissions(category: str | None = None, search: str | None = Non
             return [PermissionResponse(id=row[0], name=row[1], description=row[2], category=row[3]) for row in rows]
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list permissions: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list permissions")
+        raise HTTPException(status_code=500, detail="Failed to list permissions") from e
 
 
 @router.post("/permissions", response_model=PermissionResponse)
@@ -1141,8 +1141,8 @@ async def create_permission(payload: PermissionCreateRequest, db=Depends(get_db_
         # In tests, include error details for quicker diagnosis
         import os as _os
         if _os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            raise HTTPException(status_code=500, detail=f"Failed to create permission: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create permission")
+            raise HTTPException(status_code=500, detail=f"Failed to create permission: {e}") from e
+        raise HTTPException(status_code=500, detail="Failed to create permission") from e
 
 
 @router.post("/roles/{role_id}/permissions/{permission_id}")
@@ -1157,7 +1157,7 @@ async def grant_permission_to_role(role_id: int, permission_id: int, db=Depends(
         return {"message": "Permission granted to role"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to grant permission {permission_id} to role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to grant permission to role")
+        raise HTTPException(status_code=500, detail="Failed to grant permission to role") from e
 
 
 @router.delete("/roles/{role_id}/permissions/{permission_id}")
@@ -1172,7 +1172,7 @@ async def revoke_permission_from_role(role_id: int, permission_id: int, db=Depen
         return {"message": "Permission revoked from role"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to revoke permission {permission_id} from role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to revoke permission from role")
+        raise HTTPException(status_code=500, detail="Failed to revoke permission from role") from e
 
 
 @router.get("/users/{user_id}/roles", response_model=UserRoleListResponse)
@@ -1197,7 +1197,7 @@ async def get_user_roles_admin(
         return UserRoleListResponse(user_id=user_id, roles=roles)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get user roles for {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get user roles")
+        raise HTTPException(status_code=500, detail="Failed to get user roles") from e
 
 
 @router.post("/users/{user_id}/roles/{role_id}")
@@ -1224,7 +1224,7 @@ async def add_role_to_user(
         return {"message": "Role added to user"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to add role {role_id} to user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to add role to user")
+        raise HTTPException(status_code=500, detail="Failed to add role to user") from e
 
 
 @router.delete("/users/{user_id}/roles/{role_id}")
@@ -1245,7 +1245,7 @@ async def remove_role_from_user(
         return {"message": "Role removed from user"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to remove role {role_id} from user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to remove role from user")
+        raise HTTPException(status_code=500, detail="Failed to remove role from user") from e
 
 
 @router.get("/users/{user_id}/overrides", response_model=UserOverridesResponse)
@@ -1269,7 +1269,7 @@ async def list_user_overrides(
         return UserOverridesResponse(user_id=user_id, overrides=entries)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list overrides for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list user overrides")
+        raise HTTPException(status_code=500, detail="Failed to list user overrides") from e
 
 
 @router.post("/users/{user_id}/overrides")
@@ -1350,8 +1350,8 @@ async def upsert_user_override(
         _settings = _get_settings()
         # In tests or single-user dev, surface error details to aid debugging
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes") or str(_settings.AUTH_MODE) == "single_user":
-            raise HTTPException(status_code=500, detail=f"Failed to upsert user override: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upsert user override")
+            raise HTTPException(status_code=500, detail=f"Failed to upsert user override: {e}") from e
+        raise HTTPException(status_code=500, detail="Failed to upsert user override") from e
 
 
 @router.delete("/users/{user_id}/overrides/{permission_id}")
@@ -1374,8 +1374,8 @@ async def delete_user_override(
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Failed to delete override for user {user_id}: {e}")
         if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
-            raise HTTPException(status_code=500, detail=f"Failed to delete user override: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete user override")
+            raise HTTPException(status_code=500, detail=f"Failed to delete user override: {e}") from e
+        raise HTTPException(status_code=500, detail="Failed to delete user override") from e
 
 
 @router.get("/users/{user_id}/effective-permissions", response_model=EffectivePermissionsResponse)
@@ -1396,7 +1396,7 @@ async def get_effective_permissions_admin(
         return EffectivePermissionsResponse(user_id=user_id, permissions=sorted(perms))
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to compute effective permissions for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute effective permissions")
+        raise HTTPException(status_code=500, detail="Failed to compute effective permissions") from e
 
 
 @router.get("/roles/{role_id}/permissions/effective", response_model=RoleEffectivePermissionsResponse)
@@ -1419,12 +1419,12 @@ async def get_role_effective_permissions(role_id: int) -> RoleEffectivePermissio
             all_permissions=data.get("all_permissions", []),
         )
     except ResourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Role not found")
+        raise HTTPException(status_code=404, detail="Role not found") from None
     except HTTPException:
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to compute effective permissions for role {role_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to compute role effective permissions")
+        raise HTTPException(status_code=500, detail="Failed to compute role effective permissions") from e
 
 
 @router.post("/roles/{role_id}/rate-limits", response_model=RateLimitResponse)
@@ -1454,7 +1454,7 @@ async def upsert_role_rate_limit(role_id: int, payload: RateLimitUpsertRequest, 
         return RateLimitResponse(scope="role", id=role_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert role rate limit: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upsert role rate limit")
+        raise HTTPException(status_code=500, detail="Failed to upsert role rate limit") from e
 
 
 @router.delete("/roles/{role_id}/rate-limits", response_model=MessageResponse)
@@ -1469,7 +1469,7 @@ async def clear_role_rate_limits(role_id: int, db=Depends(get_db_transaction)) -
         return MessageResponse(message="Role rate limits cleared", details={"role_id": role_id})
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to clear role rate limits: {e}")
-        raise HTTPException(status_code=500, detail="Failed to clear role rate limits")
+        raise HTTPException(status_code=500, detail="Failed to clear role rate limits") from e
 
 
 @router.post("/users/{user_id}/rate-limits", response_model=RateLimitResponse)
@@ -1505,7 +1505,7 @@ async def upsert_user_rate_limit(
         return RateLimitResponse(scope="user", id=user_id, resource=payload.resource, limit_per_min=payload.limit_per_min, burst=payload.burst)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to upsert user rate limit: {e}")
-        raise HTTPException(status_code=500, detail="Failed to upsert user rate limit")
+        raise HTTPException(status_code=500, detail="Failed to upsert user rate limit") from e
 
 
 #######################################################################################################################
@@ -1560,7 +1560,7 @@ async def list_backups(
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list backups: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list backups")
+        raise HTTPException(status_code=500, detail="Failed to list backups") from exc
 
 
 @router.post("/backups", response_model=BackupCreateResponse)
@@ -1614,7 +1614,7 @@ async def create_backup(
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to create backup: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to create backup")
+        raise HTTPException(status_code=500, detail="Failed to create backup") from exc
 
 
 @router.post("/backups/{backup_id}/restore", response_model=BackupRestoreResponse)
@@ -1660,7 +1660,7 @@ async def restore_backup(
         raise
     except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to restore backup: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to restore backup")
+        raise HTTPException(status_code=500, detail="Failed to restore backup") from exc
 
 
 @router.get("/retention-policies", response_model=RetentionPoliciesResponse)
@@ -1673,7 +1673,7 @@ async def list_retention_policies(
         return RetentionPoliciesResponse(policies=policies)
     except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list retention policies: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list retention policies")
+        raise HTTPException(status_code=500, detail="Failed to list retention policies") from exc
 
 
 @router.put("/retention-policies/{policy_key}", response_model=RetentionPolicy)
@@ -1705,7 +1705,7 @@ async def update_retention_policy(
         raise HTTPException(status_code=400, detail="invalid_retention_update") from exc
     except _ADMIN_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to update retention policy: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to update retention policy")
+        raise HTTPException(status_code=500, detail="Failed to update retention policy") from exc
 
 
 # System Ops Endpoints (Logs, Maintenance, Feature Flags, Incidents)
@@ -2024,7 +2024,7 @@ async def reload_llm_pricing_catalog() -> dict:
         return {"status": "ok"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to reload pricing catalog: {e}")
-        raise HTTPException(status_code=500, detail="Failed to reload pricing catalog")
+        raise HTTPException(status_code=500, detail="Failed to reload pricing catalog") from e
 
 
 # ---------------------------------------------
@@ -2044,4 +2044,4 @@ async def reload_chat_model_alias_caches() -> dict:
         return {"status": "ok"}
     except _ADMIN_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to reload chat model alias caches: {e}")
-        raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches")
+        raise HTTPException(status_code=500, detail="Failed to reload chat model alias caches") from e

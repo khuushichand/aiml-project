@@ -304,10 +304,8 @@ async def run_jobs_metrics_gauges(stop_event) -> None:
                     except (TypeError, ValueError):
                         continue
                 # Limit groups per loop
-                count = 0
-                for (owner, d, q, jt), vals in grp.items():
+                for count, ((owner, d, q, jt), vals) in enumerate(grp.items(), 1):
                     _set_gauges(d, q, jt, owner, _percentiles(vals["qlat"]), _percentiles(vals["dur"]))
-                    count += 1
                     if count >= max_groups:
                         break
             finally:

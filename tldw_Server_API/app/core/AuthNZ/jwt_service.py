@@ -105,7 +105,7 @@ class JWTService:
                         self._decode_key = self._encode_key
                         logger.debug("JWTService: using derived single-user surrogate key for HS algorithms")
                     except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS:
-                        raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
+                        raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms") from None
                 else:
                     raise ConfigurationError("JWT_SECRET_KEY", "JWT secret key not configured for HS algorithms")
         elif alg_upper.startswith("RS") or alg_upper.startswith("ES"):
@@ -189,7 +189,7 @@ class JWTService:
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create access token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_refresh_token(
         self,
@@ -244,7 +244,7 @@ class JWTService:
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create refresh token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_magic_link_token(
         self,
@@ -300,7 +300,7 @@ class JWTService:
             return token
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create magic link token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     async def verify_token_async(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
@@ -371,19 +371,19 @@ class JWTService:
 
         except ExpiredSignatureError:
             logger.debug("Token has expired")
-            raise TokenExpiredError()
+            raise TokenExpiredError() from None
 
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
-            raise InvalidTokenError(f"Invalid token claims: {e}")
+            raise InvalidTokenError(f"Invalid token claims: {e}") from e
 
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
-            raise InvalidTokenError(f"Invalid token: {e}")
+            raise InvalidTokenError(f"Invalid token: {e}") from e
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
-            raise InvalidTokenError(f"Token verification failed: {e}")
+            raise InvalidTokenError(f"Token verification failed: {e}") from e
 
     def verify_token(self, token: str, token_type: Optional[str] = None) -> dict[str, Any]:
         """
@@ -454,19 +454,19 @@ class JWTService:
 
         except ExpiredSignatureError:
             logger.debug("Token has expired")
-            raise TokenExpiredError()
+            raise TokenExpiredError() from None
 
         except JWTClaimsError as e:
             logger.warning(f"JWT claims error: {e}")
-            raise InvalidTokenError(f"Invalid token claims: {e}")
+            raise InvalidTokenError(f"Invalid token claims: {e}") from e
 
         except JWTError as e:
             logger.warning(f"JWT verification error: {e}")
-            raise InvalidTokenError(f"Invalid token: {e}")
+            raise InvalidTokenError(f"Invalid token: {e}") from e
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Unexpected error verifying token: {e}")
-            raise InvalidTokenError(f"Token verification failed: {e}")
+            raise InvalidTokenError(f"Token verification failed: {e}") from e
 
     def decode_access_token(self, token: str) -> dict[str, Any]:
         """
@@ -630,7 +630,7 @@ class JWTService:
             return token
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create virtual access token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def hash_token_candidates(self, token: str) -> list[str]:
         """Return ordered HMAC-SHA256 hashes derived from current and legacy secrets."""
@@ -791,7 +791,7 @@ class JWTService:
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create password reset token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_email_verification_token(
         self,
@@ -835,7 +835,7 @@ class JWTService:
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create email verification token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def create_service_account_token(
         self,
@@ -877,7 +877,7 @@ class JWTService:
 
         except _JWT_SERVICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create service account token: {e}")
-            raise InvalidTokenError(f"Failed to create token: {e}")
+            raise InvalidTokenError(f"Failed to create token: {e}") from e
 
     def refresh_access_token(self, refresh_token: str) -> tuple[str, str]:
         """

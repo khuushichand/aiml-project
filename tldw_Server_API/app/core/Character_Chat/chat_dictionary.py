@@ -582,7 +582,7 @@ class ChatDictionaryService:
                 logger.info("Chat dictionary tables initialized")
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize dictionary tables: {e}")
-            raise CharactersRAGDBError(f"Failed to initialize dictionary tables: {e}")
+            raise CharactersRAGDBError(f"Failed to initialize dictionary tables: {e}") from e
 
     # --- Dictionary CRUD Operations ---
 
@@ -637,11 +637,11 @@ class ChatDictionaryService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name)
-            raise CharactersRAGDBError(f"Database error creating dictionary: {e}")
+                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name) from e
+            raise CharactersRAGDBError(f"Database error creating dictionary: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name)
+                raise ConflictError(f"Dictionary '{name}' already exists", "chat_dictionaries", name) from e
             raise
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database error creating dictionary: {e}")
@@ -680,7 +680,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary: {e}") from e
 
     def list_dictionaries(self, include_inactive: bool = False) -> list[dict[str, Any]]:
         """
@@ -706,7 +706,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries: {e}")
-            raise CharactersRAGDBError(f"Error listing dictionaries: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionaries: {e}") from e
 
     def list_dictionaries_with_entry_counts(self, include_inactive: bool = False) -> list[dict[str, Any]]:
         """
@@ -740,7 +740,7 @@ class ChatDictionaryService:
                 return [dict(row) for row in cursor.fetchall()]
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing dictionaries with counts: {e}")
-            raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}")
+            raise CharactersRAGDBError(f"Error listing dictionaries with counts: {e}") from e
 
     def update_dictionary(
         self,
@@ -804,11 +804,11 @@ class ChatDictionaryService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name)
-            raise CharactersRAGDBError(f"Database error updating dictionary: {e}")
+                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name) from e
+            raise CharactersRAGDBError(f"Database error updating dictionary: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name)
+                raise ConflictError(f"Dictionary name '{name}' already exists", "chat_dictionaries", name) from e
             raise
 
     def delete_dictionary(self, dictionary_id: int, hard_delete: bool = False) -> bool:
@@ -841,7 +841,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary: {e}")
-            raise CharactersRAGDBError(f"Error deleting dictionary: {e}")
+            raise CharactersRAGDBError(f"Error deleting dictionary: {e}") from e
 
     # --- Entry CRUD Operations ---
 
@@ -978,7 +978,7 @@ class ChatDictionaryService:
             raise
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error adding dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error adding dictionary entry: {e}") from e
 
     def get_entries(
         self,
@@ -1032,7 +1032,7 @@ class ChatDictionaryService:
                 return result
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entries: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entries: {e}") from e
 
     def get_entry(self, entry_id: int, active_only: bool = True) -> Optional[dict[str, Any]]:
         """
@@ -1071,7 +1071,7 @@ class ChatDictionaryService:
                 return entry
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry: {e}") from e
 
     def get_entry_objects(
         self,
@@ -1132,7 +1132,7 @@ class ChatDictionaryService:
                 return entries
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching dictionary entry objects: {e}")
-            raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}")
+            raise CharactersRAGDBError(f"Error fetching dictionary entry objects: {e}") from e
 
     def update_entry(
         self,
@@ -1175,7 +1175,7 @@ class ChatDictionaryService:
                         try:
                             _safe_compile_regex(pattern)
                         except re.error as e:
-                            raise InputError(f"Invalid regex pattern: {e}")
+                            raise InputError(f"Invalid regex pattern: {e}") from e
                     entry.is_regex = is_regex_requested
                 updates.append("key = ?")
                 updates.append("is_regex = ?")
@@ -1236,7 +1236,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error updating dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error updating dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error updating dictionary entry: {e}") from e
 
     def delete_entry(self, entry_id: int) -> bool:
         """
@@ -1261,7 +1261,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting dictionary entry: {e}")
-            raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}")
+            raise CharactersRAGDBError(f"Error deleting dictionary entry: {e}") from e
 
     # --- Text Processing ---
 
@@ -1474,7 +1474,7 @@ class ChatDictionaryService:
             return dict_id
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             self.delete_dictionary(dict_id, hard_delete=True)
-            raise CharactersRAGDBError(f"Failed to import dictionary: {e}")
+            raise CharactersRAGDBError(f"Failed to import dictionary: {e}") from e
 
     def export_to_markdown(self, dictionary_id: int, file_path: Optional[Path] = None) -> Union[bool, str]:
         """
@@ -1526,7 +1526,7 @@ class ChatDictionaryService:
             return True
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to export dictionary: {e}")
-            raise CharactersRAGDBError(f"Failed to export dictionary: {e}")
+            raise CharactersRAGDBError(f"Failed to export dictionary: {e}") from e
 
     # --- Helper Methods ---
 
@@ -1663,7 +1663,7 @@ class ChatDictionaryService:
                     }
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
-            raise CharactersRAGDBError(f"Error getting statistics: {e}")
+            raise CharactersRAGDBError(f"Error getting statistics: {e}") from e
 
     def bulk_add_entries(self, dictionary_id: int, entries: list[dict[str, Any]]) -> Any:
         """
@@ -1750,7 +1750,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding bulk entries: {e}")
-            raise CharactersRAGDBError(f"Error adding bulk entries: {e}")
+            raise CharactersRAGDBError(f"Error adding bulk entries: {e}") from e
 
     def search_entries(self, dictionary_id: Optional[int] = None, query: Optional[str] = None) -> list[dict[str, Any]]:
         """
@@ -1795,7 +1795,7 @@ class ChatDictionaryService:
 
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error searching entries: {e}")
-            raise CharactersRAGDBError(f"Error searching entries: {e}")
+            raise CharactersRAGDBError(f"Error searching entries: {e}") from e
 
     # --- Additional Developer-Friendly APIs ---
 
@@ -1832,7 +1832,7 @@ class ChatDictionaryService:
                 return False
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error toggling entry active: {e}")
-            raise CharactersRAGDBError(f"Error toggling entry active: {e}")
+            raise CharactersRAGDBError(f"Error toggling entry active: {e}") from e
 
     def clear_cache(self) -> None:
         self._entry_cache = None
@@ -1964,7 +1964,7 @@ class ChatDictionaryService:
             raise
         except _CHAT_DICTIONARY_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cloning dictionary: {e}")
-            raise CharactersRAGDBError(f"Error cloning dictionary: {e}")
+            raise CharactersRAGDBError(f"Error cloning dictionary: {e}") from e
 
     def get_usage_statistics(self, dictionary_id: int) -> dict[str, Any]:
         """Return simple usage statistics based on in-memory counters."""

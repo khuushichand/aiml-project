@@ -179,7 +179,7 @@ class ChatterboxAdapter(TTSAdapter):
                     "Failed to import chatterbox package",
                     provider=self.provider_name,
                     details={"error": str(e), "suggestion": suggestion}
-                )
+                ) from e
 
             # Defer heavy model weights loading until first request
             self._status = ProviderStatus.AVAILABLE

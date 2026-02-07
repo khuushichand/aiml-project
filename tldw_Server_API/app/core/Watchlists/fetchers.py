@@ -1493,25 +1493,26 @@ async def fetch_site_items_with_rules(
                 continue
             finally:
                 await _close_response(resp)
-                page_items = parsed.get("items") or []
-                for item in page_items:
-                    url = item.get("url")
-                    if not url or url in seen_items:
-                        continue
-                    seen_items.add(url)
-                    collected.append(item)
-                    if limit is not None and len(collected) >= limit:
-                        break
+
+            page_items = parsed.get("items") or []
+            for item in page_items:
+                url = item.get("url")
+                if not url or url in seen_items:
+                    continue
+                seen_items.add(url)
+                collected.append(item)
                 if limit is not None and len(collected) >= limit:
                     break
+            if limit is not None and len(collected) >= limit:
+                break
 
-                next_pages = parsed.get("next_pages") or []
-                for nxt in next_pages:
-                    if not nxt or nxt in visited or nxt in queue:
-                        continue
-                    if len(visited) + len(queue) >= max_pages:
-                        break
-                    queue.append(nxt)
+            next_pages = parsed.get("next_pages") or []
+            for nxt in next_pages:
+                if not nxt or nxt in visited or nxt in queue:
+                    continue
+                if len(visited) + len(queue) >= max_pages:
+                    break
+                queue.append(nxt)
     except _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"fetch_site_items_with_rules pagination failed: {exc}")
 

@@ -711,7 +711,7 @@ class PromptImprover:
 
         except Exception as e:
             logger.error(f"Failed to improve prompt: {e}")
-            raise DatabaseError(f"Failed to improve prompt: {e}")
+            raise DatabaseError(f"Failed to improve prompt: {e}") from e
 
     def analyze_prompt(self, prompt_id: int, model_name: str = "gpt-4") -> dict[str, Any]:
         """
@@ -782,7 +782,7 @@ Format as JSON.
 
         except Exception as e:
             logger.error(f"Failed to analyze prompt: {e}")
-            raise DatabaseError(f"Failed to analyze prompt: {e}")
+            raise DatabaseError(f"Failed to analyze prompt: {e}") from e
 
     def standardize_to_xml(self, prompt_id: int) -> dict[str, Any]:
         """
@@ -853,7 +853,7 @@ Format as JSON.
 
         except Exception as e:
             logger.error(f"Failed to standardize prompt: {e}")
-            raise DatabaseError(f"Failed to standardize prompt: {e}")
+            raise DatabaseError(f"Failed to standardize prompt: {e}") from e
 
     ####################################################################################################################
     # Helper Methods

@@ -10,6 +10,42 @@ vi.mock("../dynamic-options", () => ({
   useWorkflowDynamicOptions: vi.fn()
 }))
 
+vi.mock("antd", async () => {
+  const actual = await vi.importActual("antd")
+
+  const FormItem = ({ label, children }: any) => (
+    <div>
+      {label ? <label>{label}</label> : null}
+      {children}
+    </div>
+  )
+  const Form = ({ children, ...rest }: any) => <div {...rest}>{children}</div>
+  Form.Item = FormItem
+
+  return {
+    ...actual,
+    Form,
+    Select: ({ value, options = [], onChange, loading, notFoundContent, placeholder, ...rest }: any) => (
+      <div data-testid="mock-select">
+        <div
+          data-testid="mock-select-trigger"
+          role="combobox"
+          onMouseDown={() => {}}
+        >
+          {loading && (!options || options.length === 0) ? notFoundContent : null}
+        </div>
+        <div data-testid="mock-select-options">
+          {(options || []).map((opt: any) => (
+            <div key={opt.value} role="option" onClick={() => onChange?.(opt.value)}>
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+})
+
 const setupStore = (schema: WorkflowStepSchema) => {
   useWorkflowEditorStore.setState({
     nodes: [
@@ -58,10 +94,10 @@ describe("NodeConfigPanel selectors", () => {
       loadingByKey: { model: true }
     })
 
-    const { container } = render(<NodeConfigPanel />)
-    const trigger = container.querySelector(".ant-select-selector")
+    render(<NodeConfigPanel />)
+    const trigger = screen.getByTestId("mock-select-trigger")
     expect(trigger).not.toBeNull()
-    fireEvent.mouseDown(trigger as Element)
+    fireEvent.mouseDown(trigger)
 
     expect(await screen.findByText("Loading options...")).toBeInTheDocument()
   })
@@ -85,10 +121,10 @@ describe("NodeConfigPanel selectors", () => {
       loadingByKey: {}
     })
 
-    const { container } = render(<NodeConfigPanel />)
-    const trigger = container.querySelector(".ant-select-selector")
+    render(<NodeConfigPanel />)
+    const trigger = screen.getByTestId("mock-select-trigger")
     expect(trigger).not.toBeNull()
-    fireEvent.mouseDown(trigger as Element)
+    fireEvent.mouseDown(trigger)
 
     expect(await screen.findByText("GPT-4")).toBeInTheDocument()
     expect(await screen.findByText("GPT-4o Mini")).toBeInTheDocument()

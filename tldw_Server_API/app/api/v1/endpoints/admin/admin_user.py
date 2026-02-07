@@ -121,7 +121,7 @@ async def list_users(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users",
-        )
+        ) from e
 
 
 @router.get("/users/export")
@@ -161,7 +161,7 @@ async def export_users(
         raise
     except Exception as exc:
         logger.error("Failed to export users: {}", exc)
-        raise HTTPException(status_code=500, detail="Failed to export users")
+        raise HTTPException(status_code=500, detail="Failed to export users") from exc
 
 
 @router.get("/users/{user_id}", response_model=UserDetailResponse)

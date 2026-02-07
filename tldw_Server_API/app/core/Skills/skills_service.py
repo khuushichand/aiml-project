@@ -150,7 +150,7 @@ class SkillsService:
             raise SkillStorageError(
                 f"Failed to create skills directory: {e}",
                 path=str(self.skills_dir),
-            )
+            ) from e
 
     def _ensure_registry_ready(self) -> None:
         """Ensure the skill registry table is available."""
@@ -429,9 +429,9 @@ class SkillsService:
         try:
             skill_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
-            raise SkillConflictError(f"Skill directory '{name}' already exists", skill_name=name)
+            raise SkillConflictError(f"Skill directory '{name}' already exists", skill_name=name) from None
         except OSError as e:
-            raise SkillStorageError(f"Failed to create skill directory: {e}", path=str(skill_dir))
+            raise SkillStorageError(f"Failed to create skill directory: {e}", path=str(skill_dir)) from e
 
         # Write SKILL.md
         skill_file = skill_dir / "SKILL.md"
@@ -439,7 +439,7 @@ class SkillsService:
             skill_file.write_text(content, encoding="utf-8")
         except OSError as e:
             shutil.rmtree(skill_dir, ignore_errors=True)
-            raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file))
+            raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file)) from e
 
         # Write supporting files
         if supporting_files:
@@ -537,7 +537,7 @@ class SkillsService:
             try:
                 skill_file.write_text(content, encoding="utf-8")
             except OSError as e:
-                raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file))
+                raise SkillStorageError(f"Failed to write SKILL.md: {e}", path=str(skill_file)) from e
 
             update_data.update(
                 {
@@ -616,7 +616,7 @@ class SkillsService:
             try:
                 shutil.rmtree(skill_dir)
             except OSError as e:
-                raise SkillStorageError(f"Failed to delete skill directory: {e}", path=str(skill_dir))
+                raise SkillStorageError(f"Failed to delete skill directory: {e}", path=str(skill_dir)) from e
 
         if not row.get("deleted"):
             try:
@@ -651,7 +651,7 @@ class SkillsService:
         try:
             parsed = self._parser.parse_content(content, default_name=name)
         except Exception as e:
-            raise SkillValidationError(f"Invalid skill content: {e}")
+            raise SkillValidationError(f"Invalid skill content: {e}") from e
 
         skill_name = name or parsed.frontmatter.name
         if not skill_name:
@@ -734,7 +734,7 @@ class SkillsService:
                 )
 
         except zipfile.BadZipFile:
-            raise SkillValidationError("Invalid zip file")
+            raise SkillValidationError("Invalid zip file") from None
 
     async def export_skill(self, name: str) -> bytes:
         """

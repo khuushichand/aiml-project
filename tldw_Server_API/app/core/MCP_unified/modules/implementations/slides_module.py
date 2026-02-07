@@ -488,7 +488,7 @@ class SlidesModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except (ValueError, TypeError, KeyError) as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         # Presentations CRUD
         if tool_name == "slides.presentations.list":
@@ -645,7 +645,7 @@ class SlidesModule(BaseModule):
             )
             return {"presentation": self._presentation_to_dict(row)}
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         finally:
             db.close_connection()
 
@@ -733,7 +733,7 @@ class SlidesModule(BaseModule):
                 "presentation": self._presentation_to_dict(row),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -760,7 +760,7 @@ class SlidesModule(BaseModule):
                 "updated_fields": list(patch.keys()),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -793,7 +793,7 @@ class SlidesModule(BaseModule):
                 else:
                     raise ValueError("Cannot reorder non-JSON slides content")
             except json.JSONDecodeError:
-                raise ValueError("Cannot reorder markdown slides; use update instead")
+                raise ValueError("Cannot reorder markdown slides; use update instead") from None
 
             db.update_presentation(
                 presentation_id=pid,
@@ -809,7 +809,7 @@ class SlidesModule(BaseModule):
                 "new_order": slide_order,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -830,7 +830,7 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -852,7 +852,7 @@ class SlidesModule(BaseModule):
                 "presentation": self._presentation_to_dict(row),
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -1020,7 +1020,7 @@ class SlidesModule(BaseModule):
             )
             return {"version": self._version_to_dict(row)}
         except KeyError:
-            raise ValueError("Version not found")
+            raise ValueError("Version not found") from None
         finally:
             db.close_connection()
 
@@ -1059,7 +1059,7 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError("Presentation or version not found")
+            raise ValueError("Presentation or version not found") from None
         except ConflictError as exc:
             raise ValueError(str(exc)) from exc
         finally:
@@ -1512,7 +1512,7 @@ class SlidesModule(BaseModule):
                 "success": True,
             }
         except KeyError:
-            raise ValueError(f"Presentation not found: {args.get('presentation_id')}")
+            raise ValueError(f"Presentation not found: {args.get('presentation_id')}") from None
         finally:
             db.close_connection()
 

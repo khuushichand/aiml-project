@@ -270,7 +270,7 @@ class SSEStream:
                     try:
                         line, enq_ts = self._queue.get_nowait()
                     except asyncio.QueueEmpty:
-                        raise asyncio.TimeoutError
+                        raise asyncio.TimeoutError from None
                 elif timeout is not None:
                     line, enq_ts = await asyncio.wait_for(self._queue.get(), timeout=timeout)
                 else:

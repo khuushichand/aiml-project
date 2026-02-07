@@ -103,7 +103,7 @@ async def process_web_scraping_endpoint(
                 payload.scrape_method,
                 (payload.url_input[:100] if payload.url_input else "None"),
             )
-        raise HTTPException(status_code=500, detail=error_detail)
+        raise HTTPException(status_code=500, detail=error_detail) from None
 
 
 __all__ = ["router"]

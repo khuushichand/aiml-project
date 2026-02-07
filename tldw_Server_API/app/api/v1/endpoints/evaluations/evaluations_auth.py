@@ -172,7 +172,7 @@ async def verify_api_key(
                     "type": "authentication_error",
                     "code": "token_expired",
                 }},
-            )
+            ) from None
         except InvalidTokenError as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -181,7 +181,7 @@ async def verify_api_key(
                     "type": "authentication_error",
                     "code": "invalid_token",
                 }},
-            )
+            ) from e
         except Exception as exc:
             logger.error(f"Unexpected error decoding JWT for evaluations auth: {exc}")
             raise HTTPException(

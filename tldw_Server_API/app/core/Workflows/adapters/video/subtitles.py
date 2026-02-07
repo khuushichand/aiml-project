@@ -94,7 +94,7 @@ async def run_subtitle_generate_adapter(config: dict[str, Any], context: dict[st
         # Generate subtitle file
         if sub_format == "vtt":
             content = "WEBVTT\n\n"
-            for i, seg in enumerate(segments):
+            for _i, seg in enumerate(segments):
                 start = format_time_vtt(seg.get("start", 0))
                 end = format_time_vtt(seg.get("end", 0))
                 text = seg.get("text", "").strip()

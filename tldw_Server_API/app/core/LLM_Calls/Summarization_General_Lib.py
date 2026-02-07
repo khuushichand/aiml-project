@@ -653,7 +653,7 @@ def format_input_with_metadata(metadata, content):
 
 
 
-def extract_text_from_input(input_data):
+def extract_text_from_input(input_data):  # noqa: F811
     if isinstance(input_data, str):
         try:
             # Try to parse as JSON

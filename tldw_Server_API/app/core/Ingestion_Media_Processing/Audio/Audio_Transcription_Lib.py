@@ -2534,7 +2534,7 @@ def create_segments_from_text(text: str, audio_duration: float = None, segmentat
                 current_time = end_time
         else:
             # No duration info, just create segments without timing
-            for i, sentence in enumerate(sentences):
+            for _i, sentence in enumerate(sentences):
                 segments.append({
                     "start_seconds": 0.0,
                     "end_seconds": 0.0,
@@ -3647,10 +3647,10 @@ def convert_to_wav(
 
                     except subprocess.TimeoutExpired:
                         logging.error("Format detection timed out")
-                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}") from None
                     except _AUDIO_TRANSCRIPTION_NONCRITICAL_EXCEPTIONS as e:
                         logging.error(f"Error during format detection: {e}")
-                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
+                        raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}") from e
                 else:
                     raise ConversionError(f"Audio file '{input_path.name}' is corrupted or invalid: {validation_msg}")
             # For other issues, continue anyway as FFmpeg might still handle it
@@ -3763,7 +3763,8 @@ def convert_to_wav(
                 error_details = result.stderr or result.stdout or "No output captured"
                 # Clean up potentially corrupted output file
                 if out_path.exists():
-                    with contextlib.suppress(OSError): out_path.unlink()
+                    with contextlib.suppress(OSError):
+                        out_path.unlink()
                 raise ConversionError(f"FFmpeg conversion failed (code {result.returncode}) for '{input_path.name}'. Error: {error_details.strip()}")
         else:
             logging.info(f"Conversion to WAV completed successfully: {out_path}")
@@ -3787,7 +3788,8 @@ def convert_to_wav(
         log_counter("convert_to_wav_error", labels={"file_path": video_file_path, "error": str(e)})
         # Clean up potentially corrupted output file
         if out_path.exists():
-             with contextlib.suppress(OSError): out_path.unlink()
+             with contextlib.suppress(OSError):
+                 out_path.unlink()
         raise ConversionError(error_msg) from e # Wrap other errors in ConversionError
 
     conversion_time = time.time() - start_time

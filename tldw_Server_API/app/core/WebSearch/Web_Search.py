@@ -1772,12 +1772,8 @@ def search_web_google(
         logging.error(f"Configuration error: {str(ve)}")
         raise
 
-    except Exception as re:
-        logging.error(f"Error during API request: {str(re)}")
-        raise
-
     except Exception as e:
-        logging.error(f"Unexpected error occurred: {str(e)}")
+        logging.error(f"Error during API request: {str(e)}")
         raise
 
 

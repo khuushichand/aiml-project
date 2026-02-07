@@ -123,7 +123,7 @@ class AudioProcessor:
             return audio_bytes
 
         except _AUDIO_BASE64_EXCEPTIONS as e:
-            raise ValueError(f"Failed to decode base64 audio: {e}")
+            raise ValueError(f"Failed to decode base64 audio: {e}") from e
 
     def encode_audio_base64(self, audio_bytes: bytes) -> str:
         """

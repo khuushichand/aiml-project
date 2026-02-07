@@ -108,7 +108,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         except Exception as e:
             logger.error(f"Error during paragraph chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}") from e
 
     def chunk_with_metadata(self,
                            text: str,
@@ -233,7 +233,7 @@ class ParagraphChunkingStrategy(BaseChunkingStrategy):
 
         except Exception as e:
             logger.error(f"Error during paragraph chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by paragraphs: {str(e)}") from e
 
     def validate_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """

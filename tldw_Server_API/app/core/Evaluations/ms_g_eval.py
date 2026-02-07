@@ -398,7 +398,7 @@ def geval_summarization(
                         user=user_identifier,
                     )
                 except Exception:
-                    raise ValueError(f"Unsupported API endpoint: {api_endpoint}")
+                    raise ValueError(f"Unsupported API endpoint: {api_endpoint}") from None
     except RetryError:
         logger.exception(f"geval {api_endpoint} call failed\nInput prompt was: {prompt_with_src_and_gen}")
         raise

@@ -99,7 +99,7 @@ class SnapshotManager:
         try:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
-            raise OSError(f"Failed to create snapshot directory: {e}")
+            raise OSError(f"Failed to create snapshot directory: {e}") from e
 
         # Create the tarball
         try:
@@ -112,7 +112,7 @@ class SnapshotManager:
             # Clean up on failure
             with contextlib.suppress(_SNAPSHOTS_NONCRITICAL_EXCEPTIONS):
                 snapshot_path.unlink(missing_ok=True)
-            raise OSError(f"Failed to create snapshot archive: {e}")
+            raise OSError(f"Failed to create snapshot archive: {e}") from e
 
         # Get snapshot size
         try:
@@ -184,7 +184,7 @@ class SnapshotManager:
             else:
                 os.makedirs(workspace_path, exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
-            raise OSError(f"Failed to clear workspace: {e}")
+            raise OSError(f"Failed to clear workspace: {e}") from e
 
         # Extract snapshot
         try:
@@ -202,7 +202,7 @@ class SnapshotManager:
         except ValueError:
             raise
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
-            raise OSError(f"Failed to extract snapshot: {e}")
+            raise OSError(f"Failed to extract snapshot: {e}") from e
 
         return True
 
@@ -246,7 +246,7 @@ class SnapshotManager:
 
             shutil.copytree(source_workspace, new_workspace, dirs_exist_ok=True)
         except _SNAPSHOTS_NONCRITICAL_EXCEPTIONS as e:
-            raise OSError(f"Failed to clone workspace: {e}")
+            raise OSError(f"Failed to clone workspace: {e}") from e
 
         logger.info(f"Cloned session {source_session_id} to {new_session_id}")
         return True

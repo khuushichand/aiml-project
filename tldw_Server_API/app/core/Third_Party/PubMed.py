@@ -160,8 +160,6 @@ def search_pubmed(
         return items, total, None
     except Exception as e:
         return None, 0, f"Unexpected error during PubMed search: {str(e)}"
-    except Exception as e:
-        return None, 0, f"Unexpected error during PubMed search: {str(e)}"
 
 
 def get_pubmed_by_id(pmid: str) -> tuple[dict[str, Any] | None, str | None]:

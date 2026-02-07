@@ -12,17 +12,25 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, defaultValue?: unknown, _opts?: unknown) => {
-      if (typeof defaultValue === "string") return defaultValue
-      if (
+    t: (_key: string, defaultValue?: unknown, opts?: unknown) => {
+      let text: string | undefined
+      let vars: Record<string, unknown> = {}
+      if (typeof defaultValue === "string") {
+        text = defaultValue
+        if (opts && typeof opts === "object") vars = opts as Record<string, unknown>
+      } else if (
         defaultValue &&
         typeof defaultValue === "object" &&
         "defaultValue" in (defaultValue as Record<string, unknown>)
       ) {
-        const text = (defaultValue as Record<string, unknown>).defaultValue
-        if (typeof text === "string") return text
+        const dv = (defaultValue as Record<string, unknown>).defaultValue
+        if (typeof dv === "string") text = dv
+        vars = defaultValue as Record<string, unknown>
       }
-      return _key
+      if (!text) return _key
+      return text.replace(/\{\{(\w+)\}\}/g, (_, k) =>
+        vars[k] != null ? String(vars[k]) : `{{${k}}}`
+      )
     }
   })
 }))

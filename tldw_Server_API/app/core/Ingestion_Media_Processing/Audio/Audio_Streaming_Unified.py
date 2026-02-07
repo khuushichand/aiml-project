@@ -1267,7 +1267,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                 logger.error(f"Failed to import Parakeet MLX: {e}")
                 raise RuntimeError(
                     "Parakeet MLX dependencies not available. Install with: pip install mlx mlx-lm"
-                )
+                ) from e
         else:
             # Load standard or ONNX variant (requires Nemo)
             try:
@@ -1343,7 +1343,7 @@ class ParakeetStreamingTranscriber(BaseStreamingTranscriber):
                     f"Nemo toolkit not installed for {variant} variant and MLX fallback unavailable. "
                     f"Install Nemo with: pip install nemo_toolkit[asr] "
                     f"OR install MLX with: pip install mlx mlx-lm"
-                )
+                ) from e
 
     def reset(self):
         """Reset transcriber buffers and Parakeet RNNT streaming state."""
@@ -1711,12 +1711,12 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
             # non-empty value other than "auto", mirroring the offline
             # speech_to_text path.
             try:
-                from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _ct_override  # type: ignore
+                from .Audio_Transcription_Lib import WHISPER_COMPUTE_TYPE_OVERRIDE as _CT_OVERRIDE  # type: ignore
             except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS:  # pragma: no cover - defensive; falls back to device-based default
-                _ct_override = ""  # type: ignore
+                _CT_OVERRIDE = ""  # type: ignore
 
-            if _ct_override and str(_ct_override).strip().lower() != "auto":
-                compute_type = str(_ct_override).strip()
+            if _CT_OVERRIDE and str(_CT_OVERRIDE).strip().lower() != "auto":
+                compute_type = str(_CT_OVERRIDE).strip()
             else:
                 compute_type = 'float16' if device == 'cuda' else 'int8'
 
@@ -1756,7 +1756,7 @@ class WhisperStreamingTranscriber(BaseStreamingTranscriber):
 
         except ImportError as e:
             logger.error(f"Failed to import Whisper dependencies: {e}")
-            raise RuntimeError("Whisper dependencies not available")
+            raise RuntimeError("Whisper dependencies not available") from e
         except _AUDIO_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize Whisper model: {e}")
             raise
@@ -1922,7 +1922,7 @@ class Qwen3ASRStreamingTranscriber(BaseStreamingTranscriber):
         except ImportError:
             raise RuntimeError(
                 "httpx is required for Qwen3-ASR streaming. Install with: pip install httpx"
-            )
+            ) from None
 
         logger.info(f"Qwen3-ASR streaming initialized with vLLM at {self._vllm_base_url}")
         self.model = "qwen3-asr"  # Placeholder to indicate model is ready

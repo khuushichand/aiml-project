@@ -417,7 +417,7 @@ class TTSAdapter(ABC):
         except Exception as e:
             logger.error(f"Error closing {self.provider_name} adapter: {e}")
 
-    async def _cleanup_resources(self):
+    async def _cleanup_resources(self):  # noqa: B027
         """Override this method for adapter-specific cleanup"""
         pass
 

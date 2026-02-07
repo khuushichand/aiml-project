@@ -1060,11 +1060,16 @@ async def moderate_input_messages(
     audit_context: Any | None,
     client_id: str,
     audit_event_type: Any | None = None,
+    supervised_policy_engine: Any | None = None,
+    self_monitoring_service: Any | None = None,
+    dependent_user_id: str | None = None,
 ) -> None:
     """Apply input moderation and redaction to user message text parts in-place.
 
     - Emits topic monitoring alerts non-blockingly when configured.
     - Tracks moderation metrics and audit events.
+    - Optionally overlays guardian supervised policies when engine is provided.
+    - Optionally runs self-monitoring checks when service is provided.
     - Raises HTTPException(400) when input is blocked by policy.
     """
     # Determine user id context for policy and telemetry
@@ -1076,6 +1081,15 @@ async def moderate_input_messages(
         req_user_id = None
 
     eff_policy = moderation_service.get_effective_policy(str(req_user_id) if req_user_id is not None else client_id)
+
+    # Guardian policy overlay: merge supervised rules into eff_policy
+    if supervised_policy_engine and dependent_user_id:
+        try:
+            eff_policy = supervised_policy_engine.build_moderation_policy_overlay(
+                dependent_user_id, eff_policy
+            )
+        except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+            logger.debug(f"Guardian policy overlay skipped: {e}")
     conv_id = None
     try:
         conv_id = getattr(request_data, "conversation_id", None)
@@ -1107,6 +1121,27 @@ async def moderate_input_messages(
                 )
         except _CHAT_NONCRITICAL_EXCEPTIONS as _e:
             logger.debug(f"Topic monitoring (input) skipped: {_e}")
+
+        # Self-monitoring check (awareness/notifications)
+        if self_monitoring_service and text:
+            try:
+                sm_result = self_monitoring_service.check_text(
+                    text=text,
+                    user_id=str(req_user_id or client_id),
+                    phase="input",
+                    conversation_id=str(conv_id) if conv_id else None,
+                )
+                if sm_result.action == "block":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=sm_result.block_message or "Blocked by self-monitoring rule",
+                    )
+                if sm_result.action == "redact" and sm_result.redacted_text is not None:
+                    text = sm_result.redacted_text
+            except HTTPException:
+                raise
+            except _CHAT_NONCRITICAL_EXCEPTIONS as e:
+                logger.debug(f"Self-monitoring check skipped: {e}")
 
         if not eff_policy.enabled or not eff_policy.input_enabled:
             return text
@@ -1189,8 +1224,9 @@ async def moderate_input_messages(
     # Moderate both "user" messages and "tool" messages (tool call results may contain
     # external content that should be checked for policy violations)
     MODERATED_ROLES = {"user", "tool"}
+    _should_moderate = (eff_policy.enabled and eff_policy.input_enabled) or self_monitoring_service
     try:
-        if eff_policy.enabled and eff_policy.input_enabled and request_data and request_data.messages:
+        if _should_moderate and request_data and request_data.messages:
             for m in request_data.messages:
                 if getattr(m, "role", None) not in MODERATED_ROLES:
                     continue
@@ -1856,7 +1892,7 @@ async def execute_streaming_call(
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
                 queue_exc._chat_queue_admission = True
-                raise queue_exc
+                raise queue_exc from admission_error
 
             async def _channel_stream():
                 while True:
@@ -2724,7 +2760,7 @@ async def execute_non_stream_call(
                 )
                 queue_exc = HTTPException(status_code=status_code, detail=detail)
                 queue_exc._chat_queue_admission = True
-                raise queue_exc
+                raise queue_exc from admission_error
             llm_response = await fut
             metrics_recorded = True
         else:

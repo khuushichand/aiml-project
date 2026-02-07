@@ -313,7 +313,7 @@ def extract_claims_for_chunks(
                             )
                             raise TimeoutError(
                                 f"LLM extraction timed out after {timeout_sec:.1f}s for provider '{provider}'."
-                            )
+                            ) from None
 
                     # Normalize response to string
                     if isinstance(resp, str):

@@ -38,12 +38,14 @@ const EXPORT_DIAGNOSTICS_MAX_PAGES = 500;
 const EXPORT_DIAGNOSTICS_CONCURRENCY = 4;
 
 const normalizeCharacterId = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) {
     return value;
   }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\d+$/.test(trimmed)) {
+      return Number.parseInt(trimmed, 10);
+    }
   }
   return null;
 };

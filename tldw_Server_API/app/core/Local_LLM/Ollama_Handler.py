@@ -125,10 +125,6 @@ class OllamaHandler(BaseLLMHandler):
         if self._serve_process and (pid is None or self._serve_process.pid == pid):
             self._stop_stream_drainers()
             self._serve_process = None
-    def __init__(self, config: OllamaConfig, global_app_config: dict[str, Any]):
-        super().__init__(config, global_app_config)
-        self.config: OllamaConfig  # For type hinting
-
     async def is_ollama_installed(self) -> bool:
         """Checks if the 'ollama' executable is available."""
         return await asyncio.to_thread(shutil.which, 'ollama') is not None
@@ -194,10 +190,10 @@ class OllamaHandler(BaseLLMHandler):
                     self.logger.exception(f"Error terminating timed-out ollama pull process: {e_term}")
                     process.kill()  # Force kill if terminate fails
                     await process.wait()
-            raise ModelDownloadError(f"Failed to pull model '{model_name}': Operation timed out.")
+            raise ModelDownloadError(f"Failed to pull model '{model_name}': Operation timed out.") from None
         except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
             self.logger.exception(f"Unexpected error in pull_ollama_model: {e}")
-            raise ModelDownloadError(f"Failed to pull model '{model_name}': {e}")
+            raise ModelDownloadError(f"Failed to pull model '{model_name}': {e}") from e
 
     async def serve_model(self, model_name: str, port: Optional[int] = None, host: str = "127.0.0.1") -> dict[str, Any]:
         """
@@ -309,10 +305,10 @@ class OllamaHandler(BaseLLMHandler):
         except FileNotFoundError:
             msg = "Ollama executable not found."
             self.logger.exception(msg)
-            raise ServerError(msg)
+            raise ServerError(msg) from None
         except _OLLAMA_NONCRITICAL_EXCEPTIONS as e:
             self.logger.exception(f"Error starting Ollama server: {e}")
-            raise ServerError(f"Error starting Ollama server: {e}")
+            raise ServerError(f"Error starting Ollama server: {e}") from e
 
     async def stop_server(self, pid: Optional[int] = None, port: Optional[int] = None) -> str:
         """
@@ -387,9 +383,9 @@ class OllamaHandler(BaseLLMHandler):
                 proc.wait(timeout=5)
                 self.logger.info(f"Process {pid} killed.")
         except psutil.NoSuchProcess:
-            raise ProcessLookupError(f"No process found with PID {pid}")
+            raise ProcessLookupError(f"No process found with PID {pid}") from None
         except _OLLAMA_PSUTIL_EXCEPTIONS as e:
-            raise ServerError(f"Failed to terminate process {pid}: {e}")
+            raise ServerError(f"Failed to terminate process {pid}: {e}") from e
 
     async def inference(self, model_name: str, prompt: str, system_message: Optional[str] = None,
                         port: Optional[int] = None, host: str = "127.0.0.1",
@@ -457,8 +453,8 @@ class OllamaHandler(BaseLLMHandler):
                             return await request_json(client, "POST", api_url, json=payload)
                         except ModelDownloadError as e_pull:
                             raise InferenceError(
-                                f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}")
-                    raise InferenceError(f"Ollama API error ({status}): {text}")
+                                f"Model {model_name} could not be pulled: {e_pull}. Original API error: {text}") from e_pull
+                    raise InferenceError(f"Ollama API error ({status}): {text}") from e
                 # Likely connection error; attempt to start server then retry
                 self.logger.exception(f"Could not connect to Ollama server at {api_url}: {e}")
                 self.logger.info("Attempting to start Ollama server...")
@@ -473,9 +469,9 @@ class OllamaHandler(BaseLLMHandler):
                         raise InferenceError("Ollama server did not become ready in time")
                     return await request_json(client, "POST", api_url, json=payload)
                 except ServerError as se:
-                    raise InferenceError(f"Could not start or connect to Ollama server: {se}")
+                    raise InferenceError(f"Could not start or connect to Ollama server: {se}") from se
                 except _OLLAMA_REQUEST_EXCEPTIONS as e_retry:
-                    raise InferenceError(f"Failed to perform inference after server start attempt: {e_retry}")
+                    raise InferenceError(f"Failed to perform inference after server start attempt: {e_retry}") from e_retry
 
 #
 # End of Ollama_Handler.py

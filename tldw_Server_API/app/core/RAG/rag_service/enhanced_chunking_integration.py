@@ -299,7 +299,7 @@ async def expand_with_parent_context(
 
     expanded_docs = []
 
-    for parent_id, chunks in parent_groups.items():
+    for _parent_id, chunks in parent_groups.items():
         # Sort chunks by index
         chunks.sort(key=lambda d: d.metadata.get("chunk_index", 0))
 

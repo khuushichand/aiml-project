@@ -256,7 +256,7 @@ class DatabasePool:
 
             except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to initialize database pool: {e}")
-                raise DatabaseError(f"Database initialization failed: {e}")
+                raise DatabaseError(f"Database initialization failed: {e}") from e
 
     def _should_use_postgres(self) -> bool:
         """Return True if the configured DATABASE_URL resolves to PostgreSQL.
@@ -427,7 +427,7 @@ class DatabasePool:
                     yield conn
                 logger.debug("PostgreSQL transaction committed successfully")
             except asyncpg.exceptions.TooManyConnectionsError:
-                raise ConnectionPoolExhaustedError()
+                raise ConnectionPoolExhaustedError() from None
             except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
@@ -436,7 +436,7 @@ class DatabasePool:
                 raise
             except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"PostgreSQL transaction error: {e}")
-                raise TransactionError("PostgreSQL transaction", str(e))
+                raise TransactionError("PostgreSQL transaction", str(e)) from e
         else:
             # SQLite transaction
             conn = None
@@ -472,8 +472,8 @@ class DatabasePool:
 
             except aiosqlite.OperationalError as e:
                 if "database is locked" in str(e):
-                    raise DatabaseLockError()
-                raise TransactionError("SQLite transaction", str(e))
+                    raise DatabaseLockError() from e
+                raise TransactionError("SQLite transaction", str(e)) from e
             except HTTPException:
                 # Re-raise HTTP exceptions unchanged
                 raise
@@ -482,7 +482,7 @@ class DatabasePool:
                 raise
             except _AUTHNZ_DB_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"SQLite transaction error: {e}")
-                raise TransactionError("SQLite transaction", str(e))
+                raise TransactionError("SQLite transaction", str(e)) from e
             finally:
                 if conn:
                     await conn.close()
@@ -500,7 +500,7 @@ class DatabasePool:
                 conn = await self.pool.acquire()
                 yield conn
             except asyncpg.exceptions.TooManyConnectionsError:
-                raise ConnectionPoolExhaustedError()
+                raise ConnectionPoolExhaustedError() from None
             finally:
                 if conn:
                     await self.pool.release(conn)
@@ -565,8 +565,7 @@ class DatabasePool:
                 cursor = await conn.execute(q, tuple(params))
                 row = await cursor.fetchone()
                 if row:
-                    # Convert Row to dict
-                    return {key: row[key] for key in row}
+                    return dict(row)
                 return None
 
     # Compatibility aliases for callers expecting asyncpg-like API

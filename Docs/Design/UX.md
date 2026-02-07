@@ -68,6 +68,9 @@ https://medium.com/design-bootcamp/the-history-of-radial-menus-in-video-games-e6
 https://www.smashingmagazine.com/2025/12/how-measure-impact-features-tars/
 https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-951b1c98d4ec
 https://www.grug.design/know
+https://www.designsystemscollective.com/good-design-doesnt-happen-by-default-c400cbdd332b?gi=3b7cf76aa01d
+https://icones.js.org/
+
 https://github.com/vibeflowing-inc/vibe_figma
 https://ant.design/docs/spec/colors/
 https://animations.dev/

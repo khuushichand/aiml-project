@@ -212,7 +212,7 @@ class LlamafileHandler(BaseLLMHandler):
                 allow_secrets=getattr(self.config, "allow_cli_secrets", False),
             )
         except ValueError as e:
-            raise ServerError(str(e))
+            raise ServerError(str(e)) from e
 
     def _is_path_allowed(self, p: Path) -> bool:
         """Check if path is under allowed directories."""
@@ -355,11 +355,11 @@ class LlamafileHandler(BaseLLMHandler):
                         f"Failed to fetch llamafile release info/download: {status} - {error_text}",
                         exc_info=True,
                     )
-                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}")
+                    raise ModelDownloadError(f"Failed to fetch/download llamafile: {status}") from e
                 self.logger.error(f"Unexpected error downloading llamafile: {e}", exc_info=True)
                 if output_path.exists():
                     output_path.unlink(missing_ok=True)
-                raise ModelDownloadError(f"Unexpected error downloading llamafile: {e}")
+                raise ModelDownloadError(f"Unexpected error downloading llamafile: {e}") from e
 
     # --- Model Management ---
     async def download_model_file(self, model_name: str, model_url: str, model_filename: Optional[str] = None,
@@ -405,8 +405,9 @@ class LlamafileHandler(BaseLLMHandler):
             return model_path
         except Exception as e:
             self.logger.error(f"Failed to download model {model_name}: {e}", exc_info=True)
-            if model_path.exists(): model_path.unlink(missing_ok=True)
-            raise ModelDownloadError(f"Failed to download model {model_name}: {e}")
+            if model_path.exists():
+                model_path.unlink(missing_ok=True)
+            raise ModelDownloadError(f"Failed to download model {model_name}: {e}") from e
 
     async def list_models(self) -> list[str]:
         if not self.models_dir.exists():
@@ -583,7 +584,8 @@ class LlamafileHandler(BaseLLMHandler):
                         stdout_output = out_bytes.decode(errors='ignore').strip()
                     except asyncio.TimeoutError:
                         stdout_output = "(stdout read timed out after 5s)"
-                if stdout_output: self.logger.error(f"Llamafile server stdout: {stdout_output}")
+                if stdout_output:
+                    self.logger.error(f"Llamafile server stdout: {stdout_output}")
                 await self._terminate_process(process)
                 self.metrics["start_errors"] += 1
                 raise ServerError(f"Llamafile server failed to start. Stderr: {stderr_output}")
@@ -599,7 +601,7 @@ class LlamafileHandler(BaseLLMHandler):
                     "command": ' '.join(redacted_cmd)}  # Return redacted command
         except Exception as e:
             self.logger.error(f"Exception starting llamafile server for {model_filename}: {e}", exc_info=True)
-            raise ServerError(f"Exception starting llamafile: {e}")
+            raise ServerError(f"Exception starting llamafile: {e}") from e
 
     async def stop_server(self, port: Optional[int] = None, pid: Optional[int] = None) -> str:
         process_to_stop: Optional[asyncio.subprocess.Process] = None
@@ -629,7 +631,7 @@ class LlamafileHandler(BaseLLMHandler):
                     return f"Failed to stop unmanaged PID {pid} with taskkill."
                 except Exception as e:
                     self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
-                    raise ServerError(f"Error stopping unmanaged PID {pid}: {e}")
+                    raise ServerError(f"Error stopping unmanaged PID {pid}: {e}") from e
         elif port:
             if port in self._active_servers:
                 process_to_stop = self._active_servers[port]
@@ -716,7 +718,7 @@ class LlamafileHandler(BaseLLMHandler):
             if port_to_clear and port_to_clear in self._active_servers:
                 self._stop_stream_drainers(port_to_clear)
                 del self._active_servers[port_to_clear]
-            raise ServerError(f"Error stopping llamafile server: {e}")
+            raise ServerError(f"Error stopping llamafile server: {e}") from e
 
     async def inference(self,
                         prompt: str,
@@ -750,20 +752,22 @@ class LlamafileHandler(BaseLLMHandler):
             except ConnectionRefusedError:
                 self.logger.exception(
                     f"No managed llamafile server on port {port} (or it terminated), and connection refused to {client_host}:{port}.")
-                raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.")
+                raise ServerError(f"Llamafile server not found or not responding on {client_host}:{port}.") from None
             except Exception as e:
                 self.logger.error(f"Error checking connection to {client_host}:{port}: {e}", exc_info=True)
-                raise ServerError(f"Error connecting to Llamafile server at {client_host}:{port}: {e}")
+                raise ServerError(f"Error connecting to Llamafile server at {client_host}:{port}: {e}") from e
             if not conn_made:
                 raise ServerError(f"Llamafile server not found/responding on {client_host}:{port} (conn test failed).")
         else:
             self.logger.debug(f"Using managed llamafile server on port {port}.")
 
         headers = {"Content-Type": "application/json"}
-        if api_key: headers["Authorization"] = f"Bearer {api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         messages = []
-        if system_prompt: messages.append({"role": "system", "content": system_prompt})
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
         timeout = kwargs.pop("timeout", None)
@@ -794,15 +798,15 @@ class LlamafileHandler(BaseLLMHandler):
                         f"Llamafile API error ({status}) from {api_url}: {error_text}",
                         exc_info=True
                     )
-                    raise InferenceError(f"Llamafile API error ({status}): {error_text}")
+                    raise InferenceError(f"Llamafile API error ({status}): {error_text}") from e
                 if http_utils.is_network_error(e):
                     self.logger.error(
                         f"Could not connect or communicate with Llamafile server at {api_url}: {e}",
                         exc_info=True
                     )
-                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}")
+                    raise ServerError(f"Could not connect/communicate with Llamafile server at {api_url}: {e}") from e
                 self.logger.error(f"Unexpected error during llamafile inference to {api_url}: {e}", exc_info=True)
-                raise InferenceError(f"Unexpected error during llamafile inference: {e}")
+                raise InferenceError(f"Unexpected error during llamafile inference: {e}") from e
 
     def _cleanup_all_managed_servers_sync(self):
         """Synchronous cleanup for signal handlers or app shutdown.

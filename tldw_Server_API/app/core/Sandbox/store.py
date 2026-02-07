@@ -550,7 +550,7 @@ class SQLiteStore(SandboxStore):
             try:
                 return float(txt)
             except (TypeError, ValueError):
-                raise ValueError(f"Invalid created_at filter: {value!r}")
+                raise ValueError(f"Invalid created_at filter: {value!r}") from None
 
     def _fp(self, body: dict[str, Any]) -> str:
         """

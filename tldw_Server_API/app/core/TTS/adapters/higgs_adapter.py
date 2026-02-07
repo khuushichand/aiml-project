@@ -235,7 +235,7 @@ class HiggsAdapter(TTSAdapter):
                     f"GPU error initializing {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "device": self.device}
-                )
+                ) from e
             raise
         except Exception as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
@@ -244,7 +244,7 @@ class HiggsAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         """Get Higgs Audio V2 capabilities"""

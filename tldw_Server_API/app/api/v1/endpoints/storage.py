@@ -227,7 +227,7 @@ async def download_file(
             raise HTTPException(status_code=403, detail="Invalid file path")
         full_path = resolved_path
     except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid file path")
+        raise HTTPException(status_code=403, detail="Invalid file path") from None
 
     if not full_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
@@ -657,9 +657,9 @@ async def set_user_quota(
             ),
         )
     except UserNotFoundError:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found") from None
     except StorageError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.put("/admin/quotas/team/{team_id}", response_model=SetQuotaResponse)

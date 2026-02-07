@@ -1470,7 +1470,7 @@ async def refresh_token(
         raise
     except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Refresh token rotation failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to refresh token") from e
 
     return AuthTokenResponse(
         access_token=new_access,

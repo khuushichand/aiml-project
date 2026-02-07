@@ -604,7 +604,7 @@ class ACPSandboxRunnerManager:
             pub = key.export_public_key().decode("utf-8")
             return priv, pub
         except _ACP_SANDBOX_NONCRITICAL_EXCEPTIONS as e:
-            raise ACPResponseError(f"Failed to generate SSH key: {e}")
+            raise ACPResponseError(f"Failed to generate SSH key: {e}") from e
 
     async def _allocate_ssh_port(self) -> int:
         async with self._ssh_ports_lock:

@@ -92,7 +92,7 @@ class HuggingFaceEmbeddingsAdapter(EmbeddingsProvider):
                 return self._normalize(data, multi=multi)
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         # Fallback: do not attempt legacy path; endpoint will fall back
         msg = (

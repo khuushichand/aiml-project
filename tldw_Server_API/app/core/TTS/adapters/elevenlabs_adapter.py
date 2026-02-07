@@ -245,7 +245,7 @@ class ElevenLabsAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e)}
-            )
+            ) from e
 
     async def _fetch_user_voices(self):
         """Fetch available voices from ElevenLabs API"""
@@ -381,7 +381,7 @@ class ElevenLabsAdapter(TTSAdapter):
                 f"Failed to generate speech with {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "error_type": type(e).__name__}
-            )
+            ) from e
 
     async def _stream_audio_elevenlabs(
         self,

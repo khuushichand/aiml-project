@@ -531,10 +531,12 @@ class ClientSyncEngine:
             all_data = {**payload, **core_sync_meta, 'deleted': payload.get('deleted', 0)}
 
             for col in table_columns:
-                if col == 'id': continue
+                if col == 'id':
+                    continue
                 if col in all_data:
                     value = all_data[col]
-                    if isinstance(value, bool): value = 1 if value else 0
+                    if isinstance(value, bool):
+                        value = 1 if value else 0
                     cols_sql.append(f"`{col}`")
                     placeholders_sql.append("?")
                     params_list.append(value)
@@ -553,7 +555,8 @@ class ClientSyncEngine:
             for col in table_columns:
                 if col in payload and col not in ['id', 'uuid']:
                     value = payload[col]
-                    if isinstance(value, bool): value = 1 if value else 0
+                    if isinstance(value, bool):
+                        value = 1 if value else 0
                     set_clauses.append(f"`{col}` = ?")
                     params_list.append(value)
 

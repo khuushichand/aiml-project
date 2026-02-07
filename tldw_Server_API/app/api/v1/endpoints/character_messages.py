@@ -244,7 +244,7 @@ async def send_message(
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Unable to validate chat message limit right now.",
-            )
+            ) from e
 
         # Validate parent message if provided
         if message_data.parent_message_id:
@@ -356,7 +356,7 @@ async def send_message(
     except ConflictError as e:
         # Optimistic lock or state conflict during creation
         logger.warning(f"Conflict sending message to chat {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except InputError as e:
         # Map DB validation errors to appropriate HTTP codes
         msg = str(e)
@@ -364,16 +364,16 @@ async def send_message(
         if "exceeds maximum size" in msg.lower():
             status_code = status.HTTP_413_CONTENT_TOO_LARGE
         logger.warning(f"Input error sending message to chat {chat_id}: {e}")
-        raise HTTPException(status_code=status_code, detail=msg)
+        raise HTTPException(status_code=status_code, detail=msg) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error sending message to chat {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error sending message to chat {chat_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while sending message"
-        )
+        ) from e
 
 
 @router.get("/chats/{chat_id}/messages",
@@ -695,7 +695,7 @@ async def get_chat_messages(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while retrieving messages"
-        )
+        ) from e
 
 
 @router.get("/messages/{message_id}", response_model=MessageResponse,
@@ -746,7 +746,7 @@ async def get_message(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while retrieving message"
-        )
+        ) from e
 
 
 @router.put("/messages/{message_id}", response_model=MessageResponse,
@@ -866,16 +866,16 @@ async def edit_message(
         raise
     except ConflictError as e:
         logger.warning(f"Conflict editing message {message_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error editing message {message_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error editing message {message_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while editing message"
-        )
+        ) from e
 
 
 @router.delete(
@@ -947,16 +947,16 @@ async def delete_message(
         raise
     except ConflictError as e:
         logger.warning(f"Conflict deleting message {message_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting message {message_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHARACTER_MESSAGES_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting message {message_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting message"
-        )
+        ) from e
 
 
 # Maximum search query length to prevent abuse
@@ -1028,7 +1028,7 @@ async def search_messages(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while searching messages"
-        )
+        ) from e
 
 
 #

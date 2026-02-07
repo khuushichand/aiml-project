@@ -26,4 +26,4 @@ async def get_watchlists_db_for_user(
         return db
     except Exception as e:
         logger.error(f"Failed to init Watchlists DB for user {current_user.id}: {e}")
-        raise HTTPException(status_code=500, detail="Watchlists DB unavailable")
+        raise HTTPException(status_code=500, detail="Watchlists DB unavailable") from e

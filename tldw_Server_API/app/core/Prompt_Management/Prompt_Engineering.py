@@ -54,7 +54,7 @@ def chat_api_call(**kwargs: Any) -> Any:
             or kwargs.get("endpoint")
         )
         if not api_endpoint:
-            raise PromptGenerationError("Provider name is required.")
+            raise PromptGenerationError("Provider name is required.") from None
         request = dict(kwargs)
         messages_payload = request.pop("messages_payload", None)
         if messages_payload is not None and "messages" not in request:

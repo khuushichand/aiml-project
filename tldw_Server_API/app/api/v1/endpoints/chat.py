@@ -1902,6 +1902,38 @@ async def create_chat_completion(
             finally:
                 await _decrement_active_request(user_id)
 
+        # Guardian & self-monitoring integration
+        _supervised_engine = None
+        _self_mon_service = None
+        _dep_user_id = None
+        try:
+            from tldw_Server_API.app.core.feature_flags import is_guardian_enabled, is_self_monitoring_enabled
+
+            if current_user and getattr(current_user, "id", None) is not None:
+                try:
+                    _uid_int = int(current_user.id)
+                except Exception:
+                    import hashlib as _hashlib
+                    _digest = _hashlib.sha1(str(current_user.id).encode("utf-8")).digest()
+                    _uid_int = int.from_bytes(_digest[:4], byteorder="big", signed=False)
+                _guardian_db_path = DatabasePaths.get_guardian_db_path(_uid_int)
+
+                _guardian_db = None
+                if is_guardian_enabled() or is_self_monitoring_enabled():
+                    from tldw_Server_API.app.core.DB_Management.Guardian_DB import GuardianDB as _GuardianDB
+                    _guardian_db = _GuardianDB(str(_guardian_db_path))
+
+                if is_guardian_enabled() and _guardian_db:
+                    from tldw_Server_API.app.core.Moderation.supervised_policy import get_supervised_policy_engine
+                    _supervised_engine = get_supervised_policy_engine(_guardian_db)
+                    _dep_user_id = str(current_user.id)
+
+                if is_self_monitoring_enabled() and _guardian_db:
+                    from tldw_Server_API.app.core.Monitoring.self_monitoring_service import get_self_monitoring_service
+                    _self_mon_service = get_self_monitoring_service(_guardian_db)
+        except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+            pass
+
         # Moderation: apply global/per-user policy to input messages (redact or block)
         try:
             moderation = get_moderation_service()
@@ -1919,6 +1951,9 @@ async def create_chat_completion(
                 audit_context=context,
                 client_id=client_id,
                 audit_event_type=AuditEventType.SECURITY_VIOLATION,
+                supervised_policy_engine=_supervised_engine,
+                self_monitoring_service=_self_mon_service,
+                dependent_user_id=_dep_user_id,
             )
         except HTTPException:
             raise
@@ -2225,7 +2260,7 @@ async def create_chat_completion(
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail="Fallback provider initialization failed. Please retry.",
-                    )
+                    ) from refresh_exc
 
             # Request Queue Integration (Admission control / backpressure)
             # ------------------------------------------------------------------------
@@ -2303,7 +2338,7 @@ async def create_chat_completion(
                     logger.error(
                         "Queue admission error for request_id=%s: %s", request_id, e
                     )
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.")
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Service busy. Please retry.") from e
             # The request queue system has been initialized in main.py but is not yet
             # integrated here. Once the central scheduling/queue module is built, this
             # endpoint should enqueue requests rather than processing them directly.
@@ -2408,6 +2443,17 @@ async def create_chat_completion(
             else:
                 llm_call_func = partial(perform_chat_api_call, **cleaned_args)
 
+            # Build moderation getter that overlays guardian policies on output
+            def _get_moderation_with_guardian():
+                base = get_moderation_service()
+                if not _supervised_engine or not _dep_user_id:
+                    return base
+                try:
+                    from tldw_Server_API.app.core.Moderation.supervised_policy import GuardianModerationProxy
+                    return GuardianModerationProxy(base, _supervised_engine, _dep_user_id)
+                except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                    return base
+
             if request_data.stream:
                 return await execute_streaming_call(
                     current_loop=current_loop,
@@ -2433,7 +2479,7 @@ async def create_chat_completion(
                     enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    moderation_getter=get_moderation_service,
+                    moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
@@ -2470,7 +2516,7 @@ async def create_chat_completion(
                     enable_provider_fallback=ENABLE_PROVIDER_FALLBACK,
                     llm_call_func=llm_call_func,
                     refresh_provider_params=rebuild_call_params_for_provider,
-                    moderation_getter=get_moderation_service,
+                    moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
                 )
                 # Track response size and return
@@ -2544,7 +2590,7 @@ async def create_chat_completion(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An unexpected internal server error occurred."
-            )
+            ) from e_http
 
         except ChatModuleException as e_chat:
             # Our custom exceptions with structured error handling
@@ -2604,7 +2650,7 @@ async def create_chat_completion(
             raise HTTPException(
                 status_code=http_status,
                 detail=safe_detail
-            )
+            ) from e_chat
 
         except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS as e_chat:
             # Do not leak raw HTTPException details from underlying call sites.
@@ -2614,7 +2660,7 @@ async def create_chat_completion(
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="An unexpected internal server error occurred."
-                )
+                ) from e_chat
             # Special-case DB errors here, because a generic Exception handler precedes
             # the DB-specific except block below. Map to precise HTTP statuses.
             if isinstance(e_chat, (InputError, ConflictError, CharactersRAGDBError)):
@@ -2635,7 +2681,7 @@ async def create_chat_completion(
                     client_detail = "Conflict."
                 else:
                     client_detail = "A database error occurred. Please try again later."
-                raise HTTPException(status_code=db_status, detail=client_detail)
+                raise HTTPException(status_code=db_status, detail=client_detail) from e_chat
             # Handle legacy chat library exceptions robustly, even if class identity differs.
             # For non-library exceptions, return a generic 500 rather than leaking the raw exception.
             is_chat_lib_error = (
@@ -2742,7 +2788,7 @@ async def create_chat_completion(
                     client_detail = "An unexpected internal server error occurred."
                 else:
                     client_detail = "An internal server error occurred."
-            raise HTTPException(status_code=err_status, detail=client_detail)
+            raise HTTPException(status_code=err_status, detail=client_detail) from e_chat
 
 
     finally:
@@ -2801,7 +2847,7 @@ async def get_chat_queue_activity(
     try:
         limit = int(limit)
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be an integer")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be an integer") from None
     if limit < 1 or limit > 1000:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="limit must be between 1 and 1000")
     try:
@@ -2905,7 +2951,7 @@ def _verify_conversation_ownership(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
     except (TypeError, ValueError):
         if str(conv_client_id) != str(user_id):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden for this conversation") from None
     return conversation
 
 

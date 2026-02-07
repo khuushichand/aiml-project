@@ -474,7 +474,7 @@ class RedisResourceGovernor(ResourceGovernor):
             return False, int(ra), count
         except _RG_NONCRITICAL_EXCEPTIONS:
             if fail_mode == "fallback_memory":
-                raise _FallbackToMemory
+                raise _FallbackToMemory from None
             if fail_mode == "fail_open":
                 return True, 0, 0
             return False, window, 0
@@ -1240,7 +1240,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 pol_e = self._get_policy(policy_id_early)
                 ra_e = max(0, int(floor_until - now_early)) or 1
                 per_category_e: dict[str, Any] = {}
-                for category, cfg in req.categories.items():
+                for category, _cfg in req.categories.items():
                     if category == "requests":
                         lim = int((pol_e.get("requests") or {}).get("rpm") or 0)
                         per_category_e[category] = {"allowed": False, "limit": lim, "retry_after": ra_e}
@@ -1483,7 +1483,7 @@ class RedisResourceGovernor(ResourceGovernor):
                             used_lua = True
                             self._last_used_multi_lua = True
                             # Populate added_members from tmp_members
-                            for category, sc, ev, key, members in tmp_members:
+                            for category, sc, ev, _key, members in tmp_members:
                                 added_members.setdefault(category, {})[(sc, ev)] = list(members)
                         else:
                             # res is expected as {0, max_retry_after}; capture RA if present
@@ -1533,7 +1533,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 if add_failed:
                     # Deny with rollback (nothing added yet)
                     per_category: dict[str, Any] = {}
-                    for category, cfg in req.categories.items():
+                    for category, _cfg in req.categories.items():
                         if category in ("requests", "tokens"):
                             lim = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
                             per_category[category] = {"allowed": False, "limit": lim, "retry_after": int(denial_retry_after or 1)}
@@ -1644,7 +1644,7 @@ class RedisResourceGovernor(ResourceGovernor):
                 base_cats = {}
             per_category: dict[str, Any] = {}
             # Populate categories from request, overriding requests/tokens to denied
-            for category, cfg in req.categories.items():
+            for category, _cfg in req.categories.items():
                 if category in ("requests", "tokens"):
                     lim = int((pol.get(category) or {}).get("rpm") or 0) if category == "requests" else int((pol.get(category) or {}).get("per_min") or 0)
                     per_category[category] = {"allowed": False, "limit": lim, "retry_after": int(denial_retry_after or 1)}

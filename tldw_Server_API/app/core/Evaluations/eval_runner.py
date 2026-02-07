@@ -1010,7 +1010,7 @@ class EvaluationRunner:
             docs = inp.get("corpus") or inp.get("documents") or []
             if not isinstance(docs, list):
                 continue
-            for i, d in enumerate(docs):
+            for _i, d in enumerate(docs):
                 if isinstance(d, str):
                     corpus.append({"id": f"doc_{len(corpus)+1}", "text": d})
                 elif isinstance(d, dict):

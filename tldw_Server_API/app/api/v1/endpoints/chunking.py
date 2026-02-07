@@ -322,7 +322,7 @@ async def process_text_for_chunking_json(
                  raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Option '{key_to_check}' must be an integer. Value: {effective_options[key_to_check]}. Error: {e}"
-                )
+                ) from e
 
 
     # Filename-based language hint if language not set/empty
@@ -364,7 +364,8 @@ async def process_text_for_chunking_json(
         # Determine LLM provider and model for the summarization steps
         # Priority: Request's llm_options -> Server default for summarization -> Hardcoded default
         requested_llm_options = effective_options.get('llm_options_for_internal_steps', {}) # This is a dict now
-        if requested_llm_options is None: requested_llm_options = {}
+        if requested_llm_options is None:
+            requested_llm_options = {}
 
 
         default_summarization_provider = server_configs.get('llm_api_settings', {}).get('default_api', 'openai')
@@ -450,14 +451,14 @@ async def process_text_for_chunking_json(
         )
     except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors from chunker
         logger.warning(f"Chunking library error for '{request_data.file_name}': {lib_error}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error)) from lib_error
     except ValueError as ve: # General value errors (e.g., from Pydantic or type conversions if not caught earlier)
         logger.warning(f"ValueError during chunking setup or process for '{request_data.file_name}': {ve}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve)) from ve
     except Exception as e:
         logger.error(f"Unexpected error during chunking process for '{request_data.file_name}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"An internal error occurred during text chunking: {type(e).__name__}")
+                            detail=f"An internal error occurred during text chunking: {type(e).__name__}") from e
 
     if not chunk_results:
         logger.info(f"Chunking produced no results for '{request_data.file_name}'. Returning empty list.")
@@ -526,7 +527,7 @@ async def process_file_for_chunking(
         text_content = text_content_bytes.decode('utf-8')
     except Exception as e:
         logger.error(f"Error reading uploaded file '{file.filename}': {e}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not read or decode file: {e}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not read or decode file: {e}") from e
     finally:
         await file.close()
 
@@ -542,9 +543,12 @@ async def process_file_for_chunking(
     }
     # Build the nested llm_options_for_internal_steps from flattened form fields
     internal_llm_opts_from_form = {}
-    if llm_step_temperature is not None: internal_llm_opts_from_form['temperature'] = llm_step_temperature
-    if llm_step_system_prompt is not None: internal_llm_opts_from_form['system_prompt_for_step'] = llm_step_system_prompt
-    if llm_step_max_tokens is not None: internal_llm_opts_from_form['max_tokens_per_step'] = llm_step_max_tokens
+    if llm_step_temperature is not None:
+        internal_llm_opts_from_form['temperature'] = llm_step_temperature
+    if llm_step_system_prompt is not None:
+        internal_llm_opts_from_form['system_prompt_for_step'] = llm_step_system_prompt
+    if llm_step_max_tokens is not None:
+        internal_llm_opts_from_form['max_tokens_per_step'] = llm_step_max_tokens
 
     if internal_llm_opts_from_form:
         form_options_dict['llm_options_for_internal_steps'] = internal_llm_opts_from_form
@@ -607,7 +611,8 @@ async def process_file_for_chunking(
             _raise_missing_chunking_key(provider_key_file)
 
         requested_llm_params_file = effective_processing_options.get('llm_options_for_internal_steps', {})
-        if requested_llm_params_file is None: requested_llm_params_file = {}
+        if requested_llm_params_file is None:
+            requested_llm_params_file = {}
 
         client_suggested_system_prompt_file = requested_llm_params_file.get('system_prompt_for_step')
         method_default_system_prompt_file = effective_processing_options.get('summarize_system_prompt')
@@ -636,13 +641,13 @@ async def process_file_for_chunking(
         )
     except (ChunkingError, InvalidInputError, InvalidChunkingMethodError) as lib_error: # Catch specific errors
         logger.warning(f"Chunking library error for file '{file.filename}': {lib_error}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(lib_error)) from lib_error
     except ValueError as ve: # General value errors
         logger.warning(f"ValueError during chunking file '{file.filename}': {ve}")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve)) from ve
     except Exception as e:
         logger.error(f"Unexpected error during chunking file '{file.filename}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error during file chunking: {type(e).__name__}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error during file chunking: {type(e).__name__}") from e
 
     # Convert chunk_results to ChunkedContentResponse objects
     chunked_responses = [

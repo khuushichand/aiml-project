@@ -187,9 +187,23 @@ async def run_jobs_webhooks_worker(stop_event: asyncio.Event | None = None) -> N
                 for r in rows:
                     try:
                         if isinstance(r, dict):
-                            eid = int(r.get("id")); et = str(r.get("event_type")); attrs = r.get("attrs_json"); job_id = r.get("job_id"); dom=r.get("domain"); que=r.get("queue"); jt=r.get("job_type"); ts=str(r.get("created_at"))
+                            eid = int(r.get("id"))
+                            et = str(r.get("event_type"))
+                            attrs = r.get("attrs_json")
+                            job_id = r.get("job_id")
+                            dom=r.get("domain")
+                            que=r.get("queue")
+                            jt=r.get("job_type")
+                            ts=str(r.get("created_at"))
                         else:
-                            eid = int(r[0]); et = str(r[1]); attrs = r[2]; job_id = r[3]; dom=r[4]; que=r[5]; jt=r[6]; ts=str(r[7])
+                            eid = int(r[0])
+                            et = str(r[1])
+                            attrs = r[2]
+                            job_id = r[3]
+                            dom=r[4]
+                            que=r[5]
+                            jt=r[6]
+                            ts=str(r[7])
                         # Construct payload
                         job_stub = {"id": job_id, "domain": dom, "queue": que, "job_type": jt}
                         try:

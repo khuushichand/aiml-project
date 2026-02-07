@@ -248,9 +248,9 @@ def _moonshot_request(
             raise_chat_error_from_http("moonshot", e)
         if is_network_error(e):
             logging.error(f"Moonshot RequestException: {e}", exc_info=True)
-            raise ChatProviderError(provider="moonshot", message=f"Network error: {e}", status_code=504)
+            raise ChatProviderError(provider="moonshot", message=f"Network error: {e}", status_code=504) from e
         logging.error(f"Moonshot: Unexpected error in chat_with_moonshot: {e}", exc_info=True)
-        raise ChatProviderError(provider="moonshot", message=f"Unexpected error: {e}")
+        raise ChatProviderError(provider="moonshot", message=f"Unexpected error: {e}") from e
 
 
 class MoonshotAdapter(ChatProvider):

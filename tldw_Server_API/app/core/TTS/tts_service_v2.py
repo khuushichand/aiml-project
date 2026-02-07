@@ -1209,7 +1209,7 @@ class TTSServiceV2:
                     continue
             # If all failed, raise the last error
             if last_exc:
-                raise last_exc
+                raise last_exc from first_err
             raise
 
     def _register_tts_metrics(self):
@@ -1465,7 +1465,7 @@ class TTSServiceV2:
                                     f"Circuit open for {provider_key}",
                                     provider=provider_key,
                                     details={"circuit_state": "open"}
-                                )
+                                ) from e
                     else:
                         response = await _generate_with_adapter()
 
@@ -1645,7 +1645,7 @@ class TTSServiceV2:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: {error_msg}".encode()
                 else:
-                    raise tts_error
+                    raise tts_error from e
         finally:
             try:
                 if not released_active_slot:
@@ -2434,7 +2434,7 @@ class TTSServiceV2:
                         if self._stream_errors_as_audio:
                             yield b"ERROR: All fallback providers exhausted"
                         else:
-                            raise TTSFallbackExhaustedError("All fallback providers exhausted")
+                            raise TTSFallbackExhaustedError("All fallback providers exhausted") from e
                 else:
                     # Non-retryable error, don't attempt more fallbacks
                     if self._stream_errors_as_audio:
@@ -2447,7 +2447,7 @@ class TTSServiceV2:
                 if self._stream_errors_as_audio:
                     yield f"ERROR: Unexpected error during fallback: {str(e)}".encode()
                 else:
-                    raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}")
+                    raise TTSGenerationError(f"Unexpected error during fallback: {str(e)}") from e
         else:
             if self._stream_errors_as_audio:
                 yield b"ERROR: No fallback providers available"

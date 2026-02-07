@@ -117,7 +117,7 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            aria-label="Decrease font size"
+            aria-label={t("option:documentWorkspace.decreaseFontSize", "Decrease font size")}
             onClick={() => setFontSize(fontSize - 10)}
             disabled={fontSize <= 50}
             className="flex h-7 w-7 items-center justify-center rounded hover:bg-hover disabled:opacity-50"
@@ -135,7 +135,7 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
           />
           <button
             type="button"
-            aria-label="Increase font size"
+            aria-label={t("option:documentWorkspace.increaseFontSize", "Increase font size")}
             onClick={() => setFontSize(fontSize + 10)}
             disabled={fontSize >= 200}
             className="flex h-7 w-7 items-center justify-center rounded hover:bg-hover disabled:opacity-50"
@@ -239,7 +239,7 @@ export const EpubSettingsPanel: React.FC<EpubSettingsPanelProps> = ({
             }))}
           />
           <p className="mt-1.5 text-[11px] text-text-muted">
-            {SPREAD_MODE_INFO[spreadMode].description}
+            {t(`option:documentWorkspace.spread${SPREAD_MODE_INFO[spreadMode].label}Description`, SPREAD_MODE_INFO[spreadMode].description)}
           </p>
         </div>
       )}

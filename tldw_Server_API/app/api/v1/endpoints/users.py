@@ -486,7 +486,7 @@ async def update_user_profile(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update profile"
-        )
+        ) from e
 
 
 #######################################################################################################################
@@ -557,7 +557,7 @@ async def change_password(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e)
-            )
+            ) from e
 
         # Hash new password
         new_hash = password_service.hash_password(request.new_password)
@@ -594,7 +594,7 @@ async def change_password(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to change password"
-        )
+        ) from e
 
 
 #######################################################################################################################
@@ -876,7 +876,7 @@ async def recalculate_storage(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to recalculate storage"
-        )
+        ) from e
 
 
 #

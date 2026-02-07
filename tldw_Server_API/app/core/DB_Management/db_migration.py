@@ -508,7 +508,7 @@ class DatabaseMigrator:
 
                 raise MigrationError(
                     f"Migration {migration.name} ({direction}) failed: {e}"
-                )
+                ) from e
 
     def migrate_to_version(
         self,
@@ -600,7 +600,7 @@ class DatabaseMigrator:
             if backup_path and create_backup:
                 logger.info(f"Migration failed. Backup available at: {backup_path}")
 
-            raise MigrationError(f"Migration failed: {e}")
+            raise MigrationError(f"Migration failed: {e}") from e
 
     def rollback_to_backup(self, backup_path: str):
         """Restore database from backup"""
@@ -631,7 +631,7 @@ class DatabaseMigrator:
             }
 
         except Exception as e:
-            raise MigrationError(f"Rollback failed: {e}")
+            raise MigrationError(f"Rollback failed: {e}") from e
 
     def verify_migrations(self) -> list[dict[str, Any]]:
         """Verify integrity of applied migrations"""

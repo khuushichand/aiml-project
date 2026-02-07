@@ -74,61 +74,78 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
             if lang in ('javascript', 'typescript', 'tsx', 'jsx'):
                 m = self.JSTYPE_EXPORT_DEFAULT_CLASS_RE.match(line)
                 if m:
-                    headers.append(_Header('class', m.group(1), idx)); continue
+                    headers.append(_Header('class', m.group(1), idx))
+                    continue
                 m = self.JSTYPE_CLASS_RE.match(line)
                 if m:
-                    headers.append(_Header('class', m.group(1), idx)); continue
+                    headers.append(_Header('class', m.group(1), idx))
+                    continue
                 m = self.JSTYPE_FUNC_RE.match(line)
                 if m:
-                    headers.append(_Header('function', m.group(1), idx)); continue
+                    headers.append(_Header('function', m.group(1), idx))
+                    continue
                 m = self.JSTYPE_EXPORT_DEFAULT_FUNC_NAMED_RE.match(line)
                 if m:
-                    headers.append(_Header('function', m.group(1), idx)); continue
+                    headers.append(_Header('function', m.group(1), idx))
+                    continue
                 m = self.JSTYPE_EXPORT_DEFAULT_FUNC_ANON_RE.match(line)
                 if m:
-                    headers.append(_Header('function', 'default', idx)); continue
+                    headers.append(_Header('function', 'default', idx))
+                    continue
                 m = self.JSTYPE_EXPORT_DEFAULT_ARROW_RE.match(line)
                 if m:
-                    headers.append(_Header('function', 'default', idx)); continue
+                    headers.append(_Header('function', 'default', idx))
+                    continue
                 m = self.JSTYPE_CONST_ARROW_RE.match(line)
                 if m:
-                    headers.append(_Header('function', m.group(1), idx)); continue
+                    headers.append(_Header('function', m.group(1), idx))
+                    continue
                 m = self.JSTYPE_CONST_FUNC_RE.match(line)
                 if m:
-                    headers.append(_Header('function', m.group(1), idx)); continue
+                    headers.append(_Header('function', m.group(1), idx))
+                    continue
                 m = self.TSTYPE_INTERFACE_RE.match(line)
                 if m:
-                    headers.append(_Header('interface', m.group(1), idx)); continue
+                    headers.append(_Header('interface', m.group(1), idx))
+                    continue
                 m = self.TSTYPE_TYPE_RE.match(line)
                 if m:
-                    headers.append(_Header('type', m.group(1), idx)); continue
+                    headers.append(_Header('type', m.group(1), idx))
+                    continue
                 # methods will be handled inside class blocks via braces
             if lang in ('c', 'cpp', 'csharp', 'java'):
                 m = self.C_LIKE_CLASS_RE.match(line)
                 if m:
-                    headers.append(_Header('class', m.group(1), idx)); continue
+                    headers.append(_Header('class', m.group(1), idx))
+                    continue
                 m = self.C_LIKE_FUNC_RE.match(line)
                 if m:
-                    headers.append(_Header('function', m.group(1), idx)); continue
+                    headers.append(_Header('function', m.group(1), idx))
+                    continue
             if lang == 'go':
                 m = self.GO_FUNC_RE.match(line)
                 if m:
-                    headers.append(_Header('func', m.group(1), idx)); continue
+                    headers.append(_Header('func', m.group(1), idx))
+                    continue
             if lang == 'rust':
                 m = self.RUST_TYPE_RE.match(line)
                 if m:
-                    headers.append(_Header(m.group(1), m.group(2), idx)); continue
+                    headers.append(_Header(m.group(1), m.group(2), idx))
+                    continue
                 m = self.RUST_FUNC_RE.match(line)
                 if m:
-                    headers.append(_Header('fn', m.group(1), idx)); continue
+                    headers.append(_Header('fn', m.group(1), idx))
+                    continue
             if lang == 'ruby':
                 m = self.RUBY_HEADER_RE.match(line)
                 if m:
-                    headers.append(_Header(m.group(1), m.group(2), idx)); continue
+                    headers.append(_Header(m.group(1), m.group(2), idx))
+                    continue
             # Shell-like
             m = self.SHELL_FUNC_RE.match(line)
             if m:
-                headers.append(_Header('function', m.group(1), idx)); continue
+                headers.append(_Header('function', m.group(1), idx))
+                continue
         headers.sort(key=lambda h: h.line_index)
         return headers
 
@@ -145,7 +162,8 @@ class CodeChunkingStrategy(BaseChunkingStrategy):
         while i < len(lines):
             line = lines[i]
             if not line.strip():
-                i += 1; continue
+                i += 1
+                continue
             if self._indent(line) <= base_indent and (self.PY_HEADER_RE.match(line) or self.RUBY_HEADER_RE.match(line)):
                 return i
             i += 1

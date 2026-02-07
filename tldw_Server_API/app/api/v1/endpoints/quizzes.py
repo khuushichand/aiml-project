@@ -45,7 +45,7 @@ def list_quizzes(
         return db.list_quizzes(q=q, media_id=media_id, workspace_tag=workspace_tag, limit=limit, offset=offset)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list quizzes: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list quizzes")
+        raise HTTPException(status_code=500, detail="Failed to list quizzes") from e
 
 
 @router.post("", response_model=QuizResponse)
@@ -59,7 +59,7 @@ def create_quiz(payload: QuizCreate, db: CharactersRAGDB = Depends(get_chacha_db
         return quiz
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create quiz: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create quiz")
+        raise HTTPException(status_code=500, detail="Failed to create quiz") from e
 
 
 @router.get("/{quiz_id}", response_model=QuizResponse)
@@ -87,10 +87,10 @@ def update_quiz(
             raise HTTPException(status_code=404, detail="Quiz not found")
         return quiz
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to update quiz: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update quiz")
+        raise HTTPException(status_code=500, detail="Failed to update quiz") from e
 
 
 @router.delete("/{quiz_id}")
@@ -107,10 +107,10 @@ def delete_quiz(
             raise HTTPException(status_code=404, detail="Quiz not found")
         return {"status": "deleted"}
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete quiz: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete quiz")
+        raise HTTPException(status_code=500, detail="Failed to delete quiz") from e
 
 
 @router.get(
@@ -131,7 +131,7 @@ def list_questions(
         return db.list_questions(quiz_id, q=q, include_answers=include_answers, limit=limit, offset=offset)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list questions: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list questions")
+        raise HTTPException(status_code=500, detail="Failed to list questions") from e
 
 
 @router.post("/{quiz_id}/questions", response_model=QuestionAdminResponse)
@@ -148,10 +148,10 @@ def create_question(
             raise HTTPException(status_code=500, detail="Failed to load created question")
         return item
     except ConflictError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create question: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create question")
+        raise HTTPException(status_code=500, detail="Failed to create question") from e
 
 
 @router.patch("/{quiz_id}/questions/{question_id}", response_model=QuestionAdminResponse)
@@ -171,10 +171,10 @@ def update_question(
             raise HTTPException(status_code=404, detail="Question not found")
         return item
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to update question: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update question")
+        raise HTTPException(status_code=500, detail="Failed to update question") from e
 
 
 @router.delete("/{quiz_id}/questions/{question_id}")
@@ -192,10 +192,10 @@ def delete_question(
             raise HTTPException(status_code=404, detail="Question not found")
         return {"status": "deleted"}
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete question: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete question")
+        raise HTTPException(status_code=500, detail="Failed to delete question") from e
 
 
 @router.post("/{quiz_id}/attempts", response_model=AttemptResponse, response_model_exclude_none=True)
@@ -207,10 +207,10 @@ def start_attempt(
     try:
         return db.start_attempt(quiz_id)
     except ConflictError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to start attempt: {e}")
-        raise HTTPException(status_code=500, detail="Failed to start attempt")
+        raise HTTPException(status_code=500, detail="Failed to start attempt") from e
 
 
 @router.put("/attempts/{attempt_id}", response_model=AttemptResponse, response_model_exclude_none=True)
@@ -223,10 +223,10 @@ def submit_attempt(
     try:
         return db.submit_attempt(attempt_id, [a.model_dump() for a in submission.answers])
     except ConflictError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to submit attempt: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit attempt")
+        raise HTTPException(status_code=500, detail="Failed to submit attempt") from e
 
 
 @router.get("/attempts", response_model=AttemptListResponse, response_model_exclude_none=True)
@@ -241,7 +241,7 @@ def list_attempts(
         return db.list_attempts(quiz_id=quiz_id, limit=limit, offset=offset)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list attempts: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list attempts")
+        raise HTTPException(status_code=500, detail="Failed to list attempts") from e
 
 
 @router.get("/attempts/{attempt_id}", response_model=AttemptResponse, response_model_exclude_none=True)
@@ -278,9 +278,9 @@ async def generate_quiz(
             workspace_tag=request.workspace_tag,
         )
     except ConflictError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to generate quiz: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate quiz")
+        raise HTTPException(status_code=500, detail="Failed to generate quiz") from e

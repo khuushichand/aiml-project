@@ -1,9 +1,11 @@
 # llm_inference_lib/manager.py
+from __future__ import annotations
+
 #
 #
 # Imports
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 #
 # Third-party imports
@@ -30,12 +32,12 @@ class LLMInferenceManager:
         self.config = config
         self.logger = logging # Use the logger from utils_loader
 
-        self.ollama: Optional[OllamaHandler] = None
+        self.ollama: OllamaHandler | None = None
         if self.config.ollama and self.config.ollama.enabled:
             self.ollama = OllamaHandler(self.config.ollama, self.config.app_config)
             self.logger.info("Ollama handler initialized.")
 
-        self.huggingface: Optional[HuggingFaceHandler] = None
+        self.huggingface: HuggingFaceHandler | None = None
         if self.config.huggingface and self.config.huggingface.enabled:
             # Ensure models_dir exists (use local variable to avoid mutating config)
             hf_cfg = self.config.huggingface
@@ -53,7 +55,7 @@ class LLMInferenceManager:
                 self.logger.info(f"HuggingFace handler initialized. Models directory: {hf_models_dir}")
 
 
-        self.llamafile: Optional[LlamafileHandler] = None
+        self.llamafile: LlamafileHandler | None = None
         if self.config.llamafile and self.config.llamafile.enabled:
             lf_cfg = self.config.llamafile
             # Use local variables to avoid mutating config
@@ -65,7 +67,7 @@ class LLMInferenceManager:
             self.llamafile = LlamafileHandler(lf_cfg, self.config.app_config)
             self.logger.info(f"Llamafile handler initialized. Executable dir: {lf_exe_dir}, Models dir: {lf_models_dir}")
 
-        self.llamacpp: Optional[LlamaCppHandler] = None
+        self.llamacpp: LlamaCppHandler | None = None
         if self.config.llamacpp and self.config.llamacpp.enabled:
             lc_cfg = self.config.llamacpp
             # Use local variable to avoid mutating config
@@ -185,7 +187,7 @@ class LLMInferenceManager:
             )
         raise InferenceError(f"Inference not implemented for backend {backend} via this generic method or backend unknown.")
 
-    async def start_server(self, backend: str, model_name: Optional[str] = None, **kwargs) -> dict[str, Any]:
+    async def start_server(self, backend: str, model_name: str | None = None, **kwargs) -> dict[str, Any]:
         handler = self.get_handler(backend)
         self.logger.info(f"Starting server for backend {backend} with model {model_name or 'default'}")
         if backend == "ollama":

@@ -392,7 +392,7 @@ def _cohere_request(
         raise ChatBadRequestError(
             provider="cohere",
             message=f"Key error while preparing or parsing Cohere payload/response: {e}",
-        )
+        ) from e
     except Exception as e:
         if is_http_status_error(e):
             status_code = get_http_status_from_exception(e) or 500
@@ -402,22 +402,22 @@ def _cohere_request(
                 exc_info=False,
             )
             if status_code == 401:
-                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}")
+                raise ChatAuthenticationError(provider="cohere", message=f"Authentication failed. Detail: {error_text[:200]}") from e
             if status_code == 429:
-                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}")
+                raise ChatRateLimitError(provider="cohere", message=f"Rate limit exceeded. Detail: {error_text[:200]}") from e
             if 400 <= status_code < 500:
-                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}")
+                raise ChatBadRequestError(provider="cohere", message=f"Bad request (Status {status_code}). Detail: {error_text[:200]}") from e
             raise ChatProviderError(
                 provider="cohere",
                 message=f"Server error (Status {status_code}). Detail: {error_text[:200]}",
                 status_code=status_code,
-            )
+            ) from e
         if is_network_error(e):
             logging.error(f"Cohere API request failed (network error) for {COHERE_CHAT_URL}: {e}", exc_info=True)
-            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504)
+            raise ChatProviderError(provider="cohere", message=f"Network error after retries: {e}", status_code=504) from e
         logging.error(f"Cohere API call: Unexpected error: {e}", exc_info=True)
         if not isinstance(e, ChatAPIError):
-            raise ChatAPIError(provider="cohere", message=f"Unexpected error in Cohere API call: {e}")
+            raise ChatAPIError(provider="cohere", message=f"Unexpected error in Cohere API call: {e}") from e
         raise
     finally:
         if session:

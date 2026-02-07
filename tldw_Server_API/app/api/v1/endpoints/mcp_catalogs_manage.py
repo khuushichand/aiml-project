@@ -117,7 +117,7 @@ async def list_org_tool_catalogs(
             ]
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list org tool catalogs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list org tool catalogs")
+        raise HTTPException(status_code=500, detail="Failed to list org tool catalogs") from e
 
 
 @router.post(
@@ -182,7 +182,7 @@ async def create_org_tool_catalog(
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create org tool catalog: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create tool catalog")
+        raise HTTPException(status_code=500, detail="Failed to create tool catalog") from e
 
 
 @router.get(
@@ -222,7 +222,7 @@ async def list_team_tool_catalogs(
             ]
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list team tool catalogs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list team tool catalogs")
+        raise HTTPException(status_code=500, detail="Failed to list team tool catalogs") from e
 
 
 @router.post(
@@ -283,7 +283,7 @@ async def create_team_tool_catalog(
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create team tool catalog: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create tool catalog")
+        raise HTTPException(status_code=500, detail="Failed to create tool catalog") from e
 
 
 @router.post(
@@ -404,7 +404,7 @@ async def delete_org_tool_catalog(org_id: int, catalog_id: int, user: dict = Dep
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete org tool catalog {catalog_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete tool catalog")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog") from e
 
 
 @router.delete(
@@ -444,7 +444,7 @@ async def delete_org_catalog_entry(org_id: int, catalog_id: int, tool_name: str,
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete org tool catalog entry: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry") from e
 
 
 @router.delete(
@@ -480,7 +480,7 @@ async def delete_team_tool_catalog(team_id: int, catalog_id: int, user: dict = D
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete team tool catalog {catalog_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete tool catalog")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog") from e
 
 
 @router.delete(
@@ -519,4 +519,4 @@ async def delete_team_catalog_entry(team_id: int, catalog_id: int, tool_name: st
         raise
     except _CATALOG_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to delete team tool catalog entry: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry")
+        raise HTTPException(status_code=500, detail="Failed to delete tool catalog entry") from e

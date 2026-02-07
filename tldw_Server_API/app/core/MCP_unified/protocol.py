@@ -1357,7 +1357,7 @@ class MCPProtocol:
             if isinstance(tool_args, dict):
                 tool_args = module.sanitize_input(tool_args)
         except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as _san_e:
-            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}")
+            raise InvalidParamsException(f"Invalid arguments: {str(_san_e)}") from _san_e
 
         # Protocol-level pre-execution validation for write-capable tools
         # Ensures that modules validate arguments even if they forgot to call
@@ -1418,7 +1418,7 @@ class MCPProtocol:
                 except _MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS as ve:
                     with contextlib.suppress(_MCP_PROTOCOL_NONCRITICAL_EXCEPTIONS):
                         self.metrics.record_tool_invalid_params(getattr(module, "name", "unknown"), str(tool_name))
-                    raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}")
+                    raise ValueError(f"Invalid parameters for tool {tool_name}: {ve}") from ve
 
                 idempotency_cache_key = None
                 if isinstance(idempotency_key, str) and idempotency_key:
@@ -1428,7 +1428,7 @@ class MCPProtocol:
         except ValueError as ve:
             # Surface as JSON-RPC INVALID_PARAMS at the protocol layer
             # by raising a sentinel exception handled by process_request
-            raise InvalidParamsException(str(ve))
+            raise InvalidParamsException(str(ve)) from ve
 
         async def _execute_tool_call() -> dict[str, Any]:
             # Optional per-tool/category rate limits (ingestion vs read)

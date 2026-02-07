@@ -99,7 +99,7 @@ def extract_character_id_from_ui_choice(choice: str) -> int:
         logger.debug(f"Extracted character ID: {character_id}")
         return character_id
     except ValueError:
-        raise ValueError(f"Could not parse character ID from: '{character_id_str}' (derived from '{choice}')")
+        raise ValueError(f"Could not parse character ID from: '{character_id_str}' (derived from '{choice}')") from None
 
 
 def get_character_list_for_ui(db: CharactersRAGDB, limit: int = 1000) -> list[dict[str, Any]]:

@@ -419,7 +419,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     "Failed to import required libraries",
                     provider=self.provider_name,
                     details={"error": str(e), "suggestion": error_msg}
-                )
+                ) from e
 
             # Set to evaluation mode
             if self.model:
@@ -455,7 +455,7 @@ class VibeVoiceAdapter(TTSAdapter):
                     f"GPU error initializing {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "device": self.device}
-                )
+                ) from e
             raise
         except _VIBEVOICE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"{self.provider_name}: Initialization failed: {e}")
@@ -464,7 +464,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     def _check_model_files(self) -> bool:
         """Check if model files exist locally."""
@@ -850,7 +850,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 f"Failed to generate speech with {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e), "error_type": type(e).__name__}
-            )
+            ) from e
         finally:
             # Auto cleanup if enabled
             if self.auto_cleanup:
@@ -1003,7 +1003,7 @@ class VibeVoiceAdapter(TTSAdapter):
                 f"Streaming error in {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e)}
-            )
+            ) from e
         finally:
             writer.close()
             # Clean up voice reference file if used (but not custom voices from Voices folder)

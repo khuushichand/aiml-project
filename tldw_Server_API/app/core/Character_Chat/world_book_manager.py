@@ -541,7 +541,7 @@ class WorldBookService:
                 logger.info("World book tables initialized")
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize world book tables: {e}")
-            raise CharactersRAGDBError(f"Failed to initialize world book tables: {e}")
+            raise CharactersRAGDBError(f"Failed to initialize world book tables: {e}") from e
 
     # --- World Book CRUD Operations ---
 
@@ -612,11 +612,11 @@ class WorldBookService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
-            raise CharactersRAGDBError(f"Database error creating world book: {e}")
+                raise ConflictError(f"World book with name '{name}' already exists", "world_books", name) from e
+            raise CharactersRAGDBError(f"Database error creating world book: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"World book with name '{name}' already exists", "world_books", name)
+                raise ConflictError(f"World book with name '{name}' already exists", "world_books", name) from e
             raise
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Database error creating world book: {e}")
@@ -668,7 +668,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching world book: {e}")
-            raise CharactersRAGDBError(f"Error fetching world book: {e}")
+            raise CharactersRAGDBError(f"Error fetching world book: {e}") from e
 
     def list_world_books(self, include_disabled: bool = False) -> list[dict[str, Any]]:
         """
@@ -700,7 +700,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error listing world books: {e}")
-            raise CharactersRAGDBError(f"Error listing world books: {e}")
+            raise CharactersRAGDBError(f"Error listing world books: {e}") from e
 
     def update_world_book(
         self,
@@ -771,11 +771,11 @@ class WorldBookService:
 
         except sqlite3.IntegrityError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
-            raise CharactersRAGDBError(f"Database error updating world book: {e}")
+                raise ConflictError(f"World book name '{name}' already exists", "world_books", name) from e
+            raise CharactersRAGDBError(f"Database error updating world book: {e}") from e
         except CharactersRAGDBError as e:
             if _is_unique_violation(e):
-                raise ConflictError(f"World book name '{name}' already exists", "world_books", name)
+                raise ConflictError(f"World book name '{name}' already exists", "world_books", name) from e
             raise
 
     def delete_world_book(self, world_book_id: int, hard_delete: bool = False, **kwargs) -> bool:
@@ -814,7 +814,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting world book: {e}")
-            raise CharactersRAGDBError(f"Error deleting world book: {e}")
+            raise CharactersRAGDBError(f"Error deleting world book: {e}") from e
 
     # --- Entry CRUD Operations ---
 
@@ -877,7 +877,7 @@ class WorldBookService:
                 try:
                     re.compile(keyword)
                 except re.error as e:
-                    raise InputError(f"Invalid regex pattern '{keyword}': {e}")
+                    raise InputError(f"Invalid regex pattern '{keyword}': {e}") from e
 
         keywords_json = json.dumps(keywords)
         metadata_json = json.dumps(metadata or {})
@@ -923,7 +923,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error adding world book entry: {e}")
-            raise CharactersRAGDBError(f"Error adding world book entry: {e}")
+            raise CharactersRAGDBError(f"Error adding world book entry: {e}") from e
 
     def add_world_book_entry(
         self,
@@ -1012,7 +1012,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching world book entries: {e}")
-            raise CharactersRAGDBError(f"Error fetching world book entries: {e}")
+            raise CharactersRAGDBError(f"Error fetching world book entries: {e}") from e
 
     def update_entry(
         self,
@@ -1052,7 +1052,7 @@ class WorldBookService:
                         try:
                             re.compile(keyword)
                         except re.error as e:
-                            raise InputError(f"Invalid regex pattern '{keyword}': {e}")
+                            raise InputError(f"Invalid regex pattern '{keyword}': {e}") from e
                 updates.append("keywords = ?")
                 params.append(json.dumps(keywords))
 
@@ -1114,7 +1114,7 @@ class WorldBookService:
             raise
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error updating world book entry: {e}")
-            raise CharactersRAGDBError(f"Error updating world book entry: {e}")
+            raise CharactersRAGDBError(f"Error updating world book entry: {e}") from e
 
     def delete_entry(self, entry_id: int) -> bool:
         """
@@ -1142,7 +1142,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error deleting world book entry: {e}")
-            raise CharactersRAGDBError(f"Error deleting world book entry: {e}")
+            raise CharactersRAGDBError(f"Error deleting world book entry: {e}") from e
 
     # --- Character Association ---
 
@@ -1213,7 +1213,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error attaching world book to character: {e}")
-            raise CharactersRAGDBError(f"Error attaching world book to character: {e}")
+            raise CharactersRAGDBError(f"Error attaching world book to character: {e}") from e
 
     def detach_from_character(self, world_book_id: int, character_id: int) -> dict[str, Any]:
         """
@@ -1244,7 +1244,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error detaching world book from character: {e}")
-            raise CharactersRAGDBError(f"Error detaching world book from character: {e}")
+            raise CharactersRAGDBError(f"Error detaching world book from character: {e}") from e
 
     def get_character_world_books(self, character_id: int, enabled_only: bool = True) -> list[dict[str, Any]]:
         """
@@ -1278,7 +1278,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error fetching character world books: {e}")
-            raise CharactersRAGDBError(f"Error fetching character world books: {e}")
+            raise CharactersRAGDBError(f"Error fetching character world books: {e}") from e
 
     # --- Content Processing ---
 
@@ -1761,7 +1761,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error getting statistics: {e}")
-            raise CharactersRAGDBError(f"Error getting statistics: {e}")
+            raise CharactersRAGDBError(f"Error getting statistics: {e}") from e
 
     def search_entries(self, world_book_id: Optional[int] = None, query: Optional[str] = None) -> list[dict[str, Any]]:
         """
@@ -1813,7 +1813,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error searching entries: {e}")
-            raise CharactersRAGDBError(f"Error searching entries: {e}")
+            raise CharactersRAGDBError(f"Error searching entries: {e}") from e
 
     def bulk_update_entries(
         self,
@@ -1879,7 +1879,7 @@ class WorldBookService:
 
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error bulk updating entries: {e}")
-            raise CharactersRAGDBError(f"Error bulk updating entries: {e}")
+            raise CharactersRAGDBError(f"Error bulk updating entries: {e}") from e
 
     def clone_world_book(self, source_wb_id: int, new_name: str) -> int:
         """
@@ -1946,7 +1946,7 @@ class WorldBookService:
             raise
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error cloning world book: {e}")
-            raise CharactersRAGDBError(f"Error cloning world book: {e}")
+            raise CharactersRAGDBError(f"Error cloning world book: {e}") from e
 
     def close(self):
         """
@@ -1979,7 +1979,7 @@ class WorldBookService:
                 return False
         except _WORLD_BOOK_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error toggling entry enabled: {e}")
-            raise CharactersRAGDBError(f"Error toggling entry enabled: {e}")
+            raise CharactersRAGDBError(f"Error toggling entry enabled: {e}") from e
 
     def bulk_add_entries(self, world_book_id: int, entries: list[dict[str, Any]]) -> dict[str, int]:
         added = 0

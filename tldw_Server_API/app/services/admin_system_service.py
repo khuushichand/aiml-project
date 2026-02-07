@@ -45,7 +45,7 @@ def _parse_date_param(value: str | None, label: str, end_of_day: bool = False) -
             return dt
         return datetime.fromisoformat(raw)
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid {label} date format")
+        raise HTTPException(status_code=400, detail=f"Invalid {label} date format") from None
 
 
 async def get_security_alert_status() -> SecurityAlertStatusResponse:
@@ -228,7 +228,7 @@ async def get_system_stats(db) -> SystemStatsResponse:
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve system statistics",
-        )
+        ) from exc
 
 
 async def get_dashboard_activity(
@@ -501,7 +501,7 @@ async def get_audit_log(
         raise HTTPException(
             status_code=500,
             detail="Failed to retrieve audit log",
-        )
+        ) from exc
 
 
 async def export_audit_log(

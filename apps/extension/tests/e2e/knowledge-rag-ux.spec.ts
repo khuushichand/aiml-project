@@ -152,27 +152,36 @@ test.describe('Knowledge RAG workspace UX', () => {
         await expect(autoRagSwitch).toBeVisible()
 
         const initialMode = await page.evaluate(() => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const store = (window as any).__tldw_useStoreMessageOption
-          return store ? store.getState().chatMode : null
+          const w = window as unknown as {
+            __tldw_useStoreMessageOption?: {
+              getState?: () => { chatMode?: string }
+            }
+          }
+          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
         })
         expect(initialMode).toBe('normal')
 
         await autoRagSwitch.click()
 
         const ragMode = await page.evaluate(() => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const store = (window as any).__tldw_useStoreMessageOption
-          return store ? store.getState().chatMode : null
+          const w = window as unknown as {
+            __tldw_useStoreMessageOption?: {
+              getState?: () => { chatMode?: string }
+            }
+          }
+          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
         })
         expect(ragMode).toBe('rag')
 
         await autoRagSwitch.click()
 
         const backMode = await page.evaluate(() => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const store = (window as any).__tldw_useStoreMessageOption
-          return store ? store.getState().chatMode : null
+          const w = window as unknown as {
+            __tldw_useStoreMessageOption?: {
+              getState?: () => { chatMode?: string }
+            }
+          }
+          return w.__tldw_useStoreMessageOption?.getState?.().chatMode ?? null
         })
         expect(backMode).toBe('normal')
       } else {

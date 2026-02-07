@@ -767,7 +767,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                         defused_common.DTDForbidden,
                         defused_common.NotSupportedError) as e:
                     logger.error(f"Blocked potential XXE attack: {e}")
-                    raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}")
+                    raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}") from None
             except ImportError:
                 # Fall back to standard library with security measures
                 # Create parser with entity resolution disabled
@@ -780,7 +780,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                     raise InvalidInputError(
                         "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
                         "These are not allowed for security reasons."
-                    )
+                    ) from None
 
                 # External references are only dangerous when used in DTD/ENTITY constructs.
                 # Since we already reject any DTD/ENTITY declarations above, allow URLs in text nodes.
@@ -849,7 +849,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                         defused_common.DTDForbidden,
                         defused_common.NotSupportedError) as e:
                     logger.error(f"Blocked potential XXE attack: {e}")
-                    raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}")
+                    raise InvalidInputError(f"XML contains forbidden constructs (potential XXE attack): {e}") from None
             except ImportError:
                 parser = ET.XMLParser()
                 parser.entity = {}
@@ -859,7 +859,7 @@ class XMLChunkingStrategy(BaseChunkingStrategy):
                     raise InvalidInputError(
                         "XML contains unsafe DOCTYPE SYSTEM or ENTITY declaration. "
                         "These are not allowed for security reasons."
-                    )
+                    ) from None
 
                 root = ET.fromstring(text, parser=parser)
                 logger.debug("Using standard xml.etree with security checks")

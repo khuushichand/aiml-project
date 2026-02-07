@@ -566,7 +566,7 @@ def _ensure_hf_revision(model_name_or_path: str, expected_sha: str | None) -> No
             f"Failed to verify revision for {model_name_or_path} (SHA: {expected_sha}): {e}"
         )
         # Decide if this should be a fatal error. For now, we'll raise to prevent using a potentially wrong model.
-        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}")
+        raise RuntimeError(f"Failed to verify model revision for {model_name_or_path}: {e}") from e
 
 
 class TokenBucketLimiter:
@@ -1540,7 +1540,7 @@ class ONNXEmbedder:
             if os.path.exists(self.onnx_model_file_path):
                 with contextlib.suppress(OSError):
                     os.remove(self.onnx_model_file_path)
-            raise RuntimeError(f"ONNX model conversion failed for {self.model_identifier}.")
+            raise RuntimeError(f"ONNX model conversion failed for {self.model_identifier}.") from e
 
     def _reset_timer(self) -> None:
         # This method must be thread-safe
@@ -1746,7 +1746,7 @@ def create_embeddings_batch(
         embedding_service_config = EmbeddingConfigSchema(**user_app_config["embedding_config"])
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:  # Catch Pydantic ValidationError or other parsing issues
         logger.exception(f"Failed to parse embedding_config: {str(e)}")
-        raise ValueError(f"Invalid embedding_config structure: {e}")
+        raise ValueError(f"Invalid embedding_config structure: {e}") from e
 
     model_id_to_use = model_id_override if model_id_override else embedding_service_config.default_model_id
     if not model_id_to_use:

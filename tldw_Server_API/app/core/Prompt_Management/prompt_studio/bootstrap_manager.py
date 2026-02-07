@@ -75,7 +75,7 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to collect trace: {e}")
-            raise DatabaseError(f"Failed to collect trace: {e}")
+            raise DatabaseError(f"Failed to collect trace: {e}") from e
 
     def get_traces(self, prompt_id: int, min_score: float = 0.7,
                   limit: int = 100) -> list[dict[str, Any]]:
@@ -132,7 +132,7 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to get traces: {e}")
-            raise DatabaseError(f"Failed to get traces: {e}")
+            raise DatabaseError(f"Failed to get traces: {e}") from e
 
     ####################################################################################################################
     # Example Selection
@@ -331,7 +331,7 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to create bootstrapped prompt: {e}")
-            raise DatabaseError(f"Failed to create bootstrapped prompt: {e}")
+            raise DatabaseError(f"Failed to create bootstrapped prompt: {e}") from e
 
     def _format_examples_for_prompt(self, examples: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
@@ -419,4 +419,4 @@ class BootstrapManager:
 
         except Exception as e:
             logger.error(f"Failed to analyze bootstrap performance: {e}")
-            raise DatabaseError(f"Failed to analyze bootstrap performance: {e}")
+            raise DatabaseError(f"Failed to analyze bootstrap performance: {e}") from e

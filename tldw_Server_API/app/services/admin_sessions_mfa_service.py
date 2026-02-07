@@ -49,7 +49,7 @@ async def list_user_sessions(
         raise
     except _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to list sessions for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list sessions")
+        raise HTTPException(status_code=500, detail="Failed to list sessions") from exc
 
 
 async def revoke_user_session(
@@ -71,7 +71,7 @@ async def revoke_user_session(
         raise
     except _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to revoke session {session_id} for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to revoke session")
+        raise HTTPException(status_code=500, detail="Failed to revoke session") from exc
 
 
 async def revoke_all_user_sessions(
@@ -92,7 +92,7 @@ async def revoke_all_user_sessions(
         raise
     except _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to revoke all sessions for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to revoke sessions")
+        raise HTTPException(status_code=500, detail="Failed to revoke sessions") from exc
 
 
 async def get_user_mfa_status(
@@ -112,7 +112,7 @@ async def get_user_mfa_status(
         raise
     except _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to fetch MFA status for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to fetch MFA status")
+        raise HTTPException(status_code=500, detail="Failed to fetch MFA status") from exc
 
 
 async def disable_user_mfa(
@@ -135,4 +135,4 @@ async def disable_user_mfa(
         raise
     except _ADMIN_SESSIONS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to disable MFA for user {user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to disable MFA")
+        raise HTTPException(status_code=500, detail="Failed to disable MFA") from exc

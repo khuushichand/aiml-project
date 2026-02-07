@@ -62,7 +62,7 @@ async def list_tools_endpoint(current_user: User = Depends(get_request_user)) ->
         return ToolListResponse(tools=tools)
     except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"tools.list failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list tools")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list tools") from e
 
 
 @router.post(
@@ -100,7 +100,7 @@ async def execute_tool_endpoint(
         return ExecuteToolResult(ok=True, result=result.get("result", result), module=result.get("module"))
     except ToolExecutionError as te:
         logger.warning(f"tools.execute denied or invalid: {te}")
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(te))
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(te)) from te
     except _TOOL_ENDPOINT_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"tools.execute failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Tool execution failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Tool execution failed") from e

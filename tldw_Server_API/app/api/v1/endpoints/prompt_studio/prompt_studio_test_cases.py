@@ -205,13 +205,13 @@ async def create_test_case(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Test case already exists"
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error creating test case: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create test case"
-        )
+        ) from e
 
 @router.post(
     "/bulk",
@@ -298,7 +298,7 @@ async def create_bulk_test_cases(
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="Invalid test case payload"
-                    )
+                    ) from None
                 serialized_cases.append(encoded_case)
 
         test_cases = manager.create_bulk_test_cases(
@@ -319,7 +319,7 @@ async def create_bulk_test_cases(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create test cases"
-        )
+        ) from e
 
 @router.get(
     "/list/{project_id}",
@@ -414,7 +414,7 @@ async def list_test_cases(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail,
-        )
+        ) from e
     except Exception as e:  # noqa: BLE001
         logger.exception("Unexpected error listing test cases: {}", e)
         detail = "Failed to list test cases"
@@ -423,7 +423,7 @@ async def list_test_cases(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail,
-        )
+        ) from e
 
 @router.get("/get/{test_case_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Test case", "content": {"application/json": {"examples": {"get": {"summary": "Case", "value": {"success": True, "data": {"id": 101, "name": "Short text", "is_golden": True}}}}}}}}
@@ -466,7 +466,7 @@ async def get_test_case(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get test case"
-        )
+        ) from e
 
 @router.put("/update/{test_case_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
@@ -530,13 +530,13 @@ async def update_test_case(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error updating test case: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update test case"
-        )
+        ) from e
 
 @router.delete("/delete/{test_case_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
@@ -600,7 +600,7 @@ async def delete_test_case(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete test case"
-        )
+        ) from e
 
 ########################################################################################################################
 # Import/Export Endpoints
@@ -716,7 +716,7 @@ async def import_test_cases(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to import test cases"
-        )
+        ) from e
 
 
 @router.post(
@@ -799,7 +799,7 @@ async def import_test_cases_csv_upload(
         )
     except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error importing test cases via upload: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to import CSV test cases")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to import CSV test cases") from e
 
 
 @router.get(
@@ -844,7 +844,7 @@ async def get_csv_import_template(
         )
     except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Failed to generate CSV template: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate CSV template")
+        raise HTTPException(status_code=500, detail="Failed to generate CSV template") from e
 
 # Compatibility: run test cases endpoint returning {"results": [...]}
 @router.post("/run")
@@ -967,7 +967,7 @@ async def export_test_cases(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to export test cases"
-        )
+        ) from e
 
 ########################################################################################################################
 # Generation Endpoints
@@ -1085,10 +1085,10 @@ async def generate_test_cases(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid test case generation request"
-        )
+        ) from e
     except PROMPT_STUDIO_TEST_CASE_EXCEPTIONS as e:
         logger.error(f"Error generating test cases: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate test cases"
-        )
+        ) from e

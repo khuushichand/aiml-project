@@ -293,7 +293,7 @@ except _USER_DB_NONCRITICAL_EXCEPTIONS:
     _single_user_instance = None
 
 
-def is_single_user_mode() -> bool:
+def is_single_user_mode() -> bool:  # noqa: F811
     """Compatibility shim for tests that expect this helper in User_DB_Handling."""
     try:
         return get_settings().AUTH_MODE == "single_user"
@@ -501,7 +501,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="AuthNZ user lookup is unavailable.",
-        )
+        ) from None
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -536,10 +536,10 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         token_active_team_id = payload.get("active_team_id")
     except (InvalidTokenError, TokenExpiredError) as e:
         logger.warning(f"Token validation failed: {e}")
-        raise credentials_exception
+        raise credentials_exception from e
     except _USER_DB_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error decoding token: {e}")
-        raise credentials_exception
+        raise credentials_exception from e
 
     # Enforce scope checks for scoped tokens to prevent privilege expansion.
     try:
@@ -603,7 +603,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise
     except _USER_DB_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Error checking token blacklist: {exc}")
-        raise credentials_exception
+        raise credentials_exception from exc
 
     # --- Fetch and Validate User Data ---
     subject_identifier = user_id_int if user_id_int is not None else raw_subject
@@ -650,7 +650,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error retrieving user information."
-        )
+        ) from e
 
     # Prepare numeric ID (if available) for downstream lookups
     subject_db_id_raw = user_data.get("id")
@@ -675,7 +675,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing user data: Invalid format - {e}"
-        )
+        ) from e
     except _USER_DB_NONCRITICAL_EXCEPTIONS as e:  # Catch other potential errors during model creation
         if pii_redact_logs:
             logger.error("Unexpected error creating User model for authenticated user (details redacted)", exc_info=True)
@@ -684,7 +684,7 @@ async def verify_jwt_and_fetch_user(request: Request, token: str = Depends(oauth
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal error processing user data."
-        )
+        ) from e
 
     # --- Final User Status Check ---
     if not user.is_active:

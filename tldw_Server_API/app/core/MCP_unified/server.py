@@ -1176,7 +1176,7 @@ class MCPServer:
                         sess.client_info.update(ci)
                 sess.touch()
         except PermissionError as e:
-            raise HTTPException(status_code=403, detail=str(e))
+            raise HTTPException(status_code=403, detail=str(e)) from e
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -1220,10 +1220,10 @@ class MCPServer:
                     "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
                     "hint": "Throttle tool calls or wait for the cooldown before retrying."
                 }
-            )
+            ) from e
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error processing HTTP request: {self._mask_secrets(str(e))}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
     async def handle_http_batch(
         self,
@@ -1274,7 +1274,7 @@ class MCPServer:
                         continue
                 sess.touch()
         except PermissionError as e:
-            raise HTTPException(status_code=403, detail=str(e))
+            raise HTTPException(status_code=403, detail=str(e)) from e
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             pass
 
@@ -1322,10 +1322,10 @@ class MCPServer:
                     "message": f"Rate limit exceeded. Retry after {e.retry_after} seconds",
                     "hint": "Throttle tool calls or wait for the cooldown before retrying."
                 }
-            )
+            ) from e
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error processing HTTP batch request: {self._mask_secrets(str(e))}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
     async def _close_all_connections(self):
         """Close all WebSocket connections"""

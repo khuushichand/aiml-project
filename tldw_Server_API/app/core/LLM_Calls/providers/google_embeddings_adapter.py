@@ -82,7 +82,7 @@ class GoogleEmbeddingsAdapter(EmbeddingsProvider):
                         return self._normalize(data, multi=False)
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         msg = (
             "GoogleEmbeddingsAdapter: native HTTP disabled "

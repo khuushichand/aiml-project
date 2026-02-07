@@ -1015,11 +1015,11 @@ async def login(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="An error occurred during login"
-            )
+            ) from None
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during login"
-        )
+        ) from None
 
 
 #######################################################################################################################
@@ -1171,11 +1171,11 @@ async def list_user_sessions(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to retrieve sessions: {e}"
-            )
+            ) from e
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve sessions"
-        )
+        ) from e
 
 
 @router.delete("/sessions/{session_id}", response_model=MessageResponse)
@@ -1223,13 +1223,13 @@ async def revoke_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke session"
-        )
+        ) from e
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Unexpected error revoking session: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred while revoking the session"
-        )
+        ) from e
 
 
 @router.post("/sessions/revoke-all", response_model=MessageResponse)
@@ -1258,7 +1258,7 @@ async def revoke_all_sessions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revoke sessions"
-        )
+        ) from e
 
 
 #######################################################################################################################
@@ -1368,7 +1368,7 @@ async def refresh_token(
                         response.headers["X-TLDW-Refresh-Reason"] = "invalid-user-id"
                     except _AUTH_NONCRITICAL_EXCEPTIONS:
                         pass
-                raise InvalidTokenError("Invalid user ID in refresh token")
+                raise InvalidTokenError("Invalid user ID in refresh token") from None
             # Capture session association when present
             session_id = token_payload.get("session_id")
 
@@ -1446,7 +1446,7 @@ async def refresh_token(
                         response.headers.setdefault("X-TLDW-Refresh-Reason", f"session-error:{type(_sess_e).__name__}")
                     except _AUTH_NONCRITICAL_EXCEPTIONS:
                         pass
-                raise InvalidTokenError("Invalid or expired session for refresh token")
+                raise InvalidTokenError("Invalid or expired session for refresh token") from _sess_e
 
             # Always blacklist the prior refresh token's JTI to prevent reuse
             try:
@@ -1504,7 +1504,7 @@ async def refresh_token(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
             headers={"WWW-Authenticate": "Bearer"}
-        )
+        ) from e
     except _AUTH_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Token refresh error: {e}")
         log_counter("auth_refresh_unexpected_error")
@@ -1519,7 +1519,7 @@ async def refresh_token(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during token refresh"
-        )
+        ) from e
 
 
 #######################################################################################################################
@@ -1683,7 +1683,7 @@ async def reset_password(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or expired reset token",
-            )
+            ) from None
 
         user_id = int(payload["sub"])
         if hasattr(jwt_service, "hash_password_reset_token_candidates"):
@@ -1760,7 +1760,7 @@ async def reset_password(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=str(e),
-            )
+            ) from e
 
         # Hash new password
         new_password_hash = password_service.hash_password(data.new_password)
@@ -1809,7 +1809,7 @@ async def reset_password(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset password",
-        )
+        ) from e
 
 
 # Email Verification Endpoints
@@ -1836,7 +1836,7 @@ async def verify_email(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or expired verification token",
-            )
+            ) from None
 
         user_id = int(payload["sub"])
         email = payload["email"]
@@ -1872,7 +1872,7 @@ async def verify_email(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify email",
-        )
+        ) from e
 
 
 @router.post("/resend-verification", status_code=status.HTTP_200_OK)
@@ -2065,18 +2065,18 @@ async def verify_magic_link(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Magic link token has expired",
-        )
+        ) from None
     except InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid magic link token",
-        )
+        ) from None
     except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
         logger.error("Magic link verification failed: {}", exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid magic link token",
-        )
+        ) from exc
 
     email = _normalize_magic_email(payload.get("email") or "")
     user_id: Optional[int] = None
@@ -2308,7 +2308,7 @@ async def setup_mfa(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to setup MFA",
-            )
+            ) from exc
 
         return MFASetupResponse(
             secret=secret,
@@ -2323,7 +2323,7 @@ async def setup_mfa(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to setup MFA",
-        )
+        ) from e
 
 
 @router.post("/mfa/verify", status_code=status.HTTP_200_OK)
@@ -2419,7 +2419,7 @@ async def verify_mfa_setup(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify MFA",
-        )
+        ) from e
 
 
 @router.post("/mfa/disable", status_code=status.HTTP_200_OK)
@@ -2482,7 +2482,7 @@ async def disable_mfa(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to disable MFA",
-        )
+        ) from e
 
 
 @router.post("/mfa/login", response_model=TokenResponse)
@@ -2668,7 +2668,7 @@ async def mfa_login(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to complete MFA login",
-        )
+        ) from e
 
 
 #######################################################################################################################
@@ -2889,7 +2889,7 @@ async def register(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during registration"
-        )
+        ) from e
 
 
 #######################################################################################################################

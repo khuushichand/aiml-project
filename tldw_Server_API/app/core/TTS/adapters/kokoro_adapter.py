@@ -608,7 +608,7 @@ class KokoroAdapter(TTSAdapter):
                 "Failed to import kokoro_onnx library",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install kokoro-onnx"}
-            )
+            ) from e
         except TTSModelNotFoundError:
             raise
         except _KOKORO_NONCRITICAL_EXCEPTIONS as e:
@@ -617,7 +617,7 @@ class KokoroAdapter(TTSAdapter):
                 "Failed to initialize ONNX model",
                 provider=self.provider_name,
                 details={"error": str(e), "model_path": self.model_path}
-            )
+            ) from e
 
     async def _initialize_pytorch(self) -> bool:
         """Initialize PyTorch backend"""
@@ -628,7 +628,7 @@ class KokoroAdapter(TTSAdapter):
                 "PyTorch is required for Kokoro PyTorch backend",
                 provider=self.provider_name,
                 details={"error": str(e), "suggestion": "pip install torch"}
-            )
+            ) from e
         # Check model file
         if not os.path.exists(self.model_path):
             raise TTSModelNotFoundError(
@@ -720,7 +720,7 @@ class KokoroAdapter(TTSAdapter):
                     "Failed to initialize PyTorch model",
                     provider=self.provider_name,
                     details={"error": str(e), "model_path": self.model_path}
-                )
+                ) from e
 
     # Thin wrapper methods for tests to patch
     async def _load_onnx_model(self) -> bool:
@@ -922,7 +922,7 @@ class KokoroAdapter(TTSAdapter):
                         "Kokoro PyTorch generation requires 'kokoro' package",
                         provider=self.provider_name,
                         details={"suggestion": "pip install kokoro-tts or Kokoro PyTorch package"}
-                    )
+                    ) from None
                 # Capture the logical voice id before resolving file path
                 voice_id = voice
 

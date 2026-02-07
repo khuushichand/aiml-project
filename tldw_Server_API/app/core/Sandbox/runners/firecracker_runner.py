@@ -140,7 +140,7 @@ def _fc_api_request(sock_path: str, method: str, path: str, payload: dict | None
                 if code >= 300:
                     raise RuntimeError(f"firecracker API error: {line}")
         except _FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS as e:
-            raise RuntimeError(f"firecracker API parse failed: {e}")
+            raise RuntimeError(f"firecracker API parse failed: {e}") from e
     finally:
         with contextlib.suppress(_FIRECRACKER_RUNNER_NONCRITICAL_EXCEPTIONS):
             sock.close()

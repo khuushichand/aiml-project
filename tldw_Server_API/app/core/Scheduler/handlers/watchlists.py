@@ -55,7 +55,7 @@ async def watchlist_run(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         uid_int = int(user_id)
     except Exception:
-        raise ValueError("watchlist_run: user_id must be int-like")
+        raise ValueError("watchlist_run: user_id must be int-like") from None
 
     # Execute the real pipeline (handles run row creation, stats, and job history)
     result = await run_watchlist_job(uid_int, int(job_id))

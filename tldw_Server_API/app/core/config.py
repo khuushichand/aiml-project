@@ -2551,6 +2551,8 @@ def _route_toggle_policy() -> dict:
         "persona",
         "jobs",  # jobs admin
         "benchmarks",
+        "guardian",
+        "self-monitoring",
     }
 
     # Load from config.txt (if available)
@@ -2642,6 +2644,8 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             # to avoid 404s when the app is imported before ROUTES_ENABLE is set.
             "connectors",
             "llamacpp",
+            "guardian",
+            "self-monitoring",
         }
         if (_test_mode or _pytest_active) and key in _force_in_tests:
             return True
@@ -4179,8 +4183,8 @@ def load_and_log_configs():
             'web_crawl_enable_domain_map': web_crawl_enable_domain_map,
             'web_crawl_domain_map': web_crawl_domain_map,
             },
-            'Redis': config_parser_object.get('Redis', {}),
-            'Web-Scraping': config_parser_object.get('Web-Scraping', {})
+            'Redis': dict(config_parser_object.items('Redis')) if config_parser_object.has_section('Redis') else {},
+            'Web-Scraping': dict(config_parser_object.items('Web-Scraping')) if config_parser_object.has_section('Web-Scraping') else {}
         }
         # Assemble minimal RAG config section (vector store + pgvector params)
         try:

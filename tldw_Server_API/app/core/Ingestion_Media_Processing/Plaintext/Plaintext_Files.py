@@ -205,7 +205,7 @@ def convert_document_to_text(
                 elif isinstance(e_rtf, ValueError):  # Catch the specific mock error by type check
                     logging.error(f"Pandoc conversion failed (ValueError) for RTF {file_path}: {e_rtf}", exc_info=False)
                     # Raise a NEW, clean ValueError containing the mock message
-                    raise ValueError(f"RTF conversion failed: {str(e_rtf)}")
+                    raise ValueError(f"RTF conversion failed: {str(e_rtf)}") from e_rtf
                 else:  # Catch other unexpected errors during RTF conversion
                     logging.error(f"Unexpected Pandoc conversion error for RTF {file_path}: {e_rtf}", exc_info=True)
                     raise ValueError(f"Unexpected RTF conversion error: {str(e_rtf)}") from e_rtf
@@ -562,18 +562,24 @@ def process_document_content( # Renamed from _process_single_document for clarit
                          log_counter("document_recursive_analysis_error", labels={"file_path": str(doc_path), "error": str(rec_summ_err)})
                 else:
                     final_analysis_text = "\n\n---\n\n".join(chunk_summaries)
-                    if len(chunk_summaries) > 1: logging.info(f"Combined {len(chunk_summaries)} chunk analyses (non-recursive).")
-                    else: logging.info("Using single chunk analysis as final analysis.")
+                    if len(chunk_summaries) > 1:
+                        logging.info(f"Combined {len(chunk_summaries)} chunk analyses (non-recursive).")
+                    else:
+                        logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis_text
             log_counter("document_chunks_analyzed", value=len(chunk_summaries), labels={"file_path": str(doc_path)})
             logging.info(f"Analysis processing completed for document {doc_path}.")
 
         # Log skipped analysis reasons
-        elif not perform_analysis: logging.info(f"Analysis disabled for {doc_path}.")
-        elif not api_name: logging.warning(f"Analysis skipped for {doc_path}: API name missing.")
-        elif not processed_chunks: logging.warning(f"Analysis skipped for {doc_path}: No processable chunks available.")
-        else: logging.warning(f"Analysis skipped for {doc_path} due to unknown condition.")
+        elif not perform_analysis:
+            logging.info(f"Analysis disabled for {doc_path}.")
+        elif not api_name:
+            logging.warning(f"Analysis skipped for {doc_path}: API name missing.")
+        elif not processed_chunks:
+            logging.warning(f"Analysis skipped for {doc_path}: No processable chunks available.")
+        else:
+            logging.warning(f"Analysis skipped for {doc_path} due to unknown condition.")
 
 
         # Determine final status (Success or Warning)

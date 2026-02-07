@@ -51,7 +51,7 @@ async def process_xml_task(
             tree = ET.parse(tmp_path)
             root = tree.getroot()
         except ET.ParseError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid XML: {str(e)}") from e
 
         # 3) Chunk the XML. For instance:
         chunk_options = {
@@ -105,4 +105,4 @@ async def process_xml_task(
 
     except Exception as e:
         logger.error(f"Error processing XML file: {filename} -> {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

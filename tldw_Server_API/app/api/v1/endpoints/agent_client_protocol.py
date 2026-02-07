@@ -556,7 +556,7 @@ async def acp_session_new(
             )
     except ACPResponseError as exc:
         logger.error("ACP session/new failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     sandbox_meta = None
     try:
@@ -598,7 +598,7 @@ async def acp_session_prompt(
         result = await client.prompt(payload.session_id, payload.prompt)
     except ACPResponseError as exc:
         logger.error("ACP session/prompt failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
     return ACPSessionPromptResponse(
         stop_reason=result.get("stopReason"),
@@ -616,7 +616,7 @@ async def acp_session_cancel(
         await client.cancel(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/cancel failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return {"status": "ok"}
 
 
@@ -630,7 +630,7 @@ async def acp_session_close(
         await client.close_session(payload.session_id)
     except ACPResponseError as exc:
         logger.error("ACP session/close failed for user {}: {}", user.id, exc)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return {"status": "ok"}
 
 

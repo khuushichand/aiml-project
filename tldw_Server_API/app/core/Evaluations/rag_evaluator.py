@@ -298,7 +298,7 @@ class RAGEvaluator:
                         results["metrics"].pop("faithfulness", None)
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Critical failure in evaluation: {e}")
-            raise ValueError(f"Evaluation failed: {str(e)}")
+            raise ValueError(f"Evaluation failed: {str(e)}") from e
 
         # Calculate overall score if we have metrics
         if results["metrics"]:
@@ -356,7 +356,7 @@ class RAGEvaluator:
             })
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Claim faithfulness evaluation failed: {e}")
-            raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}")
+            raise ValueError(f"Claim faithfulness evaluation failed: {str(e)}") from e
 
     async def _evaluate_relevance(self, query: str, response: str, api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate relevance of response to query"""
@@ -421,11 +421,11 @@ class RAGEvaluator:
         except CircuitOpenError as e:
             logger.warning(f"Circuit breaker open for relevance evaluation: {e}")
             # Re-raise with more context
-            raise ValueError(f"Service temporarily unavailable for relevance evaluation: {str(e)}")
+            raise ValueError(f"Service temporarily unavailable for relevance evaluation: {str(e)}") from e
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Relevance evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Relevance evaluation failed: {str(e)}")
+            raise ValueError(f"Relevance evaluation failed: {str(e)}") from e
 
     async def _evaluate_faithfulness(self, response: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate if response is grounded in contexts"""
@@ -491,7 +491,7 @@ class RAGEvaluator:
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Faithfulness evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Faithfulness evaluation failed: {str(e)}")
+            raise ValueError(f"Faithfulness evaluation failed: {str(e)}") from e
 
     async def _evaluate_answer_similarity(self, response: str, ground_truth: str, api_name: str = "openai", model: Optional[str] = None) -> tuple:
         """Evaluate similarity between response and ground truth"""
@@ -656,7 +656,7 @@ class RAGEvaluator:
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Answer similarity evaluation failed: {e}")
             # Raise exception instead of returning 0.0 (fixing error handling issue)
-            raise ValueError(f"Answer similarity evaluation failed: {str(e)}")
+            raise ValueError(f"Answer similarity evaluation failed: {str(e)}") from e
 
     async def _evaluate_context_precision(self, query: str, contexts: list[str], api_name: str, model: Optional[str] = None) -> tuple:
         """Evaluate precision of retrieved contexts"""
@@ -806,7 +806,7 @@ class RAGEvaluator:
         except _RAG_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Context recall evaluation failed: {e}")
             # Raise exception instead of returning 0.0
-            raise ValueError(f"Context recall evaluation failed: {str(e)}")
+            raise ValueError(f"Context recall evaluation failed: {str(e)}") from e
 
     def _generate_suggestions(self, metrics: dict[str, dict]) -> list[str]:
         """Generate improvement suggestions based on metrics"""

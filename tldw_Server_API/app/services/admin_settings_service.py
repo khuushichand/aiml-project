@@ -20,7 +20,7 @@ async def get_cleanup_settings() -> dict[str, Any]:
         return {"enabled": enabled, "interval_sec": interval}
     except Exception as exc:
         logger.error(f"Failed to get cleanup settings: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to get cleanup settings")
+        raise HTTPException(status_code=500, detail="Failed to get cleanup settings") from exc
 
 
 async def set_cleanup_settings(payload: AdminCleanupSettingsUpdate) -> dict[str, Any]:
@@ -37,7 +37,7 @@ async def set_cleanup_settings(payload: AdminCleanupSettingsUpdate) -> dict[str,
         raise
     except Exception as exc:
         logger.error(f"Failed to set cleanup settings: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to set cleanup settings")
+        raise HTTPException(status_code=500, detail="Failed to set cleanup settings") from exc
 
 
 async def get_notes_title_settings() -> dict[str, Any]:

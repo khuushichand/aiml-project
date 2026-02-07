@@ -142,7 +142,7 @@ class GroqAdapter(ChatProvider):
                     resp.raise_for_status()
                     return resp.json()
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("GroqAdapter native HTTP disabled by configuration")
@@ -181,7 +181,7 @@ class GroqAdapter(ChatProvider):
                         yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("GroqAdapter native HTTP disabled by configuration")

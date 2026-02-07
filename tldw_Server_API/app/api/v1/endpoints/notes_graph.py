@@ -166,7 +166,7 @@ async def get_notes_graph(
         raise
     except Exception as e:
         logger.error(f"notes.graph.read stub failed: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Graph fetch failed") from e
 
 
 @router.get(
@@ -276,12 +276,12 @@ async def create_manual_link(
         )
         return {"status": "created", "edge": edge}
     except ConflictError:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate manual link")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="duplicate manual link") from None
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create manual note link: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link creation failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link creation failed") from e
 
 
 @router.delete(
@@ -328,7 +328,7 @@ async def delete_manual_link(
         deleted = db.delete_manual_note_edge(user_id=str(current_user.id_str), edge_id=normalized_edge_id)
         return {"deleted": bool(deleted), "edge_id": normalized_edge_id}
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete manual note link: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link deletion failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Link deletion failed") from e

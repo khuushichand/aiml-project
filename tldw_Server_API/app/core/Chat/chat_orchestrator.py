@@ -482,9 +482,9 @@ def chat_api_call(
         logging.error(f"Value/Type/Key error during chat API call setup for {endpoint_lower}: {e}", exc_info=True)
         error_type = "Configuration/Parameter Error"
         if "Unsupported API endpoint" in str(e):
-            raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}")
+            raise ChatConfigurationError(provider=endpoint_lower, message=f"Unsupported API endpoint: {endpoint_lower}") from e
         else:
-            raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}")
+            raise ChatBadRequestError(provider=endpoint_lower, message=f"{error_type} for {endpoint_lower}: {e}") from e
     except (KeyboardInterrupt, SystemExit):
         # Don't catch system-level signals - let them propagate
         raise
@@ -500,28 +500,28 @@ def chat_api_call(
             sanitized_error = _sanitize_error_for_client(error_text)
             if status_code == 401:
                 raise ChatAuthenticationError(provider=endpoint_lower,
-                                              message="Authentication failed. Please check your API key.")
+                                              message="Authentication failed. Please check your API key.") from e
             if status_code == 429:
                 raise ChatRateLimitError(provider=endpoint_lower,
-                                         message="Rate limit exceeded. Please try again later.")
+                                         message="Rate limit exceeded. Please try again later.") from e
             if 400 <= status_code < 500:
                 raise ChatBadRequestError(provider=endpoint_lower,
-                                          message=f"Invalid request (Status {status_code}). {sanitized_error}")
+                                          message=f"Invalid request (Status {status_code}). {sanitized_error}") from e
             if 500 <= status_code < 600:
                 raise ChatProviderError(provider=endpoint_lower,
                                         message=f"Provider error (Status {status_code}). Please try again.",
-                                        status_code=status_code)
+                                        status_code=status_code) from e
             raise ChatAPIError(provider=endpoint_lower,
                                message=f"Unexpected error (Status {status_code}). {sanitized_error}",
-                               status_code=status_code)
+                               status_code=status_code) from e
         if _is_network_exception(e):
             logging.error(f"Network error connecting to {endpoint_lower}: {e}", exc_info=False)
-            raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504)
+            raise ChatProviderError(provider=endpoint_lower, message="Network error. Please check your connection.", status_code=504) from e
         logging.exception(
             f"Unexpected internal error in chat_api_call for {endpoint_lower}: {e}")
         raise ChatAPIError(provider=endpoint_lower,
                            message=f"An unexpected internal error occurred in chat_api_call for {endpoint_lower}: {str(e)}",
-                           status_code=500)
+                           status_code=500) from e
 
 
 async def chat_api_call_async(
@@ -601,7 +601,7 @@ async def chat_api_call_async(
         return await perform_chat_api_call_async(**call_kwargs)
     except Exception as e:
         if _is_network_exception(e):
-            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504)
+            raise ChatProviderError(provider=endpoint_lower, message=f"Network error: {e}", status_code=504) from e
         if isinstance(
             e,
             (
@@ -615,7 +615,7 @@ async def chat_api_call_async(
         ):
             raise
         # Surface as provider error for unexpected conditions
-        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}")
+        raise ChatProviderError(provider=endpoint_lower, message=f"Unexpected error: {e}") from e
 
 
 # Default timeout for synchronous coroutine execution (5 minutes)
@@ -917,7 +917,8 @@ def _chat_sync_impl(
                         image_url_data = part.get("image_url", {}).get("url", "") # data URI
                         if image_history_mode == "send_all":
                             processed_hist_content_parts.append(part)
-                            if role == "user": last_user_image_url_from_history = image_url_data
+                            if role == "user":
+                                last_user_image_url_from_history = image_url_data
                         elif image_history_mode == "send_last_user_image" and role == "user":
                             last_user_image_url_from_history = image_url_data # Track, add later
                         elif image_history_mode == "tag_past":
@@ -1010,16 +1011,20 @@ def _chat_sync_impl(
 
         # Temperature and other LLM params
         temperature_float = 0.7
-        try: temperature_float = float(temperature) if temperature is not None else 0.7
-        except ValueError: logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
+        try:
+            temperature_float = float(temperature) if temperature is not None else 0.7
+        except ValueError:
+            logging.warning(f"Invalid temperature '{temperature}', using 0.7.")
 
         logging.debug("Debug - Chat Function - Final LLM Payload (structure, image data truncated):")
         for i, msg_p in enumerate(llm_messages_payload):
             content_log = []
             if isinstance(msg_p.get("content"), list):
                 for _part_idx, part_c in enumerate(msg_p["content"]):
-                    if part_c.get("type") == "text": content_log.append(f"text: '{part_c['text'][:30]}...'")
-                    elif part_c.get("type") == "image_url": content_log.append(f"image: '{part_c['image_url']['url'][:40]}...'")
+                    if part_c.get("type") == "text":
+                        content_log.append(f"text: '{part_c['text'][:30]}...'")
+                    elif part_c.get("type") == "image_url":
+                        content_log.append(f"image: '{part_c['image_url']['url'][:40]}...'")
             logging.debug(f"  Msg {i}: Role: {msg_p['role']}, Content: [{', '.join(content_log)}]")
 
         logging.debug(f"Debug - Chat Function - Temperature: {temperature}")

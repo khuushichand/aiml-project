@@ -126,7 +126,7 @@ def _load_config_from_db(db, test_id: str, *, created_by: str | None = None) -> 
     try:
         parsed = json.loads(raw)
     except Exception as exc:
-        raise EmbeddingsABTestJobError(f"Failed to parse A/B config for {test_id}: {exc}", retryable=False)
+        raise EmbeddingsABTestJobError(f"Failed to parse A/B config for {test_id}: {exc}", retryable=False) from exc
     if not isinstance(parsed, dict):
         raise EmbeddingsABTestJobError(f"A/B config is not a dict for {test_id}", retryable=False)
     return parsed
@@ -139,7 +139,7 @@ def _normalize_config(cfg: dict[str, Any]) -> EmbeddingsABTestConfig:
         else:
             config = EmbeddingsABTestConfig.parse_obj(cfg)  # type: ignore[attr-defined]
     except Exception as exc:
-        raise EmbeddingsABTestJobError(f"Invalid A/B config payload: {exc}", retryable=False)
+        raise EmbeddingsABTestJobError(f"Invalid A/B config payload: {exc}", retryable=False) from exc
 
     if getattr(config, "chunking", None) is None:
         config.chunking = ABTestChunking(method="sentences", size=200, overlap=20, language=None)

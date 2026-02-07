@@ -203,6 +203,8 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     return () => observer.disconnect()
   }, [viewMode, currentPage, zoomLevel, loading, updatePageMetrics])
 
+  const pageGap = 16
+
   // Compute per-page dimensions for virtual single-page scrolling.
   useEffect(() => {
     if (!pdfInstance) {
@@ -212,7 +214,9 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
     }
     let cancelled = false
     const s = zoomLevel / 100
-    const gap = 16 // must match pageGap
+    // Reset immediately so stale values from a previous scale aren't used
+    setPageHeights([])
+    setPageOffsets([])
     const computeAllMetrics = async () => {
       try {
         const heights: number[] = []
@@ -221,6 +225,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
         let firstHeight = 0
         let firstWidth = 0
         for (let i = 1; i <= pdfInstance.numPages; i++) {
+          if (cancelled) return
           const page = await pdfInstance.getPage(i)
           const viewport = page.getViewport({ scale: s })
           if (i === 1) {
@@ -229,7 +234,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
           }
           heights.push(viewport.height)
           offsets.push(offset)
-          offset += viewport.height + gap
+          offset += viewport.height + pageGap
         }
         if (!cancelled) {
           setPageHeights(heights)
@@ -252,7 +257,6 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
   }, [pdfInstance, zoomLevel, updatePageMetrics])
 
   const scale = zoomLevel / 100
-  const pageGap = 16
   const fallbackPageHeight = 1100 * scale
   const fallbackPageWidth = 800 * scale
   const basePageHeight = pageMetrics.height > 0 ? pageMetrics.height : fallbackPageHeight
@@ -266,7 +270,7 @@ export const PdfDocument: React.FC<PdfDocumentProps> = ({
   const heightVarianceHigh = pageHeights.length > 1 && (() => {
     const mean = pageHeights.reduce((s, h) => s + h, 0) / pageHeights.length
     if (mean === 0) return false
-    const maxDev = Math.max(...pageHeights.map(h => Math.abs(h - mean)))
+    const maxDev = pageHeights.reduce((m, h) => Math.max(m, Math.abs(h - mean)), 0)
     return maxDev / mean > 0.3
   })()
   const virtualScrollEnabled =

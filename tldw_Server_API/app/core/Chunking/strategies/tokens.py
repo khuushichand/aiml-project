@@ -105,7 +105,7 @@ class TransformersTokenizer:
                 logger.debug(f"Tokenizer {self.model_name} loaded successfully")
             except _TOKENS_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Failed to load tokenizer '{self.model_name}': {e}")
-                raise TokenizerError(f"Failed to load tokenizer: {e}")
+                raise TokenizerError(f"Failed to load tokenizer: {e}") from e
 
         return self._tokenizer
 
@@ -406,7 +406,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
 
         except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
-            raise TokenizerError(f"Failed to tokenize text: {e}")
+            raise TokenizerError(f"Failed to tokenize text: {e}") from e
 
         if not token_ids:
             return []
@@ -601,7 +601,7 @@ class TokenChunkingStrategy(BaseChunkingStrategy):
                 offsets = self._reconstruct_offsets_by_decoding(token_ids, text)
         except _TOKENS_TOKENIZATION_EXCEPTIONS as e:
             logger.error(f"Tokenization failed: {e}")
-            raise TokenizerError(f"Failed to tokenize text: {e}")
+            raise TokenizerError(f"Failed to tokenize text: {e}") from e
 
         if not token_ids:
             return []

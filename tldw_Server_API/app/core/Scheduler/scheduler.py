@@ -121,7 +121,7 @@ class Scheduler:
         except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as e:
             logger.error(f"Failed to start scheduler: {e}")
             await self.stop()
-            raise SchedulerError(f"Scheduler start failed: {e}")
+            raise SchedulerError(f"Scheduler start failed: {e}") from e
 
     async def stop(self) -> None:
         """Stop the scheduler gracefully."""
@@ -293,10 +293,10 @@ class Scheduler:
                 )
             except PermissionError as exc:
                 logger.error(f"Batch validation failed at task {idx}: {exc}")
-                raise PermissionError(str(exc))
+                raise PermissionError(str(exc)) from exc
             except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.error(f"Batch validation failed at task {idx}: {exc}")
-                raise ValueError(f"Batch submission failed - task {idx}: {exc}")
+                raise ValueError(f"Batch submission failed - task {idx}: {exc}") from exc
 
             if existing_id:
                 result_ids.append(existing_id)
@@ -346,7 +346,7 @@ class Scheduler:
                 )
             except (AttributeError, LookupError, OSError, RuntimeError, TypeError, ValueError) as exc:
                 logger.error(f"Batch submission failed: {exc}")
-                raise SchedulerError(f"Failed to submit batch: {exc}")
+                raise SchedulerError(f"Failed to submit batch: {exc}") from exc
         else:
             logger.info("Batch submission contained only idempotent tasks; nothing enqueued")
 
@@ -576,7 +576,7 @@ class Scheduler:
                 payload_size = len(payload_json)
             except (TypeError, ValueError) as exc:
                 logger.error(f"Payload serialization failed: {exc}")
-                raise ValueError(f"Payload cannot be serialized to JSON: {exc}")
+                raise ValueError(f"Payload cannot be serialized to JSON: {exc}") from exc
 
             max_payload_size = getattr(self.config, 'max_payload_size', 1048576)
             if payload_size > max_payload_size:

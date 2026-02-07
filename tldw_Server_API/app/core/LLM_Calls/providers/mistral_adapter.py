@@ -237,7 +237,7 @@ class MistralAdapter(ChatProvider):
                 data = resp.json()
                 return self._normalize_to_openai_shape(data)
         except Exception as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = self._apply_config_defaults(request or {})
@@ -279,7 +279,7 @@ class MistralAdapter(ChatProvider):
                     yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except Exception as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)

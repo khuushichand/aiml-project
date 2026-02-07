@@ -27,6 +27,7 @@ import { GenerationInfo } from "./GenerationInfo"
 import { FeedbackButtons } from "@/components/Sidepanel/Chat/FeedbackButtons"
 import type { FeedbackThumb } from "@/store/feedback"
 import type { GenerationInfo as GenerationInfoType } from "./types"
+import type { MessageSteeringMode } from "@/types/message-steering"
 
 const ACTION_BUTTON_CLASS =
   "flex items-center justify-center rounded-full border border-border bg-surface2 text-text-muted hover:bg-surface hover:text-text transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-focus min-w-[44px] min-h-[44px] sm:h-8 sm:w-8 sm:min-w-0 sm:min-h-0"
@@ -52,13 +53,19 @@ const OverflowMenuItem: React.FC<{
   onClick?: () => void
   disabled?: boolean
   danger?: boolean
-}> = ({ icon, label, onClick, disabled, danger }) => (
+  active?: boolean
+}> = ({ icon, label, onClick, disabled, danger, active }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled}
+    aria-disabled={disabled}
     className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-      danger ? "text-danger hover:text-danger" : "text-text hover:text-text"
+      danger
+        ? "text-danger hover:text-danger"
+        : active
+          ? "bg-primary/10 text-primaryStrong hover:bg-primary/10 hover:text-primaryStrong"
+          : "text-text hover:text-text"
     }`}
   >
     <span className="flex h-4 w-4 items-center justify-center text-text-subtle">{icon}</span>
@@ -103,6 +110,11 @@ type MessageActionsBarProps = {
   temporaryChat?: boolean
   hideContinue?: boolean
   onContinue?: () => void
+  messageSteeringMode?: MessageSteeringMode
+  onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
+  messageSteeringForceNarrate?: boolean
+  onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
+  onClearMessageSteering?: () => void
   onEdit: () => void
   editMode: boolean
   feedbackSelected?: FeedbackThumb
@@ -156,6 +168,11 @@ export function MessageActionsBar({
   temporaryChat,
   hideContinue,
   onContinue,
+  messageSteeringMode = "none",
+  onMessageSteeringModeChange,
+  messageSteeringForceNarrate = false,
+  onMessageSteeringForceNarrateChange,
+  onClearMessageSteering,
   onEdit,
   editMode,
   feedbackSelected,
@@ -209,6 +226,70 @@ export function MessageActionsBar({
           onClick={onContinue}
         />
       )
+    }
+    const canControlMessageSteering =
+      isBot &&
+      isLastMessage &&
+      onMessageSteeringModeChange &&
+      onMessageSteeringForceNarrateChange
+    if (canControlMessageSteering) {
+      items.push(
+        <OverflowMenuItem
+          key="steer-continue"
+          icon={<span className="text-[10px] leading-none font-semibold">C</span>}
+          label={
+            t("playground:composer.steering.continue", "Continue as user") as string
+          }
+          onClick={() =>
+            onMessageSteeringModeChange(
+              messageSteeringMode === "continue_as_user"
+                ? "none"
+                : "continue_as_user"
+            )
+          }
+          active={messageSteeringMode === "continue_as_user"}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="steer-impersonate"
+          icon={<span className="text-[10px] leading-none font-semibold">I</span>}
+          label={
+            t("playground:composer.steering.impersonate", "Impersonate user") as string
+          }
+          onClick={() =>
+            onMessageSteeringModeChange(
+              messageSteeringMode === "impersonate_user"
+                ? "none"
+                : "impersonate_user"
+            )
+          }
+          active={messageSteeringMode === "impersonate_user"}
+        />
+      )
+      items.push(
+        <OverflowMenuItem
+          key="steer-narrate"
+          icon={<span className="text-[10px] leading-none font-semibold">N</span>}
+          label={t("playground:composer.steering.narrate", "Force narrate") as string}
+          onClick={() =>
+            onMessageSteeringForceNarrateChange(!messageSteeringForceNarrate)
+          }
+          active={messageSteeringForceNarrate}
+        />
+      )
+      const steeringActive =
+        messageSteeringMode !== "none" || messageSteeringForceNarrate
+      if (steeringActive && onClearMessageSteering) {
+        items.push(
+          <OverflowMenuItem
+            key="steer-clear"
+            icon={<span className="text-[10px] leading-none font-semibold">x</span>}
+            label={t("common:clear", "Clear") as string}
+            onClick={onClearMessageSteering}
+          />
+        )
+      }
     }
     if (isBot && canSaveToNotes) {
       items.push(
@@ -294,6 +375,9 @@ export function MessageActionsBar({
   }, [
     canReply, onReply, isBot, onNewBranch, temporaryChat,
     hideContinue, isLastMessage, onContinue, canSaveToNotes,
+    messageSteeringMode, onMessageSteeringModeChange,
+    messageSteeringForceNarrate, onMessageSteeringForceNarrateChange,
+    onClearMessageSteering,
     canSaveToFlashcards, canGenerateDocument, onGenerateDocument,
     onSaveKnowledge, savingKnowledge, isTtsEnabled, ttsActionDisabled,
     isSpeaking, onToggleTts, onDelete, canPin, isPinned, onTogglePinned, t

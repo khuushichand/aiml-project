@@ -456,7 +456,7 @@ async def search_cards_get(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid label_ids format: {str(e)}"
-        )
+        ) from e
     except Exception as e:
         raise _handle_error(e) from e
 @router.post(

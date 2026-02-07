@@ -106,7 +106,7 @@ async def create_dataset(
             message=f"Failed to create dataset: {sanitize_error_message(e, 'creating dataset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @datasets_router.get("/datasets", response_model=DatasetListResponse)
@@ -130,7 +130,7 @@ async def list_datasets(
             message=f"Failed to list datasets: {sanitize_error_message(e, 'listing datasets')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @datasets_router.get("/datasets/{dataset_id}", response_model=DatasetResponse)
@@ -158,7 +158,7 @@ async def get_dataset(
             message=f"Failed to get dataset: {sanitize_error_message(e, 'retrieving dataset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @datasets_router.delete(
@@ -190,4 +190,4 @@ async def delete_dataset(
             message=f"Failed to delete dataset: {sanitize_error_message(e, 'deleting dataset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e

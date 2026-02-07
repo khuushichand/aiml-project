@@ -319,7 +319,7 @@ async def create_feed_subscription(
         )
     except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_create_source_failed: {exc}")
-        raise HTTPException(status_code=400, detail="feed_create_failed")
+        raise HTTPException(status_code=400, detail="feed_create_failed") from exc
 
     try:
         output_prefs = {"collections_origin": FEED_ORIGIN}
@@ -347,7 +347,7 @@ async def create_feed_subscription(
         logger.error(f"collections_feeds_create_job_failed: {exc}")
         with contextlib.suppress(_COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS):
             db.delete_source(int(source.id))
-        raise HTTPException(status_code=400, detail="feed_create_failed")
+        raise HTTPException(status_code=400, detail="feed_create_failed") from exc
 
     settings["collections_feed_job_id"] = int(job.id)
     try:
@@ -408,7 +408,7 @@ async def get_feed_subscription(
     try:
         source = db.get_source(feed_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="feed_not_found")
+        raise HTTPException(status_code=404, detail="feed_not_found") from None
     settings = _parse_settings(source.settings_json)
     if not _is_feed_source(settings):
         raise HTTPException(status_code=404, detail="feed_not_found")
@@ -426,7 +426,7 @@ async def update_feed_subscription(
     try:
         source = db.get_source(feed_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="feed_not_found")
+        raise HTTPException(status_code=404, detail="feed_not_found") from None
     settings = _parse_settings(source.settings_json)
     if not _is_feed_source(settings):
         raise HTTPException(status_code=404, detail="feed_not_found")
@@ -448,7 +448,7 @@ async def update_feed_subscription(
         source = db.update_source(feed_id, patch)
     except _COLLECTIONS_FEEDS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"collections_feeds_update_source_failed: {exc}")
-        raise HTTPException(status_code=400, detail="feed_update_failed")
+        raise HTTPException(status_code=400, detail="feed_update_failed") from exc
     if payload.tags is not None:
         try:
             db.set_source_tags(feed_id, [t for t in payload.tags if t])
@@ -501,7 +501,7 @@ async def delete_feed_subscription(
     try:
         source = db.get_source(feed_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="feed_not_found")
+        raise HTTPException(status_code=404, detail="feed_not_found") from None
     settings = _parse_settings(source.settings_json)
     if not _is_feed_source(settings):
         raise HTTPException(status_code=404, detail="feed_not_found")

@@ -193,7 +193,7 @@ class OpenRouterAdapter(ChatProvider):
                     resp.raise_for_status()
                     return resp.json()
             except _OPENROUTER_CLIENT_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")
@@ -232,7 +232,7 @@ class OpenRouterAdapter(ChatProvider):
                         yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except _OPENROUTER_CLIENT_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # Native disabled -> error to avoid legacy recursion
         raise RuntimeError("OpenRouterAdapter native HTTP disabled by configuration")

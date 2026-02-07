@@ -115,7 +115,7 @@ async def process_web_scraping_task(
         except (TypeError, ValueError):
             raise ValueError(
                 f"score_threshold must be a float between 0.0 and 1.0; got {score_threshold!r}."
-            )
+            ) from None
         if not 0.0 <= normalized_score_threshold <= 1.0:
             raise ValueError(
                 f"score_threshold must be between 0.0 and 1.0 inclusive; got {normalized_score_threshold}."
@@ -381,7 +381,7 @@ async def process_web_scraping_task(
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 async def ingest_web_content_orchestrate(
@@ -490,7 +490,7 @@ async def ingest_web_content_orchestrate(
             except json.JSONDecodeError:
                 raise HTTPException(
                     status_code=400, detail="Invalid JSON format for cookies"
-                )
+                ) from None
 
             if isinstance(parsed, dict):
                 custom_cookies_list = [parsed]

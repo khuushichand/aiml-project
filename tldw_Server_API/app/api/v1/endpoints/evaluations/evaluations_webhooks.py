@@ -130,7 +130,7 @@ async def register_webhook(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to register webhook: {sanitize_error_message(e, 'webhook registration')}"
-        )
+        ) from e
 
 
 @webhooks_router.get("/webhooks", response_model=list[WebhookStatusResponse])
@@ -153,7 +153,7 @@ async def list_webhooks(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list webhooks: {sanitize_error_message(e, 'listing webhooks')}"
-        )
+        ) from e
 
 
 @webhooks_router.delete("/webhooks")
@@ -177,7 +177,7 @@ async def unregister_webhook(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to unregister webhook: {sanitize_error_message(e, 'webhook removal')}"
-        )
+        ) from e
 
 
 @webhooks_router.post("/webhooks/test", response_model=WebhookTestResponse)
@@ -204,4 +204,4 @@ async def test_webhook(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to test webhook: {sanitize_error_message(e, 'webhook testing')}"
-        )
+        ) from e

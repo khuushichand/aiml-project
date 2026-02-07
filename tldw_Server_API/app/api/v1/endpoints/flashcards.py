@@ -122,10 +122,10 @@ def create_deck(payload: DeckCreate, db: CharactersRAGDB = Depends(get_chacha_db
             "version": 1,
         }
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create deck: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create deck")
+        raise HTTPException(status_code=500, detail="Failed to create deck") from e
 
 
 @router.get("/decks", response_model=list[Deck])
@@ -135,7 +135,7 @@ def list_decks(db: CharactersRAGDB = Depends(get_chacha_db_for_user), include_de
         return db.list_decks(limit=limit, offset=offset, include_deleted=include_deleted)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list decks: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list decks")
+        raise HTTPException(status_code=500, detail="Failed to list decks") from e
 
 
 @router.post("", response_model=Flashcard)
@@ -183,7 +183,7 @@ def create_flashcard(payload: FlashcardCreate, db: CharactersRAGDB = Depends(get
         return card
     except CharactersRAGDBError as e:
         logger.error(f"Failed to create flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create flashcard")
+        raise HTTPException(status_code=500, detail="Failed to create flashcard") from e
 
 
 @router.post("/bulk", response_model=FlashcardListResponse)
@@ -203,7 +203,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
                 try:
                     deck_ids_to_validate.add(int(data.get("deck_id")))
                 except _FLASHCARDS_INT_PARSE_EXCEPTIONS:
-                    raise HTTPException(status_code=400, detail="Invalid deck_id type")
+                    raise HTTPException(status_code=400, detail="Invalid deck_id type") from None
             effective_model, eff_is_cloze, eff_reverse = _normalize_flashcard_model_fields(
                 data.get("front"),
                 data.get("model_type"),
@@ -252,7 +252,7 @@ def create_flashcards_bulk(payload: list[FlashcardCreate], db: CharactersRAGDB =
         return {"items": card_dicts, "count": len(card_dicts)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed bulk create flashcards: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create flashcards")
+        raise HTTPException(status_code=500, detail="Failed to create flashcards") from e
 
 
 @router.get("", response_model=FlashcardListResponse)
@@ -273,7 +273,7 @@ def list_flashcards(
         return {"items": items, "count": len(items), "total": int(total)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to list flashcards: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list flashcards")
+        raise HTTPException(status_code=500, detail="Failed to list flashcards") from e
 
 ## (export endpoint moved earlier)
 
@@ -285,7 +285,7 @@ def get_flashcard(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_db_fo
         return _fetch_flashcard_or_404(card_uuid, db)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get flashcard")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard") from e
 
 
 @router.patch("/{card_uuid}")
@@ -359,10 +359,10 @@ def update_flashcard(card_uuid: str, payload: FlashcardUpdate, db: CharactersRAG
         card = db.get_flashcard(card_uuid)
         return card
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to update flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update flashcard")
+        raise HTTPException(status_code=500, detail="Failed to update flashcard") from e
 
 
 @router.delete("/{card_uuid}")
@@ -373,10 +373,10 @@ def delete_flashcard(card_uuid: str, expected_version: int = Query(..., ge=1), d
             raise HTTPException(status_code=404, detail="Flashcard not found or already deleted")
         return {"deleted": True}
     except ConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to delete flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete flashcard")
+        raise HTTPException(status_code=500, detail="Failed to delete flashcard") from e
 
 
 @router.put("/{card_uuid}/tags")
@@ -387,7 +387,7 @@ def set_flashcard_tags(card_uuid: str, payload: FlashcardTagsUpdate, db: Charact
         return card
     except CharactersRAGDBError as e:
         logger.error(f"Failed to set flashcard tags: {e}")
-        raise HTTPException(status_code=500, detail="Failed to set flashcard tags")
+        raise HTTPException(status_code=500, detail="Failed to set flashcard tags") from e
 
 
 @router.get("/{card_uuid}/tags")
@@ -397,7 +397,7 @@ def get_flashcard_tags(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha_
         return {"items": kws, "count": len(kws)}
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard tags: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get flashcard tags")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard tags") from e
 
 
 @router.post("/import")
@@ -598,10 +598,10 @@ def import_flashcards(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import flashcards: {e}")
-        raise HTTPException(status_code=500, detail="Failed to import flashcards")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards") from e
     except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"TSV import failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to import TSV flashcards")
+        raise HTTPException(status_code=500, detail="Failed to import TSV flashcards") from e
 
 
 @router.post("/import/json")
@@ -641,7 +641,7 @@ async def import_flashcards_json(
                 try:
                     items.append(_json.loads(ln))
                 except _json.JSONDecodeError:
-                    raise HTTPException(status_code=400, detail="Invalid JSON/JSONL upload: failed to parse a line")
+                    raise HTTPException(status_code=400, detail="Invalid JSON/JSONL upload: failed to parse a line") from None
             data = {'items': items}
 
         items = data.get('items') if isinstance(data, dict) and 'items' in data else data
@@ -752,10 +752,10 @@ async def import_flashcards_json(
         raise
     except CharactersRAGDBError as e:
         logger.error(f"Failed to import JSON flashcards: {e}")
-        raise HTTPException(status_code=500, detail="Failed to import flashcards")
+        raise HTTPException(status_code=500, detail="Failed to import flashcards") from e
     except _FLASHCARDS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"JSON import failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to import JSON flashcards")
+        raise HTTPException(status_code=500, detail="Failed to import JSON flashcards") from e
 
 
 @router.post("/review", response_model=FlashcardReviewResponse)
@@ -764,10 +764,10 @@ def review_flashcard(payload: FlashcardReviewRequest, db: CharactersRAGDB = Depe
         updated = db.review_flashcard(payload.card_uuid, payload.rating, payload.answer_time_ms)
         return updated
     except ConflictError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"Failed to review flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to review flashcard")
+        raise HTTPException(status_code=500, detail="Failed to review flashcard") from e
 
 
 @router.get("/export")
@@ -797,7 +797,7 @@ def export_flashcards(
                                  headers={"Content-Disposition": f"attachment; filename={filename}"})
     except CharactersRAGDBError as e:
         logger.error(f"Failed to export flashcards: {e}")
-        raise HTTPException(status_code=500, detail="Failed to export flashcards")
+        raise HTTPException(status_code=500, detail="Failed to export flashcards") from e
 
 
 @router.get("/{card_uuid}", response_model=Flashcard)
@@ -806,4 +806,4 @@ def get_flashcard_alias(card_uuid: str, db: CharactersRAGDB = Depends(get_chacha
         return _fetch_flashcard_or_404(card_uuid, db)
     except CharactersRAGDBError as e:
         logger.error(f"Failed to get flashcard: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get flashcard")
+        raise HTTPException(status_code=500, detail="Failed to get flashcard") from e

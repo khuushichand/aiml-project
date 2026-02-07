@@ -305,7 +305,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         try:
             status, payload = done_q.get_nowait()
         except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS:
-            raise ProcessingError("Regex execution failed without result (thread)")
+            raise ProcessingError("Regex execution failed without result (thread)") from None
         if status == "ok":
             return payload  # type: ignore[return-value]
         raise ProcessingError(f"Regex execution failed: {payload}")
@@ -381,7 +381,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
         try:
             re.compile(pattern)
         except re.error as e:
-            raise InvalidInputError(f"Invalid regex pattern: {e}")
+            raise InvalidInputError(f"Invalid regex pattern: {e}") from e
 
         # Don't actually test the regex execution - the DANGEROUS_PATTERNS check above
         # should catch problematic patterns. Testing them would cause the very problem
@@ -481,7 +481,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
 
         except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during chapter chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}") from e
 
     def _split_by_size(self, text: str, max_size: int, overlap: int) -> list[str]:
         """
@@ -692,7 +692,7 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
 
         except _EBOOK_CHUNKING_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Error during chapter chunking: {e}")
-            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}")
+            raise ProcessingError(f"Failed to chunk by chapters: {str(e)}") from e
 
     def validate_options(self, options: dict[str, Any]) -> dict[str, Any]:
         """
@@ -712,6 +712,6 @@ class EbookChapterChunkingStrategy(BaseChunkingStrategy):
             try:
                 re.compile(pattern)
             except re.error as e:
-                raise InvalidInputError(f"Invalid chapter pattern: {e}")
+                raise InvalidInputError(f"Invalid chapter pattern: {e}") from e
 
         return validated

@@ -1239,7 +1239,8 @@ class ChromaDBManager:
                             )
                             self.client.delete_collection(name=target_collection.name)
                             new_coll_meta = {"embedding_dimension": new_embedding_dim}
-                            if embedding_model_id_for_dim_check: new_coll_meta[
+                            if embedding_model_id_for_dim_check:
+                                new_coll_meta[
                                 "source_model_id"] = embedding_model_id_for_dim_check
                             target_collection = self.client.create_collection(name=target_collection.name,
                                                                               metadata=new_coll_meta)

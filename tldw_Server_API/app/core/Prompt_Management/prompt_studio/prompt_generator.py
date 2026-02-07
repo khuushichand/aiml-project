@@ -214,7 +214,7 @@ INSTRUCTIONS:
 
         except Exception as e:
             logger.error(f"Failed to generate prompt: {e}")
-            raise DatabaseError(f"Failed to generate prompt: {e}")
+            raise DatabaseError(f"Failed to generate prompt: {e}") from e
 
     def generate_from_template(self, project_id: int, template_name: str,
                               variables: dict[str, str],
@@ -262,7 +262,7 @@ INSTRUCTIONS:
 
         except Exception as e:
             logger.error(f"Failed to generate from template: {e}")
-            raise DatabaseError(f"Failed to generate from template: {e}")
+            raise DatabaseError(f"Failed to generate from template: {e}") from e
 
     def generate_chain_of_thought(self, project_id: int, task: str,
                                        model_name: str = "gpt-4") -> dict[str, Any]:
@@ -470,7 +470,7 @@ INSTRUCTIONS:
                 # Check if it's a valid enum name
                 valid_types = [pt.value for pt in PromptType]
                 if effective_type not in valid_types:
-                    raise ValueError(f"Invalid prompt type: {effective_type}. Valid types are: {valid_types}")
+                    raise ValueError(f"Invalid prompt type: {effective_type}. Valid types are: {valid_types}") from None
         elif not isinstance(effective_type, PromptType):
             raise ValueError(f"Invalid prompt type: {effective_type}")
 

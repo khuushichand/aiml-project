@@ -657,7 +657,7 @@ async def get_usage_daily(
         return UsageDailyResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to query usage_daily")
-        raise HTTPException(status_code=500, detail="Failed to load usage daily data")
+        raise HTTPException(status_code=500, detail="Failed to load usage daily data") from None
 
 
 async def get_usage_top(
@@ -687,7 +687,7 @@ async def get_usage_top(
         return UsageTopResponse(items=[UsageTopRow(**r) for r in rows])
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to query usage top: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to load usage top data")
+        raise HTTPException(status_code=500, detail="Failed to load usage top data") from exc
 
 
 async def run_usage_aggregate(day: str | None) -> dict:
@@ -729,7 +729,7 @@ async def export_usage_daily_csv(
         return content, filename
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export usage daily CSV: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to export usage daily CSV")
+        raise HTTPException(status_code=500, detail="Failed to export usage daily CSV") from exc
 
 
 async def export_usage_top_csv(
@@ -760,7 +760,7 @@ async def export_usage_top_csv(
         return content, filename
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export usage top CSV: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to export usage top CSV")
+        raise HTTPException(status_code=500, detail="Failed to export usage top CSV") from exc
 
 
 async def run_llm_usage_aggregate(day: str | None) -> dict:
@@ -814,7 +814,7 @@ async def get_llm_usage(
         return LLMUsageLogResponse(items=items, total=int(total or 0), page=page, limit=limit)
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS:
         logger.exception("Failed to query llm_usage_log")
-        raise HTTPException(status_code=500, detail="Failed to load LLM usage data")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage data") from None
 
 
 async def get_llm_usage_summary(
@@ -841,7 +841,7 @@ async def get_llm_usage_summary(
         return LLMUsageSummaryResponse(items=[LLMUsageSummaryRow(**r) for r in rows])
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to summarize llm_usage_log: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to load LLM usage summary")
+        raise HTTPException(status_code=500, detail="Failed to load LLM usage summary") from exc
 
 
 async def get_llm_top_spenders(
@@ -861,7 +861,7 @@ async def get_llm_top_spenders(
         return LLMTopSpendersResponse(items=[LLMTopSpenderRow(**r) for r in rows])
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to load llm top spenders: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to load LLM top spenders")
+        raise HTTPException(status_code=500, detail="Failed to load LLM top spenders") from exc
 
 
 async def export_llm_usage_csv(
@@ -958,4 +958,4 @@ async def export_llm_usage_csv(
         return "\n".join(lines) + "\n"
     except _ADMIN_USAGE_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to export llm usage CSV: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to export CSV")
+        raise HTTPException(status_code=500, detail="Failed to export CSV") from exc

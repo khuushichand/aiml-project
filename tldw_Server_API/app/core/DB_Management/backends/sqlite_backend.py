@@ -382,7 +382,7 @@ class SQLiteBackend(DatabaseBackend):
 
         except sqlite3.Error as e:
             logger.exception(f"Query execution failed: {e}")
-            raise DatabaseError(f"SQLite error: {e}")
+            raise DatabaseError(f"SQLite error: {e}") from e
 
     def execute_many(
         self,
@@ -411,7 +411,7 @@ class SQLiteBackend(DatabaseBackend):
 
         except sqlite3.Error as e:
             logger.exception(f"Batch execution failed: {e}")
-            raise DatabaseError(f"SQLite error: {e}")
+            raise DatabaseError(f"SQLite error: {e}") from e
 
     def create_tables(self, schema: str, connection: Optional[sqlite3.Connection] = None) -> None:
         """Create tables from a schema definition."""
@@ -422,7 +422,7 @@ class SQLiteBackend(DatabaseBackend):
             conn.executescript(schema)
         except sqlite3.Error as e:
             logger.exception(f"Schema creation failed: {e}")
-            raise DatabaseError(f"Failed to create schema: {e}")
+            raise DatabaseError(f"Failed to create schema: {e}") from e
 
     def table_exists(self, table_name: str, connection: Optional[sqlite3.Connection] = None) -> bool:
         """Check if a table exists."""
@@ -490,7 +490,7 @@ class SQLiteBackend(DatabaseBackend):
 
         except sqlite3.Error as e:
             logger.exception(f"FTS table creation failed: {e}")
-            raise DatabaseError(f"Failed to create FTS table: {e}")
+            raise DatabaseError(f"Failed to create FTS table: {e}") from e
 
     def _ensure_fts_triggers(
         self,

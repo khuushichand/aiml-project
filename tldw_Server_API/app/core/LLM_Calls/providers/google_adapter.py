@@ -550,7 +550,7 @@ class GoogleAdapter(ChatProvider):
                 data = resp.json()
                 return self._normalize_to_openai_shape(data)
         except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
         request = normalize_payload(self.name, request or {})
@@ -626,7 +626,7 @@ class GoogleAdapter(ChatProvider):
                     yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except _GOOGLE_ADAPTER_RUNTIME_EXCEPTIONS as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)

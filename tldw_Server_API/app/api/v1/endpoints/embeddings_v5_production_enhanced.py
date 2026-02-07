@@ -502,7 +502,7 @@ def _should_enforce_tenant_rps(request: Request) -> bool:
 
     # Principal-first: if we can see an explicit single-user principal, do not
     # enforce tenant quotas even under multi-user profiles.
-    if principal is not None and is_single_user_principal(principal):
+    if principal is not None and is_single_user_principal(principal):  # noqa: SIM103
         return False
 
     # Multi-tenant runtime: enforce quotas when a positive RPS is configured.
@@ -1075,19 +1075,23 @@ async def _embeddings_router_lifespan(app):
                             preload_list.append(default_model)
                         else:
                             preload_list.append(f"{default_provider}:{default_model}")
-                    seen = set(); final_models = []
+                    seen = set()
+                    final_models = []
                     for m in preload_list:
                         if m and m not in seen:
-                            seen.add(m); final_models.append(m)
+                            seen.add(m)
+                            final_models.append(m)
                     if final_models:
                         logger.info(f"CI detected; preloading {len(final_models)} embedding model(s): {final_models}")
                         for full in final_models:
                             try:
                                 if ":" in full:
                                     prov, mdl = full.split(":", 1)
-                                    provider = prov.strip().lower(); model = mdl.strip()
+                                    provider = prov.strip().lower()
+                                    model = mdl.strip()
                                 else:
-                                    model = full.strip(); provider = guess_provider_for_model(model)
+                                    model = full.strip()
+                                    provider = guess_provider_for_model(model)
                                 if not is_model_allowed(provider, model):
                                     logger.warning(f"Skipping preload for disallowed model {provider}:{model}")
                                     continue
@@ -1573,7 +1577,7 @@ async def get_embeddings_providers_config(current_user: User = Depends(get_reque
         }
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to read embeddings providers config: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load embeddings configuration")
+        raise HTTPException(status_code=500, detail="Failed to load embeddings configuration") from e
 
 # ============================================================================
 # Models and Warmup/Download Utilities
@@ -1885,7 +1889,7 @@ async def create_embeddings_with_circuit_breaker(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Service temporarily unavailable for provider {provider}. Please try again later."
-        )
+        ) from e
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to create embeddings with {provider}: {e}")
         raise
@@ -1941,7 +1945,7 @@ async def create_embeddings_batch_async(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
-            )
+            ) from None
 
         try:
             _validate_dimensions_request(provider, model_id or "", dimensions)
@@ -2016,7 +2020,7 @@ async def create_embeddings_batch_async(
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         detail=f"Embedding service error: {str(e)}"
-                    )
+                    ) from e
 
         if len(all_new_embeddings) != len(uncached_texts):
             raise HTTPException(
@@ -2129,7 +2133,7 @@ async def create_embedding_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unknown provider: {provider}"
-            )
+            ) from None
 
         _validate_dimensions_request(provider, model, embedding_request.dimensions)
 
@@ -2840,7 +2844,7 @@ async def get_embedding_model_info(
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Model info probe failed for {resolved_provider}:{model}: {exc}")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Embedding service unavailable") from exc
 
     dimension = None
     if vectors and vectors[0]:
@@ -3013,7 +3017,7 @@ async def warmup_model(
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Warmup failed for {provider}:{payload.model}: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Warmup failed: {e}") from e
 
 
 @router.post(
@@ -3043,7 +3047,7 @@ async def download_model(
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Download failed for {provider}:{payload.model}: {e}")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Download failed: {e}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Download failed: {e}") from e
 
 @router.delete(
     "/embeddings/cache",
@@ -3161,7 +3165,7 @@ async def delete_collection(
         manager.client.delete_collection(name=collection_name)
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"Failed to delete collection {collection_name}: {exc}")
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found") from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -3178,7 +3182,7 @@ async def get_collection_stats(
     try:
         collection = manager.client.get_collection(name=collection_name)
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Collection not found") from None
 
     try:
         count = int(collection.count())
@@ -3504,7 +3508,7 @@ async def list_dlq_items(
     except HTTPException:
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list DLQ items: {e}") from e
     finally:
         try:
             if client is not None:
@@ -3607,7 +3611,7 @@ async def requeue_dlq_item(
         raise
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
         dlq_requeue_errors_total.labels(queue_name=dlq_stream, error_type=type(e).__name__).inc()
-        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to requeue DLQ item: {e}") from e
     finally:
         await ensure_async_client_closed(client)
 
@@ -4184,7 +4188,7 @@ async def schedule_reembed(
             job_type=str(root_row.get("job_type")),
         )
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to schedule re-embed: {e}") from e
 
 
 # ---------------------------------------------------------------------------

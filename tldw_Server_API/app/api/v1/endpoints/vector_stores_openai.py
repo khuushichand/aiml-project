@@ -538,7 +538,7 @@ async def list_vector_store_users(current_user: User = Depends(get_request_user)
                 'batch_count': batch_count
             })
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Failed to scan user directories: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to scan user directories: {e}") from e
 
     return { 'data': users }
 
@@ -562,7 +562,7 @@ async def update_vector_store(
     try:
         stats = await adapter.get_collection_stats(store_id)
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
+        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}") from e
     md = stats.get("metadata", {}) or {}
     # Enforce unique name per-user using meta DB first
     if payload.name and payload.name.strip():
@@ -822,7 +822,7 @@ async def upsert_vectors(
             embedded = await loop.run_in_executor(None, embed_fn, texts_to_embed, app_config, model_id)
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Embedding generation failed for vectors upsert: {e}")
-            raise HTTPException(500, detail="Failed to generate embeddings for provided content")
+            raise HTTPException(500, detail="Failed to generate embeddings for provided content") from e
         # Assign back to vectors at corresponding indices
         for i, vec in zip(text_indices, embedded):
             if len(vec) != dim:
@@ -871,7 +871,7 @@ async def duplicate_vector_store(
     try:
         src_stats = await adapter.get_collection_stats(store_id)
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(404, detail=f"Source store not found: {e}")
+        raise HTTPException(404, detail=f"Source store not found: {e}") from e
     src_dim = src_stats.get('dimension', 1536)
     dim = payload.dimensions or src_dim
 
@@ -1038,7 +1038,7 @@ async def rebuild_index(
         )
         return info
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=400, detail=f"Index rebuild failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Index rebuild failed: {e}") from e
 
 
 class DeleteByFilterRequest(BaseModel):
@@ -1099,7 +1099,7 @@ async def delete_by_filter(
     try:
         deleted = await fn(store_id, payload.filter)  # type: ignore[misc]
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=400, detail=f"Delete by filter failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Delete by filter failed: {e}") from e
     return {"deleted": int(deleted or 0)}
 
 
@@ -1162,7 +1162,7 @@ async def list_vectors(
                 raise ValueError("filter must be a JSON object")
             meta_filter = parsed
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-            raise HTTPException(status_code=400, detail={"error":"invalid_filter","message":str(e)})
+            raise HTTPException(status_code=400, detail={"error":"invalid_filter","message":str(e)}) from e
     if order_by and (order_by != 'id' and not order_by.startswith('metadata.')):
         raise HTTPException(status_code=400, detail={"error":"invalid_order_by","message":"order_by must be 'id' or 'metadata.<key>'"})
     # Prefer adapter-provided pagination helper when available (PG, future stores)
@@ -1257,7 +1257,7 @@ async def delete_vector(
     except HTTPException:
         raise
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=404, detail="Vector store not found")
+        raise HTTPException(status_code=404, detail="Vector store not found") from None
 
     adapter = await _get_adapter_for_user(current_user, 1536)
     await adapter.initialize()
@@ -1278,7 +1278,7 @@ async def delete_vector(
             raise
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
             # If collection get fails unexpectedly, report not found
-            raise HTTPException(status_code=404, detail="Vector not found")
+            raise HTTPException(status_code=404, detail="Vector not found") from None
     await adapter.delete_vectors(store_id, ids=[vector_id])
     return {"id": vector_id, "deleted": True}
 
@@ -1344,7 +1344,7 @@ async def query_vectors(
             qvec = embedded[0]
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Embedding generation failed for query: {e}")
-            raise HTTPException(500, detail="Failed to generate embedding for query")
+            raise HTTPException(500, detail="Failed to generate embedding for query") from e
     else:
         raise HTTPException(400, detail="Provide either 'query' text or 'vector'")
 
@@ -1595,7 +1595,7 @@ async def create_store_from_media(
         except HTTPException:
             raise
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-            raise HTTPException(400, detail=f"Keyword fetch failed: {e}")
+            raise HTTPException(400, detail=f"Keyword fetch failed: {e}") from e
     else:
         raise HTTPException(400, detail="Provide media_ids or keywords")
 
@@ -1641,7 +1641,7 @@ async def create_store_from_media(
         try:
             source_col = adapter.manager.get_or_create_collection(source_collection_name)
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-            raise HTTPException(404, detail=f"Source embeddings collection not found: {e}")
+            raise HTTPException(404, detail=f"Source embeddings collection not found: {e}") from e
 
         upserted_total = 0
         for it in items:
@@ -1689,7 +1689,7 @@ async def create_store_from_media(
     try:
         method_enum = ChunkingMethod(method_value)
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=400, detail=f"Unsupported chunk_method '{payload.chunk_method}'")
+        raise HTTPException(status_code=400, detail=f"Unsupported chunk_method '{payload.chunk_method}'") from None
 
     ck_cfg = ChunkerConfig(
         default_method=method_enum,
@@ -1764,7 +1764,7 @@ async def create_store_from_media(
             vecs = await loop.run_in_executor(None, embed_fn, subtexts, app_config, model_id)
         except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
             db_update_batch(batch_id, user_id=uid, status='failed', error=str(e))
-            raise HTTPException(500, detail=f"Embedding failed: {e}")
+            raise HTTPException(500, detail=f"Embedding failed: {e}") from e
         # Prepare corresponding slice metadata
         slice_ids = ids[start:start+step]
         slice_docs = subtexts
@@ -1797,7 +1797,7 @@ async def get_vector_store(
     try:
         stats = await adapter.get_collection_stats(store_id)
     except _VECTORSTORE_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}")
+        raise HTTPException(status_code=404, detail=f"Vector store not found: {e}") from e
     md = stats.get("metadata", {}) or {}
     # Prefer meta DB name if available (do not gate existence on meta DB)
     try:

@@ -391,7 +391,7 @@ class DockerRunner:
             remaining = max(1, int((deadline - datetime.utcnow()).total_seconds()))
             cid = subprocess.check_output(cmd, text=True, timeout=remaining).strip()
         except FileNotFoundError:
-            raise RuntimeError("docker binary not found in PATH")
+            raise RuntimeError("docker binary not found in PATH") from None
         except subprocess.TimeoutExpired:
             finished = datetime.utcnow()
             hub.publish_event(run_id, "end", {"exit_code": None, "reason": "startup_timeout"})
@@ -421,9 +421,9 @@ class DockerRunner:
                     cmd_wo_sec = [c for c in cmd if c not in security_opts]
                     cid = subprocess.check_output(cmd_wo_sec, text=True).strip()
                 except subprocess.CalledProcessError as e2:
-                    raise RuntimeError(f"docker create failed (without security opts): {e2}")
+                    raise RuntimeError(f"docker create failed (without security opts): {e2}") from e2
             else:
-                raise RuntimeError(f"docker create failed: {e}")
+                raise RuntimeError(f"docker create failed: {e}") from e
 
         # Register container for cancellation
         try:
@@ -487,7 +487,7 @@ class DockerRunner:
             # Cleanup container
             with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            raise RuntimeError(f"docker cp failed: {e}")
+            raise RuntimeError(f"docker cp failed: {e}") from e
 
         # Step 3: start container and stream logs
         try:
@@ -523,7 +523,7 @@ class DockerRunner:
         except subprocess.CalledProcessError as e:
             with contextlib.suppress(_DOCKER_RUNNER_NONCRITICAL_EXCEPTIONS):
                 subprocess.check_call(["docker", "rm", "-f", cid])
-            raise RuntimeError(f"docker start failed: {e}")
+            raise RuntimeError(f"docker start failed: {e}") from e
 
         # If granular egress allowlist is enabled, inspect container IP and apply host iptables rules
         container_ip: str | None = None

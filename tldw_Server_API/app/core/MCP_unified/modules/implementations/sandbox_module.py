@@ -138,7 +138,7 @@ class SandboxModule(BaseModule):
                 raw_body=args,
             )
         except Exception as e:
-            raise RuntimeError(f"Sandbox execution failed: {e}")
+            raise RuntimeError(f"Sandbox execution failed: {e}") from e
 
         # Return a compact result for MCP
         def _iso(dt):
@@ -202,7 +202,7 @@ class SandboxModule(BaseModule):
                 if ts <= 0:
                     raise ValueError
             except Exception:
-                raise ValueError("timeout_sec must be a positive integer")
+                raise ValueError("timeout_sec must be a positive integer") from None
         files = arguments.get("files")
         if files is not None:
             if not isinstance(files, list):

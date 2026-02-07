@@ -44,7 +44,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Union
 
-import defusedxml.ElementTree as ET
+import defusedxml.ElementTree as ET  # noqa: N817
 import ebooklib
 import html2text
 
@@ -717,9 +717,12 @@ def process_epub(
         ebook_obj = None
         extractor_func: Optional[callable] = None
 
-        if extraction_method == 'markdown': extractor_func = epub_to_markdown
-        elif extraction_method == 'filtered': extractor_func = read_epub_filtered
-        else: extractor_func = read_epub # Default fallback
+        if extraction_method == 'markdown':
+            extractor_func = epub_to_markdown
+        elif extraction_method == 'filtered':
+            extractor_func = read_epub_filtered
+        else:
+            extractor_func = read_epub # Default fallback
 
         try:
             extracted_text, ebook_obj = extractor_func(file_path)
@@ -914,8 +917,10 @@ def process_epub(
                 else:
                     # Simple join if not recursive or only one summary
                     final_analysis = "\n\n---\n\n".join(chunk_summaries)
-                    if len(chunk_summaries) > 1 : logging.info(f"Combined {len(chunk_summaries)} chunk summaries (non-recursive).")
-                    else: logging.info("Using single chunk analysis as final analysis.")
+                    if len(chunk_summaries) > 1 :
+                        logging.info(f"Combined {len(chunk_summaries)} chunk summaries (non-recursive).")
+                    else:
+                        logging.info("Using single chunk analysis as final analysis.")
 
             result["analysis"] = final_analysis # Store final combined analysis
             log_counter("epub_chunks_summarized", value=len(chunk_summaries), labels={"file_path": file_path})
@@ -927,7 +932,8 @@ def process_epub(
             logging.warning(f"Summarization skipped for EPUB '{final_title}': API name not provided.")
         elif not processed_chunks:
             logging.warning(f"Summarization skipped for EPUB '{final_title}': No processable chunks available.")
-        else: logging.warning(f"Summarization skipped for EPUB '{final_title}' due to unknown condition.")
+        else:
+            logging.warning(f"Summarization skipped for EPUB '{final_title}' due to unknown condition.")
 
 
         # Final status determination
@@ -1326,7 +1332,8 @@ def _process_markup_or_plain_text(
                     markdown_content = handle.read().decode("utf-8")
                 epub_title, epub_author = extract_epub_metadata_from_text(markdown_content)
                 extracted_title = epub_title
-                if epub_author: extracted_author = epub_author
+                if epub_author:
+                    extracted_author = epub_author
                 raw_metadata = {'maybe_epub_title': epub_title, 'maybe_epub_author': epub_author}
             except _BOOK_PROCESSING_NONCRITICAL_EXCEPTIONS as text_err:
                  raise ValueError(f"Failed to read text file {file_path}: {text_err}") from text_err

@@ -345,7 +345,7 @@ async def get_media_file(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found on storage",
-        )
+        ) from None
     except StorageError as e:
         logger.error(
             "Storage error retrieving file {}: {}",
@@ -427,7 +427,7 @@ async def head_media_file(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Storage error",
-        )
+        ) from None
 
     mime_type = file_record.get("mime_type") or "application/octet-stream"
     original_filename = file_record.get("original_filename") or f"file_{media_id}"

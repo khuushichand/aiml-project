@@ -307,7 +307,7 @@ async def browse_provider_sources(
             items, next_cursor = [], None
     except Exception as e:
         logger.error(f"Browse error for {provider}: {e}")
-        raise HTTPException(status_code=502, detail=f"Browse failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Browse failed: {e}") from e
     return {"items": items, "next_cursor": next_cursor}
 
 
@@ -472,7 +472,7 @@ async def get_job_status(job_id: int) -> dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # Admin: Org-level policy

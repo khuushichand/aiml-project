@@ -4,9 +4,9 @@ Defines the interface that all backends must implement.
 """
 
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime
-from typing import Any, AsyncContextManager, Optional
+from typing import Any, Optional
 
 from .task import Task
 
@@ -271,7 +271,7 @@ class QueueBackend(ABC):
 
     @abstractmethod
     @asynccontextmanager
-    async def transaction(self) -> AsyncContextManager:
+    async def transaction(self) -> AbstractAsyncContextManager:
         """
         Create a database transaction context.
 

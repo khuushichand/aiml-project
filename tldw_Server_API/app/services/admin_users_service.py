@@ -110,7 +110,7 @@ async def list_users(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve users",
-        )
+        ) from e
 
 
 async def export_users(
@@ -148,7 +148,7 @@ async def export_users(
         return content, media_type, default_name
     except Exception as exc:
         logger.error(f"Failed to export users: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to export users")
+        raise HTTPException(status_code=500, detail="Failed to export users") from exc
 
 
 async def get_user_details(
@@ -287,7 +287,7 @@ async def update_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user",
-        )
+        ) from e
 
 
 async def delete_user(
@@ -333,4 +333,4 @@ async def delete_user(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete user",
-        )
+        ) from e

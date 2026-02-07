@@ -1560,8 +1560,11 @@ def process_podcast(
             cleaned = 0
             for f_path in temp_files:
                 if f_path and Path(f_path).exists():
-                    try: Path(f_path).unlink() ; cleaned += 1
-                    except OSError as e: update_progress(f"Warning: Failed to remove temp file {f_path}: {e}")
+                    try:
+                        Path(f_path).unlink()
+                        cleaned += 1
+                    except OSError as e:
+                        update_progress(f"Warning: Failed to remove temp file {f_path}: {e}")
             update_progress(f"Cleaned {cleaned} temporary podcast files.")
 
     try:
@@ -1604,12 +1607,16 @@ def process_podcast(
                   elif isinstance(current_keywords, list):
                        kw_list = current_keywords
 
-                  if metadata.get('series'): kw_list.append(f"series:{metadata['series']}")
-                  if metadata.get('episode'): kw_list.append(f"episode:{metadata['episode']}")
-                  if metadata.get('season'): kw_list.append(f"season:{metadata['season']}")
+                  if metadata.get('series'):
+                      kw_list.append(f"series:{metadata['series']}")
+                  if metadata.get('episode'):
+                      kw_list.append(f"episode:{metadata['episode']}")
+                  if metadata.get('season'):
+                      kw_list.append(f"season:{metadata['season']}")
                   # Add tags as keywords if available
                   tags = metadata.get('tags')
-                  if isinstance(tags, list): kw_list.extend(tags)
+                  if isinstance(tags, list):
+                      kw_list.extend(tags)
 
                   result["metadata"]["keywords"] = list(set(kw_list)) # Store as unique list
 

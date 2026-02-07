@@ -282,7 +282,7 @@ def validate_max_tokens(max_tokens: Optional[int]) -> Optional[int]:
         try:
             max_tokens = int(max_tokens)
         except (ValueError, TypeError):
-            raise ValueError(f"max_tokens must be an integer, got {type(max_tokens)}")
+            raise ValueError(f"max_tokens must be an integer, got {type(max_tokens)}") from None
 
     if max_tokens < 1:
         raise ValueError(f"max_tokens must be at least 1, got {max_tokens}")

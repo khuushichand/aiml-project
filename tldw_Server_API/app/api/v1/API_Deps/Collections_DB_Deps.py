@@ -24,7 +24,7 @@ async def get_collections_db_for_user(
         return CollectionsDatabase.for_user(user_id=current_user.id)
     except Exception as e:
         logger.error(f"Failed to initialize Collections DB for user {current_user.id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Collections DB unavailable")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Collections DB unavailable") from e
 
 
 async def try_get_collections_db_for_user(

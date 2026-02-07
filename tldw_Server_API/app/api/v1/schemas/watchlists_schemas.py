@@ -71,6 +71,7 @@ class Source(BaseModel):
     source_type: SourceType
     active: bool
     tags: list[str] = []
+    group_ids: list[int] = []
     settings: dict[str, Any] | None = None
     last_scraped_at: str | None = None
     status: str | None = None

@@ -419,7 +419,8 @@ class FileValidator:
                 self._custom_media_configs[key] = copy.deepcopy(config_val)
 
     def _compile_yara_rules(self, rules_path: str):
-        if not self.yara_available: return None
+        if not self.yara_available:
+            return None
         try:
             # Check if the rules file exists
             if not os.path.exists(rules_path):
@@ -433,7 +434,8 @@ class FileValidator:
         return None
 
     def _initialize_yara_scanner(self, rules_path: str):
-        if not self.yara_available: return
+        if not self.yara_available:
+            return
         self.compiled_yara_rules = self._compile_yara_rules(rules_path)
         if self.compiled_yara_rules is None:
             logging.warning("Yara rules not loaded. Yara scanning will be disabled for this validator instance.")
@@ -783,7 +785,8 @@ class FileValidator:
                             return ValidationResult(False, issues, archive_path_obj)
 
                         for member in zip_ref.infolist():
-                            if member.is_dir(): continue  # Skip directories
+                            if member.is_dir():
+                                continue  # Skip directories
 
                             # Path traversal prevention
                             # Normalize and validate the member filename
@@ -1105,7 +1108,7 @@ class FileValidator:
         try:
             root = DET.fromstring(xml_content.encode('utf-8', errors='ignore'))
         except _UPLOAD_SINK_NONCRITICAL_EXCEPTIONS as e:
-            raise FileValidationError(f"Invalid XML content: {e}")
+            raise FileValidationError(f"Invalid XML content: {e}") from e
 
         # Optionally strip comments and processing instructions
         try:

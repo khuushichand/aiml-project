@@ -985,7 +985,7 @@ def db(
                     "dry_run": dry_run,
                 }
                 _emit(result, json_out)
-                raise typer.Exit(2)
+                raise typer.Exit(2) from exc
 
     user_id = DatabasePaths.get_single_user_id()
     if not DatabasePaths.validate_database_structure(user_id):
@@ -1017,7 +1017,7 @@ def db(
                 "dry_run": dry_run,
             }
             _emit(result, json_out)
-            raise typer.Exit(2)
+            raise typer.Exit(2) from exc
 
     actions.append({"sqlite_files": sqlite_files})
     result = {"command": "db", "status": "ok", "actions": actions, "notes": notes, "dry_run": dry_run}

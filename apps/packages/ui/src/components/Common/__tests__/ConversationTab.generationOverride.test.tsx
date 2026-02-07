@@ -45,9 +45,17 @@ vi.mock("@/hooks/chat/useChatSettingsRecord", () => ({
   useChatSettingsRecord: vi.fn()
 }))
 
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: vi.fn()
-}))
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual("@tanstack/react-query")
+  return {
+    ...actual,
+    useQuery: vi.fn(),
+    useQueryClient: vi.fn().mockReturnValue({
+      invalidateQueries: vi.fn(),
+      setQueryData: vi.fn()
+    })
+  }
+})
 
 vi.mock("antd", () => {
   const FormItem = ({ label, help, children }: any) => (

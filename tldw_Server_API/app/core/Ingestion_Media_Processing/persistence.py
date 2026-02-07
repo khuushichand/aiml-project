@@ -843,7 +843,7 @@ async def add_media_orchestrate(
                                 try:
                                     handle.seek(0)
                                 except _PERSISTENCE_NONCRITICAL_EXCEPTIONS:
-                                    raise InputError("Original file stream is not seekable for storage.")
+                                    raise InputError("Original file stream is not seekable for storage.") from None
 
                                 # Store in permanent storage
                                 storage_path = await storage.store(
@@ -1028,7 +1028,7 @@ async def add_media_orchestrate(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OS error during setup: {os_err}",
-        )
+        ) from os_err
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as unexpected:
         logger.error(
             "Unhandled exception in /media/add endpoint: {} - {}",
@@ -1039,7 +1039,7 @@ async def add_media_orchestrate(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected internal error: {type(unexpected).__name__}",
-        )
+        ) from unexpected
 
 
 async def add_media_persist(

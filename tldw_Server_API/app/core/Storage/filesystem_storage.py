@@ -99,7 +99,7 @@ class FileSystemStorage(StorageBackend):
         except Exception as e:
             if isinstance(e, StorageError):
                 raise
-            raise StorageError(f"Invalid path: {e}", path=str(path))
+            raise StorageError(f"Invalid path: {e}", path=str(path)) from e
 
     async def store(
         self,
@@ -157,7 +157,7 @@ class FileSystemStorage(StorageBackend):
 
         except Exception as e:
             logger.error(f"Failed to store file {file_path}: {e}")
-            raise StorageError(f"Failed to store file: {e}", path=str(file_path))
+            raise StorageError(f"Failed to store file: {e}", path=str(file_path)) from e
 
     async def retrieve(self, path: str) -> BinaryIO:
         """
@@ -183,7 +183,7 @@ class FileSystemStorage(StorageBackend):
             raise
         except Exception as e:
             logger.error(f"Failed to retrieve file {path}: {e}")
-            raise StorageError(f"Failed to retrieve file: {e}", path=path)
+            raise StorageError(f"Failed to retrieve file: {e}", path=path) from e
 
     async def retrieve_stream(
         self, path: str, chunk_size: int = 65536
@@ -218,7 +218,7 @@ class FileSystemStorage(StorageBackend):
             raise
         except Exception as e:
             logger.error(f"Failed to stream file {path}: {e}")
-            raise StorageError(f"Failed to stream file: {e}", path=path)
+            raise StorageError(f"Failed to stream file: {e}", path=path) from e
 
     async def delete(self, path: str) -> bool:
         """
@@ -247,7 +247,7 @@ class FileSystemStorage(StorageBackend):
             return True
         except Exception as e:
             logger.error(f"Failed to delete file {path}: {e}")
-            raise StorageError(f"Failed to delete file: {e}", path=path)
+            raise StorageError(f"Failed to delete file: {e}", path=path) from e
 
     async def _cleanup_empty_dirs(self, dir_path: Path) -> None:
         """
@@ -309,7 +309,7 @@ class FileSystemStorage(StorageBackend):
             raise
         except Exception as e:
             logger.error(f"Failed to get file size for {path}: {e}")
-            raise StorageError(f"Failed to get file size: {e}", path=path)
+            raise StorageError(f"Failed to get file size: {e}", path=path) from e
 
     def get_url(self, path: str) -> str | None:
         """
@@ -356,7 +356,7 @@ class FileSystemStorage(StorageBackend):
             return hasher.hexdigest()
         except Exception as e:
             logger.error(f"Failed to compute checksum for {path}: {e}")
-            raise StorageError(f"Failed to compute checksum: {e}", path=path)
+            raise StorageError(f"Failed to compute checksum: {e}", path=path) from e
 
     def get_full_path(self, path: str) -> Path:
         """

@@ -25,7 +25,7 @@ try:
 except ImportError:
     logger.error("transformers or torch not installed. Please install them: pip install transformers torch torchvision torchaudio accelerate bitsandbytes")
     # Raise or handle appropriately
-    raise ImportError("HuggingFace handler requires 'transformers', 'torch', 'accelerate', 'bitsandbytes'.")
+    raise ImportError("HuggingFace handler requires 'transformers', 'torch', 'accelerate', 'bitsandbytes'.") from None
 #
 ########################################################################################################################
 #
@@ -119,7 +119,7 @@ class HuggingFaceHandler(BaseLLMHandler):
                     await asyncio.to_thread(shutil.rmtree, model_save_path, ignore_errors=False)
                  except Exception as e_clean:
                     self.logger.exception(f"Failed to cleanup partial download at {model_save_path}: {e_clean}")
-            raise ModelDownloadError(f"Failed to download model '{model_identifier}': {e}")
+            raise ModelDownloadError(f"Failed to download model '{model_identifier}': {e}") from e
 
     def _get_torch_dtype(self, dtype_str: Optional[str]):
         if not dtype_str:
@@ -184,7 +184,7 @@ class HuggingFaceHandler(BaseLLMHandler):
             return model, tokenizer
         except Exception as e:
             self.logger.exception(f"Error loading model '{model_name_or_path}': {e}")
-            raise InferenceError(f"Error loading model '{model_name_or_path}': {e}")
+            raise InferenceError(f"Error loading model '{model_name_or_path}': {e}") from e
 
     async def unload_model(self, model_name_or_path: str):
         """Unloads a model from memory to free up resources."""
@@ -260,7 +260,7 @@ class HuggingFaceHandler(BaseLLMHandler):
             return response_text
         except Exception as e:
             self.logger.error(f"Error during Hugging Face chat completion for '{model_name_or_path}': {e}", exc_info=True)
-            raise InferenceError(f"Error during Hugging Face chat completion for '{model_name_or_path}': {e}")
+            raise InferenceError(f"Error during Hugging Face chat completion for '{model_name_or_path}': {e}") from e
 
     async def text_generation_pipeline(self,
                                   model_name_or_path: str,
@@ -304,7 +304,7 @@ class HuggingFaceHandler(BaseLLMHandler):
             return generated_text
         except Exception as e:
             self.logger.error(f"Error during Hugging Face pipeline generation for '{model_name_or_path}': {e}", exc_info=True)
-            raise InferenceError(f"Error during Hugging Face pipeline generation for '{model_name_or_path}': {e}")
+            raise InferenceError(f"Error during Hugging Face pipeline generation for '{model_name_or_path}': {e}") from e
 
 #
 # End of Hugging_FaceHandler.py

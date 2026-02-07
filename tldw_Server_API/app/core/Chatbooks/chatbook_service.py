@@ -4014,7 +4014,7 @@ class ChatbookService:
                 "description": description
             }
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
-            raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e)
+            raise JobError(f"Failed to create export job: {e}", job_type="export", cause=e) from e
 
     def get_export_job_status(self, job_id: str) -> dict[str, Any]:
         """Get export job status."""
@@ -4207,7 +4207,7 @@ class ChatbookService:
                 "file_path": file_path
             }
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
-            raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e)
+            raise JobError(f"Failed to create import job: {e}", job_type="import", cause=e) from e
 
     def get_import_job_status(self, job_id: str) -> dict[str, Any]:
         """Get import job status."""
@@ -4320,7 +4320,7 @@ class ChatbookService:
 
             return result
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
-            raise DatabaseError(f"Failed to preview export: {e}", cause=e)
+            raise DatabaseError(f"Failed to preview export: {e}", cause=e) from e
 
     def clean_old_exports(self, days_old: int = 7) -> int:
         """
@@ -4383,7 +4383,7 @@ class ChatbookService:
 
             return deleted_count
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
-            raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e)
+            raise FileOperationError(f"Failed to clean old exports: {e}", operation="cleanup", cause=e) from e
 
     def validate_chatbook(self, file_path: str) -> bool:
         """
@@ -4419,11 +4419,11 @@ class ChatbookService:
 
                 return True
         except zipfile.BadZipFile:
-            raise ArchiveError("Invalid ZIP file", archive_path=file_path)
+            raise ArchiveError("Invalid ZIP file", archive_path=file_path) from None
         except _CHATBOOK_NONCRITICAL_EXCEPTIONS as e:
             if isinstance(e, (ValidationError, ArchiveError)):
                 raise
-            raise ValidationError(f"Validation failed: {e}", cause=e)
+            raise ValidationError(f"Validation failed: {e}", cause=e) from e
 
     def validate_chatbook_file(self, file_path: str) -> dict[str, Any]:
         """

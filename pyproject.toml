@@ -666,18 +666,42 @@ select = [
 ]
 ignore = [
     "E501", # line too long
+    "E402", # module-level import not at top — many files use __future__+docstring or conditional imports
+    "E741", # ambiguous variable name (l, I, O) — used intentionally in math/loop contexts
     "B008", # do not perform function calls in argument defaults
+    "BLE001", # blind except — many intentional broad catches for cleanup/streaming
     "C901", # too complex
     "N802", # function name should be lowercase
+    "N803", # camelCase argument names — from API/Pydantic schemas
     "N806", # variable in function should be lowercase
     "N805", # invalid first argument name for method (Pydantic validators use cls without @classmethod)
+    "N814", # camelCase imported as constant — project convention for some imports
+    "N818", # exception class name should end in Error — existing convention
     "N999", # invalid module name (project uses CamelCase module names by convention)
+    "N815", # mixed-case-variable-in-class-scope — project convention
+    "N816", # mixed-case-variable-in-global-scope — project convention
+    "SIM102", # collapsible-if — nested ifs are often more readable with comments
+    "SIM105", # suppressible-exception — contextlib.suppress() is less readable for complex cases
+    "SIM108", # if-else-block-instead-of-if-exp — ternary not always more readable
+    "SIM112", # uncapitalized-environment-variables — existing convention
+    "SIM115", # open-file-with-context-handler — many valid patterns without context manager
+    "SIM116", # if-else-block-instead-of-dict-lookup — not always clearer
+    "SIM117", # multiple-with-statements — nested with is often more readable
+    "TRY002", # raise-vanilla-class — project raises Exception in some valid contexts
     "TRY003", # wants custom exception classes for every raise ValueError("msg")
+    "TRY004", # type-check-without-type-error — ValueError vs TypeError is debatable
+    "TRY203", # useless-try-except — sometimes try/except/raise is for clarity
+    "TRY300", # try-consider-else — opinionated, return in try is idiomatic Python
+    "TRY301", # abstract raise to inner function — impractical
+    "TRY401", # verbose log message — debatable
 ]
 exclude = []
 
 [tool.ruff.lint.per-file-ignores]
 "tldw_Server_API/app/api/v1/endpoints/*.py" = ["B008"]
+"tldw_Server_API/app/api/v1/schemas/rag_schemas_simple_compat.py" = ["F403", "F405"]
+"tldw_Server_API/app/core/Character_Chat/Character_Chat_Lib_facade.py" = ["F403", "F405"]
+"tldw_Server_API/app/api/v1/endpoints/audio/__init__.py" = ["F401"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tldw_Server_API"]

@@ -11,7 +11,6 @@ import shutil
 import sqlite3
 import struct
 import sys
-from datetime import datetime
 
 from Cryptodome.Cipher import AES
 from Cryptodome.Protocol.KDF import PBKDF2
@@ -182,7 +181,7 @@ def get_firefox_cookies(domain_name):
             cursor.close()
             conn.close()
             os.remove(temp_cookie_db)
-            break  # Use the first profile found
+        break  # Use the first profile found
 
     return cookies
 

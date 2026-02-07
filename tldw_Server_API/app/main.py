@@ -1631,9 +1631,7 @@ async def lifespan(app: FastAPI):
             logger.exception(f"App Startup: Security alert configuration invalid: {config_error}")
             raise
     except _STARTUP_GUARD_EXCEPTIONS as exc:
-        logger.exception(f"App Startup: Security alert validation failed: {exc}")
-    except _STARTUP_GUARD_EXCEPTIONS as e:
-        logger.exception(f"App Startup: Failed to initialize auth services: {e}")
+        logger.exception(f"App Startup: Security alert validation / auth services init failed: {exc}")
         # Continue startup even if auth services fail (for backward compatibility)
 
     # Startup: Warm ChaChaNotes to remove request-path blocking for the default user
@@ -4447,7 +4445,7 @@ async def serve_setup_page():
     try:
         setup_required = needs_setup()
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="Configuration file missing; cannot render setup UI.")
+        raise HTTPException(status_code=500, detail="Configuration file missing; cannot render setup UI.") from None
 
     if not setup_required:
         return RedirectResponse(url="/api/v1/config/quickstart", status_code=307)
@@ -4753,6 +4751,20 @@ elif _MINIMAL_TEST_APP:
         app.include_router(personalization_router, prefix=f"{API_V1_PREFIX}/personalization", tags=["personalization"])
     except _IMPORT_EXCEPTIONS as _pers_min_err:
         logger.debug(f"Skipping personalization router in minimal test app: {_pers_min_err}")
+    # Guardian controls (parental/supervised account controls)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router
+
+        app.include_router(guardian_controls_router, prefix=f"{API_V1_PREFIX}/guardian", tags=["guardian"])
+    except _IMPORT_EXCEPTIONS as _guard_min_err:
+        logger.debug(f"Skipping guardian controls router in minimal test app: {_guard_min_err}")
+    # Self-monitoring (awareness notifications, crisis resources)
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.self_monitoring import router as self_monitoring_router
+
+        app.include_router(self_monitoring_router, prefix=f"{API_V1_PREFIX}/self-monitoring", tags=["self-monitoring"])
+    except _IMPORT_EXCEPTIONS as _selfmon_min_err:
+        logger.debug(f"Skipping self-monitoring router in minimal test app: {_selfmon_min_err}")
     # Persona scaffold endpoints (catalog/session/WS) used by unit tests
     try:
         from tldw_Server_API.app.api.v1.endpoints.persona import router as persona_router
@@ -5453,6 +5465,26 @@ else:
         tags=["personalization"],
         default_stable=False,
     )
+    try:
+        from tldw_Server_API.app.api.v1.endpoints.guardian_controls import router as guardian_controls_router_full
+        from tldw_Server_API.app.api.v1.endpoints.self_monitoring import router as self_monitoring_router_full
+
+        _include_if_enabled(
+            "guardian",
+            guardian_controls_router_full,
+            prefix=f"{API_V1_PREFIX}/guardian",
+            tags=["guardian"],
+            default_stable=False,
+        )
+        _include_if_enabled(
+            "self-monitoring",
+            self_monitoring_router_full,
+            prefix=f"{API_V1_PREFIX}/self-monitoring",
+            tags=["self-monitoring"],
+            default_stable=False,
+        )
+    except _STARTUP_GUARD_EXCEPTIONS as _guardian_full_err:
+        logger.debug(f"Guardian/self-monitoring routers unavailable in full app: {_guardian_full_err}")
     # In tests, force-include persona endpoints regardless of route policy for WS/unit coverage
     if _TEST_MODE:
         app.include_router(persona_router, prefix=f"{API_V1_PREFIX}/persona", tags=["persona"])

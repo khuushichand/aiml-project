@@ -92,7 +92,7 @@ async def create_or_update_pipeline_preset(
             message=f"Failed to save preset: {sanitize_error_message(e, 'save_preset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @pipeline_router.get(
@@ -138,7 +138,7 @@ async def list_pipeline_presets(
             message=f"Failed to list presets: {sanitize_error_message(e, 'list_presets')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @pipeline_router.get(
@@ -188,7 +188,7 @@ async def get_pipeline_preset(
             message=f"Failed to get preset: {sanitize_error_message(e, 'get_preset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @pipeline_router.delete(
@@ -223,7 +223,7 @@ async def delete_pipeline_preset(
             message=f"Failed to delete preset: {sanitize_error_message(e, 'delete_preset')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @pipeline_router.post(
@@ -263,4 +263,4 @@ async def cleanup_ephemeral_collections(
             message=f"Cleanup failed: {sanitize_error_message(e, 'cleanup')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e

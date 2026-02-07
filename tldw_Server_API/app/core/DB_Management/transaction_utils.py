@@ -83,7 +83,7 @@ async def db_transaction(db: CharactersRAGDB, max_retries: int = 3):
         except Exception as e:
             # Unexpected error - log and re-raise
             logger.error(f"Unexpected error in transaction: {e}", exc_info=True)
-            raise CharactersRAGDBError(f"Transaction failed: {str(e)}")
+            raise CharactersRAGDBError(f"Transaction failed: {str(e)}") from e
 
     # If we get here, all retries exhausted
     if last_error:
@@ -143,7 +143,7 @@ async def run_transaction(
             raise
         except Exception as e:  # noqa: BLE001
             # Unexpected error
-            raise CharactersRAGDBError(f"Transaction failed: {e}")
+            raise CharactersRAGDBError(f"Transaction failed: {e}") from e
 
     # Exhausted retries
     if last_err:

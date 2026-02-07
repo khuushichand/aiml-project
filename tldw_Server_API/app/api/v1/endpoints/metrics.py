@@ -91,7 +91,7 @@ async def get_prometheus_metrics() -> Response:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to export metrics"
-        )
+        ) from e
 
 
 @router.get("/metrics/json",
@@ -121,7 +121,7 @@ async def get_json_metrics() -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve metrics"
-        )
+        ) from e
 
 
 @router.get("/metrics/health",
@@ -213,7 +213,7 @@ async def get_chat_metrics_endpoint() -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve chat metrics"
-        )
+        ) from e
 
 
 @router.post(
@@ -254,4 +254,4 @@ async def reset_metrics() -> dict[str, str]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to reset metrics"
-        )
+        ) from e

@@ -223,7 +223,7 @@ async def _authenticate_api_key_from_request(request: Request, api_key: str) -> 
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate API key",
-        )
+        ) from e
 
 
 def _get_test_session_lock() -> asyncio.Lock:

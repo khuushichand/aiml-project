@@ -115,7 +115,7 @@ class GatingConfig(BaseModel):
         try:
             import yaml
         except ImportError:
-            raise ImportError("PyYAML is required for YAML config loading: pip install pyyaml")
+            raise ImportError("PyYAML is required for YAML config loading: pip install pyyaml") from None
 
         path = Path(path)
         if not path.exists():
@@ -144,7 +144,7 @@ class GatingConfig(BaseModel):
         try:
             import yaml
         except ImportError:
-            raise ImportError("PyYAML is required for YAML config saving: pip install pyyaml")
+            raise ImportError("PyYAML is required for YAML config saving: pip install pyyaml") from None
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

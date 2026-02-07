@@ -17,22 +17,22 @@ try:  # pragma: no cover - presence depends on environment
     try:
         _PG_UniqueViolationError = asyncpg.exceptions.UniqueViolationError  # type: ignore[attr-defined]
     except AttributeError:  # pragma: no cover
-        class _PG_UniqueViolationError(Exception):  # type: ignore
+        class _PG_UniqueViolationError(Exception):  # type: ignore  # noqa: N801
             pass
 except ImportError:  # pragma: no cover
     _ASYNC_PG_AVAILABLE = False
-    class _PG_UniqueViolationError(Exception):  # type: ignore
+    class _PG_UniqueViolationError(Exception):  # type: ignore  # noqa: N801
         pass
 
 try:  # pragma: no cover - optional in SQLite-only deployments
     import aiosqlite  # type: ignore
     _AIOSQLITE_AVAILABLE = True
     # Provide a safe alias for IntegrityError so except clauses don't NameError
-    _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]
+    _AIOSQLITE_IntegrityError = aiosqlite.IntegrityError  # type: ignore[attr-defined]  # noqa: N801
 except ImportError:  # pragma: no cover
     _AIOSQLITE_AVAILABLE = False
     # Fallback placeholder so tuple excepts remain valid even when aiosqlite is absent
-    class _AIOSQLITE_IntegrityError(Exception):  # type: ignore
+    class _AIOSQLITE_IntegrityError(Exception):  # type: ignore  # noqa: N801
         pass
 #
 # 3rd-party imports
@@ -250,7 +250,7 @@ class UsersDB:
                     delay = min(delay * 2, 1.0)
                     continue
                 logger.error(f"Failed to create users table: {e}")
-                raise DatabaseError(f"Failed to create users table: {e}")
+                raise DatabaseError(f"Failed to create users table: {e}") from e
 
     async def get_user_by_id(self, user_id: int) -> Optional[dict[str, Any]]:
         """
@@ -293,7 +293,7 @@ class UsersDB:
             raise
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by ID {user_id}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
     async def get_user_by_username(self, username: str) -> Optional[dict[str, Any]]:
         """
@@ -331,7 +331,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by username {username}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
     async def get_user_by_uuid(self, user_uuid: str) -> Optional[dict[str, Any]]:
         """
@@ -370,7 +370,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by uuid {user_uuid}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
     async def get_user_by_email(self, email: str) -> Optional[dict[str, Any]]:
         """
@@ -408,7 +408,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get user by email {email}: {e}")
-            raise DatabaseError(f"Failed to get user: {e}")
+            raise DatabaseError(f"Failed to get user: {e}") from e
 
     async def create_user(
         self,
@@ -545,7 +545,7 @@ class UsersDB:
             raise
         except _PG_UniqueViolationError as e:
             logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
-            raise DuplicateUserError("Username or email already exists")
+            raise DuplicateUserError("Username or email already exists") from e
         except (_AIOSQLITE_IntegrityError, sqlite3.IntegrityError) as e:
             message = str(e).lower()
             if "unique constraint failed" in message or "unique constraint violation" in message:
@@ -557,9 +557,9 @@ class UsersDB:
             msg = str(e)
             if "UNIQUE constraint failed" in msg and "users" in msg:
                 logger.warning(f"Duplicate user detected during create_user for '{username}': {e}")
-                raise DuplicateUserError("Username or email already exists")
+                raise DuplicateUserError("Username or email already exists") from e
             logger.error(f"Failed to create user {username}: {e}")
-            raise DatabaseError(f"Failed to create user: {e}")
+            raise DatabaseError(f"Failed to create user: {e}") from e
 
     async def update_user(
         self,
@@ -638,7 +638,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update user {user_id}: {e}")
-            raise DatabaseError(f"Failed to update user: {e}")
+            raise DatabaseError(f"Failed to update user: {e}") from e
 
     async def delete_user(self, user_id: int) -> bool:
         """
@@ -661,7 +661,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to delete user {user_id}: {e}")
-            raise DatabaseError(f"Failed to delete user: {e}")
+            raise DatabaseError(f"Failed to delete user: {e}") from e
 
     async def update_last_login(self, user_id: int):
         """Update user's last login timestamp"""
@@ -724,7 +724,7 @@ class UsersDB:
 
         except _USERS_DB_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to list users: {e}")
-            raise DatabaseError(f"Failed to list users: {e}")
+            raise DatabaseError(f"Failed to list users: {e}") from e
 
 
 #######################################################################################################################
@@ -852,7 +852,7 @@ async def get_user_media_db(user_id: int, db_name: str = "media"):
 
     except ImportError as e:
         logger.error(f"Failed to import MediaDatabase: {e}")
-        raise ImportError("MediaDatabase class not available")
+        raise ImportError("MediaDatabase class not available") from e
 
 
 async def ensure_user_directories(user_id: int):

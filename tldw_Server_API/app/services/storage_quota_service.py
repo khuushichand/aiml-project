@@ -332,7 +332,7 @@ class StorageQuotaService:
 
         except Exception as e:
             logger.error(f"Failed to update storage usage: {e}")
-            raise StorageError(f"Failed to update storage usage: {e}")
+            raise StorageError(f"Failed to update storage usage: {e}") from e
 
 
     # ---- Filesystem and reporting helpers ----
@@ -449,7 +449,7 @@ class StorageQuotaService:
             }
         except Exception as e:
             logger.error(f"Failed to set user quota: {e}")
-            raise StorageError(f"Failed to set quota: {e}")
+            raise StorageError(f"Failed to set quota: {e}") from e
 
     async def get_all_users_storage(self) -> list[dict[str, Any]]:
         """List storage usage for all active users, sorted by usage desc."""

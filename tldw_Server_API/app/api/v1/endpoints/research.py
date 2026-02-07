@@ -109,11 +109,12 @@ async def arxiv_search_endpoint(
         raise
     except Exception as e:
         logger.error(f"Unexpected error during arXiv search execution: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while searching arXiv: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred while searching arXiv: {str(e)}") from e
 
     total_pages_calculated = math.ceil(
         total_results_from_api / search_params.results_per_page) if search_params.results_per_page > 0 else 0
-    if total_results_from_api == 0: total_pages_calculated = 0  # Ensure total_pages is 0 if no results
+    if total_results_from_api == 0:
+        total_pages_calculated = 0  # Ensure total_pages is 0 if no results
 
     return ArxivSearchResponse(
         query_echo={
@@ -224,7 +225,7 @@ async def semantic_scholar_search_endpoint(
     except Exception as e:
         logger.error(f"Unexpected error during Semantic Scholar search execution: {e}", exc_info=True)
         raise HTTPException(status_code=500,
-                            detail=f"An unexpected error occurred while searching Semantic Scholar: {str(e)}")
+                            detail=f"An unexpected error occurred while searching Semantic Scholar: {str(e)}") from e
 
     total_results_api = api_response_data.get("total", 0)
     actual_offset_api = api_response_data.get("offset", 0)  # S2 returns the actual offset used
@@ -244,7 +245,8 @@ async def semantic_scholar_search_endpoint(
 
     total_pages_calculated = math.ceil(
         total_results_api / search_params.results_per_page) if search_params.results_per_page > 0 else 0
-    if total_results_api == 0: total_pages_calculated = 0
+    if total_results_api == 0:
+        total_pages_calculated = 0
 
     return SemanticScholarSearchResponse(
         query_echo={
@@ -324,7 +326,7 @@ async def websearch_endpoint(
         loop = asyncio.get_running_loop()
         global _WEBSEARCH_EXECUTOR
         try:
-            _WEBSEARCH_EXECUTOR  # type: ignore[name-defined]
+            _WEBSEARCH_EXECUTOR  # type: ignore[name-defined]  # noqa: B018
         except NameError:
             _WEBSEARCH_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ThreadPoolExecutor")  # type: ignore[assignment]
         phase1 = await loop.run_in_executor(_WEBSEARCH_EXECUTOR, generate_and_search, payload.query, search_params)
@@ -367,7 +369,7 @@ async def websearch_endpoint(
 
     except Exception as e:
         logger.error(f"websearch endpoint failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Websearch failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Websearch failed: {str(e)}") from e
 
 
 #

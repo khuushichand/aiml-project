@@ -845,7 +845,7 @@ class StreamingResponseHandler:
                                 await maybe_result
                         except _STREAMING_NONCRITICAL_EXCEPTIONS as finalize_err:
                             logger.debug(f"Finalize callback error after cancel: {finalize_err}")
-                    return
+                    return  # noqa: B012
 
                 # Flush any pending tail from text_transform (e.g., moderation holdback)
                 if not self.error_occurred and self.text_transform:

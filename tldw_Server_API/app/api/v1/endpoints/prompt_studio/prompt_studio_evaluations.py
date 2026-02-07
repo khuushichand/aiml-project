@@ -383,7 +383,7 @@ async def create_evaluation(
             ps_job_kind="evaluations",
             traceparent=tp,
         ).exception("Failed to create evaluation: {}", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get("/evaluations", response_model=EvaluationList, openapi_extra={
     "responses": {"200": {"description": "Evaluations", "content": {"application/json": {"examples": {"list": {"summary": "Eval list", "value": [{"id": 501, "project_id": 1, "prompt_id": 12, "status": "running"}]}}}}}}
@@ -457,7 +457,7 @@ async def list_evaluations(
             ps_job_kind="evaluations",
             traceparent=tp,
         ).exception("Failed to list evaluations: {}", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.get(
     "/evaluations/{evaluation_id}",
@@ -579,7 +579,7 @@ async def get_evaluation(
             ps_job_kind="evaluations",
             traceparent=tp,
         ).exception("Failed to get evaluation: {}", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.delete("/evaluations/{evaluation_id}", openapi_extra={
     "responses": {"200": {"description": "Deleted", "content": {"application/json": {"examples": {"deleted": {"value": {"message": "Evaluation 123 deleted successfully"}}}}}}}
@@ -653,7 +653,7 @@ async def delete_evaluation(
             ps_job_kind="evaluations",
             traceparent=tp,
         ).exception("Failed to delete evaluation: {}", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 ########################################################################################################################
 # Background Task Health

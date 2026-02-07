@@ -257,7 +257,7 @@ async def get_media_content(media_id: int, db: MediaDatabase) -> dict[str, Any]:
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving media content: {str(e)}"
-        )
+        ) from e
 
 
 def chunk_media_content(text: str, chunk_size: int = 1000, overlap: int = 200, method: str = "words") -> list[dict[str, Any]]:
@@ -625,7 +625,7 @@ async def get_embeddings_status(
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error checking embeddings status: {str(e)}"
-        )
+        ) from e
 
 
 @router.post(
@@ -700,7 +700,7 @@ async def generate_embeddings(
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error generating embeddings: {str(e)}"
-        )
+        ) from e
 
 
 @router.post(
@@ -921,7 +921,7 @@ async def delete_embeddings(
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting embeddings: {str(e)}"
-        )
+        ) from e
 
 
 @router.get(

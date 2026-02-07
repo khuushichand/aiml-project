@@ -393,13 +393,9 @@ def is_retryable_error(error: Exception) -> bool:
         return False
 
     # Retryable errors
-    if isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError,
-                         TTSProviderError, TTSProviderUnavailableError,
-                         TTSResourceError)):
-        return True
-
-    # Unknown errors are not retryable by default
-    return False
+    return isinstance(error, (TTSNetworkError, TTSTimeoutError, TTSRateLimitError,
+                              TTSProviderError, TTSProviderUnavailableError,
+                              TTSResourceError))
 
 
 def resource_error(provider: str, resource_type: str, required: Any = None,

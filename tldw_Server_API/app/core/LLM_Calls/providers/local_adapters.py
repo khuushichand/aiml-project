@@ -161,28 +161,44 @@ def _chat_with_openai_compatible_local_server(
         "messages": api_messages,
         "stream": streaming,
     }
-    if model_name: payload["model"] = model_name
-    if temp is not None: payload["temperature"] = temp
-    if top_p is not None: payload["top_p"] = top_p
-    if top_k is not None: payload["top_k"] = top_k # OpenAI spec doesn't have top_k for chat, but some servers might
-    if min_p is not None: payload["min_p"] = min_p # Not standard OpenAI, but some servers might support
-    if max_tokens is not None: payload["max_tokens"] = max_tokens
-    if n is not None: payload["n"] = n
-    if stop is not None: payload["stop"] = stop
-    if presence_penalty is not None: payload["presence_penalty"] = presence_penalty
-    if frequency_penalty is not None: payload["frequency_penalty"] = frequency_penalty
-    if logit_bias is not None: payload["logit_bias"] = logit_bias
-    if seed is not None: payload["seed"] = seed
-    if response_format is not None: payload["response_format"] = response_format
-    if tools is not None: payload["tools"] = tools
+    if model_name:
+        payload["model"] = model_name
+    if temp is not None:
+        payload["temperature"] = temp
+    if top_p is not None:
+        payload["top_p"] = top_p
+    if top_k is not None:
+        payload["top_k"] = top_k # OpenAI spec doesn't have top_k for chat, but some servers might
+    if min_p is not None:
+        payload["min_p"] = min_p # Not standard OpenAI, but some servers might support
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if n is not None:
+        payload["n"] = n
+    if stop is not None:
+        payload["stop"] = stop
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+    if frequency_penalty is not None:
+        payload["frequency_penalty"] = frequency_penalty
+    if logit_bias is not None:
+        payload["logit_bias"] = logit_bias
+    if seed is not None:
+        payload["seed"] = seed
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if tools is not None:
+        payload["tools"] = tools
     apply_tool_choice(payload, tools, tool_choice)
-    if logprobs is not None: payload["logprobs"] = logprobs
+    if logprobs is not None:
+        payload["logprobs"] = logprobs
     if top_logprobs is not None: # Can only be used if logprobs is true
         if logprobs:
             payload["top_logprobs"] = top_logprobs
         else:
             logging.warning(f"{provider_name}: top_logprobs provided without logprobs=True. Ignoring top_logprobs.")
-    if user_identifier is not None: payload["user"] = user_identifier
+    if user_identifier is not None:
+        payload["user"] = user_identifier
 
     if tool_choice is not None and not tools:
         raise ChatBadRequestError(provider=provider_name, message="tool_choice requires tools")
@@ -367,11 +383,11 @@ def _chat_with_openai_compatible_local_server(
         if is_network_error(e_http):
             # Network/connectivity, DNS, timeouts prior to receiving a response
             logging.error(f"{provider_name}: Request error: {e_http}", exc_info=False)
-            raise ChatProviderError(provider=provider_name, message=str(e_http), status_code=504)
+            raise ChatProviderError(provider=provider_name, message=str(e_http), status_code=504) from e_http
         raise
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"{provider_name}: Data processing or configuration error: {e_data}", exc_info=True)
-        raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}")
+        raise ChatBadRequestError(provider=provider_name, message=f"{provider_name} data or configuration error: {e_data}") from e_data
     finally:
         if not streaming:
             with contextlib.suppress(_LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS):
@@ -422,7 +438,8 @@ def _local_llm_request(
         if streaming is not None and streaming != stream:
             logging.warning("local_llm: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg_section = 'local_llm' # Generic section for "local-llm" type
     cfg = loaded_config_data.get(cfg_section, {})
@@ -455,8 +472,10 @@ def _local_llm_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -579,7 +598,8 @@ def _llama_request(
         if streaming is not None and streaming != stream:
             logging.warning("Llama.cpp: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('llama_api', {})
 
@@ -610,7 +630,8 @@ def _llama_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -704,7 +725,8 @@ def _kobold_request(
         extra_headers: dict[str, str] | None = None,
         extra_body: dict[str, Any] | None = None,
 ):
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     logging.debug("KoboldAI (Native): Chat request starting...")
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('kobold_api', {})
@@ -786,7 +808,8 @@ def _kobold_request(
     final_prompt_string = "\n\n".join(filter(None, full_prompt_parts)).strip() # filter(None,...) removes empty strings
 
     headers = {'Content-Type': 'application/json'}
-    if current_api_key: headers['X-Api-Key'] = current_api_key # Some Kobold forks might use this
+    if current_api_key:
+        headers['X-Api-Key'] = current_api_key # Some Kobold forks might use this
     headers = merge_extra_headers(headers, {"extra_headers": extra_headers})
 
     payload: dict[str, Any] = {
@@ -800,13 +823,17 @@ def _kobold_request(
         # "stream": current_streaming, # Will be False due to above logic
     }
     # Add other params if they are not None
-    if current_stop_sequence is not None: payload['stop_sequence'] = current_stop_sequence # List of strings
-    if current_num_responses is not None: payload['n'] = current_num_responses # Number of responses
-    if current_seed is not None: payload['seed'] = current_seed
+    if current_stop_sequence is not None:
+        payload['stop_sequence'] = current_stop_sequence # List of strings
+    if current_num_responses is not None:
+        payload['n'] = current_num_responses # Number of responses
+    if current_seed is not None:
+        payload['seed'] = current_seed
     payload = merge_extra_body(payload, {"extra_body": extra_body})
 
     # Kobold specific params (can be added from cfg if needed and supported)
-    if cfg.get('rep_pen') is not None: payload['rep_pen'] = float(cfg['rep_pen'])
+    if cfg.get('rep_pen') is not None:
+        payload['rep_pen'] = float(cfg['rep_pen'])
     # Other kobold params: typical_p, tfs, top_a, etc. could be added from cfg
 
     logging.debug(
@@ -856,11 +883,11 @@ def _kobold_request(
                 provider="kobold",
                 message=f"Network error calling KoboldAI (Native): {e_http}",
                 status_code=503,
-            )
+            ) from e_http
         raise
     except (ValueError, KeyError, TypeError) as e_data:
         logging.error(f"KoboldAI (Native): Data or configuration error: {e_data}", exc_info=True)
-        raise ChatBadRequestError(provider="kobold", message=f"KoboldAI (Native) config/data error: {e_data}")
+        raise ChatBadRequestError(provider="kobold", message=f"KoboldAI (Native) config/data error: {e_data}") from e_data
 
 
 # https://github.com/oobabooga/text-generation-webui/wiki/12-%E2%80%90-OpenAI-API
@@ -903,7 +930,8 @@ def _ooba_request(
         if streaming is not None and streaming != stream:
             logging.warning("Oobabooga: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ooba_api', {})
 
@@ -934,7 +962,8 @@ def _ooba_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -1047,7 +1076,8 @@ def _tabbyapi_request(
         if streaming is not None and streaming != stream:
             logging.warning("TabbyAPI: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('tabby_api', {})
 
@@ -1083,7 +1113,8 @@ def _tabbyapi_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -1210,7 +1241,8 @@ def _vllm_request(
         if streaming is not None and streaming != stream:
             logging.warning("vLLM: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('vllm_api', {})
 
@@ -1248,7 +1280,8 @@ def _vllm_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -1290,7 +1323,8 @@ def _vllm_request(
             current_top_logprobs = int(current_top_logprobs)
     except _LOCAL_ADAPTERS_NONCRITICAL_EXCEPTIONS:
         logging.warning("vLLM: Failed to coerce top_logprobs='%s' to int; sending as-is", current_top_logprobs)
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     if custom_prompt_input:
         logging.info("vLLM: 'custom_prompt_input' received. Ensure incorporated if needed.")
 
@@ -1375,7 +1409,8 @@ def _aphrodite_request(
         if streaming is not None and streaming != stream:
             logging.warning("Aphrodite: Received both 'streaming' and 'stream'; preferring explicit 'stream' value")
         streaming = stream
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('aphrodite_api', {})
 
@@ -1414,8 +1449,10 @@ def _aphrodite_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
-    if isinstance(current_logprobs, str): current_logprobs = current_logprobs.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_logprobs, str):
+        current_logprobs = current_logprobs.lower() == "true"
     # Coerce numeric/string config values to correct types
     try:
         if isinstance(current_top_p, str):
@@ -1540,7 +1577,8 @@ def _ollama_request(
     # Harmonize system alias
     if (system_message is None) and (system is not None):
         system_message = system
-    if model and (model.lower() == "none" or model.strip() == ""): model = None
+    if model and (model.lower() == "none" or model.strip() == ""):
+        model = None
     loaded_config_data = app_config or load_settings()
     cfg = loaded_config_data.get('ollama_api', {})
 
@@ -1603,7 +1641,8 @@ def _ollama_request(
     api_retries = int(cfg.get('api_retries', 1))
     api_retry_delay = int(cfg.get('api_retry_delay', 1))
 
-    if isinstance(current_streaming, str): current_streaming = current_streaming.lower() == "true"
+    if isinstance(current_streaming, str):
+        current_streaming = current_streaming.lower() == "true"
     # Coerce numeric/string config values to correct types for Ollama's JSON schema
     try:
         if isinstance(current_top_p, str):

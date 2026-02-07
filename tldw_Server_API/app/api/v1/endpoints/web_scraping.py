@@ -52,7 +52,7 @@ async def get_scraping_service_status(
         return service.get_service_status()
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get scraping service status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/job/{job_id}")
@@ -74,7 +74,7 @@ async def get_scraping_job_status(
         return await service.get_job_status(job_id, current_user)
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get job status for {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.delete("/job/{job_id}")
@@ -96,7 +96,7 @@ async def cancel_scraping_job(
         return await service.cancel_job(job_id, current_user)
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to cancel job {job_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/service/initialize")
@@ -118,7 +118,7 @@ async def initialize_scraping_service(
         }
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to initialize scraping service: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/service/shutdown")
@@ -144,7 +144,7 @@ async def shutdown_scraping_service(
         }
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to shutdown scraping service: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/progress/{task_id}")
@@ -181,7 +181,7 @@ async def get_scraping_progress(
         raise
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get progress for task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/cookies/{domain}")
@@ -212,7 +212,7 @@ async def get_cookies_for_domain(
         }
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to get cookies for {domain}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/cookies/{domain}")
@@ -247,7 +247,7 @@ async def set_cookies_for_domain(
         }
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to set cookies for {domain}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/duplicates/check")
@@ -287,7 +287,7 @@ async def check_url_duplicate(
         }
     except _WEB_SCRAPING_ENDPOINT_EXCEPTIONS as e:
         logger.error(f"Failed to check duplicate for {url}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # Include this router in your main app

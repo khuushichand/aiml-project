@@ -451,7 +451,7 @@ async def quality_gate_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Quality gating module not available.",
-        )
+        ) from None
     except Exception as e:
         logger.error(f"Quality gate evaluation failed: {e}")
         raise HTTPException(
@@ -489,12 +489,12 @@ async def save_baseline_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Regression module not available.",
-        )
+        ) from None
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Baseline save failed: {e}")
         raise HTTPException(
@@ -538,12 +538,12 @@ async def check_regression_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Regression module not available.",
-        )
+        ) from None
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Regression check failed: {e}")
         raise HTTPException(
@@ -578,12 +578,12 @@ async def check_regression_post_endpoint(
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Regression module not available.",
-        )
+        ) from None
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except Exception as e:
         logger.error(f"Regression check failed: {e}")
         raise HTTPException(

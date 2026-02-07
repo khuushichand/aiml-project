@@ -259,7 +259,7 @@ async def submit_audio_job(
         get_ps_logger(request_id=rid, ps_component="endpoint", ps_job_kind="audio", traceparent=tp).error(
             "Failed to submit audio job: %s", e
         )
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit job")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to submit job") from e
 
 
 class AudioJob(BaseModel):
@@ -308,7 +308,7 @@ async def get_audio_job(
         logger.exception(
             f"Failed to fetch job: job_id={job_id}, user_id={getattr(current_user, 'id', None)}"
         )
-        raise HTTPException(status_code=500, detail="Failed to fetch job")
+        raise HTTPException(status_code=500, detail="Failed to fetch job") from None
 
 
 @router.get("/jobs/{job_id}/progress/stream", summary="Stream audio job progress (SSE)")
@@ -451,7 +451,7 @@ async def list_audio_jobs_admin(
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to list jobs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to list jobs")
+        raise HTTPException(status_code=500, detail="Failed to list jobs") from e
 
 
 class AudioJobsSummary(BaseModel):
@@ -485,7 +485,7 @@ async def summarize_audio_jobs_admin(
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to summarize jobs: {e}")
-        raise HTTPException(status_code=500, detail="Failed to summarize jobs")
+        raise HTTPException(status_code=500, detail="Failed to summarize jobs") from e
 
 
 class AudioJobsOwnerSummaryItem(BaseModel):
@@ -524,7 +524,7 @@ async def summary_by_owner_admin(
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to summarize by owner: {e}")
-        raise HTTPException(status_code=500, detail="Failed to summarize by owner")
+        raise HTTPException(status_code=500, detail="Failed to summarize by owner") from e
 
 
 class OwnerProcessingSummary(BaseModel):
@@ -592,7 +592,7 @@ async def owner_processing_summary(
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get owner processing summary: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get owner processing summary")
+        raise HTTPException(status_code=500, detail="Failed to get owner processing summary") from e
 
 
 # --- Admin: user tiers (audio) ---
@@ -620,7 +620,7 @@ async def get_user_tier_admin(user_id: int):
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to get user tier: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get user tier")
+        raise HTTPException(status_code=500, detail="Failed to get user tier") from e
 
 
 @router.put(
@@ -641,4 +641,4 @@ async def set_user_tier_admin(user_id: int, req: SetUserTierRequest):
         raise
     except _AUDIO_JOBS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Failed to set user tier: {e}")
-        raise HTTPException(status_code=500, detail="Failed to set user tier")
+        raise HTTPException(status_code=500, detail="Failed to set user tier") from e

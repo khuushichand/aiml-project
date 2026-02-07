@@ -14,6 +14,12 @@ from loguru import logger
 from tldw_Server_API.app.core.config import settings as app_settings
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
 
+try:
+    import redis as _redis_lib
+    _REDIS_EXCEPTIONS: tuple[type[Exception], ...] = (_redis_lib.RedisError,)
+except ImportError:
+    _REDIS_EXCEPTIONS = ()
+
 _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS = (
     OSError,
     ValueError,
@@ -24,7 +30,7 @@ _SANDBOX_STREAMS_NONCRITICAL_EXCEPTIONS = (
     ConnectionError,
     TimeoutError,
     json.JSONDecodeError,
-)
+) + _REDIS_EXCEPTIONS
 
 
 class RunStreamHub:

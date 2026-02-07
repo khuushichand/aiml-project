@@ -243,7 +243,7 @@ def _safe_compile_regex_impl(
         # Explicit timeout: pattern is too slow / vulnerable to ReDoS
         raise re.error(
             f"Regex pattern too slow: exceeded {MAX_REGEX_VALIDATE_TIME_MS}ms validation timeout"
-        )
+        ) from None
     except (TypeError, AttributeError, ValueError) as e:
         logger.warning(f"Regex test failed for pattern '{pattern[:50]}...': {e}")
         raise re.error(REGEX_SAFETY_TEST_FAILED_MSG.format(error=e)) from e

@@ -145,7 +145,7 @@ async def admin_rescan(
         await svc._rescan_once()  # type: ignore[attr-defined]
     except Exception as e:
         logger.warning(f"Admin rescan failed: {e}")
-        raise HTTPException(status_code=500, detail="Rescan failed")
+        raise HTTPException(status_code=500, detail="Rescan failed") from e
     jobs = 0
     try:
         jobs = len(svc._aps.get_jobs()) if getattr(svc, "_aps", None) else 0  # type: ignore[attr-defined]
@@ -412,4 +412,4 @@ def _validate_cron_or_422(cron: str, timezone: str | None) -> None:
             detail=(
                 f"Invalid cron or timezone. Timezone must be an IANA name. Details: {e}"
             ),
-        )
+        ) from e

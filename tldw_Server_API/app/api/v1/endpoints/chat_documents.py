@@ -400,7 +400,7 @@ async def generate_document(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The chat service provider is currently unavailable.",
-        )
+        ) from e
     except HTTPException:
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
@@ -408,7 +408,7 @@ async def generate_document(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected internal server error occurred.",
-        )
+        ) from e
 
 
 @router.get(
@@ -464,7 +464,7 @@ async def get_job_status(
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting job status: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.delete(
@@ -512,7 +512,7 @@ async def cancel_job(
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error cancelling job: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -551,7 +551,7 @@ async def list_generated_documents(
         )
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error listing generated documents: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -583,7 +583,7 @@ async def get_generated_document(
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting document {document_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.delete(
@@ -614,7 +614,7 @@ async def delete_generated_document(
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error deleting document {document_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.post(
@@ -663,7 +663,7 @@ async def save_prompt_config(
         raise
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error saving prompt config: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -716,7 +716,7 @@ async def get_prompt_config(
         )
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting prompt config: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.post(
@@ -761,7 +761,7 @@ async def bulk_generate_documents(
         )
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error creating bulk generation jobs: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
 
 
 @router.get(
@@ -828,4 +828,4 @@ async def get_generation_statistics(
         )
     except _CHAT_DOCS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting generation statistics: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e

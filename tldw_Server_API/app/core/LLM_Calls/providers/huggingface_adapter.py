@@ -237,7 +237,7 @@ class HuggingFaceAdapter(ChatProvider):
                     yield from finalize_stream(response=resp, done_already=seen_done)
             return
         except Exception as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
         return await asyncio.to_thread(self.chat, request, timeout=timeout)
@@ -263,4 +263,4 @@ class HuggingFaceAdapter(ChatProvider):
                 resp.raise_for_status()
                 return resp.json()
         except Exception as e:
-            raise self.normalize_error(e)
+            raise self.normalize_error(e) from e

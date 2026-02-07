@@ -283,7 +283,7 @@ async def create_registration_code(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create registration code",
-        )
+        ) from exc
 
 
 async def list_registration_codes(
@@ -401,7 +401,7 @@ async def list_registration_codes(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve registration codes",
-        )
+        ) from exc
 
 
 async def delete_registration_code(
@@ -443,4 +443,4 @@ async def delete_registration_code(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete registration code",
-        )
+        ) from exc

@@ -802,7 +802,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                     logger.debug(f"Rollback after failed execute() also failed: {rollback_exc}")
             logger.error(f"Query execution failed: {e}")
-            raise DatabaseError(f"PostgreSQL error: {e}")
+            raise DatabaseError(f"PostgreSQL error: {e}") from e
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
@@ -867,7 +867,7 @@ class PostgreSQLBackend(DatabaseBackend):
                 except _POSTGRES_BACKEND_NONCRITICAL_EXCEPTIONS as rollback_exc:  # noqa: BLE001
                     logger.debug(f"Rollback after failed execute_many() also failed: {rollback_exc}")
             logger.error(f"Batch execution failed: {e}")
-            raise DatabaseError(f"PostgreSQL error: {e}")
+            raise DatabaseError(f"PostgreSQL error: {e}") from e
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
@@ -896,7 +896,7 @@ class PostgreSQLBackend(DatabaseBackend):
             if not external_conn:
                 conn.rollback()
             logger.error(f"Schema creation failed: {e}")
-            raise DatabaseError(f"Failed to create schema: {e}")
+            raise DatabaseError(f"Failed to create schema: {e}") from e
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)
@@ -1029,7 +1029,7 @@ class PostgreSQLBackend(DatabaseBackend):
             if not external_conn:
                 conn.rollback()
             logger.error(f"FTS setup failed: {e}")
-            raise DatabaseError(f"Failed to create FTS: {e}")
+            raise DatabaseError(f"Failed to create FTS: {e}") from e
         finally:
             if not external_conn:
                 self.get_pool().return_connection(conn)

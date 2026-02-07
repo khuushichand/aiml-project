@@ -40,13 +40,13 @@ const getBudgetToneClass = (status: PromptPreviewSummary["budgetStatus"]) => {
   return "text-text-muted border-border/60 bg-surface2"
 }
 
-const SECTION_LABELS: Record<string, string> = {
-  preset: "Character preset",
-  author_note: "Author note",
-  message_steering: "Message steering",
-  greeting: "Greeting",
-  lorebook: "Lorebook",
-  world_book: "World book"
+const SECTION_I18N_KEYS: Record<string, string> = {
+  preset: "playground:section.preset",
+  author_note: "playground:section.author_note",
+  message_steering: "playground:section.message_steering",
+  greeting: "playground:section.greeting",
+  lorebook: "playground:section.lorebook",
+  world_book: "playground:section.world_book"
 }
 
 const toBudgetStatus = (
@@ -65,7 +65,7 @@ export const normalizePreviewPayload = (payload: any): PromptPreviewSummary => {
   const sections = sectionList.map((section: any) => {
     const key = String(section?.name || "unknown")
     const content = typeof section?.content === "string" ? section.content : ""
-    const label = SECTION_LABELS[key] || key.replace(/_/g, " ")
+    const label = key.replace(/_/g, " ")
     const tokens =
       typeof section?.tokens_effective === "number"
         ? section.tokens_effective
@@ -275,7 +275,11 @@ export const PromptAssemblyPreview: React.FC<Props> = ({
                             key={section.key}
                             className="border-t border-border/60 text-text"
                           >
-                            <td className="px-2 py-1">{section.label}</td>
+                            <td className="px-2 py-1">
+                              {SECTION_I18N_KEYS[section.key]
+                                ? t(SECTION_I18N_KEYS[section.key], { defaultValue: section.label })
+                                : section.label}
+                            </td>
                             <td className="px-2 py-1">
                               <span
                                 className={

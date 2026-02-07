@@ -4,7 +4,7 @@ export const normalizeWorkspacePath = (rawPath: string): string => {
     return ""
   }
 
-  let normalized = trimmed.replace(/[\\]+/g, "/")
+  let normalized = trimmed.replace(/\\/g, "/")
   const isWindowsRoot = /^[a-zA-Z]:\/$/.test(normalized)
 
   if (normalized.length > 1 && !isWindowsRoot) {

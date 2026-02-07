@@ -110,12 +110,12 @@ async def start_llamacpp_server_endpoint(
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except (ModelNotFoundError, ServerError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error starting Llama.cpp server: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.post("/llamacpp/stop_server", summary="Stop Llama.cpp Server")
@@ -130,12 +130,12 @@ async def stop_llamacpp_server_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except ServerError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error stopping Llama.cpp server: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/status", summary="Get Llama.cpp Server Status")
@@ -150,10 +150,10 @@ async def get_llamacpp_status_endpoint(llm_manager: LLMInferenceManager = Depend
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp server status: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/metrics", summary="Get Llama.cpp Metrics")
@@ -164,10 +164,10 @@ async def get_llamacpp_metrics_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llama.cpp metrics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamafile/metrics", summary="Get Llamafile Metrics")
@@ -183,7 +183,7 @@ async def get_llamafile_metrics_endpoint(llm_manager: LLMInferenceManager = Depe
         raise
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error getting Llamafile metrics: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 @router.get("/llamacpp/models", summary="List available Llama.cpp models")
@@ -202,10 +202,10 @@ async def list_llamacpp_models_endpoint(llm_manager: LLMInferenceManager = Depen
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error listing Llama.cpp models: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 
 from tldw_Server_API.app.api.v1.schemas.llamacpp_schemas import LlamaCppInferenceRequest
@@ -250,12 +250,12 @@ async def run_llamacpp_inference_endpoint(
     except HTTPException:
         raise
     except InferenceError as e:
-        raise _llamacpp_unavailable(str(e))
+        raise _llamacpp_unavailable(str(e)) from e
     except ServerError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         llm_manager.logger.error(f"Unexpected error during Llama.cpp inference: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.") from e
 
 # --- Llama.cpp Reranker (GGUF embeddings) ---
 
@@ -326,7 +326,7 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
         )
         from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reranking modules unavailable: {e}")
+        raise HTTPException(status_code=500, detail=f"Reranking modules unavailable: {e}") from e
 
     # Build documents from passages
     documents: list[Document] = []
@@ -375,7 +375,7 @@ async def llamacpp_reranker_endpoint(payload: LlamaCppRerankRequest, current_use
         if isinstance(scored, list) and cfg.top_k:
             scored = scored[: cfg.top_k]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reranking failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Reranking failed: {e}") from e
 
     # Convert results
     # Map back to original order indices
@@ -494,7 +494,7 @@ async def public_reranking_endpoint(payload: PublicRerankRequest, current_user: 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Public reranking failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Public reranking failed: {e}") from e
 
 #
 # End of llamacpp.py

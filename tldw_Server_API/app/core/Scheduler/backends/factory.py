@@ -52,7 +52,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
             raise BackendError(
                 "PostgreSQL backend requires asyncpg. "
                 "Install with: pip install asyncpg"
-            )
+            ) from None
 
         from .postgresql_backend import PostgreSQLBackend
         return PostgreSQLBackend(config)
@@ -68,7 +68,7 @@ def create_backend(config: Optional[SchedulerConfig] = None) -> QueueBackend:
             raise BackendError(
                 "SQLite backend requires aiosqlite. "
                 "Install with: pip install aiosqlite"
-            )
+            ) from None
 
         from .sqlite_backend import SQLiteBackend
         return SQLiteBackend(config)

@@ -129,7 +129,7 @@ class PayloadService:
 
         except Exception as e:
             logger.error(f"Failed to store payload for task {task_id}: {e}")
-            raise PayloadError(f"Payload storage failed: {e}")
+            raise PayloadError(f"Payload storage failed: {e}") from e
 
     async def load_payload(self, payload_ref: str) -> Any:
         """
@@ -167,7 +167,7 @@ class PayloadService:
 
         except Exception as e:
             logger.error(f"Failed to load payload {payload_ref}: {e}")
-            raise PayloadError(f"Payload load failed: {e}")
+            raise PayloadError(f"Payload load failed: {e}") from e
 
     async def delete_payload(self, payload_ref: str) -> bool:
         """

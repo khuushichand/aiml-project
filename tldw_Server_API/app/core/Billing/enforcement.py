@@ -754,7 +754,7 @@ async def create_billing_rg_request(
     try:
         from tldw_Server_API.app.core.Resource_Governance.governor import RGRequest
     except ImportError:
-        raise RuntimeError("Resource Governor not available")
+        raise RuntimeError("Resource Governor not available") from None
 
     return RGRequest(
         entity=f"org:{org_id}",

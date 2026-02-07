@@ -264,6 +264,122 @@ def _select_sources_for_scope(db: WatchlistsDatabase, scope: dict[str, Any]) -> 
     return list(selected.values())
 
 
+async def _maybe_auto_generate_output(
+    *,
+    db: WatchlistsDatabase,
+    collections_db: CollectionsDatabase,
+    user_id: int,
+    run,
+    job,
+    job_output_prefs: dict[str, Any],
+    stats: dict[str, Any],
+) -> int | None:
+    """Generate a briefing output automatically if configured in job output_prefs.
+
+    Returns the output artifact ID, or None if skipped.
+    """
+    auto_cfg = job_output_prefs.get("auto_output")
+    if not isinstance(auto_cfg, dict) or not auto_cfg.get("enabled"):
+        return None
+    if stats.get("items_ingested", 0) <= 0:
+        return None
+
+    # Lazy imports to avoid circular dependencies
+    from tldw_Server_API.app.core.Watchlists import template_store
+    from tldw_Server_API.app.services.outputs_service import (
+        _build_output_filename,
+        _outputs_dir_for_user,
+        _resolve_output_path_for_user,
+        render_output_template,
+    )
+
+    items_rows, _ = db.list_items(run_id=run.id, status="ingested", limit=1000, offset=0)
+    if not items_rows:
+        return None
+
+    output_type = str(auto_cfg.get("type", "briefing_markdown"))
+    template_name = auto_cfg.get("template_name")
+    if not template_name:
+        template_defaults = job_output_prefs.get("template") or {}
+        template_name = template_defaults.get("default_name")
+
+    # Resolve template content
+    template_content: str | None = None
+    template_format = "md"
+    if template_name:
+        try:
+            tpl = template_store.load_template(str(template_name))
+            template_content = tpl.content
+            template_format = tpl.format or "md"
+        except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+            logger.debug(f"auto-output: template {template_name!r} not found, using default")
+
+    # Build context (simplified version of endpoint's _build_output_context)
+    job_name = getattr(job, "name", None) or f"Job-{getattr(job, 'id', '?')}"
+    title = f"{job_name}-Auto-{run.id}"
+    items_payload: list[dict[str, Any]] = []
+    for itm in items_rows:
+        items_payload.append({
+            "title": getattr(itm, "title", None) or "Untitled",
+            "url": getattr(itm, "url", None) or "",
+            "summary": getattr(itm, "summary", None) or "",
+            "published_at": getattr(itm, "published_at", None) or "",
+            "tags": getattr(itm, "tags_json", None) or "[]",
+        })
+
+    if template_content:
+        context = {
+            "title": title,
+            "generated_at": _utcnow_iso(),
+            "items": items_payload,
+            "item_count": len(items_payload),
+        }
+        rendered = render_output_template(template_content, context)
+    else:
+        # Default markdown briefing
+        lines = [f"# {title}", ""]
+        for idx, itm in enumerate(items_payload, 1):
+            item_title = itm.get("title") or "Untitled"
+            item_url = itm.get("url") or ""
+            item_summary = itm.get("summary") or ""
+            if item_url:
+                lines.append(f"{idx}. [{item_title}]({item_url})")
+            else:
+                lines.append(f"{idx}. {item_title}")
+            if item_summary:
+                lines.append(f"   {item_summary[:200]}")
+            lines.append("")
+        rendered = "\n".join(lines)
+
+    # Write file
+    out_dir = _outputs_dir_for_user(user_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = _build_output_filename(title, "auto", ts, template_format)
+    path = _resolve_output_path_for_user(user_id, filename)
+    path.write_text(rendered, encoding="utf-8")
+
+    # Persist artifact
+    metadata = {
+        "item_count": len(items_payload),
+        "format": template_format,
+        "type": output_type,
+        "origin": "auto_output",
+        "run_id": run.id,
+        "job_id": getattr(job, "id", None),
+    }
+    artifact = collections_db.create_output_artifact(
+        type_=output_type,
+        title=title,
+        format_=template_format,
+        storage_path=filename,
+        metadata_json=json.dumps(metadata),
+        job_id=getattr(job, "id", None),
+        run_id=run.id,
+    )
+    return artifact.id
+
+
 async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
     """Run the watchlist fetch→ingest pipeline for this user/job.
 
@@ -1145,4 +1261,21 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
             _maybe_promote_feed_schedule(db=db, job=job, job_output_prefs=job_output_prefs)
     except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
         logger.debug(f"collections schedule auto-promote failed for job {job_id}: {exc}")
+
+    # Auto-generate output if configured
+    try:
+        auto_output_id = await _maybe_auto_generate_output(
+            db=db,
+            collections_db=collections_db,
+            user_id=user_id,
+            run=run,
+            job=job,
+            job_output_prefs=job_output_prefs,
+            stats=stats,
+        )
+        if auto_output_id:
+            stats["auto_output_id"] = auto_output_id
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS as exc:
+        logger.debug(f"auto-output generation failed for run {run.id}: {exc}")
+
     return {"run_id": run.id, **stats}

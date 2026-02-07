@@ -92,7 +92,7 @@ async def list_benchmarks():
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list benchmarks: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/{benchmark_name}/info", response_model=BenchmarkInfoResponse)
@@ -126,7 +126,7 @@ async def get_benchmark_info(benchmark_name: str):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get benchmark info: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/{benchmark_name}/samples", response_model=BenchmarkSampleResponse)
@@ -176,7 +176,7 @@ async def get_benchmark_samples(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get samples: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/{benchmark_name}/run", response_model=BenchmarkRunResponse)
@@ -337,7 +337,7 @@ async def run_benchmark(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to run benchmark: {str(e)}"
-        )
+        ) from e
 
 
 # Special endpoint for SimpleQA with its grading system
@@ -375,4 +375,4 @@ async def evaluate_simpleqa(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Evaluation failed: {str(e)}"
-        )
+        ) from e

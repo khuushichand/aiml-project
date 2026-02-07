@@ -131,7 +131,7 @@ def _prepare_character_data_for_db_storage(
                         )
                     else:
                         logger.error("Invalid image_base64 data for character: {}", exc)
-                        raise InputError(f"Invalid image_base64 data: {exc}")
+                        raise InputError(f"Invalid image_base64 data: {exc}") from exc
         else:
             db_data["image"] = None
     elif not is_update and "image" not in db_data:

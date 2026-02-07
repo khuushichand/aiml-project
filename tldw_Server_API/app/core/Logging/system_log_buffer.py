@@ -143,7 +143,7 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                     break
                 except OSError:
                     if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s") from None
                     time.sleep(0.05)
         else:
             while True:
@@ -159,7 +159,7 @@ def _log_file_lock(timeout: float = _LOG_FILE_LOCK_TIMEOUT):
                     except (OSError, FileNotFoundError):
                         pass
                     if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s")
+                        raise RuntimeError(f"Failed to acquire system log lock within {timeout}s") from None
                     time.sleep(0.05)
         yield
     finally:

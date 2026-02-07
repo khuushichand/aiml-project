@@ -740,7 +740,7 @@ async def patch_metadata(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         if body.new_version:
             with db.transaction():
@@ -859,7 +859,7 @@ async def put_version_metadata(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         with db.transaction() as conn:
             update_version_safe_metadata_in_transaction(
@@ -975,7 +975,7 @@ async def create_or_update_version_advanced(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="safe_metadata is not JSON-serializable",
-            )
+            ) from None
 
         if body.new_version:
             content = (

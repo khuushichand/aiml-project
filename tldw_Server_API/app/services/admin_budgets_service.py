@@ -350,7 +350,7 @@ async def list_budgets(
         )
     except Exception as exc:
         logger.error(f"Failed to list org budgets: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to list org budgets")
+        raise HTTPException(status_code=500, detail="Failed to list org budgets") from exc
 
 
 async def upsert_budget(

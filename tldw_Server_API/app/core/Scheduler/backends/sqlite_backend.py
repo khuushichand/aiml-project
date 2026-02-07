@@ -126,7 +126,7 @@ class SQLiteBackend(QueueBackend):
 
         except Exception as e:
             logger.error(f"Failed to connect to SQLite: {e}")
-            raise ConnectionError(f"SQLite connection failed: {e}")
+            raise ConnectionError(f"SQLite connection failed: {e}") from e
 
     async def disconnect(self) -> None:
         """Close all database connections"""
@@ -440,7 +440,7 @@ class SQLiteBackend(QueueBackend):
 
             except Exception as e:
                 await self._connection.rollback()
-                raise TransactionError(f"Dequeue failed: {e}")
+                raise TransactionError(f"Dequeue failed: {e}") from e
 
     async def get_ready_tasks(self, queue_name: Optional[str] = None) -> list[str]:
         """
@@ -812,7 +812,7 @@ class SQLiteBackend(QueueBackend):
             except Exception as e:
                 await self._connection.rollback()
                 logger.error(f"Failed to reclaim expired leases: {e}")
-                raise TransactionError(f"Lease reclamation failed: {e}")
+                raise TransactionError(f"Lease reclamation failed: {e}") from e
 
     # Leader election (TTL-based) using service_leaders table
 

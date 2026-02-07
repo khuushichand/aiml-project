@@ -206,9 +206,9 @@ def _zai_request(
             raise_chat_error_from_http("zai", e)
         if is_network_error(e):
             logging.error(f"Z.AI RequestException: {e}", exc_info=True)
-            raise ChatProviderError(provider="zai", message=f"Network error: {e}", status_code=504)
+            raise ChatProviderError(provider="zai", message=f"Network error: {e}", status_code=504) from e
         logging.error(f"Z.AI: Unexpected error in chat_with_zai: {e}", exc_info=True)
-        raise ChatProviderError(provider="zai", message=f"Unexpected error: {e}")
+        raise ChatProviderError(provider="zai", message=f"Unexpected error: {e}") from e
 
 
 class ZaiAdapter(ChatProvider):

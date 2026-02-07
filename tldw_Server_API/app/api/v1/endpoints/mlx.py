@@ -31,12 +31,12 @@ async def load_mlx_model(
         status = registry.load(model_path=model_path, overrides=overrides)
         return status
     except ChatBadRequestError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except ChatProviderError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except Exception as e:
         logger.error(f"Unexpected MLX load failure: {e}")
-        raise HTTPException(status_code=500, detail="MLX load failed unexpectedly")
+        raise HTTPException(status_code=500, detail="MLX load failed unexpectedly") from e
 
 
 @router.post(
@@ -52,7 +52,7 @@ async def unload_mlx_model(
         return registry.unload()
     except Exception as e:
         logger.error(f"Unexpected MLX unload failure: {e}")
-        raise HTTPException(status_code=500, detail="MLX unload failed unexpectedly")
+        raise HTTPException(status_code=500, detail="MLX unload failed unexpectedly") from e
 
 
 @router.get(
@@ -66,4 +66,4 @@ async def get_mlx_status():
         return registry.status()
     except Exception as e:
         logger.error(f"Unexpected MLX status failure: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get MLX status")
+        raise HTTPException(status_code=500, detail="Failed to get MLX status") from e

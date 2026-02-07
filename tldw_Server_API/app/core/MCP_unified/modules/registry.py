@@ -394,7 +394,7 @@ class ModuleRegistry:
 
         # Shutdown modules concurrently
         tasks = []
-        for module_id, registration in self._modules.items():
+        for _module_id, registration in self._modules.items():
             if registration.module_instance:
                 tasks.append(registration.module_instance.shutdown())
 

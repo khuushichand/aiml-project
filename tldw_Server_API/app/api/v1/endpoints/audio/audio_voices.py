@@ -72,7 +72,7 @@ async def upload_voice(
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice upload is not available in this build"
-        )
+        ) from None
     except VoiceQuotaExceededError as e:
         logger.warning(f"Voice quota exceeded: {e}", exc_info=True)
         raise HTTPException(
@@ -87,7 +87,7 @@ async def upload_voice(
         ) from e
     except Exception as e:
         logger.error(f"Voice upload error: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to upload voice sample") from e
 
 
 @router.post("/voices/encode", summary="Encode stored voice reference for a provider")
@@ -121,7 +121,7 @@ async def encode_voice_reference(
         ) from e
     except Exception as e:
         logger.error(f"Voice encode error: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to encode voice reference")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to encode voice reference") from e
 
 
 @router.get("/voices", summary="List user's custom voices")
@@ -141,7 +141,7 @@ async def list_voices(request: Request, current_user: User = Depends(get_request
         return {"voices": [], "count": 0}
     except Exception as e:
         logger.error(f"Error listing voices: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list voices")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list voices") from e
 
 
 @router.get("/voices/{voice_id}", summary="Get voice details")
@@ -165,10 +165,10 @@ async def get_voice_details(
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available")
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available") from None
     except Exception as e:
         logger.error(f"Error getting voice details: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get voice details")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get voice details") from e
 
 
 @router.delete("/voices/{voice_id}", summary="Delete a custom voice")
@@ -194,10 +194,10 @@ async def delete_voice(
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available")
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice management not available") from None
     except Exception as e:
         logger.error(f"Error deleting voice: {e}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete voice")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to delete voice") from e
 
 
 @router.post("/voices/{voice_id}/preview", summary="Generate voice preview")
@@ -243,9 +243,9 @@ async def preview_voice(
     except HTTPException:
         raise
     except ImportError:
-        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice preview not available")
+        raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Custom voice preview not available") from None
     except Exception as e:
         logger.error(f"Voice preview error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate voice preview"
-        )
+        ) from e

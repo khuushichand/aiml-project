@@ -3801,7 +3801,7 @@ def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
             return parse_chromium_bookmarks(json_data)
         except json.JSONDecodeError:
             logging.error("Failed to parse JSON. Ensure the file is a valid Chromium bookmarks JSON file.")
-            raise ValueError("Invalid JSON format for Chromium bookmarks.")
+            raise ValueError("Invalid JSON format for Chromium bookmarks.") from None
     elif ext in ['.html', '.htm']:
         # Parse as HTML (Firefox)
         try:
@@ -3810,7 +3810,7 @@ def load_bookmarks(file_path: str) -> dict[str, Union[str, list[str]]]:
             return parse_firefox_bookmarks(html_content)
         except _ARTICLE_EXTRACTOR_NONCRITICAL_EXCEPTIONS as e:
             logging.error(f"Failed to parse HTML bookmarks: {e}")
-            raise ValueError(f"Failed to parse HTML bookmarks: {e}")
+            raise ValueError(f"Failed to parse HTML bookmarks: {e}") from e
     else:
         logging.error("Unsupported file format. Please provide a JSON (Chrome/Edge) or HTML (Firefox) bookmarks file.")
         raise ValueError("Unsupported file format for bookmarks.")
@@ -4179,7 +4179,7 @@ async def recursive_scrape(
         if progress_callback:
             progress_callback(f"Scraping completed. Total pages scraped: {pages_scraped}")
 
-        return scraped_articles
+    return scraped_articles
 
 async def scrape_article_async(context, url: str) -> dict[str, Any]:
     page = await context.new_page()

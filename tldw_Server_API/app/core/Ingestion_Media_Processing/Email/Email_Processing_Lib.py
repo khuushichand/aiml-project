@@ -961,7 +961,8 @@ def process_pst_bytes(
                             for v in vals or []:
                                 s = (v or "").strip().lower()
                                 if s and s not in seen:
-                                    seen.add(s); uniq.append(s)
+                                    seen.add(s)
+                                    uniq.append(s)
                             return uniq
                         recipients_to = _norm_list(recipients_to)
                         recipients_cc = _norm_list(recipients_cc)

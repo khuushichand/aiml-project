@@ -112,7 +112,7 @@ async def create_embeddings_abtest(
     try:
         validate_abtest_policy(cfg, user=current_user)
     except EmbeddingsABTestPolicyError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     test_id = db.create_abtest(name=payload.name, config=cfg.model_dump(), created_by=user_ctx)
     for idx, arm in enumerate(payload.config.arms):
         db.upsert_abtest_arm(
@@ -189,7 +189,7 @@ async def run_embeddings_abtest(
                 stats_json={"error": str(exc), "policy": exc.details, "status_code": exc.status_code},
                 created_by=user_ctx,
             )
-        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     # In testing mode, execute synchronously to make polling deterministic
     testing = False
@@ -259,7 +259,7 @@ async def run_embeddings_abtest(
         )
     except _EMB_ABTEST_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"Failed to enqueue A/B test job {test_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to enqueue A/B test job")
+        raise HTTPException(status_code=500, detail="Failed to enqueue A/B test job") from exc
 
     logger.info(f"A/B test enqueued via Jobs: {test_id}")
     try:

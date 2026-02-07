@@ -371,7 +371,7 @@ def label_choice(ctx, question, labels, context, expected, provider, model, api_
                 import json as _json
                 mapping_dict = _json.loads(mapping)
             except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-                raise click.ClickException(f"Invalid mapping JSON: {e}")
+                raise click.ClickException(f"Invalid mapping JSON: {e}") from e
 
         allowed = [str(l).strip() for l in labels]
         allowed_up = [l.upper() for l in allowed]
@@ -499,7 +499,7 @@ def nli_factcheck(ctx, claim, evidence, labels, expected, provider, model, api_k
                 import json as _json
                 mapping_dict = _json.loads(mapping)
             except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-                raise click.ClickException(f"Invalid mapping JSON: {e}")
+                raise click.ClickException(f"Invalid mapping JSON: {e}") from e
 
         allowed = [str(l).strip() for l in labels] if labels else ["SUPPORTED", "REFUTED", "NEI"]
         allowed_up = [l.upper() for l in allowed]
@@ -621,7 +621,7 @@ def _load_text_content(input_str: str) -> str:
         try:
             return file_path.read_text(encoding='utf-8')
         except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-            raise click.ClickException(f"Failed to read file {file_path}: {e}")
+            raise click.ClickException(f"Failed to read file {file_path}: {e}") from e
     else:
         return input_str
 
@@ -787,12 +787,12 @@ def _load_batch_input(input_file: Path) -> list[dict[str, Any]]:
                 try:
                     batch_data.append(json.loads(line))
                 except json.JSONDecodeError as e:
-                    raise click.ClickException(f"Invalid JSON on line {line_num}: {e}")
+                    raise click.ClickException(f"Invalid JSON on line {line_num}: {e}") from e
 
         return batch_data
 
     except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-        raise click.ClickException(f"Failed to load batch input file: {e}")
+        raise click.ClickException(f"Failed to load batch input file: {e}") from e
 
 
 def _run_batch_evaluation(batch_data: list[dict[str, Any]], default_provider: str,
@@ -851,7 +851,7 @@ def _load_items_file(path: Path) -> list[dict[str, Any]]:
                 items.append(json.loads(line))
             return items
     except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-        raise click.ClickException(f"Failed to load items file {path}: {e}")
+        raise click.ClickException(f"Failed to load items file {path}: {e}") from e
 
 
 def _run_single_evaluation(eval_spec: dict[str, Any], default_provider: str,
@@ -896,7 +896,7 @@ def _save_batch_results(results: list[dict[str, Any]], output_file: Path):
             json.dump(results, f, indent=2, default=str)
 
     except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-        raise click.ClickException(f"Failed to save results to {output_file}: {e}")
+        raise click.ClickException(f"Failed to save results to {output_file}: {e}") from e
 
 
 def _display_batch_summary(results: list[dict[str, Any]]):
@@ -982,7 +982,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
                     if not isinstance(gts, list):
                         raise click.ClickException('ground-truths-file must be a JSON array of strings')
                 except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-                    raise click.ClickException(f'Failed to read ground-truths-file: {e}')
+                    raise click.ClickException(f'Failed to read ground-truths-file: {e}') from e
             gt_pages_all = None
             if ground_truths_pages_file:
                 try:
@@ -990,7 +990,7 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
                     if not isinstance(gt_pages_all, list):
                         gt_pages_all = None
                 except _EVAL_CLI_NONCRITICAL_EXCEPTIONS as e:
-                    raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}')
+                    raise click.ClickException(f'Failed to read ground-truths-pages-file: {e}') from e
 
             for idx, p in enumerate(pdfs):
                 b = Path(p).read_bytes()
@@ -1003,11 +1003,16 @@ def ocr_eval(ctx, items_file, pdfs, ground_truths_file, ground_truths_pages_file
             raise click.ClickException('Provide either --items-file or --pdf inputs')
 
         thresholds = {}
-        if max_cer is not None: thresholds['max_cer'] = max_cer
-        if max_wer is not None: thresholds['max_wer'] = max_wer
-        if min_coverage is not None: thresholds['min_coverage'] = min_coverage
-        if min_page_coverage is not None: thresholds['min_page_coverage'] = min_page_coverage
-        if not thresholds: thresholds = None
+        if max_cer is not None:
+            thresholds['max_cer'] = max_cer
+        if max_wer is not None:
+            thresholds['max_wer'] = max_wer
+        if min_coverage is not None:
+            thresholds['min_coverage'] = min_coverage
+        if min_page_coverage is not None:
+            thresholds['min_page_coverage'] = min_page_coverage
+        if not thresholds:
+            thresholds = None
 
         ocr_options = {
             'enable_ocr': True,

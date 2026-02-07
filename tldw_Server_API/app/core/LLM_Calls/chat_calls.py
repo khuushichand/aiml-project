@@ -672,9 +672,9 @@ def get_openai_embeddings(
             logging.error(f"OpenAI Embeddings (single): Error making API request: {str(e)}", exc_info=True)
             raise ValueError(
                 f"OpenAI Embeddings (single): Error making API request: {str(e)}"
-            )
+            ) from e
         logging.error(f"OpenAI Embeddings (single): Unexpected error: {str(e)}", exc_info=True)
-        raise ValueError(f"OpenAI Embeddings (single): Unexpected error occurred: {str(e)}")
+        raise ValueError(f"OpenAI Embeddings (single): Unexpected error occurred: {str(e)}") from e
 
 
 # NEW BATCH FUNCTION
@@ -798,7 +798,7 @@ def get_openai_embeddings_batch(
             logging.error(f"OpenAI Embeddings (batch): RequestException: {str(e)}", exc_info=True)
             raise
         logging.error(f"OpenAI Embeddings (batch): Unexpected error: {str(e)}", exc_info=True)
-        raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}")
+        raise ValueError(f"OpenAI Embeddings (batch): Unexpected error occurred: {str(e)}") from e
 
 
 async def chat_with_openai_async(

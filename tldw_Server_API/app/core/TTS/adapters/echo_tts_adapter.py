@@ -450,7 +450,7 @@ class EchoTTSAdapter(TTSAdapter):
                     "Echo-TTS module path not found",
                     provider=self.PROVIDER_KEY,
                     details={"module_path": str(module_dir)},
-                )
+                ) from None
             module_path_str = str(module_dir)
             if module_path_str not in sys.path:
                 sys.path.insert(0, module_path_str)

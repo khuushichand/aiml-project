@@ -282,7 +282,7 @@ class VoiceFileValidator:
             base_path = base_path.resolve()
             full_path.relative_to(base_path)
         except (ValueError, RuntimeError) as e:
-            raise VoiceProcessingError(f"Invalid file path: {e}")
+            raise VoiceProcessingError(f"Invalid file path: {e}") from e
 
         return full_path
 
@@ -391,7 +391,7 @@ class VoiceManager:
         try:
             full_path.relative_to(metadata_dir.resolve())
         except ValueError as e:
-            raise VoiceProcessingError(f"Invalid metadata path: {e}")
+            raise VoiceProcessingError(f"Invalid metadata path: {e}") from e
 
         return full_path
 
@@ -764,7 +764,7 @@ class VoiceManager:
             if "processed_path" in locals() and processed_path.exists():
                 processed_path.unlink()
             logger.error(f"Failed to upload voice: {e}")
-            raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}")
+            raise VoiceProcessingError(f"Failed to process voice upload: {str(e)}") from e
 
     async def encode_voice_reference(
         self,

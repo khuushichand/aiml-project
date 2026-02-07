@@ -125,7 +125,7 @@ async def create_evaluation(
             message=f"Failed to create evaluation: {sanitize_error_message(e, 'evaluation creation')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.get(
@@ -165,7 +165,7 @@ async def list_evaluations(
             message=f"Failed to list evaluations: {sanitize_error_message(e, 'listing evaluations')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.get(
@@ -196,7 +196,7 @@ async def get_evaluation(
             message=f"Failed to get evaluation: {sanitize_error_message(e, 'retrieving evaluation')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.patch(
@@ -230,7 +230,7 @@ async def update_evaluation(
             message=f"Failed to update evaluation: {sanitize_error_message(e, 'updating evaluation')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.delete(
@@ -262,7 +262,7 @@ async def delete_evaluation(
             message=f"Failed to delete evaluation: {sanitize_error_message(e, 'deleting evaluation')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.post(
@@ -338,7 +338,7 @@ async def create_run(
             message=f"Failed to create run: {sanitize_error_message(e, 'creating run')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.get(
@@ -366,7 +366,7 @@ async def list_runs(
             message=f"Failed to list runs: {sanitize_error_message(e, 'listing runs')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.get(
@@ -397,7 +397,7 @@ async def get_run(
             message=f"Failed to get run: {sanitize_error_message(e, 'retrieving run')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e
 
 
 @crud_router.post(
@@ -427,4 +427,4 @@ async def cancel_run(
             message=f"Failed to cancel run: {sanitize_error_message(e, 'cancelling run')}",
             error_type="server_error",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+        ) from e

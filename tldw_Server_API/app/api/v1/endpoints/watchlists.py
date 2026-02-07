@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Watchlists API (sources, groups/tags, jobs, runs)
 
@@ -9,8 +7,10 @@ Implements minimal CRUD and semantics per PRD:
 
 Scraping and scheduling are stubbed; runs are created on trigger.
 """
+from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import io
 import json
@@ -29,7 +29,7 @@ from fastapi import (
     File,
     Form,
     HTTPException,
-    Path,
+    Path,  # noqa: F811
     Query,
     Request,
     UploadFile,
@@ -113,9 +113,8 @@ except (ImportError, OSError):
             conversation_id: int | None = None,
         ) -> Any:
             return type("_Result", (), {"channel": "chatbook", "status": "skipped", "details": {"reason": "notifications_unavailable"}})()
-import contextlib
 
-from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (
+from tldw_Server_API.app.api.v1.schemas.watchlists_schemas import (  # noqa: E402
     Group,
     GroupCreateRequest,
     GroupsListResponse,
@@ -283,6 +282,14 @@ def _deep_merge_dict(base: dict[str, Any] | None, override: dict[str, Any] | Non
     return result
 
 
+def _get_group_ids(db, source_id: int) -> list[int]:
+    """Fetch group IDs for a source, returning [] on failure."""
+    try:
+        return db.get_source_group_ids(source_id)
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return []
+
+
 def _is_truthy_env(raw: str | None) -> bool:
     if raw is None:
         return False
@@ -360,7 +367,7 @@ def _resolve_watchlists_db_for_target_user(
         return db
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"watchlists.resolve_target_db failed for user={target_user_id}: {exc}")
-        raise HTTPException(status_code=500, detail="watchlists_db_unavailable")
+        raise HTTPException(status_code=500, detail="watchlists_db_unavailable") from exc
 
 
 def _build_email_bodies(content: str | None, fmt: str, title: str, preferred: str = "auto") -> tuple[str, str]:
@@ -787,7 +794,7 @@ def _validate_group_ids(db: WatchlistsDatabase, group_ids: list[int] | None) -> 
             gid_int = int(gid)
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.debug(f"watchlists.group_ids: invalid group id {gid}: {exc}")
-            raise HTTPException(status_code=400, detail="group_validation_failed")
+            raise HTTPException(status_code=400, detail="group_validation_failed") from exc
         try:
             db.get_group(gid_int)
         except KeyError:
@@ -834,9 +841,9 @@ async def _resolve_watchlists_ws_user_id(
         except HTTPException:
             raise
         except (InvalidTokenError, TokenExpiredError):
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
         sub = payload.get("user_id") or payload.get("sub")
         if sub is None:
@@ -844,7 +851,7 @@ async def _resolve_watchlists_ws_user_id(
         try:
             return int(sub)
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
     if api_key:
         settings = get_settings()
@@ -1017,7 +1024,7 @@ async def create_source(
         raise
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_source failed: {e}")
-        raise HTTPException(status_code=400, detail="source_create_failed")
+        raise HTTPException(status_code=400, detail="source_create_failed") from e
     return Source(
         id=row.id,
         name=row.name,
@@ -1025,6 +1032,7 @@ async def create_source(
         source_type=row.source_type,  # type: ignore[assignment]
         active=bool(row.active),
         tags=row.tags,
+        group_ids=_get_group_ids(db, row.id),
         settings=(json.loads(row.settings_json) if row.settings_json else None),
         last_scraped_at=row.last_scraped_at,
         status=row.status,
@@ -1037,6 +1045,7 @@ async def create_source(
 async def list_sources(
     q: str | None = Query(None),
     tags: list[str] | None = Query(None, description="Filter by tag names (AND semantics)"),
+    groups: list[int] | None = Query(None, description="Filter by group IDs (OR semantics)"),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
@@ -1044,7 +1053,13 @@ async def list_sources(
 ):
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_sources(q=q, tag_names=tags, limit=limit, offset=offset)
+    rows, total = db.list_sources(q=q, tag_names=tags, limit=limit, offset=offset, group_ids=groups)
+    # Batch-fetch group IDs to avoid N+1
+    source_ids = [int(r.id) for r in rows]
+    try:
+        groups_map = db.get_source_group_ids_batch(source_ids) if source_ids else {}
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        groups_map = {}
     items: list[Source] = []
     for r in rows:
         items.append(
@@ -1055,6 +1070,7 @@ async def list_sources(
                 source_type=r.source_type,  # type: ignore[assignment]
                 active=bool(r.active),
                 tags=r.tags,
+                group_ids=groups_map.get(int(r.id), []),
                 settings=(json.loads(r.settings_json) if r.settings_json else None),
                 last_scraped_at=r.last_scraped_at,
                 status=r.status,
@@ -1162,7 +1178,7 @@ async def get_source(
     try:
         r = db.get_source(source_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+        raise HTTPException(status_code=404, detail="source_not_found") from None
     return Source(
         id=r.id,
         name=r.name,
@@ -1170,6 +1186,7 @@ async def get_source(
         source_type=r.source_type,  # type: ignore[assignment]
         active=bool(r.active),
         tags=r.tags,
+        group_ids=_get_group_ids(db, r.id),
         settings=(json.loads(r.settings_json) if r.settings_json else None),
         last_scraped_at=r.last_scraped_at,
         status=r.status,
@@ -1204,7 +1221,7 @@ async def get_source_seen_stats(
     try:
         src = target_db.get_source(source_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+        raise HTTPException(status_code=404, detail="source_not_found") from None
     stats = target_db.get_seen_item_stats(source_id)
     recent_keys: list[str] = []
     if keys_limit > 0:
@@ -1244,7 +1261,7 @@ async def clear_source_seen_state(
     try:
         target_db.get_source(source_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+        raise HTTPException(status_code=404, detail="source_not_found") from None
     cleared = target_db.clear_seen_items(source_id)
     cleared_backoff = False
     if clear_backoff:
@@ -1267,7 +1284,7 @@ async def test_source(
     try:
         src = db.get_source(source_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+        raise HTTPException(status_code=404, detail="source_not_found") from None
 
     source_type = str(getattr(src, "source_type", ""))
     _raise_if_forum_disabled(source_type)
@@ -1361,7 +1378,7 @@ async def update_source(
     try:
         existing = db.get_source(source_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="source_not_found")
+        raise HTTPException(status_code=404, detail="source_not_found") from None
     target_type = str(payload.source_type) if (getattr(payload, "source_type", None) is not None) else str(existing.source_type)
     target_url = str(payload.url) if (getattr(payload, "url", None) is not None) else str(existing.url)
     _raise_if_forum_disabled(target_type)
@@ -1419,6 +1436,7 @@ async def update_source(
         source_type=row.source_type,  # type: ignore[assignment]
         active=bool(row.active),
         tags=getattr(row, "tags", []),
+        group_ids=_get_group_ids(db, row.id),
         settings=(json.loads(row.settings_json) if row.settings_json else None),
         last_scraped_at=row.last_scraped_at,
         status=row.status,
@@ -1650,7 +1668,7 @@ async def create_group(
     try:
         row = db.create_group(name=payload.name, description=payload.description, parent_group_id=payload.parent_group_id)
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=400, detail="group_create_failed")
+        raise HTTPException(status_code=400, detail="group_create_failed") from None
     return Group(id=row.id, name=row.name, description=row.description, parent_group_id=row.parent_group_id)
 
 
@@ -1678,7 +1696,7 @@ async def update_group(
     try:
         row = db.update_group(group_id, payload.model_dump(exclude_unset=True))
     except KeyError:
-        raise HTTPException(status_code=404, detail="group_not_found")
+        raise HTTPException(status_code=404, detail="group_not_found") from None
     return Group(id=row.id, name=row.name, description=row.description, parent_group_id=row.parent_group_id)
 
 
@@ -1737,7 +1755,7 @@ async def create_job(
         )
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"create_job failed: {e}")
-        raise HTTPException(status_code=400, detail="job_create_failed")
+        raise HTTPException(status_code=400, detail="job_create_failed") from e
     # Compute and persist next_run_at; register with workflows scheduler
     try:
         next_run = _compute_next_run(row.schedule_expr, row.schedule_timezone)
@@ -1833,7 +1851,7 @@ async def preview_job(
     try:
         job = db.get_job(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
 
     # Resolve sources for job scope (IDs, tags, groups)
     scope = {}
@@ -1957,8 +1975,7 @@ async def preview_job(
         if per_items and len(per_items) > per_source:
             per_items = per_items[:per_source]
 
-        taken = 0
-        for it in per_items:
+        for taken, it in enumerate(per_items):
             if len(items) >= limit or taken >= per_source:
                 break
             title = it.get("title")
@@ -2005,7 +2022,6 @@ async def preview_job(
                     flagged=flagged,
                 )
             )
-            taken += 1
 
     return PreviewResponse(items=items, total=len(items), ingestable=total_ingestable, filtered=total_filtered)
 
@@ -2059,7 +2075,7 @@ async def get_job(
     try:
         r = db.get_job(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
     is_admin = bool(getattr(current_user, "is_admin", False))
     output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
     ingest_prefs = output_prefs.get("ingest") if isinstance(output_prefs, dict) else None
@@ -2115,7 +2131,7 @@ async def update_job(
     try:
         r = db.update_job(job_id, patch)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
     # Update next_run_at if schedule changed
     try:
         if any(k in patch for k in ("schedule_expr", "schedule_timezone")):
@@ -2219,7 +2235,7 @@ async def list_watchlist_clusters(
     try:
         db.get_job(watchlist_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="watchlist_not_found")
+        raise HTTPException(status_code=404, detail="watchlist_not_found") from None
     rows = db.list_watchlist_clusters(watchlist_id)
     return {"watchlist_id": int(watchlist_id), "clusters": rows}
 
@@ -2234,7 +2250,7 @@ async def add_watchlist_cluster(
     try:
         db.get_job(watchlist_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="watchlist_not_found")
+        raise HTTPException(status_code=404, detail="watchlist_not_found") from None
     db.add_watchlist_cluster(watchlist_id, cluster_id)
     return {"status": "added", "watchlist_id": int(watchlist_id), "cluster_id": int(cluster_id)}
 
@@ -2249,7 +2265,7 @@ async def remove_watchlist_cluster(
     try:
         db.get_job(watchlist_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="watchlist_not_found")
+        raise HTTPException(status_code=404, detail="watchlist_not_found") from None
     removed = db.remove_watchlist_cluster(watchlist_id, cluster_id)
     if not removed:
         raise HTTPException(status_code=404, detail="cluster_subscription_not_found")
@@ -2288,7 +2304,7 @@ async def replace_job_filters(
     try:
         db.get_job(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
     updated = db.set_job_filters(job_id, payload.model_dump())
     # Normalize and return
     try:
@@ -2310,7 +2326,7 @@ async def append_job_filters(
     try:
         current = db.get_job_filters(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
     existing = list(current.get("filters") or [])
     to_add = payload.filters or []
     new_filters = existing + [f.model_dump() if hasattr(f, "model_dump") else f for f in to_add]
@@ -2333,17 +2349,17 @@ async def trigger_run(
         # Ensure job exists before execution
         db.get_job(job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
 
     try:
         result = await run_watchlist_job(int(current_user.id), job_id)
         run_id = int(result.get("run_id"))
         run = db.get_run(run_id)
     except KeyError:
-        raise HTTPException(status_code=500, detail="run_lookup_failed")
+        raise HTTPException(status_code=500, detail="run_lookup_failed") from None
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"trigger_run failed: {e}")
-        raise HTTPException(status_code=500, detail="run_trigger_failed")
+        raise HTTPException(status_code=500, detail="run_trigger_failed") from e
     stats_dict: dict[str, Any] | None = None
     try:
         stats_dict = json.loads(run.stats_json or "{}") if run.stats_json else None
@@ -2553,7 +2569,7 @@ async def get_run(
     try:
         r = db.get_run(run_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="run_not_found")
+        raise HTTPException(status_code=404, detail="run_not_found") from None
     return Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg)
 
 
@@ -2576,7 +2592,7 @@ async def get_run_details(
     try:
         r = db.get_run(run_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="run_not_found")
+        raise HTTPException(status_code=404, detail="run_not_found") from None
     # Stats defaulting
     stats = {}
     try:
@@ -2693,7 +2709,7 @@ async def stream_run(
         try:
             await websocket.close(code=4401)
         finally:
-            return
+            return  # noqa: B012
     db = WatchlistsDatabase.for_user(user_id)
     try:
         run = db.get_run(int(run_id))
@@ -2701,7 +2717,7 @@ async def stream_run(
         try:
             await websocket.close(code=4404)
         finally:
-            return
+            return  # noqa: B012
 
     await websocket.accept()
     stream = WebSocketStream(
@@ -2817,7 +2833,7 @@ async def export_run_tallies_csv(
     try:
         r = db.get_run(run_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="run_not_found")
+        raise HTTPException(status_code=404, detail="run_not_found") from None
     try:
         stats = json.loads(r.stats_json or "{}") if r.stats_json else {}
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
@@ -2879,7 +2895,7 @@ async def get_scraped_item(
     try:
         row = db.get_item(item_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="item_not_found")
+        raise HTTPException(status_code=404, detail="item_not_found") from None
     return _row_to_scraped_item(row)
 
 
@@ -2897,7 +2913,7 @@ async def update_scraped_item(
             status=payload.status,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail="item_not_found")
+        raise HTTPException(status_code=404, detail="item_not_found") from None
     return _row_to_scraped_item(row)
 
 
@@ -2916,11 +2932,11 @@ async def create_output(
     try:
         run = db.get_run(payload.run_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="run_not_found")
+        raise HTTPException(status_code=404, detail="run_not_found") from None
     try:
         job = db.get_job(run.job_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="job_not_found")
+        raise HTTPException(status_code=404, detail="job_not_found") from None
 
     job_prefs: dict[str, Any] = {}
     try:
@@ -3020,7 +3036,7 @@ async def create_output(
             except template_store.TemplateNotFoundError:
                 template_record = None
             except template_store.TemplateVersionNotFoundError:
-                raise HTTPException(status_code=404, detail="template_version_not_found")
+                raise HTTPException(status_code=404, detail="template_version_not_found") from None
             except TemplateValidationError as exc:
                 raise HTTPException(status_code=400, detail="invalid_template_name") from exc
         try:
@@ -3058,7 +3074,7 @@ async def create_output(
             content = _render_template_with_context(output_template.body, context)
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Watchlists template render failed: {exc}")
-            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}")
+            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}") from exc
     elif template_record:
         context["template_name"] = template_record.name
         if template_record.description:
@@ -3067,7 +3083,7 @@ async def create_output(
             content = _render_template_with_context(template_record.content, context)
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
             logger.error(f"Watchlists template render failed: {exc}")
-            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}")
+            raise HTTPException(status_code=400, detail=f"template_render_failed: {exc}") from exc
     else:
         if output_format == "html":
             content = _render_default_html(title, item_models)
@@ -3137,7 +3153,7 @@ async def create_output(
         out_dir.mkdir(parents=True, exist_ok=True)
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"watchlists outputs: failed to create outputs dir: {exc}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from exc
 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_metadata = dict(metadata)
@@ -3271,7 +3287,7 @@ async def create_output(
                 try:
                     mece_tpl = collections_db.get_output_template_by_name(payload.mece_template_name)
                 except KeyError:
-                    raise HTTPException(status_code=404, detail="mece_template_not_found")
+                    raise HTTPException(status_code=404, detail="mece_template_not_found") from None
                 if mece_tpl.type != "mece_markdown":
                     raise HTTPException(status_code=422, detail="invalid_mece_template")
             else:
@@ -3307,7 +3323,7 @@ async def create_output(
                 try:
                     tts_tpl = collections_db.get_output_template_by_name(effective_tts_template_name)
                 except KeyError:
-                    raise HTTPException(status_code=404, detail="tts_template_not_found")
+                    raise HTTPException(status_code=404, detail="tts_template_not_found") from None
                 if tts_tpl.type != "tts_audio":
                     raise HTTPException(status_code=422, detail="invalid_tts_template")
             else:
@@ -3344,7 +3360,7 @@ async def create_output(
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"watchlists outputs create failed: {exc}")
         _cleanup_outputs()
-        raise HTTPException(status_code=500, detail="output_create_failed")
+        raise HTTPException(status_code=500, detail="output_create_failed") from exc
 
     output = _row_to_output(row, user_id=user_id, content_override=content)
 
@@ -3592,7 +3608,7 @@ async def list_template_versions(
     try:
         versions = template_store.list_template_versions(template_name)
     except template_store.TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return WatchlistTemplateVersionsResponse(
         items=[
             WatchlistTemplateVersionSummary(
@@ -3618,9 +3634,9 @@ async def get_template(
     try:
         record = template_store.load_template(template_name, version=version)
     except template_store.TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     except template_store.TemplateVersionNotFoundError:
-        raise HTTPException(status_code=404, detail="template_version_not_found")
+        raise HTTPException(status_code=404, detail="template_version_not_found") from None
     return WatchlistTemplateDetail(
         name=record.name,
         format=record.format,
@@ -3657,7 +3673,7 @@ async def create_template(
             detail={"error": "template_validation_error", "message": str(exc)},
         ) from exc
     except template_store.TemplateExistsError:
-        raise HTTPException(status_code=409, detail="template_exists")
+        raise HTTPException(status_code=409, detail="template_exists") from None
     return WatchlistTemplateDetail(
         name=record.name,
         format=record.format,
@@ -3680,5 +3696,5 @@ async def delete_template(
     try:
         template_store.delete_template(template_name)
     except template_store.TemplateNotFoundError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return {"deleted": True}

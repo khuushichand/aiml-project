@@ -537,7 +537,7 @@ async def _handle_embedding_job(
                 raise EmbeddingsJobError(str(fallback_exc), retryable=True) from fallback_exc
             validation_error = _validate_embeddings_result(embeddings, len(chunk_texts))
             if validation_error:
-                raise EmbeddingsJobError(validation_error, retryable=False)
+                raise EmbeddingsJobError(validation_error, retryable=False) from exc
             embedding_model = FALLBACK_EMBEDDING_MODEL
             embedding_provider = "huggingface"
         else:
@@ -855,7 +855,7 @@ async def _handle_custom_content_job(
                 raise EmbeddingsJobError(str(fallback_exc), retryable=True) from fallback_exc
             validation_error = _validate_embeddings_result(embeddings, 1)
             if validation_error:
-                raise EmbeddingsJobError(validation_error, retryable=False)
+                raise EmbeddingsJobError(validation_error, retryable=False) from exc
             embedding_model = FALLBACK_EMBEDDING_MODEL
             embedding_provider = "huggingface"
         else:

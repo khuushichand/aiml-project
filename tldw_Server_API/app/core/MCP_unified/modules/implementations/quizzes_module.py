@@ -431,7 +431,7 @@ class QuizzesModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except (TypeError, ValueError) as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
 
         if tool_name == "quizzes.list":
             return await self._list_quizzes(args, context)
@@ -871,7 +871,7 @@ class QuizzesModule(BaseModule):
             questions_data = self._parse_generated_questions(response_text)
         except _QUIZZES_MODULE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Quiz generation failed: {e}")
-            raise ValueError(f"Failed to generate quiz: {e}")
+            raise ValueError(f"Failed to generate quiz: {e}") from e
 
         # Create quiz and questions
         return await asyncio.to_thread(
@@ -942,7 +942,7 @@ Return ONLY the JSON array, no other text."""
             return json.loads(response)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse generated questions: {e}")
-            raise ValueError("Failed to parse generated questions from LLM response")
+            raise ValueError("Failed to parse generated questions from LLM response") from e
 
     def _resolve_llm_settings(self, args: dict[str, Any]) -> tuple[str, Optional[str]]:
         """Resolve provider/model for quiz generation from args or config defaults."""

@@ -149,7 +149,7 @@ class CircuitBreaker:
         except asyncio.TimeoutError:
             self.stats.timeouts += 1
             await self._on_failure()
-            raise TimeoutError(f"Call through circuit breaker {self.name} timed out after {self.config.timeout}s")
+            raise TimeoutError(f"Call through circuit breaker {self.name} timed out after {self.config.timeout}s") from None
 
         except self.config.expected_exception:
             await self._on_failure()

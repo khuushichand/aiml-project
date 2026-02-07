@@ -54,7 +54,7 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
                     break
                 except OSError:
                     if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system ops lock within {timeout}s")
+                        raise RuntimeError(f"Failed to acquire system ops lock within {timeout}s") from None
                     time.sleep(0.05)
         else:
             while True:
@@ -70,7 +70,7 @@ def _store_file_lock(timeout: float = _LOCK_TIMEOUT_SECONDS):
                     except (OSError, FileNotFoundError):
                         pass
                     if time.time() - start_time > timeout:
-                        raise RuntimeError(f"Failed to acquire system ops lock within {timeout}s")
+                        raise RuntimeError(f"Failed to acquire system ops lock within {timeout}s") from None
                     time.sleep(0.05)
         yield
     finally:

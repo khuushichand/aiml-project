@@ -130,8 +130,10 @@ class WebScrapingService:
             def _as_bool(v: Any, d: bool) -> bool:
                 try:
                     s = str(v).strip().lower()
-                    if s in {"1", "true", "yes", "on", "y"}: return True
-                    if s in {"0", "false", "no", "off", "n"}: return False
+                    if s in {"1", "true", "yes", "on", "y"}:
+                        return True
+                    if s in {"0", "false", "no", "off", "n"}:
+                        return False
                 except _WEB_SCRAPE_CONFIG_PARSE_EXCEPTIONS:
                     pass
                 return d
@@ -246,7 +248,7 @@ class WebScrapingService:
 
         except _WEB_SCRAPE_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Web scraping task failed: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
 
     async def _scrape_individual_urls(
         self, url_input: str, custom_titles: Optional[str],

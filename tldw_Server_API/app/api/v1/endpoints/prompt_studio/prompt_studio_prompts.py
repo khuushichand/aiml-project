@@ -221,13 +221,13 @@ async def create_prompt(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Prompt with this name already exists in the project"
-        )
+        ) from None
     except DatabaseError as e:
         logger.error(f"Database error creating prompt: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create prompt"
-        )
+        ) from e
 
 @router.get(
     "/list/{project_id}",
@@ -302,13 +302,13 @@ async def list_prompts(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list prompts"
-        )
+        ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error listing prompts: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", "Invalid input.")
-        )
+        ) from e
 
 # Simple alias that mirrors the canonical list response shape
 @router.get("", response_model=ListResponse)
@@ -395,13 +395,13 @@ async def get_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get prompt"
-        )
+        ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error getting prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", "Invalid input.")
-        )
+        ) from e
 
 @router.put(
     "/update/{prompt_id}",
@@ -532,13 +532,13 @@ async def update_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update prompt"
-        )
+        ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error updating prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", "Invalid input.")
-        )
+        ) from e
 
 @router.get("/history/{prompt_id}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "History", "content": {"application/json": {"examples": {"history": {"summary": "Versions", "value": {"success": True, "data": [{"id": 12, "version_number": 1}, {"id": 13, "version_number": 2}]}}}}}}}
@@ -583,13 +583,13 @@ async def get_prompt_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get prompt history"
-        )
+        ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error getting prompt history: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", "Invalid input.")
-        )
+        ) from e
 
 @router.post("/revert/{prompt_id}/{version}", response_model=StandardResponse, openapi_extra={
     "responses": {"200": {"description": "Reverted", "content": {"application/json": {"examples": {"reverted": {"summary": "New version", "value": {"success": True, "data": {"id": 14, "version_number": 3}}}}}}}}
@@ -645,10 +645,10 @@ async def revert_prompt(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to revert prompt"
-        )
+        ) from e
     except InputError as e:
         logger.warning(f"Prompt studio input error reverting prompt: {getattr(e, 'original_message', str(e))}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=getattr(e, "safe_message", "Invalid input.")
-        )
+        ) from e

@@ -44,7 +44,7 @@ def load_cli_config(config_path: Optional[str] = None, db_path_override: Optiona
                     config.update(eval_config)
                     logger.debug(f"Loaded evaluations config from {eval_config_path}")
         except Exception as e:
-            raise ConfigError(f"Failed to load evaluations config from {eval_config_path}: {e}")
+            raise ConfigError(f"Failed to load evaluations config from {eval_config_path}: {e}") from e
 
     # Load from main tldw config file
     main_config_path = _find_main_config()
@@ -298,4 +298,4 @@ def save_config(config: dict[str, Any], config_path: Optional[str] = None):
 
         logger.info(f"Configuration saved to {config_path}")
     except Exception as e:
-        raise ConfigError(f"Failed to save configuration to {config_path}: {e}")
+        raise ConfigError(f"Failed to save configuration to {config_path}: {e}") from e

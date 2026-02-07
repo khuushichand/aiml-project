@@ -311,7 +311,7 @@ class RBACPolicy:
                 extra={"audit": True}
             )
 
-    @lru_cache(maxsize=1000)
+    @lru_cache(maxsize=1000)  # noqa: B019
     def _get_user_permissions(self, user_id: str) -> set[Permission]:
         """
         Get all permissions for a user (cached).

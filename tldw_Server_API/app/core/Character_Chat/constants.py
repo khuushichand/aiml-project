@@ -174,7 +174,7 @@ def validate_json_list(
             except Exception:
                 raise ValueError(
                     f"Field '{field_name}' item {i} must be a string, got {type(item).__name__}"
-                )
+                ) from None
         if len(item) > max_item_length:
             raise ValueError(
                 f"Field '{field_name}' item {i} exceeds max length ({len(item)} > {max_item_length})"

@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Popover, Tooltip } from "antd"
+import { Tooltip } from "antd"
 import {
   BookPlus,
   Globe,
@@ -8,8 +8,7 @@ import {
   Search,
   FileText,
   FileIcon,
-  Gauge,
-  SlidersHorizontal
+  Gauge
 } from "lucide-react"
 import { PromptSelect } from "@/components/Common/PromptSelect"
 import { CharacterSelect } from "@/components/Common/CharacterSelect"
@@ -21,7 +20,7 @@ import {
   SessionCostEstimation,
   type PromptTemplate
 } from "./playground-features"
-import type { MessageSteeringMode } from "@/types/message-steering"
+import { ComposerToolbarOverflow } from "./ComposerToolbarOverflow"
 
 export type ComposerToolbarProps = {
   isProMode: boolean
@@ -60,11 +59,6 @@ export type ComposerToolbarProps = {
   onOpenModelSettings: () => void
   modelSummaryLabel: string
   promptSummaryLabel: string
-  messageSteeringMode: MessageSteeringMode
-  onMessageSteeringModeChange: (mode: MessageSteeringMode) => void
-  messageSteeringForceNarrate: boolean
-  onMessageSteeringForceNarrateChange: (enabled: boolean) => void
-  onClearMessageSteering: () => void
   // Dictation
   hasDictation: boolean
   speechAvailable: boolean
@@ -89,27 +83,6 @@ export type ComposerToolbarProps = {
   onDismissServerPersistenceHint: () => void
   onFocusConnectionCard: () => void
 }
-
-/** Overflow menu item for toolbar actions */
-const OverflowItem: React.FC<{
-  icon: React.ReactNode
-  label: string
-  onClick?: () => void
-  active?: boolean
-  disabled?: boolean
-}> = ({ icon, label, onClick, active, disabled }) => (
-  <button
-    type="button"
-    onClick={onClick}
-    disabled={disabled}
-    className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs transition hover:bg-surface2 disabled:cursor-not-allowed disabled:opacity-50 ${
-      active ? "bg-primary/10 text-primaryStrong" : "text-text hover:text-text"
-    }`}
-  >
-    <span className="flex h-4 w-4 items-center justify-center text-text-subtle">{icon}</span>
-    <span>{label}</span>
-  </button>
-)
 
 /**
  * Unified toolbar for the chat composer.
@@ -148,11 +121,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
     onOpenModelSettings,
     modelSummaryLabel,
     promptSummaryLabel,
-    messageSteeringMode,
-    onMessageSteeringModeChange,
-    messageSteeringForceNarrate,
-    onMessageSteeringForceNarrateChange,
-    onClearMessageSteering,
     hasDictation,
     speechAvailable,
     speechUsesServer,
@@ -174,7 +142,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
   } = props
 
   const ephemeralDisabled = privateChatLocked || isFireFoxPrivateMode
-  const [overflowOpen, setOverflowOpen] = React.useState(false)
 
   // --- Shared sub-elements ---
   const ephemeralToggle = (
@@ -406,267 +373,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
       </button>
     ) : null
 
-  const steeringActive =
-    messageSteeringMode !== "none" || messageSteeringForceNarrate
-
-  const toggleSteeringMode = (mode: MessageSteeringMode) => {
-    if (messageSteeringMode === mode) {
-      onMessageSteeringModeChange("none")
-      return
-    }
-    onMessageSteeringModeChange(mode)
-  }
-
-  const steeringControls = (
-    <div className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-surface px-1 py-1">
-      <Tooltip
-        title={
-          t(
-            "playground:composer.steering.continueHelp",
-            "Single response: continue the user voice."
-          ) as string
-        }
-      >
-        <button
-          type="button"
-          onClick={() => toggleSteeringMode("continue_as_user")}
-          aria-pressed={messageSteeringMode === "continue_as_user"}
-          className={`rounded px-2 py-1 text-xs transition ${
-            messageSteeringMode === "continue_as_user"
-              ? "bg-primary/10 text-primaryStrong"
-              : "text-text-muted hover:bg-surface2 hover:text-text"
-          }`}
-        >
-          {t("playground:composer.steering.continue", "Continue as user")}
-        </button>
-      </Tooltip>
-      <Tooltip
-        title={
-          t(
-            "playground:composer.steering.impersonateHelp",
-            "Single response: write as if authored by the user."
-          ) as string
-        }
-      >
-        <button
-          type="button"
-          onClick={() => toggleSteeringMode("impersonate_user")}
-          aria-pressed={messageSteeringMode === "impersonate_user"}
-          className={`rounded px-2 py-1 text-xs transition ${
-            messageSteeringMode === "impersonate_user"
-              ? "bg-primary/10 text-primaryStrong"
-              : "text-text-muted hover:bg-surface2 hover:text-text"
-          }`}
-        >
-          {t("playground:composer.steering.impersonate", "Impersonate user")}
-        </button>
-      </Tooltip>
-      <Tooltip
-        title={
-          t(
-            "playground:composer.steering.narrateHelp",
-            "Single response: force narration style."
-          ) as string
-        }
-      >
-        <button
-          type="button"
-          onClick={() =>
-            onMessageSteeringForceNarrateChange(!messageSteeringForceNarrate)
-          }
-          aria-pressed={messageSteeringForceNarrate}
-          className={`rounded px-2 py-1 text-xs transition ${
-            messageSteeringForceNarrate
-              ? "bg-primary/10 text-primaryStrong"
-              : "text-text-muted hover:bg-surface2 hover:text-text"
-          }`}
-        >
-          {t("playground:composer.steering.narrate", "Force narrate")}
-        </button>
-      </Tooltip>
-      {steeringActive && (
-        <Tooltip title={t("common:clear", "Clear") as string}>
-          <button
-            type="button"
-            onClick={onClearMessageSteering}
-            className="rounded px-2 py-1 text-xs text-text-muted transition hover:bg-surface2 hover:text-text"
-          >
-            {t("common:clear", "Clear")}
-          </button>
-        </Tooltip>
-      )}
-    </div>
-  )
-
-  // --- Mobile overflow menu ---
-  const overflowItems = React.useMemo(() => {
-    const items: React.ReactNode[] = []
-    items.push(
-      <OverflowItem
-        key="search"
-        icon={<Search className="w-3.5 h-3.5" />}
-        label={
-          contextToolsOpen
-            ? (t("playground:composer.contextKnowledgeClose", "Close Search & Context") as string)
-            : (t("playground:composer.contextKnowledge", "Search & Context") as string)
-        }
-        onClick={() => onToggleKnowledgePanel("search")}
-        active={contextToolsOpen}
-      />
-    )
-    if (hasWebSearch) {
-      items.push(
-        <OverflowItem
-          key="web"
-          icon={<Globe className="w-3.5 h-3.5" />}
-          label={t("playground:actions.webSearchOff", "Web search") as string}
-          onClick={onToggleWebSearch}
-          active={webSearch}
-        />
-      )
-    }
-    items.push(
-      <OverflowItem
-        key="insert"
-        icon={<BookPlus className="w-3.5 h-3.5" />}
-        label={t("option:promptInsert.useInChat", "Insert prompt") as string}
-        onClick={onOpenPromptInsert}
-      />
-    )
-    items.push(
-      <OverflowItem
-        key="steer-continue"
-        icon={<span className="text-xs leading-none">C</span>}
-        label={
-          t("playground:composer.steering.continue", "Continue as user") as string
-        }
-        onClick={() =>
-          onMessageSteeringModeChange(
-            messageSteeringMode === "continue_as_user"
-              ? "none"
-              : "continue_as_user"
-          )
-        }
-        active={messageSteeringMode === "continue_as_user"}
-      />
-    )
-    items.push(
-      <OverflowItem
-        key="steer-impersonate"
-        icon={<span className="text-xs leading-none">I</span>}
-        label={
-          t(
-            "playground:composer.steering.impersonate",
-            "Impersonate user"
-          ) as string
-        }
-        onClick={() =>
-          onMessageSteeringModeChange(
-            messageSteeringMode === "impersonate_user"
-              ? "none"
-              : "impersonate_user"
-          )
-        }
-        active={messageSteeringMode === "impersonate_user"}
-      />
-    )
-    items.push(
-      <OverflowItem
-        key="steer-narrate"
-        icon={<span className="text-xs leading-none">N</span>}
-        label={
-          t("playground:composer.steering.narrate", "Force narrate") as string
-        }
-        onClick={() =>
-          onMessageSteeringForceNarrateChange(!messageSteeringForceNarrate)
-        }
-        active={messageSteeringForceNarrate}
-      />
-    )
-    if (steeringActive) {
-      items.push(
-        <OverflowItem
-          key="steer-clear"
-          icon={<span className="text-xs leading-none">x</span>}
-          label={t("common:clear", "Clear") as string}
-          onClick={onClearMessageSteering}
-        />
-      )
-    }
-    if (hasDictation) {
-      const isDictating = speechAvailable &&
-        ((speechUsesServer && isServerDictating) ||
-          (!speechUsesServer && isListening))
-      items.push(
-        <OverflowItem
-          key="dictation"
-          icon={<MicIcon className="w-3.5 h-3.5" />}
-          label={
-            isDictating
-              ? (t("playground:actions.speechStop", "Stop dictation") as string)
-              : (t("playground:actions.speechStart", "Start dictation") as string)
-          }
-          onClick={onDictationToggle}
-          active={isDictating}
-          disabled={!speechAvailable || voiceChatEnabled}
-        />
-      )
-    }
-    items.push(
-      <OverflowItem
-        key="settings"
-        icon={<Gauge className="w-3.5 h-3.5" />}
-        label={t("playground:composer.chatSettings", "Chat Settings") as string}
-        onClick={onOpenModelSettings}
-      />
-    )
-    if (isProMode && !temporaryChat && !isConnectionReady) {
-      items.push(
-        <OverflowItem
-          key="connect"
-          icon={<span className="w-3.5 h-3.5 text-primary">●</span>}
-          label={t("playground:composer.persistence.connectToSave", "Connect your server to sync chats.") as string}
-          onClick={onFocusConnectionCard}
-        />
-      )
-    }
-    return items
-  }, [
-    contextToolsOpen, onToggleKnowledgePanel, hasWebSearch, webSearch,
-    onToggleWebSearch, onOpenPromptInsert, hasDictation, speechAvailable,
-    messageSteeringMode,
-    messageSteeringForceNarrate,
-    onMessageSteeringModeChange,
-    onMessageSteeringForceNarrateChange,
-    onClearMessageSteering,
-    steeringActive,
-    speechUsesServer, isServerDictating, isListening, voiceChatEnabled,
-    onDictationToggle, onOpenModelSettings, isProMode, temporaryChat,
-    isConnectionReady, onFocusConnectionCard, t
-  ])
-
-  const mobileOverflowTrigger = isMobile && overflowItems.length > 0 ? (
-    <Popover
-      open={overflowOpen}
-      onOpenChange={setOverflowOpen}
-      trigger="click"
-      placement="topRight"
-      content={
-        <div className="flex min-w-[200px] flex-col py-1" onClick={() => setOverflowOpen(false)}>
-          {overflowItems}
-        </div>
-      }
-    >
-      <button
-        type="button"
-        aria-label={t("common:moreActions", "More options") as string}
-        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-text-muted transition hover:bg-surface2 hover:text-text"
-      >
-        <SlidersHorizontal className="h-4 w-4" />
-      </button>
-    </Popover>
-  ) : null
-
   return (
     <div className="mt-2 flex flex-col gap-1">
       {/* Row 1: Primary selectors - always present */}
@@ -712,7 +418,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
           <div className={`flex items-center gap-2 ${isProMode ? "flex-wrap text-text-muted" : "flex-nowrap"}`}>
             <ConnectionStatus showLabel={false} className="px-1 py-0.5" />
             {ephemeralToggle}
-            {!isMobile && steeringControls}
             {/* Desktop: show inline; Mobile: hidden (in overflow) */}
             {!isMobile && searchContextButton}
             {!isMobile && webSearchButton}
@@ -725,7 +430,28 @@ export const ComposerToolbar = React.memo(function ComposerToolbar(
             {!isMobile && dictationButton}
             {!isMobile && modelUsageBadge}
             {!isMobile && chatSettingsButton}
-            {mobileOverflowTrigger}
+            {isMobile && (
+              <ComposerToolbarOverflow
+                isProMode={isProMode}
+                isConnectionReady={isConnectionReady}
+                contextToolsOpen={contextToolsOpen}
+                onToggleKnowledgePanel={onToggleKnowledgePanel}
+                webSearch={webSearch}
+                onToggleWebSearch={onToggleWebSearch}
+                hasWebSearch={hasWebSearch}
+                onOpenPromptInsert={onOpenPromptInsert}
+                onOpenModelSettings={onOpenModelSettings}
+                hasDictation={hasDictation}
+                speechAvailable={speechAvailable}
+                speechUsesServer={speechUsesServer}
+                isListening={isListening}
+                isServerDictating={isServerDictating}
+                voiceChatEnabled={voiceChatEnabled}
+                onDictationToggle={onDictationToggle}
+                temporaryChat={temporaryChat}
+                onFocusConnectionCard={onFocusConnectionCard}
+              />
+            )}
             {voiceChatButton}
             {attachmentButton}
             {toolsButton}

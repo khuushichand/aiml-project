@@ -235,7 +235,7 @@ class ChunkingOptions(BaseModel):
             try:
                 re.compile(v)
             except re.error as e: # Catch specific error
-                raise ValueError(f"Invalid regex pattern provided for custom_chapter_pattern: {v}. Error: {e}")
+                raise ValueError(f"Invalid regex pattern provided for custom_chapter_pattern: {v}. Error: {e}") from e
         return v
 
 class TranscriptionModel(str, Enum):
@@ -801,7 +801,7 @@ class MediaWikiDumpOptionsForm(BaseModel):
                 if ns < -2 or ns > 9999:  # MediaWiki namespace IDs typically range from -2 to a few hundred
                     raise ValueError(f"Invalid namespace ID: {ns}")
         except ValueError as e:
-            raise ValueError(f"Invalid namespace format. Must be comma-separated integers: {e}")
+            raise ValueError(f"Invalid namespace format. Must be comma-separated integers: {e}") from e
 
         return v
 

@@ -2004,7 +2004,7 @@ async def create_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while creating chat session"
-        )
+        ) from e
 
 
 # ========================================================================
@@ -2263,7 +2263,7 @@ async def get_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while retrieving chat session"
-        )
+        ) from e
 
 
 @router.get("/{chat_id}/context", summary="Get chat context for completions", tags=["Chat Sessions"])
@@ -2318,7 +2318,7 @@ async def get_chat_context(
         raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error getting chat context for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while retrieving chat context") from e
 
 
 @router.post(
@@ -2408,7 +2408,7 @@ async def complete_chat_legacy(
         raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in legacy complete for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during completion") from e
 
 
 @router.post("/{chat_id}/completions", response_model=CharacterChatCompletionPrepResponse,
@@ -2551,7 +2551,7 @@ async def prepare_chat_completion(
         raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error preparing completion for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred while preparing completion") from e
 
 
 # ── Token budget constants for supplemental prompt sections ──────────
@@ -2903,7 +2903,7 @@ async def prompt_assembly_preview(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while generating prompt preview",
-        )
+        ) from e
 
 
 @router.post(
@@ -3618,7 +3618,7 @@ async def character_chat_completion(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error in character chat completion for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during character chat completion") from e
 
 
 @router.get("/", response_model=ChatSessionListResponse,
@@ -3706,7 +3706,7 @@ async def list_chat_sessions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while listing chat sessions"
-        )
+        ) from e
 
 
 @router.put("/{chat_id}", response_model=ChatSessionResponse,
@@ -3768,10 +3768,10 @@ async def update_chat_session(
     except ConflictError as e:
         # Optimistic locking or state conflicts
         logger.warning(f"Conflict updating chat session {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error updating chat session {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
@@ -3779,7 +3779,7 @@ async def update_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while updating chat session"
-        )
+        ) from e
 
 
 @router.get(
@@ -3989,10 +3989,10 @@ async def delete_chat_session(
 
     except ConflictError as e:
         logger.warning(f"Conflict deleting chat session {chat_id}: {e}")
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error deleting chat session {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except HTTPException:
         raise
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
@@ -4000,7 +4000,7 @@ async def delete_chat_session(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while deleting chat session"
-        )
+        ) from e
 
 
 # ========================================================================
@@ -4219,7 +4219,7 @@ async def export_chat_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while exporting chat history"
-        )
+        ) from e
 
 
 # ========================================================================
@@ -4339,7 +4339,7 @@ async def persist_streamed_assistant_message(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)) from e
     except _CHAR_CHAT_SESSIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Error persisting streamed assistant message for {chat_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist assistant message") from e
 
 
 # ========================================================================

@@ -696,7 +696,7 @@ async def run_speech_chat_turn(
                 audio_chunks.append(chunk)
         audio_bytes = b"".join(audio_chunks)
     except Exception as e:  # noqa: BLE001
-        raise _map_tts_exception(e)
+        raise _map_tts_exception(e) from e
 
     if not audio_bytes:
         raise HTTPException(

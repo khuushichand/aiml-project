@@ -107,7 +107,7 @@ def _setup_secure_temp_directory(user_id: str) -> Path:
     try:
         temp_dir.relative_to(base_dir)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path")
+        raise HTTPException(status_code=400, detail="Invalid chatbooks temp directory path") from None
 
     return temp_dir
 
@@ -278,7 +278,7 @@ async def create_chatbook(
                 try:
                     file_path.relative_to(expected_base)
                 except ValueError:
-                    raise HTTPException(status_code=500, detail="Export path validation failed")
+                    raise HTTPException(status_code=500, detail="Export path validation failed") from None
                 file_size = None
                 try:
                     if file_path.exists() and file_path.is_file():
@@ -374,7 +374,7 @@ async def create_chatbook(
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Unhandled exception creating chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while creating the chatbook") from None
 
 
 @router.post("/import", response_model=ImportChatbookResponse)
@@ -591,7 +591,7 @@ async def import_chatbook(
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Error importing chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while importing the chatbook") from None
     finally:
         # Cleanup uploaded file if not async
         if temp_file is not None and not import_request.async_mode and temp_file.exists():
@@ -767,7 +767,7 @@ async def preview_chatbook(
             ps_job_kind="chatbooks",
             traceparent=ensure_traceparent(request),
         ).exception(f"Error previewing chatbook for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook")
+        raise HTTPException(status_code=500, detail="An error occurred while previewing the chatbook") from None
     finally:
         # Ensure preview upload cleanup on all paths
         if temp_file is not None and temp_file.exists():
@@ -1076,7 +1076,7 @@ async def download_chatbook(
                 exp_int = int(exp)
             except ValueError as e:
                 logger.warning(f"Invalid exp parameter in signed URL: exp={exp!r}, error={e}")
-                raise HTTPException(status_code=400, detail="Invalid exp")
+                raise HTTPException(status_code=400, detail="Invalid exp") from e
             # Check exp against current time
             import time
             if time.time() > exp_int:
@@ -1122,7 +1122,7 @@ async def download_chatbook(
                 )
             except _CHATBOOKS_NONCRITICAL_EXCEPTIONS as audit_err:
                 logger.warning(f"Failed to log audit event for path traversal: {audit_err}")
-            raise HTTPException(status_code=403, detail="Access denied")
+            raise HTTPException(status_code=403, detail="Access denied") from None
 
         # Verify file exists (containment already validated above)
         if not file_path.exists() or not file_path.is_file():
@@ -1186,7 +1186,7 @@ async def download_chatbook(
         raise
     except _CHATBOOKS_NONCRITICAL_EXCEPTIONS:
         logger.exception(f"Error downloading chatbook {job_id} for user {user.id}")
-        raise HTTPException(status_code=500, detail="An error occurred while downloading the file")
+        raise HTTPException(status_code=500, detail="An error occurred while downloading the file") from None
 
 
 @router.post("/cleanup", response_model=CleanupExpiredExportsResponse)

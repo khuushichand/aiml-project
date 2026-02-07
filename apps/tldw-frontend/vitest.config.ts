@@ -18,6 +18,8 @@ export default defineConfig({
     include: [
       '**/__tests__/**/*.test.{ts,tsx}',
       '**/__tests__/**/*.spec.{ts,tsx}',
+      '../packages/ui/src/**/__tests__/**/*.test.{ts,tsx}',
+      '../packages/ui/src/**/__tests__/**/*.spec.{ts,tsx}',
     ],
     exclude: ['node_modules/**', 'dist/**', 'build/**', 'pages/**'],
   },

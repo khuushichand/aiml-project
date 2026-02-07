@@ -870,10 +870,10 @@ async def update_source(db, user_id: int, source_id: int, *, enabled: bool | Non
         sets = []
         params: list[Any] = []
         if enabled is not None:
-            sets.append("enabled = $%d" % (len(params) + 1))
+            sets.append(f"enabled = ${len(params) + 1}")
             params.append(enabled)
         if options is not None:
-            sets.append("options = $%d" % (len(params) + 1))
+            sets.append(f"options = ${len(params) + 1}")
             params.append(options)
         if not sets:
             pass

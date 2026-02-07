@@ -152,7 +152,7 @@ async def apply_multi_vector_passages(
 
     # For each document, compute best span similarity
     best_by_doc: dict[int, tuple[float, int]] = {}  # doc_idx -> (best_sim, span_global_idx)
-    for g_idx, (doc_idx, s, e) in enumerate(span_meta):
+    for g_idx, (doc_idx, _s, _e) in enumerate(span_meta):
         sim = _cosine(q_vec, span_vectors[g_idx])
         prev = best_by_doc.get(doc_idx)
         if prev is None or sim > prev[0]:

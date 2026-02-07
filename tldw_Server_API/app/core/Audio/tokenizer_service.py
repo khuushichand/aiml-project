@@ -96,7 +96,7 @@ def _read_audio_from_bytes(
                     "Unable to decode audio; provide sample_rate for raw PCM",
                     request_id,
                 ),
-            )
+            ) from None
         pcm = np.frombuffer(audio_bytes, dtype=np.int16)
         audio_data = pcm.astype(np.float32) / 32768.0
         sample_rate = int(sample_rate_hint)

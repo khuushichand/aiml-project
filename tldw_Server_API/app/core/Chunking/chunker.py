@@ -1632,7 +1632,7 @@ class Chunker:
             logger.error(f"Chunking failed: {e}")
             if isinstance(e, ChunkingError):
                 raise
-            raise ChunkingError(f"Chunking failed: {str(e)}")
+            raise ChunkingError(f"Chunking failed: {str(e)}") from e
 
     def chunk_text_with_metadata(self,
                                  text: str,
@@ -1734,7 +1734,7 @@ class Chunker:
             logger.error(f"Chunking with metadata failed: {e}")
             if isinstance(e, ChunkingError):
                 raise
-            raise ChunkingError(f"Chunking failed: {str(e)}")
+            raise ChunkingError(f"Chunking failed: {str(e)}") from e
 
         # Optionally align emitted text with the source span (opt-in)
         if align_text_to_source and isinstance(results, list):
@@ -1886,7 +1886,7 @@ class Chunker:
         try:
             return factory()
         except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
-            raise InvalidChunkingMethodError(f"Failed to initialize strategy '{method}': {e}")
+            raise InvalidChunkingMethodError(f"Failed to initialize strategy '{method}': {e}") from e
 
     def _get_strategy_for_call(self, method: str):
         """Return a strategy instance scoped per cache mode to avoid shared-state mutation."""
@@ -2661,8 +2661,10 @@ class Chunker:
                 for s in segs:
                     if not isinstance(s, dict):
                         continue
-                    so = s.get('start_offset'); eo = s.get('end_offset')
-                    st = s.get('start_time'); et = s.get('end_time')
+                    so = s.get('start_offset')
+                    eo = s.get('end_offset')
+                    st = s.get('start_time')
+                    et = s.get('end_time')
                     if isinstance(so, int) and isinstance(eo, int) and (isinstance(st, (int, float)) and isinstance(et, (int, float))):
                         val.append((so, eo, float(st), float(et)))
                 time_segments = sorted(val, key=lambda x: x[0]) if val else None
@@ -2692,7 +2694,8 @@ class Chunker:
 
             # Relative position using offsets when present
             try:
-                start = md.get('start_offset'); end = md.get('end_offset')
+                start = md.get('start_offset')
+                end = md.get('end_offset')
                 if isinstance(start, int) and isinstance(end, int) and end > start:
                     mid = 0.5 * (float(start) + float(end))
                     # Offsets are in original input coordinates, so relative_position uses the original length.
@@ -2965,7 +2968,7 @@ class Chunker:
             ) from e
         except _CHUNKER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"File stream processing failed: {e}")
-            raise ChunkingError(f"Failed to process file stream: {str(e)}")
+            raise ChunkingError(f"Failed to process file stream: {str(e)}") from e
 
         # Flush any withheld tail chunk at end-of-stream.
         if withhold_last and overlap_buffer:

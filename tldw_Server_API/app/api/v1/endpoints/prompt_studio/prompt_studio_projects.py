@@ -232,13 +232,13 @@ async def create_project(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e)
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error creating project: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create project"
-        )
+        ) from e
 
 @router.get("/", response_model=None, openapi_extra={
     "responses": {
@@ -313,7 +313,7 @@ async def list_projects(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail,
-        )
+        ) from e
     except Exception as e:  # noqa: BLE001
         logger.exception("Unexpected error listing projects: {}", e)
         detail = "Failed to list projects"
@@ -322,7 +322,7 @@ async def list_projects(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=detail,
-        )
+        ) from e
 
 # Compatibility: GET on base path without trailing slash
 @router.get("", response_model=None)
@@ -386,7 +386,7 @@ async def get_project(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get project"
-        )
+        ) from e
 
 # Compatibility: GET on base path with ID
 @router.get("/{project_id}")
@@ -463,13 +463,13 @@ async def update_project(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error updating project: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update project"
-        )
+        ) from e
 
 @router.delete("/delete/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
@@ -529,7 +529,7 @@ async def delete_project(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete project"
-            )
+            ) from None
 
 @router.post("/archive/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
@@ -574,13 +574,13 @@ async def archive_project(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error archiving project: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to archive project"
-        )
+        ) from e
 
 @router.post("/unarchive/{project_id}", response_model=StandardResponse, openapi_extra={
     "responses": {
@@ -625,13 +625,13 @@ async def unarchive_project(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(e)
-        )
+        ) from e
     except DatabaseError as e:
         logger.error(f"Database error unarchiving project: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to unarchive project"
-        )
+        ) from e
 
 ########################################################################################################################
 # Project Statistics Endpoint
@@ -686,4 +686,4 @@ async def get_project_stats(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get project statistics"
-        )
+        ) from e

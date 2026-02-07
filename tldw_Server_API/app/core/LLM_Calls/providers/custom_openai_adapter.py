@@ -165,7 +165,7 @@ class CustomOpenAIAdapter(ChatProvider):
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
@@ -208,7 +208,7 @@ class CustomOpenAIAdapter(ChatProvider):
                         yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter native HTTP disabled by configuration")
 
     async def achat(self, request: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
@@ -287,7 +287,7 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                     resp.raise_for_status()
                     return self._normalize_response(resp.json())
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")
 
     def stream(self, request: dict[str, Any], *, timeout: float | None = None) -> Iterable[str]:
@@ -330,5 +330,5 @@ class CustomOpenAIAdapter2(CustomOpenAIAdapter):
                         yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except Exception as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
         raise RuntimeError("CustomOpenAIAdapter2 native HTTP disabled by configuration")

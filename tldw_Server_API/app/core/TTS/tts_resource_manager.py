@@ -250,7 +250,7 @@ class HTTPConnectionPool:
                     )
                 except _TTS_RESOURCE_NONCRITICAL_EXCEPTIONS as e:
                     # If central factory is unavailable, surface an error instead of constructing directly
-                    raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}")
+                    raise TTSNetworkError(f"Failed to create HTTP client via factory: {e}") from e
 
                 self._pools[provider] = client
                 self._pool_metrics[provider] = ResourceMetrics(

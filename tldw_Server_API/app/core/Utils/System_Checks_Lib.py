@@ -127,10 +127,7 @@ def check_ffmpeg():
         userOS_guess = platform.system() if userOS == "Unknown" else userOS
 
         if userOS_guess == "Windows":
-            if download_ffmpeg(): # call and check the return
-                return True
-            else:
-                return False
+            return download_ffmpeg()
 
         elif userOS_guess == "Linux":
             logging.info(

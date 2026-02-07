@@ -1480,7 +1480,7 @@ def search_web_baidu(arg1, arg2, arg3):
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
     return {"error": "Baidu provider not implemented"}
 
 
@@ -1585,7 +1585,7 @@ def search_web_brave(
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
     # Response: https://api.search.brave.com/app/documentation/web-search/responses#WebSearchApiResponse
     response = brave_http_get(search_url, headers=headers, params=filtered_params)
@@ -2002,7 +2002,7 @@ def search_web_google(
             if not getattr(pol, 'allowed', False):
                 raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
         except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-            raise ValueError(f"Egress policy evaluation failed: {_e}")
+            raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
         # Make the API call with centralized client
         from tldw_Server_API.app.core.http_client import fetch_json
@@ -2195,7 +2195,7 @@ def search_web_kagi(query: str, limit: int = 10) -> dict:
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
     from tldw_Server_API.app.core.http_client import fetch_json
     data = fetch_json(method="GET", url=endpoint, headers=headers, params=params, timeout=15.0)
@@ -2332,7 +2332,7 @@ def search_web_searx(
             if not getattr(pol, 'allowed', False):
                 raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
         except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-            raise ValueError(f"Egress policy evaluation failed: {_e}")
+            raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
         # Mimic browser headers via centralized UA builder
         headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5", restrict_encodings_for_requests=True)
@@ -2437,7 +2437,7 @@ def search_web_serper():
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
     return {"error": "Serper provider not implemented"}
 
 
@@ -2480,7 +2480,7 @@ def search_web_tavily(search_query, result_count=10, site_whitelist=None, site_b
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
         # Surface policy evaluation failure in a consistent way
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
     # Perform the search request
     try:
@@ -2579,7 +2579,7 @@ def search_web_exa(
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
     headers = {"Content-Type": "application/json", "x-api-key": exa_api_key}
     from tldw_Server_API.app.core.http_client import fetch_json
@@ -2657,7 +2657,7 @@ def search_web_firecrawl(
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
 
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {firecrawl_api_key}"}
     from tldw_Server_API.app.core.http_client import fetch_json
@@ -2727,7 +2727,7 @@ def search_web_yandex():
         if not getattr(pol, 'allowed', False):
             raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as _e:
-        raise ValueError(f"Egress policy evaluation failed: {_e}")
+        raise ValueError(f"Egress policy evaluation failed: {_e}") from _e
     return {"error": "Yandex provider not implemented"}
 
 

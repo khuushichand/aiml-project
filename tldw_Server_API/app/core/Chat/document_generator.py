@@ -238,7 +238,7 @@ class DocumentGeneratorService:
                 logger.info("Document generator tables initialized")
         except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to initialize document generator tables: {e}")
-            raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}")
+            raise CharactersRAGDBError(f"Failed to initialize document generator tables: {e}") from e
 
     def get_conversation_context(
         self,
@@ -600,7 +600,7 @@ class DocumentGeneratorService:
 
         except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to generate {document_type.value}: {e}")
-            raise ChatAPIError(f"Failed to generate document: {str(e)}")
+            raise ChatAPIError(f"Failed to generate document: {str(e)}") from e
 
     def _call_llm(
         self,
@@ -702,7 +702,7 @@ class DocumentGeneratorService:
 
         except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to save generated document: {e}")
-            raise CharactersRAGDBError(f"Failed to save document: {e}")
+            raise CharactersRAGDBError(f"Failed to save document: {e}") from e
 
     def record_streamed_document(
         self,
@@ -963,7 +963,7 @@ class DocumentGeneratorService:
 
         except _DOCGEN_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to create generation job: {e}")
-            raise CharactersRAGDBError(f"Failed to create job: {e}")
+            raise CharactersRAGDBError(f"Failed to create job: {e}") from e
 
     def get_job_status(self, job_id: str) -> Optional[dict[str, Any]]:
         """

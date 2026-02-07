@@ -121,14 +121,14 @@ class NeuTTSAdapter(TTSAdapter):
                     "error": str(e),
                     "suggestion": "Install: neucodec>=0.0.4, librosa, phonemizer, transformers; optional llama-cpp-python for GGUF",
                 },
-            )
+            ) from e
         except Exception as e:
             logger.error(f"NeuTTS initialization failed: {e}")
             raise TTSModelLoadError(
                 "Failed to initialize NeuTTS",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         return TTSCapabilities(
@@ -266,7 +266,7 @@ class NeuTTSAdapter(TTSAdapter):
                 "NeuTTS generation failed",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
         finally:
             if temp_path and os.path.exists(temp_path):
                 with contextlib.suppress(Exception):
@@ -360,7 +360,7 @@ class NeuTTSAdapter(TTSAdapter):
                 "NeuTTS streaming failed",
                 provider=self.provider_name,
                 details={"error": str(e)},
-            )
+            ) from e
         finally:
             if temp_path and os.path.exists(temp_path):
                 with contextlib.suppress(Exception):

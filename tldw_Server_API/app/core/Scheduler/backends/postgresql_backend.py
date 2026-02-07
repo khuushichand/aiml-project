@@ -93,7 +93,7 @@ class PostgreSQLBackend(QueueBackend):
 
         except Exception as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
-            raise BackendError(f"Connection failed: {e}")
+            raise BackendError(f"Connection failed: {e}") from e
 
     async def disconnect(self) -> None:
         """
@@ -277,7 +277,7 @@ class PostgreSQLBackend(QueueBackend):
 
             except Exception as e:
                 logger.error(f"Failed to enqueue task: {e}")
-                raise BackendError(f"Enqueue failed: {e}")
+                raise BackendError(f"Enqueue failed: {e}") from e
 
     async def bulk_enqueue(self, tasks: list[Task]) -> list[str]:
         """

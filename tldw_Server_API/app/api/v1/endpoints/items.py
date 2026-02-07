@@ -100,7 +100,7 @@ async def list_items(
         if end_dt:
             date_to_iso = end_dt.isoformat()
     except _ITEMS_COERCE_EXCEPTIONS:
-        raise HTTPException(status_code=422, detail="invalid_date_range")
+        raise HTTPException(status_code=422, detail="invalid_date_range") from None
 
     # Query collections layer first
     try:
@@ -121,7 +121,7 @@ async def list_items(
         )
     except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections items query failed: {e}")
-        raise HTTPException(status_code=500, detail="items_query_failed")
+        raise HTTPException(status_code=500, detail="items_query_failed") from e
 
     if coll_total > 0:
         return ItemsListResponse(
@@ -152,7 +152,7 @@ async def list_items(
         )
     except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"items list failed: {e}")
-        raise HTTPException(status_code=500, detail="items_query_failed")
+        raise HTTPException(status_code=500, detail="items_query_failed") from e
 
     # Build items and apply optional domain filter in-process
     items: list[Item] = []
@@ -178,7 +178,7 @@ async def get_item(
         pass
     except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     try:
         row = collections_db.get_content_item_by_media_id(item_id)
@@ -187,7 +187,7 @@ async def get_item(
         pass
     except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"collections item fetch by media_id failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     try:
         rows, _total = db.search_media_db(
@@ -206,7 +206,7 @@ async def get_item(
         )
     except _ITEMS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"media item fetch failed: {e}")
-        raise HTTPException(status_code=500, detail="item_fetch_failed")
+        raise HTTPException(status_code=500, detail="item_fetch_failed") from e
 
     if not rows:
         raise HTTPException(status_code=404, detail="item_not_found")

@@ -142,7 +142,7 @@ class SkillParser:
                     frontmatter = SkillFrontmatter.from_dict(parsed_yaml)
             except yaml.YAMLError as e:
                 logger.warning(f"Failed to parse SKILL.md frontmatter: {e}")
-                raise SkillParseError(f"Invalid YAML frontmatter: {e}", detail=str(e))
+                raise SkillParseError(f"Invalid YAML frontmatter: {e}", detail=str(e)) from e
 
         # Apply default name if not in frontmatter
         if not frontmatter.name and default_name:
@@ -185,7 +185,7 @@ class SkillParser:
         try:
             content = skill_file.read_text(encoding="utf-8")
         except Exception as e:
-            raise SkillParseError(f"Failed to read SKILL.md: {e}", detail=str(e))
+            raise SkillParseError(f"Failed to read SKILL.md: {e}", detail=str(e)) from e
 
         # Parse the main file
         parsed = self.parse_content(content, default_name=skill_dir.name)

@@ -183,11 +183,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
     serverChatSource,
     setServerChatSource,
     setServerChatVersion,
-    messageSteeringMode,
-    setMessageSteeringMode,
-    messageSteeringForceNarrate,
-    setMessageSteeringForceNarrate,
-    clearMessageSteering,
     replyTarget,
     clearReplyTarget,
     ragPinnedResults
@@ -3948,15 +3943,6 @@ export const PlaygroundForm = ({ droppedFiles }: Props) => {
                           onOpenModelSettings={() => setOpenModelSettings(true)}
                           modelSummaryLabel={modelSummaryLabel}
                           promptSummaryLabel={promptSummaryLabel}
-                          messageSteeringMode={messageSteeringMode}
-                          onMessageSteeringModeChange={setMessageSteeringMode}
-                          messageSteeringForceNarrate={
-                            messageSteeringForceNarrate
-                          }
-                          onMessageSteeringForceNarrateChange={
-                            setMessageSteeringForceNarrate
-                          }
-                          onClearMessageSteering={clearMessageSteering}
                           hasDictation={!!(browserSupportsSpeechRecognition || hasServerAudio)}
                           speechAvailable={speechAvailable}
                           speechUsesServer={speechUsesServer}

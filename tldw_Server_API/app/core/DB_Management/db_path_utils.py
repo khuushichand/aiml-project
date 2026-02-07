@@ -204,6 +204,7 @@ class DatabasePaths:
     AUDIT_DB_NAME = "unified_audit.db"
     EVALUATIONS_DB_NAME = "evaluations.db"
     PERSONALIZATION_DB_NAME = "Personalization.db"
+    GUARDIAN_DB_NAME = "Guardian.db"
     WORKFLOWS_DB_NAME = "workflows.db"
     WORKFLOWS_SCHEDULER_DB_NAME = "workflows_scheduler.db"
     KANBAN_DB_NAME = "Kanban.db"
@@ -376,6 +377,12 @@ class DatabasePaths:
         user_dir = DatabasePaths.get_user_base_directory(user_id)
         # Keep at root of user dir alongside ChaChaNotes for discoverability
         return user_dir / DatabasePaths.PERSONALIZATION_DB_NAME
+
+    @staticmethod
+    def get_guardian_db_path(user_id: Optional[UserId]) -> Path:
+        """Get the path to the user's Guardian/self-monitoring database."""
+        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        return user_dir / DatabasePaths.GUARDIAN_DB_NAME
 
     @staticmethod
     def get_workflows_db_path(user_id: Optional[UserId]) -> Path:

@@ -207,7 +207,7 @@ async def create_output(
     try:
         tpl = cdb.get_output_template(payload.template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
 
     # Build rendering context (shared by text + TTS)
 
@@ -223,7 +223,7 @@ async def create_output(
                 else:
                     context["items"] = []
         except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
-            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}")
+            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}") from e
     else:
         if not payload.item_ids and not payload.run_id:
             raise HTTPException(status_code=422, detail="Provide item_ids, run_id, or inline data")
@@ -261,7 +261,7 @@ async def create_output(
         rendered = render_output_template(tpl.body, context)
     except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"render failed: {e}")
-        raise HTTPException(status_code=422, detail="render_failed")
+        raise HTTPException(status_code=422, detail="render_failed") from e
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -274,7 +274,7 @@ async def create_output(
         out_dir.mkdir(parents=True, exist_ok=True)
     except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"failed to create outputs dir: {e}")
-        raise HTTPException(status_code=500, detail="storage_unavailable")
+        raise HTTPException(status_code=500, detail="storage_unavailable") from e
 
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     base_title = payload.title or tpl.name or "output"
@@ -316,13 +316,13 @@ async def create_output(
                 raise
             except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"TTS generation failed: {exc}")
-                raise HTTPException(status_code=500, detail="tts_generation_failed")
+                raise HTTPException(status_code=500, detail="tts_generation_failed") from exc
         else:
             try:
                 path.write_text(rendered_text, encoding="utf-8")
             except _OUTPUTS_NONCRITICAL_EXCEPTIONS as exc:
                 logger.error(f"failed to write output file: {exc}")
-                raise HTTPException(status_code=500, detail="write_failed")
+                raise HTTPException(status_code=500, detail="write_failed") from exc
 
         meta = dict(base_meta)
         if meta_extra:
@@ -347,7 +347,7 @@ async def create_output(
                 os.remove(path)
             except _OUTPUTS_NONCRITICAL_EXCEPTIONS as cleanup_err:
                 logger.warning(f"failed to cleanup output file after DB insert failure: {path} err={cleanup_err}")
-            raise HTTPException(status_code=500, detail="db_insert_failed")
+            raise HTTPException(status_code=500, detail="db_insert_failed") from exc
 
         outputs_created.append((row.id, path))
 
@@ -386,7 +386,7 @@ async def create_output(
             try:
                 tpl_row = cdb.get_output_template(template_id)
             except KeyError:
-                raise HTTPException(status_code=404, detail=detail)
+                raise HTTPException(status_code=404, detail=detail) from None
             if tpl_row.type != template_type:
                 raise HTTPException(status_code=422, detail="invalid_variant_template")
             return tpl_row
@@ -434,7 +434,7 @@ async def create_output(
                 try:
                     tts_tpl = cdb.get_output_template(payload.tts_template_id)
                 except KeyError:
-                    raise HTTPException(status_code=404, detail="tts_template_not_found")
+                    raise HTTPException(status_code=404, detail="tts_template_not_found") from None
                 if tts_tpl.type != "tts_audio":
                     raise HTTPException(status_code=422, detail="invalid_variant_template")
             else:
@@ -467,7 +467,7 @@ async def create_output(
     except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         _cleanup_outputs()
         logger.error(f"outputs.create failed: {e}")
-        raise HTTPException(status_code=500, detail="output_create_failed")
+        raise HTTPException(status_code=500, detail="output_create_failed") from e
 
     return OutputArtifact(
         id=base_row.id,
@@ -489,7 +489,7 @@ async def get_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     return OutputArtifact(
         id=row.id,
         title=row.title,
@@ -510,7 +510,7 @@ async def download_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -551,7 +551,7 @@ async def download_output_by_name(
     try:
         row = cdb.get_output_artifact_by_title(title, format_=(format if format else None))
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,
@@ -589,7 +589,7 @@ async def head_download_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
     user_id = resolve_user_id_for_request(
         current_user,
         as_int=True,
@@ -653,7 +653,7 @@ async def delete_output(
                     p.unlink()
                     fs_deleted = True
         except KeyError:
-            raise HTTPException(status_code=404, detail="output_not_found")
+            raise HTTPException(status_code=404, detail="output_not_found") from None
         except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
             fs_deleted = False
     # Delete metadata (soft by default)
@@ -680,7 +680,7 @@ async def update_output(
     try:
         row = cdb.get_output_artifact(output_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="output_not_found")
+        raise HTTPException(status_code=404, detail="output_not_found") from None
 
     user_id = resolve_user_id_for_request(
         current_user,
@@ -727,7 +727,7 @@ async def update_output(
         try:
             src_text = source_path.read_text(encoding="utf-8")
         except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=500, detail="read_failed")
+            raise HTTPException(status_code=500, detail="read_failed") from None
         if row.format == "md" and payload.format == "html":
             try:
                 import markdown as _md  # type: ignore
@@ -757,7 +757,7 @@ async def update_output(
             new_path = new_filename
             new_format = payload.format
         except _OUTPUTS_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=500, detail="write_failed")
+            raise HTTPException(status_code=500, detail="write_failed") from None
 
     # Apply DB updates via service
     try:
@@ -771,7 +771,7 @@ async def update_output(
         )
     except _OUTPUTS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"outputs.update conflict or DB error: {e}")
-        raise HTTPException(status_code=409, detail="conflict_on_update")
+        raise HTTPException(status_code=409, detail="conflict_on_update") from e
 
     return OutputArtifact(
         id=final.id,

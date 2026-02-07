@@ -839,7 +839,7 @@ class RegistrationService:
 
         except Exception as e:
             logger.error(f"Failed to create registration code: {e}")
-            raise RegistrationError(f"Failed to create registration code: {e}")
+            raise RegistrationError(f"Failed to create registration code: {e}") from e
 
     async def list_registration_codes(
         self,

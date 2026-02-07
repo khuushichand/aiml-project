@@ -359,17 +359,21 @@ def process_pdf(
             except _PDF_NONCRITICAL_EXCEPTIONS as temp_err:
                 # Cleanup directory if creation failed partially
                 if temp_dir_for_pdf and os.path.isdir(temp_dir_for_pdf):
-                    try: shutil.rmtree(temp_dir_for_pdf)
-                    except _PDF_NONCRITICAL_EXCEPTIONS: logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
+                    try:
+                        shutil.rmtree(temp_dir_for_pdf)
+                    except _PDF_NONCRITICAL_EXCEPTIONS:
+                        logging.error(f"Failed secondary cleanup of {temp_dir_for_pdf}")
                 raise OSError(f"Failed to create or write temporary file/dir: {temp_err}") from temp_err
 
         elif isinstance(file_input, Path):
             path_str = str(file_input)
-            if not file_input.exists(): raise FileNotFoundError(f"Input file path does not exist: {path_str}")
+            if not file_input.exists():
+                raise FileNotFoundError(f"Input file path does not exist: {path_str}")
             path_for_processing = path_str # Use original path
             result["processing_source"] = path_str
         elif isinstance(file_input, str):
-            if not os.path.exists(file_input): raise FileNotFoundError(f"Input file path does not exist: {file_input}")
+            if not os.path.exists(file_input):
+                raise FileNotFoundError(f"Input file path does not exist: {file_input}")
             path_for_processing = file_input # Use original path
             result["processing_source"] = file_input
         else:
@@ -507,10 +511,14 @@ def process_pdf(
         except (RuntimeError, pymupdf.FileDataError, pymupdf.EmptyFileError) as parse_lib_err:
              # --- CATCH PDF library errors during parsing specifically ---
              err_msg = str(parse_lib_err)
-             if "password" in err_msg.lower(): log_msg = f"PDF password error during text extraction for {filename}: {err_msg}"
-             elif isinstance(parse_lib_err, pymupdf.EmptyFileError): log_msg = f"PDF empty file error during text extraction for {filename}: {err_msg}"
-             elif isinstance(parse_lib_err, pymupdf.FileDataError): log_msg = f"PDF file data error during text extraction for {filename}: {err_msg}"
-             else: log_msg = f"PDF library runtime error during text extraction for {filename}: {err_msg}"
+             if "password" in err_msg.lower():
+                 log_msg = f"PDF password error during text extraction for {filename}: {err_msg}"
+             elif isinstance(parse_lib_err, pymupdf.EmptyFileError):
+                 log_msg = f"PDF empty file error during text extraction for {filename}: {err_msg}"
+             elif isinstance(parse_lib_err, pymupdf.FileDataError):
+                 log_msg = f"PDF file data error during text extraction for {filename}: {err_msg}"
+             else:
+                 log_msg = f"PDF library runtime error during text extraction for {filename}: {err_msg}"
 
              logging.error(log_msg, exc_info=True) # Log specifics
              result["warnings"].append(f"Text extraction failed ({parser}): {err_msg}")
@@ -567,10 +575,14 @@ def process_pdf(
              # --- CATCH PDF library errors during metadata specifically ---
              err_msg = str(meta_lib_err)
              # Create user-friendly error message for metadata failure
-             if "password" in err_msg.lower(): meta_fail_reason = "PDF Error: Password required or invalid."
-             elif isinstance(meta_lib_err, pymupdf.EmptyFileError): meta_fail_reason = "PDF Error: Input file is empty."
-             elif isinstance(meta_lib_err, pymupdf.FileDataError): meta_fail_reason = "PDF Error: Corrupted or invalid file data."
-             else: meta_fail_reason = f"PDF Library Error: {err_msg}" # General PDF error
+             if "password" in err_msg.lower():
+                 meta_fail_reason = "PDF Error: Password required or invalid."
+             elif isinstance(meta_lib_err, pymupdf.EmptyFileError):
+                 meta_fail_reason = "PDF Error: Input file is empty."
+             elif isinstance(meta_lib_err, pymupdf.FileDataError):
+                 meta_fail_reason = "PDF Error: Corrupted or invalid file data."
+             else:
+                 meta_fail_reason = f"PDF Library Error: {err_msg}" # General PDF error
 
              logging.error(f"Metadata extraction failed for {filename}: {meta_fail_reason}", exc_info=True)
              result["warnings"].append(f"Metadata extraction failed: {meta_fail_reason}")

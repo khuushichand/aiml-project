@@ -466,7 +466,7 @@ class AccessController:
                 return True
 
             # Check role-based access
-            if user_role in acl["roles"]:
+            if user_role in acl["roles"]:  # noqa: SIM103
                 return True
 
             # If ACL exists but user not in it, deny

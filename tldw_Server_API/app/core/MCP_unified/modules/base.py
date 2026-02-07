@@ -327,7 +327,7 @@ class BaseModule(ABC):
             self.record_circuit_breaker_failure()
 
             logger.error(f"Operation timeout in module {self.name}")
-            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s")
+            raise Exception(f"Operation timeout after {self.config.timeout_seconds}s") from None
 
         except Exception as e:
             # Record failure
@@ -443,7 +443,7 @@ class BaseModule(ABC):
 
     # Validation helpers
 
-    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):
+    def validate_tool_arguments(self, tool_name: str, arguments: dict[str, Any]):  # noqa: B027
         """
         Validate tool arguments against schema.
 

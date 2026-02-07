@@ -77,7 +77,7 @@ async def personalization_opt_in(
         return prof
     except Exception as e:
         logger.warning(f"Opt-in failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update personalization profile")
+        raise HTTPException(status_code=500, detail="Failed to update personalization profile") from e
 
 
 @router.post("/purge", response_model=PurgeResponse, tags=["personalization"], status_code=status.HTTP_200_OK)
@@ -99,7 +99,7 @@ async def personalization_purge(
         )
     except Exception as e:
         logger.warning(f"Purge failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to purge personalization data")
+        raise HTTPException(status_code=500, detail="Failed to purge personalization data") from e
 
 
 @router.get("/profile", response_model=PersonalizationProfile, tags=["personalization"], status_code=status.HTTP_200_OK)

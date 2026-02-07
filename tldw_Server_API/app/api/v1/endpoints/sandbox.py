@@ -212,9 +212,9 @@ async def _resolve_sandbox_ws_user_id(
         except HTTPException:
             raise
         except (InvalidTokenError, TokenExpiredError):
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
         sub = payload.get("user_id") or payload.get("sub")
         if sub is None:
@@ -222,7 +222,7 @@ async def _resolve_sandbox_ws_user_id(
         try:
             return int(sub)
         except _SANDBOX_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=401, detail="invalid_token")
+            raise HTTPException(status_code=401, detail="invalid_token") from None
 
     if api_key:
         settings = get_settings()
@@ -464,7 +464,7 @@ async def create_session(
                         "prior_created_at": getattr(e, "prior_created_at", None),
                     }
                 }
-            })
+            }) from e
         if isinstance(e, QueueFull):
             # Backpressure: 429 with Retry-After
             retry_after = getattr(e, "retry_after", 30)
@@ -474,7 +474,7 @@ async def create_session(
                     "message": "Sandbox run queue is full",
                     "details": {"retry_after": retry_after}
                 }
-            }, headers={"Retry-After": str(int(retry_after))})
+            }, headers={"Retry-After": str(int(retry_after))}) from e
         if isinstance(e, SandboxService.InvalidSpecVersion):
             raise HTTPException(status_code=400, detail={
                 "error": {
@@ -482,7 +482,7 @@ async def create_session(
                     "message": str(e),
                     "details": {"supported": e.supported, "provided": e.provided}
                 }
-            })
+            }) from e
         if isinstance(e, SandboxService.InvalidFirecrackerConfig):
             return JSONResponse(status_code=400, content={
                 "error": {
@@ -584,9 +584,9 @@ async def create_snapshot(
             size_bytes=result["size_bytes"],
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post(
@@ -611,9 +611,9 @@ async def restore_snapshot(
             snapshot_id=payload.snapshot_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post(
@@ -641,10 +641,10 @@ async def clone_session(
             cloned_from=session_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except _SANDBOX_NONCRITICAL_EXCEPTIONS as e:
         logger.exception(f"Clone session failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get(
@@ -1385,7 +1385,7 @@ async def cancel_run(
                 "message": str(e),
                 "details": {"run_id": run_id}
             }
-        })
+        }) from e
 
 
 @router.websocket("/runs/{run_id}/stream")
@@ -1429,7 +1429,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
         try:
             await websocket.close(code=4401)
         finally:
-            return
+            return  # noqa: B012
     # Ownership check before streaming
     try:
         owner = _service._orch.get_run_owner(run_id)  # type: ignore[attr-defined]
@@ -1454,12 +1454,12 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
             try:
                 await websocket.close(code=4404)
             finally:
-                return
+                return  # noqa: B012
     if str(owner) != str(user_id):
         try:
             await websocket.close(code=4404)
         finally:
-            return
+            return  # noqa: B012
 
     # Enforce signed WS URL validation when enabled (in addition to auth).
     try:
@@ -1474,7 +1474,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
+                    return  # noqa: B012
             qp = websocket.query_params  # type: ignore[attr-defined]
             token = qp.get("token") if qp else None  # type: ignore[assignment]
             exp = qp.get("exp") if qp else None  # type: ignore[assignment]
@@ -1487,7 +1487,7 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
+                    return  # noqa: B012
             try:
                 msg = f"{run_id}:{exp_i}".encode()
                 expected = hmac.new(str(secret).encode("utf-8"), msg, hashlib.sha256).hexdigest()
@@ -1497,13 +1497,13 @@ async def stream_run_logs(websocket: WebSocket, run_id: str) -> None:
                 try:
                     await websocket.close(code=1008)
                 finally:
-                    return
+                    return  # noqa: B012
     except _SANDBOX_NONCRITICAL_EXCEPTIONS:
         # On any unexpected error during validation, fail closed
         try:
             await websocket.close(code=1008)
         finally:
-            return
+            return  # noqa: B012
 
     await websocket.accept()
     # Wrap for WS metrics; keep domain frames unchanged

@@ -279,7 +279,7 @@ class OpenAIAdapter(ChatProvider):
                     resp.raise_for_status()
                     return resp.json()
             except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # If disabled explicitly, raise clear error rather than falling back
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")
@@ -321,7 +321,7 @@ class OpenAIAdapter(ChatProvider):
                         yield from finalize_stream(response=resp, done_already=seen_done)
                 return
             except _OPENAI_ADAPTER_NONCRITICAL_EXCEPTIONS as e:
-                raise self.normalize_error(e)
+                raise self.normalize_error(e) from e
 
         # If disabled explicitly, raise clear error rather than falling back
         raise RuntimeError("OpenAIAdapter native HTTP disabled by configuration")

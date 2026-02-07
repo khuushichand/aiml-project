@@ -615,7 +615,7 @@ def _validate_definition_payload(defn: dict[str, Any]) -> None:
         try:
             cfg_bytes = len(json.dumps(cfg, separators=(",", ":")))
         except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-            raise HTTPException(status_code=422, detail="Invalid step config JSON")
+            raise HTTPException(status_code=422, detail="Invalid step config JSON") from None
         if cfg_bytes > MAX_STEP_CONFIG_BYTES:
             raise HTTPException(status_code=413, detail=f"Step '{sid}' config too large")
         if t in {"wait_for_human", "wait_for_approval"}:
@@ -1072,7 +1072,7 @@ async def create_definition(
         )
     except sqlite3.IntegrityError:
         # Duplicate name+version for tenant
-        raise HTTPException(status_code=422, detail="Workflow with same name and version already exists")
+        raise HTTPException(status_code=422, detail="Workflow with same name and version already exists") from None
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise
     # Audit create
@@ -1158,7 +1158,7 @@ async def create_new_version(
             definition=body.model_dump(),
         )
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=422, detail="Workflow version already exists")
+        raise HTTPException(status_code=422, detail="Workflow version already exists") from None
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
         raise
     # Audit new version
@@ -2798,7 +2798,7 @@ async def download_artifact(
             return StreamingResponse(_iter(), status_code=206, headers=headers)
         except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
             # 416 Range Not Satisfiable
-            raise HTTPException(status_code=416, detail="Invalid Range header")
+            raise HTTPException(status_code=416, detail="Invalid Range header") from None
     # Full response
     ascii_name, encoded_name = _safe_disp_parts(p.name)
     headers = {
@@ -2881,7 +2881,7 @@ async def download_run_artifacts_zip(
     # Build zip in-memory (store)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_STORED) as zf:
-        for p, mime in selected:
+        for p, _mime in selected:
             try:
                 zf.write(str(p), arcname=p.name)
             except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
@@ -2905,7 +2905,7 @@ async def get_chunker_options():
         from tldw_Server_API.app.core.Chunking import DEFAULT_CHUNK_OPTIONS
         from tldw_Server_API.app.core.Chunking.base import ChunkingMethod
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-        raise HTTPException(status_code=500, detail="Chunking module unavailable")
+        raise HTTPException(status_code=500, detail="Chunking module unavailable") from None
 
     defaults = DEFAULT_CHUNK_OPTIONS.copy()
     methods = [m.value for m in ChunkingMethod]
@@ -3483,7 +3483,7 @@ async def get_workflow_template(name: str) -> dict[str, Any]:
         raise
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load template")
+        raise HTTPException(status_code=500, detail="Failed to load template") from e
 
 @router.get("/templates/_byname/{name:path}")
 async def get_workflow_template_legacy(name: str) -> dict[str, Any]:
@@ -3527,7 +3527,7 @@ async def get_workflow_template_legacy(name: str) -> dict[str, Any]:
         raise
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS as e:
         logger.warning(f"Failed to read workflow template {name}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to load template")
+        raise HTTPException(status_code=500, detail="Failed to load template") from e
 
 
 @router.get(
@@ -3984,7 +3984,7 @@ async def workflows_ws(
         jwtm = get_jwt_manager()
         token_data = jwtm.verify_token(token)
     except _WORKFLOWS_NONCRITICAL_EXCEPTIONS:
-        raise RuntimeError("Invalid token")
+        raise RuntimeError("Invalid token") from None
 
     # Run-level authorization: owner or admin
     run = db.get_run(run_id)

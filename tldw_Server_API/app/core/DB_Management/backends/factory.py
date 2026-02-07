@@ -108,7 +108,7 @@ class BackendFactory:
             normalized = normalize_backend_name(backend_type)
             backend_enum = BackendType(normalized)
         except ValueError:
-            raise DatabaseError(f"Invalid backend type: {backend_type}")
+            raise DatabaseError(f"Invalid backend type: {backend_type}") from None
 
         # Build configuration from environment
         config = DatabaseConfig(backend_type=backend_enum)
@@ -177,7 +177,7 @@ class BackendFactory:
         try:
             backend_type = BackendType(backend_type_str)
         except ValueError:
-            raise DatabaseError(f"Invalid backend type: {backend_type_str}")
+            raise DatabaseError(f"Invalid backend type: {backend_type_str}") from None
 
         config = DatabaseConfig(backend_type=backend_type)
 

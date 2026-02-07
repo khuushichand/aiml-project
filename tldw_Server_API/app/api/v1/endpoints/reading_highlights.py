@@ -97,7 +97,7 @@ async def create_highlight(
         )
     except Exception as e:
         logger.error(f"create_highlight failed: {e}")
-        raise HTTPException(status_code=500, detail="highlight_create_failed")
+        raise HTTPException(status_code=500, detail="highlight_create_failed") from e
     return Highlight(
         id=row.id,
         item_id=row.item_id,
@@ -153,7 +153,7 @@ async def update_highlight(
     try:
         row = db.update_highlight(highlight_id=highlight_id, patch=patch)
     except KeyError:
-        raise HTTPException(status_code=404, detail="highlight_not_found")
+        raise HTTPException(status_code=404, detail="highlight_not_found") from None
     return Highlight(
         id=row.id,
         item_id=row.item_id,

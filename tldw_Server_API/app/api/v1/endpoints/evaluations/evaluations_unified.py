@@ -317,7 +317,7 @@ async def admin_cleanup_idempotency(
         raise
     except _EVALS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Admin idempotency cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail="Idempotency cleanup failed")
+        raise HTTPException(status_code=500, detail="Idempotency cleanup failed") from e
 
 
 def _estimate_tokens_from_texts(*texts: Optional[str], provider: Optional[str] = None, model: Optional[str] = None) -> int:
@@ -511,7 +511,7 @@ async def delete_embeddings_abtest(
         logger.info(f"A/B test deleted: {test_id} by {user_ctx}")
     except _EVALS_NONCRITICAL_EXCEPTIONS as exc:
         logger.warning(f"A/B test cleanup failed for {test_id}: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to delete A/B test")
+        raise HTTPException(status_code=500, detail="Failed to delete A/B test") from exc
     log_evaluation_deleted(user_id=str(current_user.id), eval_id=test_id)
     try:
         if idempotency_key:
@@ -672,7 +672,7 @@ async def get_rate_limit_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get rate limit status: {sanitize_error_message(e, 'rate limit check')}"
-        )
+        ) from e
 
 
 from .evaluations_crud import crud_router
@@ -955,7 +955,7 @@ async def evaluate_geval(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=_detail
-        )
+        ) from e
 
 
 @router.post("/rag", response_model=RAGEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
@@ -1123,7 +1123,7 @@ async def evaluate_rag(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"RAG evaluation failed: {sanitize_error_message(e, 'RAG evaluation')}"
-        )
+        ) from e
 
 
 @router.post("/response-quality", response_model=ResponseQualityResponse, dependencies=[Depends(check_evaluation_rate_limit)])
@@ -1289,7 +1289,7 @@ async def evaluate_response_quality(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Quality evaluation failed: {sanitize_error_message(e, 'quality evaluation')}"
-        )
+        ) from e
 
 
 @router.post("/propositions", response_model=PropositionEvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
@@ -1362,7 +1362,7 @@ async def evaluate_propositions_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Proposition evaluation failed: {sanitize_error_message(e, 'proposition evaluation')}"
-        )
+        ) from e
 
 
 
@@ -1718,7 +1718,7 @@ async def batch_evaluate(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Batch evaluation failed: {sanitize_error_message(e, 'batch evaluation')}"
-        )
+        ) from e
 
 
 # ============= OCR Evaluation Endpoint =============
@@ -1785,7 +1785,7 @@ async def evaluate_ocr_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OCR evaluation failed: {sanitize_error_message(e, 'ocr evaluation')}"
-        )
+        ) from e
 
 
 @router.post("/ocr-pdf", response_model=OCREvaluationResponse, dependencies=[Depends(check_evaluation_rate_limit)])
@@ -1912,7 +1912,7 @@ async def evaluate_ocr_pdf_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"OCR PDF evaluation failed: {sanitize_error_message(e, 'ocr pdf evaluation')}"
-        )
+        ) from e
 
 
 # ============= Evaluation History Endpoint =============
@@ -2000,7 +2000,7 @@ async def get_evaluation_history(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve history: {sanitize_error_message(e, 'retrieving history')}"
-        )
+        ) from e
 
 
 def _promote_static_routes(_router: APIRouter) -> None:

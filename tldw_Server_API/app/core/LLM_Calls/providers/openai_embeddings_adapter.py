@@ -94,7 +94,7 @@ class OpenAIEmbeddingsAdapter(EmbeddingsProvider):
                 return resp.json()
             except Exception as e:
                 from tldw_Server_API.app.core.Chat.Chat_Deps import ChatProviderError
-                raise ChatProviderError(provider=self.name, message=str(e))
+                raise ChatProviderError(provider=self.name, message=str(e)) from e
 
         # Delegate-first fallback using legacy helper(s)
         from tldw_Server_API.app.core.LLM_Calls import chat_calls as legacy

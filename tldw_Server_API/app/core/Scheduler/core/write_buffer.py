@@ -132,7 +132,7 @@ class SafeWriteBuffer:
             self.buffer = tasks_to_flush + self.buffer
 
             # Re-raise to alert caller
-            raise BufferFlushError(f"Flush failed: {e}")
+            raise BufferFlushError(f"Flush failed: {e}") from e
 
     async def _flush_timer(self):
         """

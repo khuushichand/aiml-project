@@ -12,11 +12,11 @@ import threading
 import time
 import weakref
 from collections import deque
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Condition, Lock
-from typing import Any, AsyncContextManager, Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -304,12 +304,12 @@ class ConnectionPool:
             if connection:
                 self._return_connection(connection)
 
-    async def get_connection_async(self) -> AsyncContextManager[PooledConnection]:
+    async def get_connection_async(self) -> AbstractAsyncContextManager[PooledConnection]:
         """
         Get a connection asynchronously (future aiosqlite compatibility).
 
         Returns:
-            AsyncContextManager[PooledConnection]: Connection wrapper
+            AbstractAsyncContextManager[PooledConnection]: Connection wrapper
         """
         return self._async_connection_context()
 
@@ -610,7 +610,7 @@ class EvaluationsConnectionManager:
         """Get a database connection (synchronous)."""
         return self._pool.get_connection()
 
-    async def get_connection_async(self) -> AsyncContextManager[PooledConnection]:
+    async def get_connection_async(self) -> AbstractAsyncContextManager[PooledConnection]:
         """Get a database connection (asynchronous)."""
         return await self._pool.get_connection_async()
 

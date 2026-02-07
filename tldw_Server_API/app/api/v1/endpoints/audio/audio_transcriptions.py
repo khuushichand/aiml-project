@@ -848,4 +848,4 @@ async def segment_transcript(
         raise
     except _AUDIO_TRANSCRIPTIONS_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Transcript segmentation error: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transcript segmentation failed")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Transcript segmentation failed") from e

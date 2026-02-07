@@ -135,7 +135,7 @@ def _get_or_create_prompt_studio_db(user_id: str, client_id: str) -> PromptStudi
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to initialize database"
-            )
+            ) from e
 
 ########################################################################################################################
 # User Context Dependencies
@@ -429,7 +429,7 @@ async def require_project_access(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Database error"
-        )
+        ) from e
 
 async def require_project_write_access(
     project_id: int,

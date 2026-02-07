@@ -237,11 +237,13 @@ when MCP runs with local-only defaults (loopback IP/origin restrictions).
 These ephemeral secrets do not persist across restarts.
 
 For shared or production deployments (when MCP is accessible beyond localhost),
-set these explicitly in `.env` and rotate regularly:
+set these explicitly in `.env` and rotate regularly.
+Run these commands in your shell and paste the resulting values into your `.env`
+(do not paste the command templates themselves):
 ```bash
-# Generate secure secrets (example)
-MCP_JWT_SECRET=$(openssl rand -base64 32)
-MCP_API_KEY_SALT=$(openssl rand -base64 32)
+# Generate secure secrets — run each command, then copy the output into .env
+openssl rand -base64 32   # paste the output as the value for MCP_JWT_SECRET
+openssl rand -base64 32   # paste the output as the value for MCP_API_KEY_SALT
 ```
 See [MCP System Admin Guide](Docs/MCP/Unified/System_Admin_Guide.md) for details.
 </details>

@@ -780,7 +780,7 @@ class UnifiedFeedbackSystem:
                 )
             except ValueError as e:
                 logger.debug(f"Personalization store update skipped for user_id={user_id}: {e}")
-            except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+            except (AttributeError, OSError, RuntimeError, TypeError) as e:
                 logger.debug(f"Personalization store update failed: {e}")
 
             # Emit anonymized analytics
@@ -1000,7 +1000,7 @@ async def apply_feedback_boost(context: Any, **kwargs) -> Any:
         context.documents = store.boost_documents(context.documents, corpus=context.config.get("index_namespace"))
     except ValueError as e:
         logger.debug(f"Feedback boost skipped for user_id={user_id}: {e}")
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError) as e:
+    except (AttributeError, OSError, RuntimeError, TypeError) as e:
         logger.debug(f"Feedback boost failed: {e}")
     else:
         return context

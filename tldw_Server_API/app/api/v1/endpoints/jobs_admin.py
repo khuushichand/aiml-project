@@ -118,7 +118,7 @@ def _enforce_domain_scope(user: dict, domain: str | None) -> None:
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as _rbac_exc:
         # Fail-closed in forced mode (tests), otherwise fail-open to avoid lockout
         if _is_truthy(os.getenv("JOBS_RBAC_FORCE")):
-            raise HTTPException(status_code=403, detail="RBAC enforcement error")
+            raise HTTPException(status_code=403, detail="RBAC enforcement error") from _rbac_exc
         return
 
 
@@ -191,7 +191,7 @@ class PruneRequest(BaseModel):
         try:
             items = list(v) if isinstance(v, (list, tuple)) else [v]
         except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS:
-            raise ValueError("statuses must be a list of strings")
+            raise ValueError("statuses must be a list of strings") from None
         out = []
         for item in items:
             s = str(item or "").strip().lower()
@@ -352,7 +352,7 @@ async def prune_jobs_endpoint(
         # Preserve intended HTTP errors (e.g., RBAC 403)
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Prune failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Prune failed: {e}") from e
 
 
 # --- Queue controls (pause/resume/drain) ---
@@ -381,7 +381,7 @@ async def queue_control_endpoint(
     try:
         flags = jm.set_queue_control(req.domain, req.queue, req.action)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return QueueFlagsResponse(**flags)
 
 
@@ -430,7 +430,7 @@ async def reschedule_jobs_endpoint(
     try:
         n = jm.reschedule_jobs(domain=req.domain, queue=req.queue, job_type=req.job_type, status=req.status, set_now=req.set_now, delta_seconds=req.delta_seconds, dry_run=req.dry_run)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return AffectedResponse(affected=int(n))
 
 
@@ -514,7 +514,7 @@ async def add_job_attachment_endpoint(
             raise HTTPException(status_code=500, detail="Failed to read back attachment")
         return _normalize_attachment_item(item)
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
 
 
 @router.get("/jobs/{job_id}/attachments", response_model=list[AttachmentItem])
@@ -585,24 +585,32 @@ async def list_sla_policies_endpoint(
             # Apply Postgres RLS context so listings respect the same domain policies as jobs.
             _set_pg_rls_for_user(admin_user, domain)
             with jm._pg_cursor(conn) as cur:
-                where = ["1=1"]; params: list = []
+                where = ["1=1"]
+                params: list = []
                 if domain:
-                    where.append("domain=%s"); params.append(domain)
+                    where.append("domain=%s")
+                    params.append(domain)
                 if queue:
-                    where.append("queue=%s"); params.append(queue)
+                    where.append("queue=%s")
+                    params.append(queue)
                 if job_type:
-                    where.append("job_type=%s"); params.append(job_type)
+                    where.append("job_type=%s")
+                    params.append(job_type)
                 cur.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params))
                 rows = cur.fetchall() or []
                 return [dict(r) for r in rows]
         else:
-            where = ["1=1"]; params2: list = []
+            where = ["1=1"]
+            params2: list = []
             if domain:
-                where.append("domain=?"); params2.append(domain)
+                where.append("domain=?")
+                params2.append(domain)
             if queue:
-                where.append("queue=?"); params2.append(queue)
+                where.append("queue=?")
+                params2.append(queue)
             if job_type:
-                where.append("job_type=?"); params2.append(job_type)
+                where.append("job_type=?")
+                params2.append(job_type)
             rows = conn.execute(f"SELECT * FROM job_sla_policies WHERE {' AND '.join(where)} ORDER BY domain,queue,job_type", tuple(params2)).fetchall() or []
             return [dict(r) for r in rows]
     finally:
@@ -654,7 +662,7 @@ async def rotate_crypto_endpoint(
             dry_run=bool(body.dry_run),
         )
     except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
     return CryptoRotateResponse(affected=int(n))
 
 
@@ -1075,7 +1083,7 @@ async def ttl_sweep_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}")
+        raise HTTPException(status_code=500, detail=f"TTL sweep failed: {e}") from e
 
 
 class IntegritySweepRequest(BaseModel):
@@ -1155,7 +1163,7 @@ async def integrity_sweep_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Integrity sweep failed: {e}") from e
 
 
 class QueueStatsResponse(BaseModel):
@@ -1201,7 +1209,7 @@ async def get_jobs_stats(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Stats failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Stats failed: {e}") from e
 
 
 class ArchiveMetaResponse(BaseModel):
@@ -1354,7 +1362,7 @@ async def list_jobs_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"List failed: {e}")
+        raise HTTPException(status_code=500, detail=f"List failed: {e}") from e
 
 
 class StaleGroup(BaseModel):
@@ -1417,7 +1425,7 @@ async def stale_processing_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Stale groups failed: {e}") from e
 
 
 @router.get("/jobs/{job_id}", response_model=JobDetailResponse)
@@ -1651,7 +1659,7 @@ async def batch_cancel_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch cancel failed: {e}") from e
 
 
 class BatchRescheduleRequest(BaseModel):
@@ -1790,7 +1798,7 @@ async def batch_reschedule_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch reschedule failed: {e}") from e
 
 
 class BatchRequeueQuarantinedRequest(BaseModel):
@@ -1890,11 +1898,14 @@ async def batch_requeue_quarantined_endpoint(
                 where = ["domain = %s", "status = 'quarantined'"]
                 params: list = [req.domain]
                 if req.queue:
-                    where.append("queue = %s"); params.append(req.queue)
+                    where.append("queue = %s")
+                    params.append(req.queue)
                 if req.job_type:
-                    where.append("job_type = %s"); params.append(req.job_type)
+                    where.append("job_type = %s")
+                    params.append(req.job_type)
                 if req.job_id is not None:
-                    where.append("id = %s"); params.append(int(req.job_id))
+                    where.append("id = %s")
+                    params.append(int(req.job_id))
                 with conn:
                     with jm._pg_cursor(conn) as cur:
                         if req.dry_run:
@@ -1944,11 +1955,14 @@ async def batch_requeue_quarantined_endpoint(
                 where = ["domain = ?", "status = 'quarantined'"]
                 params2: list = [req.domain]
                 if req.queue:
-                    where.append("queue = ?"); params2.append(req.queue)
+                    where.append("queue = ?")
+                    params2.append(req.queue)
                 if req.job_type:
-                    where.append("job_type = ?"); params2.append(req.job_type)
+                    where.append("job_type = ?")
+                    params2.append(req.job_type)
                 if req.job_id is not None:
-                    where.append("id = ?"); params2.append(int(req.job_id))
+                    where.append("id = ?")
+                    params2.append(int(req.job_id))
                 if req.dry_run:
                     cur = conn.execute(f"SELECT COUNT(*) FROM jobs WHERE {' AND '.join(where)}", tuple(params2))
                     r = cur.fetchone()
@@ -1992,4 +2006,4 @@ async def batch_requeue_quarantined_endpoint(
     except HTTPException:
         raise
     except _JOBS_ADMIN_NONCRITICAL_EXCEPTIONS as e:
-        raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Batch requeue quarantined failed: {e}") from e

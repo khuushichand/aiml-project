@@ -354,7 +354,7 @@ def ensure_job_events_pg(db_url: str) -> None:
         return
     from .pg_util import negotiate_pg_dsn
     _dsn = negotiate_pg_dsn(db_url)
-    str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
+    _rls_debug = str(os.getenv("JOBS_PG_RLS_DEBUG", "")).lower() in {"1", "true", "yes", "on"}
     try:
         with psycopg.connect(_dsn, autocommit=True) as conn, conn.cursor() as cur:
             cur.execute(

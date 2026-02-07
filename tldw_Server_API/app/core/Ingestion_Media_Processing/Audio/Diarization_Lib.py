@@ -1214,7 +1214,7 @@ class DiarizationService:
                         return _fallback_full_span()
 
                     # Validate each timestamp has required fields
-                    for i, ts in enumerate(speech_timestamps):
+                    for _i, ts in enumerate(speech_timestamps):
                         if not isinstance(ts, dict) or 'start' not in ts or 'end' not in ts:
                             logger.debug("Invalid VAD timestamp format; using fallback full-span")
                             return _fallback_full_span()
@@ -1951,7 +1951,7 @@ def audio_diarization(
         if isinstance(e, DiarizationError):
             raise
         else:
-            raise DiarizationError(f"Diarization failed: {str(e)}")
+            raise DiarizationError(f"Diarization failed: {str(e)}") from e
 
 
 def combine_transcription_and_diarization(

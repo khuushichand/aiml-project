@@ -45,6 +45,7 @@ import {
 } from "@/utils/disco-skill-check"
 import { useStoreMessage } from "@/store"
 import { updateMessageDiscoSkillComment } from "@/db/dexie/helpers"
+import type { MessageSteeringMode } from "@/types/message-steering"
 
 const Markdown = React.lazy(() => import("../../Common/Markdown"))
 
@@ -145,6 +146,11 @@ type Props = {
   pinned?: boolean
   characterIdentity?: Character | null
   characterIdentityEnabled?: boolean
+  messageSteeringMode?: MessageSteeringMode
+  onMessageSteeringModeChange?: (mode: MessageSteeringMode) => void
+  messageSteeringForceNarrate?: boolean
+  onMessageSteeringForceNarrateChange?: (enabled: boolean) => void
+  onClearMessageSteering?: () => void
 }
 
 export const PlaygroundMessage = (props: Props) => {
@@ -1205,6 +1211,13 @@ export const PlaygroundMessage = (props: Props) => {
               temporaryChat={props.temporaryChat}
               hideContinue={props.hideContinue}
               onContinue={props.onContinue}
+              messageSteeringMode={props.messageSteeringMode}
+              onMessageSteeringModeChange={props.onMessageSteeringModeChange}
+              messageSteeringForceNarrate={props.messageSteeringForceNarrate}
+              onMessageSteeringForceNarrateChange={
+                props.onMessageSteeringForceNarrateChange
+              }
+              onClearMessageSteering={props.onClearMessageSteering}
               onEdit={() => setEditMode(true)}
               editMode={editMode}
               feedbackSelected={thumb}

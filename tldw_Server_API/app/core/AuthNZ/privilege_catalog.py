@@ -64,13 +64,13 @@ class OwnershipPredicateEntry(BaseModel):
     description: str | None
 
     @validator("id")
-    def validate_id(self, value: str) -> str:
+    def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Ownership predicate id cannot be empty.")
         return value
 
     @validator("evaluator")
-    def validate_evaluator(self, value: str) -> str:
+    def validate_evaluator(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Ownership predicate evaluator cannot be empty.")
         return value
@@ -85,13 +85,13 @@ class RateLimitClassEntry(BaseModel):
     notes: str | None
 
     @validator("id")
-    def validate_id(self, value: str) -> str:
+    def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Rate limit class id cannot be empty.")
         return value
 
     @validator("requests_per_min", "burst")
-    def validate_positive(self, value: int) -> int:
+    def validate_positive(cls, value: int) -> int:
         if value < 0:
             raise ValueError("Rate limit quotas must be non-negative.")
         return value
@@ -107,13 +107,13 @@ class FeatureFlagEntry(BaseModel):
     expires_at: str | None
 
     @validator("id")
-    def validate_id(self, value: str) -> str:
+    def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Feature flag id cannot be empty.")
         return value
 
     @validator("default_state")
-    def validate_state(self, value: str) -> str:
+    def validate_state(cls, value: str) -> str:
         allowed = {"enabled", "disabled"}
         if value not in allowed:
             raise ValueError(f"default_state must be one of {allowed}, got '{value}'.")
@@ -134,32 +134,32 @@ class ScopeEntry(BaseModel):
     doc_url: AnyUrl | None
 
     @validator("id")
-    def validate_id(self, value: str) -> str:
+    def validate_id(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Scope id cannot be empty.")
         return value
 
     @validator("sensitivity_tier")
-    def validate_tier(self, value: str) -> str:
+    def validate_tier(cls, value: str) -> str:
         allowed = {"low", "moderate", "high", "restricted"}
         if value not in allowed:
             raise ValueError(f"sensitivity_tier must be one of {allowed}, got '{value}'.")
         return value
 
     @validator("resource_tags", each_item=True)
-    def validate_resource_tags(self, value: str) -> str:
+    def validate_resource_tags(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Resource tags cannot be empty strings.")
         return value
 
     @validator("default_roles", each_item=True)
-    def validate_roles(self, value: str) -> str:
+    def validate_roles(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Role names cannot be empty strings.")
         return value
 
     @validator("ownership_predicates", each_item=True)
-    def validate_ownership_predicates(self, value: str) -> str:
+    def validate_ownership_predicates(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Ownership predicate identifiers cannot be empty strings.")
         return value
@@ -176,7 +176,7 @@ class PrivilegeCatalog(BaseModel):
     ownership_predicates: list[OwnershipPredicateEntry] = Field(default_factory=list)
 
     @validator("version")
-    def validate_version(self, value: str) -> str:
+    def validate_version(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Catalog version cannot be empty.")
         return value

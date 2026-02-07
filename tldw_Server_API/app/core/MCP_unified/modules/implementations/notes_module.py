@@ -256,7 +256,7 @@ class NotesModule(BaseModule):
         try:
             self.validate_tool_arguments(tool_name, args)
         except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS as ve:
-            raise ValueError(f"Invalid arguments for {tool_name}: {ve}")
+            raise ValueError(f"Invalid arguments for {tool_name}: {ve}") from ve
         if tool_name == "notes.search":
             return await self._search_notes(args, context)
         if tool_name == "notes.get":

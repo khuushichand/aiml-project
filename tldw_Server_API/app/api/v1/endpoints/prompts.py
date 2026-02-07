@@ -342,7 +342,7 @@ async def get_sync_log(
         return [schemas.SyncLogEntryResponse(**entry) for entry in entries]
     except DatabaseError as e:
         logger.error(f"Database error fetching sync log: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 
@@ -379,10 +379,10 @@ async def search_all_prompts(
             per_page=results_per_page
         )
     except ValueError as e: # Bad page/per_page
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error searching prompts: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during search.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during search.") from e
 
 
 # === Keyword Endpoints ===
@@ -427,15 +427,15 @@ async def create_keyword(
             keyword_text=final_keyword_text
         )
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e: # Catches the ConflictError from our explicit check
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error creating keyword: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating keyword: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"An unexpected error occurred: {str(e)}") from e
 
 
 @router.get(
@@ -457,7 +457,7 @@ async def list_all_keywords(
             return db.fetch_all_keywords(include_deleted=False)
     except DatabaseError as e:
         logger.error(f"Database error listing keywords: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 @router.delete(
@@ -477,12 +477,12 @@ async def delete_keyword(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keyword not found or already deleted.")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error deleting keyword '{keyword_text}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 # === Export Endpoints ===
@@ -537,13 +537,13 @@ async def export_prompts_api(
         return schemas.ExportResponse(message=status_msg, file_content_b64=file_b64)
 
     except ValueError as e: # Invalid export format etc.
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error during export: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during export.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error during export.") from e
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error during export: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during export: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during export: {str(e)}") from e
 
 
 @router.get(
@@ -572,7 +572,7 @@ async def export_keywords_api(
         return schemas.ExportResponse(message=status_msg, file_content_b64=file_b64)
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error during keyword export: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during keyword export: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Unexpected error during keyword export: {str(e)}") from e
 
 
 # === Import Endpoints ===
@@ -655,7 +655,7 @@ async def import_prompts_api(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error during import: {str(e)}"
-        )
+        ) from e
 
 
 # === Template Processing Endpoints ===
@@ -689,7 +689,7 @@ async def render_template_api(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Missing template variable: {missing_key}"
-        )
+        ) from e
     return schemas.TemplateRenderResponse(rendered=rendered)
 
 
@@ -817,15 +817,15 @@ async def legacy_create_prompt(
         # Legacy response uses prompt_id
         return {"prompt_id": p_id}
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error creating prompt (legacy): {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error creating prompt (legacy): {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Unexpected error.") from e
 
 @router.post(
     "/",
@@ -884,17 +884,17 @@ async def create_prompt(
         return schemas.PromptResponse(**created_prompt_dict)
 
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:  # This is expected if name exists and overwrite=False
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error creating prompt: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Database error during prompt creation.")
+                            detail="Database error during prompt creation.") from e
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:  # Catch-all for other unexpected errors
         logger.error(f"Unexpected error creating prompt: {e}", exc_info=True)
         # Avoid leaking the raw 'msg' variable if it was a NameError
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred.") from e
 
 @router.get(
     "/",
@@ -933,10 +933,10 @@ async def list_all_prompts(
             total_items=total_items
         )
     except ValueError as e: # For bad page/per_page from DB layer
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error listing prompts: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error listing prompts.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error listing prompts.") from e
 
 
 @router.get(
@@ -964,7 +964,7 @@ async def get_prompt(
         return schemas.PromptResponse(**prompt_details)
     except DatabaseError as e:
         logger.error(f"Database error getting prompt '{prompt_identifier}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 @router.put(
@@ -1021,19 +1021,19 @@ async def update_prompt(
         return schemas.PromptResponse(**final_updated_prompt)
 
     except InputError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error updating prompt '{prompt_identifier}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Database error during prompt update.")
+                            detail="Database error during prompt update.") from e
     except HTTPException:  # Re-raise
         raise
     except _PROMPTS_DB_OPERATION_EXCEPTIONS as e:
         logger.error(f"Unexpected error updating prompt '{prompt_identifier}': {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="An unexpected error occurred during prompt update.")
+                            detail="An unexpected error occurred during prompt update.") from e
 
 
 @router.delete(
@@ -1049,7 +1049,8 @@ async def delete_prompt(
 ) -> Response:
     try:
         processed_identifier: Union[int, str] = prompt_identifier
-        with contextlib.suppress(ValueError): processed_identifier = int(prompt_identifier)
+        with contextlib.suppress(ValueError):
+            processed_identifier = int(prompt_identifier)
 
         success = db.soft_delete_prompt(processed_identifier)
         if not success:
@@ -1057,10 +1058,10 @@ async def delete_prompt(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found or already deleted.")
         return Response(status_code=status.HTTP_204_NO_CONTENT)
     except ConflictError as e: # If version mismatch during delete
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error deleting prompt '{prompt_identifier}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 # === Version Endpoints ===
@@ -1083,7 +1084,7 @@ async def list_prompt_versions(
         return [schemas.PromptVersionResponse(**entry) for entry in versions]
     except DatabaseError as e:
         logger.error(f"Database error listing versions for prompt '{prompt_identifier}': {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 @router.post(
@@ -1118,12 +1119,12 @@ async def restore_prompt_version(
     except InputError as e:
         message = str(e)
         status_code = status.HTTP_404_NOT_FOUND if "not found" in message.lower() else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=status_code, detail=message)
+        raise HTTPException(status_code=status_code, detail=message) from e
     except ConflictError as e:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
     except DatabaseError as e:
         logger.error(f"Database error restoring prompt '{prompt_identifier}' version {version}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error.") from e
 
 
 # === Collection Endpoints (minimal, in-memory for tests) ===

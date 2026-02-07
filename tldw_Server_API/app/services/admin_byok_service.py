@@ -284,7 +284,7 @@ async def test_shared_key(
     try:
         stored_payload = decrypt_byok_payload(loads_envelope(encrypted_blob))
     except Exception:
-        raise HTTPException(status_code=404, detail="Key not found")
+        raise HTTPException(status_code=404, detail="Key not found") from None
 
     api_key = (stored_payload.get("api_key") or "").strip()
     if not api_key:

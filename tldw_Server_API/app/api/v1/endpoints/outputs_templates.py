@@ -105,7 +105,7 @@ async def get_output_template(
     try:
         row = db.get_output_template(template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return OutputTemplate(
         id=row.id,
         user_id=row.user_id,
@@ -135,7 +135,7 @@ async def update_output_template(
     try:
         row = db.update_output_template(template_id, patch)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     return OutputTemplate(
         id=row.id,
         user_id=row.user_id,
@@ -287,7 +287,7 @@ async def preview_output_template(
     try:
         row = db.get_output_template(template_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail="template_not_found")
+        raise HTTPException(status_code=404, detail="template_not_found") from None
     if row.format == "mp3":
         raise HTTPException(status_code=422, detail="tts_audio templates cannot be previewed as text")
 
@@ -300,7 +300,7 @@ async def preview_output_template(
             ctx.setdefault("date", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
             context = ctx
         except (ValueError, TypeError) as e:
-            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}")
+            raise HTTPException(status_code=422, detail=f"invalid_inline_data: {e}") from e
     else:
         # Build real or sample context for rendering
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")

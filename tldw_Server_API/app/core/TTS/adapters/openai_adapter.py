@@ -224,7 +224,7 @@ class OpenAIAdapter(TTSAdapter):
                 f"Failed to initialize {self.provider_name}",
                 provider=self.provider_name,
                 details={"error": str(e)}
-            )
+            ) from e
 
     async def get_capabilities(self) -> TTSCapabilities:
         """Get OpenAI TTS capabilities"""
@@ -324,16 +324,16 @@ class OpenAIAdapter(TTSAdapter):
                 reason = str(e) or e.__class__.__name__
                 if _is_timeout_error(e) or "timeout" in reason.lower():
                     # Map any timeout-like condition (including wrapped ones) to TTSTimeoutError
-                    raise timeout_error(self.provider_name, timeout_seconds=60.0)
+                    raise timeout_error(self.provider_name, timeout_seconds=60.0) from e
                 # All other transport failures are treated as network errors
-                raise network_error(self.provider_name, e)
+                raise network_error(self.provider_name, e) from e
             if not isinstance(e, (TTSProviderError, TTSAuthenticationError, TTSRateLimitError, TTSNetworkError, TTSTimeoutError)):
                 logger.error(f"{self.provider_name} unexpected error: {e}")
                 raise TTSProviderError(
                     f"Unexpected error in {self.provider_name}",
                     provider=self.provider_name,
                     details={"error": str(e), "error_type": type(e).__name__}
-                )
+                ) from e
             raise
 
     async def _handle_http_status_error(self, e: Exception) -> None:
@@ -556,10 +556,10 @@ class OpenAITTSAdapter(OpenAIAdapter):
             raise
         except (TTSProviderError, TTSNetworkError, TTSTimeoutError) as e:
             # Normalize to generation error for tests
-            raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__})
+            raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__}) from e
         except Exception as e:
             if _is_httpx_exception(e):
-                raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__})
+                raise TTSGenerationError(str(e), provider=self._provider_simple, details={"error_type": type(e).__name__}) from e
             raise
         finally:
             if old_model is not None:
@@ -604,7 +604,7 @@ class OpenAITTSAdapter(OpenAIAdapter):
         except Exception as e:
             if isinstance(e, (CoreNetworkError, RetryExhaustedError)) or _is_httpx_exception(e):
                 # Wrap network/API issues as generation errors per tests
-                raise TTSGenerationError(str(e), provider=self._provider_simple)
+                raise TTSGenerationError(str(e), provider=self._provider_simple) from e
             raise
 
     def get_info(self) -> dict[str, Any]:

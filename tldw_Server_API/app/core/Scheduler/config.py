@@ -246,7 +246,7 @@ class SchedulerConfig:
             self.emergency_backup_path.parent.mkdir(parents=True, exist_ok=True)
         except (PermissionError, OSError) as e:
             logger.error(f"Failed to create scheduler directories: {e}")
-            raise ValueError(f"Cannot create scheduler directories at {self.base_path}: {e}")
+            raise ValueError(f"Cannot create scheduler directories at {self.base_path}: {e}") from e
 
         # Validate configuration
         self._validate()

@@ -435,7 +435,7 @@ def _ocr_via_transformers(image_bytes: bytes, prompt: str, skip_special_tokens: 
     try:
         from PIL import Image
     except ImportError:
-        raise RuntimeError("Pillow is required for transformers mode (PIL).")
+        raise RuntimeError("Pillow is required for transformers mode (PIL).") from None
 
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     inputs = _build_transformer_inputs(processor, image, prompt)

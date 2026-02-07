@@ -281,7 +281,7 @@ def classify_claim_type(claim_text: str) -> tuple[ClaimType, dict[str, Any]]:
     # Check for quotes first (highest priority)
     if _QUOTE_PATTERNS.search(text):
         quotes = _QUOTE_PATTERNS.findall(text)
-        extracted["quotes"] = [q.strip('""\u201c\u201d') for q in quotes]
+        extracted["quotes"] = [q.strip('""\u201c\u201d') for q in quotes]  # noqa: B005
         return ClaimType.QUOTE, extracted
 
     # Check for statistics (numbers with context)

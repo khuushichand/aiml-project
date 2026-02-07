@@ -346,7 +346,7 @@ class StripeClient:
                 payload_str = payload.decode("utf-8")
             except UnicodeDecodeError as e:
                 logger.warning(f"Webhook payload decode failed: {e}")
-                raise ValueError("Invalid webhook payload")
+                raise ValueError("Invalid webhook payload") from e
         else:
             payload_str = payload
 
@@ -358,7 +358,7 @@ class StripeClient:
             )
         except stripe.error.SignatureVerificationError as e:
             logger.warning(f"Webhook signature verification failed: {e}")
-            raise ValueError("Invalid webhook signature")
+            raise ValueError("Invalid webhook signature") from e
 
     def get_price_id(self, plan_name: str, billing_cycle: str = "monthly") -> str | None:
         """

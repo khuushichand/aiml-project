@@ -261,7 +261,7 @@ class AudioConverter:
 
         except FileNotFoundError:
             logger.error("FFmpeg not found. Please install FFmpeg.")
-            raise AudioConversionError("FFmpeg is required for audio conversion")
+            raise AudioConversionError("FFmpeg is required for audio conversion") from None
         except _AUDIO_CONVERSION_EXCEPTIONS as e:
             logger.error(f"Audio conversion error: {e}")
             return False

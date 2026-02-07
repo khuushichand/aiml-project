@@ -263,8 +263,8 @@ class UserDatabase:
                 raise
             emsg = str(e).lower()
             if ("duplicate" in emsg) or ("unique" in emsg) or ("already exists" in emsg):
-                raise DuplicateUserError("Username or email already exists")
-            raise UserDatabaseError(f"Failed to create user: {e}")
+                raise DuplicateUserError("Username or email already exists") from e
+            raise UserDatabaseError(f"Failed to create user: {e}") from e
 
     def get_user(self, user_id: Optional[int] = None, username: Optional[str] = None,
                  email: Optional[str] = None) -> Optional[dict[str, Any]]:

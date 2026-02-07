@@ -141,7 +141,7 @@ async def list_skills(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.get("/context", response_model=SkillContextPayload)
@@ -166,7 +166,7 @@ async def get_skills_context(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.get("/{skill_name}", response_model=SkillResponse)
@@ -186,13 +186,13 @@ async def get_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_name}' not found",
-        )
+        ) from None
     except SkillsError as e:
         logger.error(f"Error getting skill '{skill_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.post("/", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -216,18 +216,18 @@ async def create_skill(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
-        )
+        ) from e
     except SkillValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except SkillsError as e:
         logger.error(f"Error creating skill: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.put("/{skill_name}", response_model=SkillResponse)
@@ -254,23 +254,23 @@ async def update_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_name}' not found",
-        )
+        ) from None
     except SkillConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
-        )
+        ) from e
     except SkillValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except SkillsError as e:
         logger.error(f"Error updating skill '{skill_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.delete("/{skill_name}", status_code=status.HTTP_204_NO_CONTENT)
@@ -290,18 +290,18 @@ async def delete_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_name}' not found",
-        )
+        ) from None
     except SkillConflictError as e:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
-        )
+        ) from e
     except SkillsError as e:
         logger.error(f"Error deleting skill '{skill_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.post("/import", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -326,18 +326,18 @@ async def import_skill(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
-        )
+        ) from e
     except SkillValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except SkillsError as e:
         logger.error(f"Error importing skill: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.post("/import/file", response_model=SkillResponse, status_code=status.HTTP_201_CREATED)
@@ -362,7 +362,7 @@ async def import_skill_from_file(
             try:
                 text_content = content.decode("utf-8")
             except UnicodeDecodeError:
-                raise SkillValidationError("File must be UTF-8 encoded text or a zip archive")
+                raise SkillValidationError("File must be UTF-8 encoded text or a zip archive") from None
 
             # Extract name from filename if possible
             name = None
@@ -382,18 +382,18 @@ async def import_skill_from_file(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(e),
-        )
+        ) from e
     except SkillValidationError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
-        )
+        ) from e
     except SkillsError as e:
         logger.error(f"Error importing skill from file: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.get("/{skill_name}/export")
@@ -419,13 +419,13 @@ async def export_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_name}' not found",
-        )
+        ) from None
     except SkillsError as e:
         logger.error(f"Error exporting skill '{skill_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 @router.post("/{skill_name}/execute", response_model=SkillExecutionResult)
@@ -469,13 +469,13 @@ async def execute_skill(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Skill '{skill_name}' not found",
-        )
+        ) from None
     except SkillsError as e:
         logger.error(f"Error executing skill '{skill_name}': {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e),
-        )
+        ) from e
 
 
 #

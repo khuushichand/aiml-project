@@ -164,7 +164,7 @@ def _maybe_resample(audio_np: np.ndarray, sample_rate: int, target_sample_rate: 
         return audio_np, sample_rate
     try:
         import torch
-        import torchaudio.functional as F  # type: ignore
+        import torchaudio.functional as F  # type: ignore  # noqa: N812
 
         wav = torch.from_numpy(np.asarray(audio_np, dtype="float32")).unsqueeze(0)
         resampled = F.resample(wav, sample_rate, target_sample_rate)

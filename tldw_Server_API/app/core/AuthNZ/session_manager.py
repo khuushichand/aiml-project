@@ -528,7 +528,7 @@ class SessionManager:
                         if time.time() - start_time > timeout:
                             raise RuntimeError(
                                 f"Failed to acquire lock on {lock_path} within {timeout}s"
-                            )
+                            ) from None
                         time.sleep(0.1)
             else:
                 # Windows/other: Use exclusive file creation as a lock
@@ -554,7 +554,7 @@ class SessionManager:
                         if time.time() - start_time > timeout:
                             raise RuntimeError(
                                 f"Failed to acquire lock on {lock_path} within {timeout}s"
-                            )
+                            ) from None
                         time.sleep(0.1)
 
             yield  # Lock acquired, execute protected code
@@ -987,7 +987,7 @@ class SessionManager:
             subject_id = int(subject)
         except (TypeError, ValueError):
             logger.debug(f"Refresh session: {token_label} token subject is invalid")
-            raise InvalidSessionError()
+            raise InvalidSessionError() from None
         if subject_id != int(session_data.get("user_id")):
             logger.debug(f"Refresh session: {token_label} token subject mismatch")
             raise InvalidSessionError()
@@ -997,7 +997,7 @@ class SessionManager:
                 session_claim_id = int(session_claim)
             except (TypeError, ValueError):
                 logger.debug(f"Refresh session: {token_label} token session_id is invalid")
-                raise InvalidSessionError()
+                raise InvalidSessionError() from None
             if session_claim_id != int(session_data.get("id")):
                 logger.debug(f"Refresh session: {token_label} token session_id mismatch")
                 raise InvalidSessionError()
@@ -1114,7 +1114,7 @@ class SessionManager:
                 "auth_session_create_duration",
                 time.perf_counter() - start_time,
             )
-            raise SessionError(f"Failed to create session: {e}")
+            raise SessionError(f"Failed to create session: {e}") from e
 
     async def validate_session(self, access_token: str) -> Optional[dict[str, Any]]:
         """
@@ -1282,7 +1282,7 @@ class SessionManager:
 
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke session: {e}")
-            raise SessionError(f"Failed to revoke session: {e}")
+            raise SessionError(f"Failed to revoke session: {e}") from e
         else:
             if session_details:
                 await self._blacklist_session_tokens(
@@ -1319,7 +1319,7 @@ class SessionManager:
 
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to revoke user sessions: {e}")
-            raise SessionError(f"Failed to revoke sessions: {e}")
+            raise SessionError(f"Failed to revoke sessions: {e}") from e
 
         # After sessions are marked revoked, ensure associated JTIs are blacklisted
         try:
@@ -1380,7 +1380,7 @@ class SessionManager:
                 raise
             except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as exc:
                 logger.debug(f"Refresh session: token binding validation failed: {exc}")
-                raise InvalidSessionError()
+                raise InvalidSessionError() from exc
 
             if new_refresh_token:
                 refresh_hash_update = self.hash_token(new_refresh_token)
@@ -1429,7 +1429,7 @@ class SessionManager:
             raise
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to refresh session: {e}")
-            raise SessionError(f"Failed to refresh session: {e}")
+            raise SessionError(f"Failed to refresh session: {e}") from e
 
     async def update_session_tokens(
         self,
@@ -1493,7 +1493,7 @@ class SessionManager:
 
         except _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to update session tokens: {e}")
-            raise SessionError(f"Failed to update session tokens: {e}")
+            raise SessionError(f"Failed to update session tokens: {e}") from e
 
     async def is_token_blacklisted(self, token: str, jti: Optional[str] = None) -> bool:
         """

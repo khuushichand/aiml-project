@@ -136,7 +136,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 allow_secrets=getattr(self.config, "allow_cli_secrets", False),
             )
         except ValueError as e:
-            raise ServerError(str(e))
+            raise ServerError(str(e)) from e
 
     def _is_path_allowed(self, p: Path) -> bool:
         """Check if path is under allowed directories."""
@@ -235,7 +235,7 @@ class LlamaCppHandler(BaseLLMHandler):
             return f"Failed to stop unmanaged PID {pid} with taskkill."
         except Exception as e:
             self.logger.error(f"Error stopping unmanaged PID {pid}: {e}", exc_info=True)
-            raise ServerError(f"Error stopping unmanaged PID {pid}: {e}")
+            raise ServerError(f"Error stopping unmanaged PID {pid}: {e}") from e
 
     def _is_chat_endpoint(self, api_endpoint: str) -> bool:
         endpoint = f"/{api_endpoint.lstrip('/')}"
@@ -309,7 +309,7 @@ class LlamaCppHandler(BaseLLMHandler):
                 self._active_server_port = prev_port
                 self._active_server_host = prev_host
                 self._active_server_log_handle = prev_log_handle
-                raise ServerError(f"Model swap failed: could not stop existing server: {e}")
+                raise ServerError(f"Model swap failed: could not stop existing server: {e}") from e
 
         args = {k: v for k, v in (server_args or {}).items() if v is not None and v != ""}
         self._denylist_check(args)
@@ -562,7 +562,8 @@ class LlamaCppHandler(BaseLLMHandler):
                 self.logger.error(
                     f"Llama.cpp server failed to start or become ready for {model_filename}. Exit code: {process.returncode}. Stderr: {stderr_output}"
                 )
-                if log_file_handle: log_file_handle.close()
+                if log_file_handle:
+                    log_file_handle.close()
                 try:
                     if process.returncode is None:
                         # Stop server if it started but not ready
@@ -590,9 +591,10 @@ class LlamaCppHandler(BaseLLMHandler):
             return {"status": "started", "pid": process.pid, "model": model_filename, "port": port, "host": host,
                     "command": ' '.join(redacted_cmd)}
         except Exception as e:
-            if log_file_handle: log_file_handle.close()
+            if log_file_handle:
+                log_file_handle.close()
             self.logger.error(f"Exception starting Llama.cpp server for {model_filename}: {e}", exc_info=True)
-            raise ServerError(f"Exception starting Llama.cpp server: {e}")
+            raise ServerError(f"Exception starting Llama.cpp server: {e}") from e
 
     async def stop_server(self, pid: Optional[int] = None, port: Optional[int] = None) -> str:
         if pid is not None:
@@ -699,7 +701,7 @@ class LlamaCppHandler(BaseLLMHandler):
             self._active_server_model = None
             self._active_server_port = None
             self._active_server_host = None
-            raise ServerError(f"Error stopping Llama.cpp server: {e}")
+            raise ServerError(f"Error stopping Llama.cpp server: {e}") from e
 
     async def get_server_status(self) -> dict[str, Any]:
         if self._active_server_process and self._active_server_process.returncode is None:
@@ -784,21 +786,21 @@ class LlamaCppHandler(BaseLLMHandler):
                         exc_info=True
                     )
                     self.metrics["inference_error_count"] += 1
-                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}")
+                    raise InferenceError(f"Llama.cpp API error ({status}): {error_text}") from e
                 if http_utils.is_network_error(e):
                     self.logger.error(
                         f"Could not connect or communicate with Llama.cpp server at {target_url}: {e}",
                         exc_info=True
                     )
                     self.metrics["inference_error_count"] += 1
-                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}")
+                    raise ServerError(f"Could not connect/communicate with Llama.cpp server at {target_url}: {e}") from e
                 error_text = http_utils.get_http_error_text(e)
                 self.logger.error(
                     f"Unexpected error during Llama.cpp inference to {target_url}: {error_text}",
                     exc_info=True,
                 )
                 self.metrics["inference_error_count"] += 1
-                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}")
+                raise InferenceError(f"Unexpected error during Llama.cpp inference: {error_text}") from e
 
     async def stream_inference(self, prompt: Optional[str] = None, messages: Optional[list[dict[str, str]]] = None,
                                api_endpoint: str = "/v1/chat/completions", **kwargs):

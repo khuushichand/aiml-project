@@ -130,7 +130,7 @@ class SandboxOrchestrator:
                     iso_ct = datetime.fromtimestamp(float(e.created_at), tz=timezone.utc).isoformat()
             except _SANDBOX_ORCH_NONCRITICAL_EXCEPTIONS:
                 iso_ct = None
-            raise IdempotencyConflict(e.original_id, key=getattr(e, "key", None), prior_created_at=iso_ct)
+            raise IdempotencyConflict(e.original_id, key=getattr(e, "key", None), prior_created_at=iso_ct) from e
 
     def _store_idem(self, endpoint: str, user_id: Any, idem_key: str | None, body: dict[str, Any], object_id: str, response: dict[str, Any]) -> None:
         self._store.store_idempotency(endpoint, user_id, idem_key, body, object_id, response)

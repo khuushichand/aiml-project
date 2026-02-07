@@ -1751,7 +1751,7 @@ async def get_llm_providers(include_deprecated: bool = False):
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve LLM providers: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/llm/models/metadata",
@@ -1822,7 +1822,7 @@ async def get_models_metadata(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve model metadata: {str(e)}"
-        )
+        ) from e
 
 @router.get("/llm/providers/{provider_name}",
     summary="Get specific provider details",
@@ -1860,7 +1860,7 @@ async def get_provider_details(provider_name: str, include_deprecated: bool = Fa
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve provider details: {str(e)}"
-        )
+        ) from e
 
 @router.get("/llm/models",
     summary="Get all available models",
@@ -1936,6 +1936,6 @@ async def get_all_models(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to retrieve models: {str(e)}"
-        )
+        ) from e
 
 # End of llm_providers.py

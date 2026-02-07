@@ -123,6 +123,11 @@ export const PlaygroundChat = () => {
     ttsEnabled,
     onSubmit,
     actionInfo,
+    messageSteeringMode,
+    setMessageSteeringMode,
+    messageSteeringForceNarrate,
+    setMessageSteeringForceNarrate,
+    clearMessageSteering,
     createChatBranch,
     createCompareBranch,
     temporaryChat,
@@ -414,6 +419,11 @@ export const PlaygroundChat = () => {
                 activeVariantIndex={message.activeVariantIndex}
                 onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
                 onSwipeNext={() => handleVariantSwipe(message.id, "next")}
+                messageSteeringMode={messageSteeringMode}
+                onMessageSteeringModeChange={setMessageSteeringMode}
+                messageSteeringForceNarrate={messageSteeringForceNarrate}
+                onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                onClearMessageSteering={clearMessageSteering}
               />
             )
           }
@@ -647,6 +657,11 @@ export const PlaygroundChat = () => {
                 activeVariantIndex={userMessage.activeVariantIndex}
                 onSwipePrev={() => handleVariantSwipe(userMessage.id, "prev")}
                 onSwipeNext={() => handleVariantSwipe(userMessage.id, "next")}
+                messageSteeringMode={messageSteeringMode}
+                onMessageSteeringModeChange={setMessageSteeringMode}
+                messageSteeringForceNarrate={messageSteeringForceNarrate}
+                onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                onClearMessageSteering={clearMessageSteering}
               />
               <div className="ml-10 space-y-2 border-l border-dashed border-border pl-4">
                 <div className="mb-1 flex items-center justify-between text-[11px] text-text-muted">
@@ -986,6 +1001,11 @@ export const PlaygroundChat = () => {
                         activeVariantIndex={message.activeVariantIndex}
                         onSwipePrev={() => handleVariantSwipe(message.id, "prev")}
                         onSwipeNext={() => handleVariantSwipe(message.id, "next")}
+                        messageSteeringMode={messageSteeringMode}
+                        onMessageSteeringModeChange={setMessageSteeringMode}
+                        messageSteeringForceNarrate={messageSteeringForceNarrate}
+                        onMessageSteeringForceNarrateChange={setMessageSteeringForceNarrate}
+                        onClearMessageSteering={clearMessageSteering}
                       />
 
                       {threadPreviewItems.length > 1 && (

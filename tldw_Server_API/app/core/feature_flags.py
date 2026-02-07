@@ -17,3 +17,17 @@ def is_persona_enabled() -> bool:
         return bool(settings.get("PERSONA_ENABLED", True))
     except Exception:
         return True
+
+
+def is_guardian_enabled() -> bool:
+    try:
+        return bool(settings.get("GUARDIAN_ENABLED", True))
+    except Exception:
+        return True
+
+
+def is_self_monitoring_enabled() -> bool:
+    try:
+        return bool(settings.get("SELF_MONITORING_ENABLED", True))
+    except Exception:
+        return True

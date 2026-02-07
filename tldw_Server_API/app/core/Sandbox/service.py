@@ -816,7 +816,7 @@ class SandboxService:
                 logger.warning(f"Failed to clone workspace: {e}")
                 # Clean up on failure
                 self._orch.destroy_session(new_sess.id)
-                raise ValueError(f"Failed to clone workspace: {e}")
+                raise ValueError(f"Failed to clone workspace: {e}") from e
 
         return new_sess
 

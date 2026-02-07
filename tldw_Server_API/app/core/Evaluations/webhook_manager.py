@@ -376,7 +376,7 @@ class WebhookManager:
             log_webhook_registration(user_id=user_id, webhook_id=None, url=url, events=[e.value for e in events], success=False, error=str(e))
 
             logger.error(f"Failed to register webhook: {e}")
-            raise ValueError(f"Webhook registration failed: {str(e)}")
+            raise ValueError(f"Webhook registration failed: {str(e)}") from e
 
     async def unregister_webhook(self, user_id: str, url: str) -> bool:
         """

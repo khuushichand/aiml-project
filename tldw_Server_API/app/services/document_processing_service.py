@@ -124,7 +124,7 @@ async def process_documents(
                         logging.warning(f"[file_security] non-strict: {msg}")
             except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _e:
                 if _file_security_strict():
-                    raise RuntimeError(f"Egress policy failure: {_e}")
+                    raise RuntimeError(f"Egress policy failure: {_e}") from _e
                 else:
                     logging.warning(f"[file_security] non-strict: Egress check error: {_e}")
 
@@ -221,7 +221,7 @@ async def process_documents(
                             logging.warning(f"[file_security] non-strict: MIME {mt} not allowed; continuing")
             except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as _guard:
                 if _file_security_strict():
-                    raise RuntimeError(str(_guard))
+                    raise RuntimeError(str(_guard)) from _guard
                 else:
                     logging.warning(f"[file_security] non-strict: guard error {str(_guard)}; continuing")
 
@@ -240,9 +240,9 @@ async def process_documents(
                     os.unlink(tmp_path)
                 except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as cleanup_err:
                     logging.debug(f"Ignored tmp unlink error: {cleanup_err}")
-                raise RuntimeError(f"Download from '{url}' failed: {e}")
+                raise RuntimeError(f"Download from '{url}' failed: {e}") from e
         except _DOC_PROCESSING_NONCRITICAL_EXCEPTIONS as e:
-            raise RuntimeError(f"Download from '{url}' failed: {str(e)}")
+            raise RuntimeError(f"Download from '{url}' failed: {str(e)}") from e
 
     def convert_to_text(file_path: str) -> str:
         """
