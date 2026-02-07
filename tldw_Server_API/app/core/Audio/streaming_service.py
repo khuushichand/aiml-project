@@ -1,10 +1,11 @@
 import asyncio
+import contextlib
 import json
 import os
 from collections.abc import Awaitable
 from typing import Any, Callable, Optional
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
@@ -15,6 +16,8 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
 )
 
 _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
+    asyncio.CancelledError,
+    asyncio.TimeoutError,
     AssertionError,
     AttributeError,
     ConnectionError,
@@ -32,6 +35,7 @@ _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS = (
     TypeError,
     UnicodeDecodeError,
     ValueError,
+    WebSocketDisconnect,
 )
 
 
@@ -55,6 +59,27 @@ def _get_chat_history_max_messages() -> int:
 
 
 CHAT_HISTORY_MAX_MESSAGES: int = _get_chat_history_max_messages()
+
+
+def _get_tts_ws_queue_maxsize() -> int:
+    """
+    Resolve WS TTS producer/consumer queue depth.
+
+    Environment variables (first non-empty wins):
+      - AUDIO_TTS_WS_QUEUE_MAXSIZE
+      - AUDIO_WS_TTS_QUEUE_MAXSIZE
+
+    Values are clamped to [2, 256]. Invalid values fall back to 8.
+    """
+    raw = (os.getenv("AUDIO_TTS_WS_QUEUE_MAXSIZE") or os.getenv("AUDIO_WS_TTS_QUEUE_MAXSIZE") or "").strip()
+    if not raw:
+        return 8
+    try:
+        parsed = int(raw)
+    except (ValueError, TypeError):
+        logger.debug(f"Invalid WS TTS queue size value '{raw}'; using default=8")
+        return 8
+    return max(2, min(256, parsed))
 
 
 # Register audio fail-open metrics (idempotent if already registered)
@@ -116,7 +141,7 @@ async def _stream_tts_to_websocket(
     create_task = getattr(aio, "create_task", asyncio.create_task)
     wait = getattr(aio, "wait", asyncio.wait)
     FIRST_EXCEPTION = getattr(aio, "FIRST_EXCEPTION", asyncio.FIRST_EXCEPTION)
-    queue: asyncio.Queue[Optional[bytes]] = Queue(maxsize=8)
+    queue: asyncio.Queue[Optional[bytes]] = Queue(maxsize=_get_tts_ws_queue_maxsize())
     provider_label = (provider or getattr(speech_req, "model", None) or "default").lower()
     underrun_labels = {"provider": provider_label}
     error_labels = {"component": component_label, "provider": provider_label}
@@ -140,16 +165,23 @@ async def _stream_tts_to_websocket(
                 try:
                     queue.put_nowait(chunk)
                 except QueueFull:
+                    # Count underrun at overflow detection time even if recovery path changes.
+                    try:
+                        reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
+                        logger.debug(f"{route} underrun metrics update failed: error={m_err}")
+                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
                     try:
                         _ = queue.get_nowait()
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as q_err:
                         logger.debug(f"{route} queue get_nowait failed: error={q_err}")
                     try:
                         queue.put_nowait(chunk)
-                        reg.increment("audio_stream_underruns_total", 1, labels=underrun_labels)
                     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as m_err:
-                        logger.debug(f"{route} underrun metrics update failed: error={m_err}")
-                        reg.increment("audio_stream_errors_total", 1, labels=error_labels)
+                        logger.debug(f"{route} queue recovery after full failed: error={m_err}")
+                        with contextlib.suppress(_AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS):
+                            reg.increment("audio_stream_errors_total", 1, labels=error_labels)
         except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
             try:
                 reg.increment("audio_stream_errors_total", 1, labels=error_labels)

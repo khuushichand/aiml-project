@@ -99,13 +99,13 @@ This PRD captures the remaining UX work for Content Collections after the core A
 **Goal**: Implement the import/export UX refinements described in the PRD (drag/drop, validation errors, results summary, export filters).
 **Success Criteria**: Import modal validates file type/size, supports source override + merge tags toggle, starts async import jobs, polls status, and surfaces API/job error details; export panel preserves list filters, wires `include_notes`/`include_highlights`, and delivers JSONL/ZIP with clear filename hints.
 **Tests**: Targeted frontend client tests for import/export contract wiring; manual QA with Pocket JSON and Instapaper CSV fixtures.
-**Status**: In Progress
+**Status**: Complete
 
 ## Stage 3: Reader Highlights and Notes UX
 **Goal**: Provide selection-based highlight creation, highlight list filtering, stale badges, and stronger notes autosave/dirty indicators.
 **Success Criteria**: Users can select text to create highlights, edit/delete highlights in-place, filter highlights by color/search, and see stale badges; notes show dirty state and do not lose edits on navigation.
 **Tests**: UI tests for highlight CRUD state changes and notes autosave/dirty indicator; manual QA for text selection flows.
-**Status**: Not Started
+**Status**: In Progress
 
 ## Stage 4: Output Template Editor and Bulk Item Actions
 **Goal**: Add a template editor with preview and integrate bulk actions in Items/Reading views.

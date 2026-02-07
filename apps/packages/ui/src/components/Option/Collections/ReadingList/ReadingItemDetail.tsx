@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Button,
   Drawer,
@@ -16,7 +16,6 @@ import {
   Star,
   ExternalLink,
   Trash2,
-  Archive,
   Clock,
   Calendar,
   Globe,
@@ -31,7 +30,6 @@ import { useTranslation } from "react-i18next"
 import { useCollectionsStore } from "@/store/collections"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
 import type { Highlight, HighlightColor, ReadingStatus } from "@/types/collections"
-import { StatusBadge } from "../common/StatusBadge"
 import { TagSelector } from "../common/TagSelector"
 import { HighlightCard } from "../Highlights/HighlightCard"
 
@@ -59,6 +57,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const removeItem = useCollectionsStore((s) => s.removeItem)
   const addHighlight = useCollectionsStore((s) => s.addHighlight)
   const removeHighlight = useCollectionsStore((s) => s.removeHighlight)
+  const updateHighlightInList = useCollectionsStore((s) => s.updateHighlightInList)
   const openHighlightEditor = useCollectionsStore((s) => s.openHighlightEditor)
   const highlightEditorOpen = useCollectionsStore((s) => s.highlightEditorOpen)
   const editingHighlight = useCollectionsStore((s) => s.editingHighlight)
@@ -79,6 +78,15 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   const [highlightDeleteOpen, setHighlightDeleteOpen] = useState(false)
   const [highlightDeleteId, setHighlightDeleteId] = useState<string | null>(null)
   const [highlightDeleteLoading, setHighlightDeleteLoading] = useState(false)
+  const [selectedQuote, setSelectedQuote] = useState("")
+  const [selectedNote, setSelectedNote] = useState("")
+  const [selectedColor, setSelectedColor] = useState<HighlightColor>("yellow")
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null)
+  const [notesDirty, setNotesDirty] = useState(false)
+  const [notesSaving, setNotesSaving] = useState(false)
+  const [notesSaveState, setNotesSaveState] = useState<"idle" | "dirty" | "saving" | "saved" | "error">("idle")
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const notesAutosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastEditedItemId = useRef<string | null>(null)
 
   // Fetch item details
@@ -91,6 +99,8 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         const item = await api.getReadingItem(selectedItemId)
         setCurrentItem(item)
         setNotesValue(item.notes || "")
+        setNotesDirty(false)
+        setNotesSaveState("idle")
       } catch (error: any) {
         message.error(error?.message || "Failed to load article details")
         closeItemDetail()
@@ -147,10 +157,241 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     }
   }, [highlightEditorOpen, currentItem?.id, fetchItemHighlights])
 
+  const normalizeQuote = useCallback((value: string) => {
+    return value.replace(/\s+/g, " ").trim().toLowerCase()
+  }, [])
+
+  const clearSelectionDraft = useCallback(() => {
+    setSelectedQuote("")
+    setSelectedNote("")
+    setSelectedColor("yellow")
+    setSelectedMatchId(null)
+    if (typeof window !== "undefined") {
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        selection.removeAllRanges()
+      }
+    }
+  }, [])
+
+  const clearNotesAutosaveTimer = useCallback(() => {
+    if (notesAutosaveTimerRef.current) {
+      clearTimeout(notesAutosaveTimerRef.current)
+      notesAutosaveTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      clearNotesAutosaveTimer()
+    }
+  }, [clearNotesAutosaveTimer])
+
+  useEffect(() => {
+    if (!currentItem) {
+      setNotesDirty(false)
+      setNotesSaveState("idle")
+      return
+    }
+    const baseline = currentItem.notes || ""
+    const dirty = editingNotes && notesValue !== baseline
+    setNotesDirty(dirty)
+    if (dirty) {
+      setNotesSaveState("dirty")
+    } else if (editingNotes) {
+      setNotesSaveState("saved")
+    } else {
+      setNotesSaveState("idle")
+    }
+  }, [currentItem, editingNotes, notesValue])
+
+  const saveNotes = useCallback(
+    async (showSuccess: boolean): Promise<boolean> => {
+      if (!currentItem) return true
+      setNotesSaving(true)
+      setNotesSaveState("saving")
+      try {
+        await api.updateReadingItem(currentItem.id, { notes: notesValue })
+        const updated = { ...currentItem, notes: notesValue }
+        setCurrentItem(updated)
+        updateItemInList(currentItem.id, { notes: notesValue })
+        setNotesDirty(false)
+        setNotesSaveState("saved")
+        if (showSuccess) {
+          message.success(t("collections:reading.notesSaved", "Notes saved"))
+        }
+        return true
+      } catch (error: any) {
+        setNotesSaveState("error")
+        message.error(error?.message || "Failed to save notes")
+        return false
+      } finally {
+        setNotesSaving(false)
+      }
+    },
+    [api, currentItem, notesValue, setCurrentItem, t, updateItemInList]
+  )
+
+  useEffect(() => {
+    if (!editingNotes || !notesDirty || notesSaving || !currentItem) return
+    clearNotesAutosaveTimer()
+    notesAutosaveTimerRef.current = setTimeout(() => {
+      void saveNotes(false)
+    }, 1000)
+    return () => {
+      clearNotesAutosaveTimer()
+    }
+  }, [clearNotesAutosaveTimer, currentItem, editingNotes, notesDirty, notesSaving, saveNotes])
+
+  const captureContentSelection = useCallback(() => {
+    if (!contentRef.current) return
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) return
+    const raw = selection.toString()
+    const quote = raw.replace(/\s+/g, " ").trim()
+    if (!quote) {
+      clearSelectionDraft()
+      return
+    }
+    const range = selection.getRangeAt(0)
+    if (!contentRef.current.contains(range.commonAncestorContainer)) return
+    const trimmedQuote = quote.slice(0, 2000)
+    const matched = itemHighlights.find(
+      (highlight) => normalizeQuote(highlight.quote) === normalizeQuote(trimmedQuote)
+    )
+    setSelectedQuote(trimmedQuote)
+    setSelectedColor((matched?.color as HighlightColor) || "yellow")
+    setSelectedNote(matched?.note || "")
+    setSelectedMatchId(matched?.id || null)
+  }, [clearSelectionDraft, itemHighlights, normalizeQuote])
+
+  const handleQuickHighlightSave = useCallback(async () => {
+    if (!currentItem || !selectedQuote.trim()) return
+    setHighlightSaving(true)
+    try {
+      if (selectedMatchId) {
+        const updated = await api.updateHighlight(selectedMatchId, {
+          color: selectedColor,
+          note: selectedNote.trim() || undefined,
+          state: "active"
+        })
+        setItemHighlights((prev) =>
+          prev.map((highlight) =>
+            highlight.id === selectedMatchId
+              ? { ...highlight, ...updated, item_title: highlight.item_title || currentItem.title }
+              : highlight
+          )
+        )
+        updateHighlightInList(selectedMatchId, {
+          color: updated.color,
+          note: updated.note,
+          state: updated.state
+        })
+        message.success(t("collections:highlights.updated", "Highlight updated"))
+      } else {
+        const created = await api.createHighlight({
+          item_id: currentItem.id,
+          quote: selectedQuote.trim(),
+          note: selectedNote.trim() || undefined,
+          color: selectedColor
+        })
+        const normalized = created.item_title
+          ? created
+          : { ...created, item_title: currentItem.title }
+        setItemHighlights((prev) => [normalized, ...prev])
+        addHighlight(normalized)
+        message.success(t("collections:highlights.created", "Highlight created"))
+      }
+      clearSelectionDraft()
+    } catch (error: any) {
+      message.error(error?.message || "Failed to save highlight")
+    } finally {
+      setHighlightSaving(false)
+    }
+  }, [
+    addHighlight,
+    api,
+    clearSelectionDraft,
+    currentItem,
+    selectedColor,
+    selectedMatchId,
+    selectedNote,
+    selectedQuote,
+    t,
+    updateHighlightInList
+  ])
+
+  const handleQuickHighlightDelete = useCallback(async () => {
+    if (!selectedMatchId) return
+    setHighlightDeleteLoading(true)
+    try {
+      await api.deleteHighlight(selectedMatchId)
+      setItemHighlights((prev) => prev.filter((highlight) => highlight.id !== selectedMatchId))
+      removeHighlight(selectedMatchId)
+      message.success(t("collections:highlights.deleted", "Highlight deleted"))
+      clearSelectionDraft()
+    } catch (error: any) {
+      message.error(error?.message || "Failed to delete highlight")
+    } finally {
+      setHighlightDeleteLoading(false)
+    }
+  }, [api, clearSelectionDraft, removeHighlight, selectedMatchId, t])
+
+  const notesSaveStateLabel = useMemo(() => {
+    if (!editingNotes) return null
+    if (notesSaveState === "saving") {
+      return t("collections:reading.notesSaving", "Saving…")
+    }
+    if (notesSaveState === "dirty") {
+      return t("collections:reading.notesDirty", "Unsaved changes")
+    }
+    if (notesSaveState === "error") {
+      return t("collections:reading.notesSaveError", "Save failed")
+    }
+    return t("collections:reading.notesSavedState", "All changes saved")
+  }, [editingNotes, notesSaveState, t])
+
   const handleClose = useCallback(() => {
-    closeItemDetail()
-    setEditingNotes(false)
-  }, [closeItemDetail])
+    clearNotesAutosaveTimer()
+    if (!editingNotes || !notesDirty) {
+      closeItemDetail()
+      setEditingNotes(false)
+      clearSelectionDraft()
+      return
+    }
+    void (async () => {
+      const saved = await saveNotes(false)
+      if (saved) {
+        closeItemDetail()
+        setEditingNotes(false)
+        clearSelectionDraft()
+        return
+      }
+      Modal.confirm({
+        title: t("collections:reading.notesDiscardConfirmTitle", "Discard unsaved notes?"),
+        content: t(
+          "collections:reading.notesDiscardConfirmMessage",
+          "Autosave failed. You can discard your unsaved note edits or stay and retry."
+        ),
+        okText: t("collections:reading.discard", "Discard"),
+        okButtonProps: { danger: true },
+        cancelText: t("common:cancel", "Cancel"),
+        onOk: () => {
+          closeItemDetail()
+          setEditingNotes(false)
+          clearSelectionDraft()
+        }
+      })
+    })()
+  }, [
+    clearNotesAutosaveTimer,
+    editingNotes,
+    notesDirty,
+    closeItemDetail,
+    clearSelectionDraft,
+    saveNotes,
+    t
+  ])
 
   const handleToggleFavorite = useCallback(async () => {
     if (!currentItem) return
@@ -208,20 +449,11 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
   )
 
   const handleSaveNotes = useCallback(async () => {
-    if (!currentItem) return
-    setActionLoading(true)
-    try {
-      await api.updateReadingItem(currentItem.id, { notes: notesValue })
-      const updated = { ...currentItem, notes: notesValue }
-      setCurrentItem(updated)
+    const saved = await saveNotes(true)
+    if (saved) {
       setEditingNotes(false)
-      message.success(t("collections:reading.notesSaved", "Notes saved"))
-    } catch (error: any) {
-      message.error(error?.message || "Failed to save notes")
-    } finally {
-      setActionLoading(false)
     }
-  }, [api, currentItem, notesValue, setCurrentItem, t])
+  }, [saveNotes])
 
   const handleSummarize = useCallback(async () => {
     if (!currentItem) return
@@ -300,7 +532,7 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
     } finally {
       setHighlightSaving(false)
     }
-  }, [api, currentItem, highlightQuote, highlightNote, highlightColor, t])
+  }, [addHighlight, api, currentItem, highlightColor, highlightNote, highlightQuote, t])
 
   const handleHighlightDeleteClick = useCallback((id: string) => {
     setHighlightDeleteId(id)
@@ -342,18 +574,85 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
         </span>
       ),
       children: (
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          {currentItem?.clean_html ? (
-            <div dangerouslySetInnerHTML={{ __html: currentItem.clean_html }} />
-          ) : currentItem?.text ? (
-            <pre className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200">
-              {currentItem.text}
-            </pre>
-          ) : (
-            <p className="text-zinc-500">
-              {t("collections:reading.noContent", "Content not available")}
-            </p>
+        <div className="space-y-3">
+          {selectedQuote && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900/50 dark:bg-blue-900/20">
+              <p className="text-xs font-medium text-blue-700 dark:text-blue-300">
+                {selectedMatchId
+                  ? t("collections:highlights.selectionMatched", "Selected text matches an existing highlight")
+                  : t("collections:highlights.selectionCaptured", "Selected text captured")}
+              </p>
+              <blockquote className="mt-1 text-sm italic text-zinc-700 dark:text-zinc-200">
+                "{selectedQuote}"
+              </blockquote>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Select
+                  value={selectedColor}
+                  onChange={(value) => setSelectedColor(value as HighlightColor)}
+                  options={[
+                    { value: "yellow", label: t("collections:colors.yellow", "Yellow") },
+                    { value: "green", label: t("collections:colors.green", "Green") },
+                    { value: "blue", label: t("collections:colors.blue", "Blue") },
+                    { value: "pink", label: t("collections:colors.pink", "Pink") },
+                    { value: "purple", label: t("collections:colors.purple", "Purple") }
+                  ]}
+                  className="w-32"
+                  size="small"
+                />
+                <Input
+                  value={selectedNote}
+                  onChange={(e) => setSelectedNote(e.target.value)}
+                  placeholder={t("collections:highlights.notePlaceholder", "Add context or why this matters...")}
+                  size="small"
+                  className="flex-1"
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="primary"
+                    size="small"
+                    loading={highlightSaving}
+                    onClick={handleQuickHighlightSave}
+                  >
+                    {selectedMatchId
+                      ? t("collections:highlights.update", "Update")
+                      : t("collections:highlights.add", "Add Highlight")}
+                  </Button>
+                  {selectedMatchId && (
+                    <Button
+                      danger
+                      size="small"
+                      loading={highlightDeleteLoading}
+                      onClick={handleQuickHighlightDelete}
+                    >
+                      {t("common:delete", "Delete")}
+                    </Button>
+                  )}
+                  <Button size="small" onClick={clearSelectionDraft}>
+                    {t("common:clear", "Clear")}
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
+
+          <div
+            ref={contentRef}
+            onMouseUp={captureContentSelection}
+            onKeyUp={captureContentSelection}
+            className="prose prose-sm dark:prose-invert max-w-none"
+          >
+            {currentItem?.clean_html ? (
+              <div dangerouslySetInnerHTML={{ __html: currentItem.clean_html }} />
+            ) : currentItem?.text ? (
+              <pre className="whitespace-pre-wrap text-sm text-zinc-700 dark:text-zinc-200">
+                {currentItem.text}
+              </pre>
+            ) : (
+              <p className="text-zinc-500">
+                {t("collections:reading.noContent", "Content not available")}
+              </p>
+            )}
+          </div>
         </div>
       )
     },
@@ -510,11 +809,23 @@ export const ReadingItemDetail: React.FC<ReadingItemDetailProps> = ({
                 rows={6}
                 placeholder={t("collections:reading.notesPlaceholder", "Add your notes...")}
               />
+              <div className="flex items-center justify-between text-xs text-zinc-500">
+                <span>{notesSaveStateLabel}</span>
+                {notesSaveState === "saving" && <Spin size="small" />}
+              </div>
               <div className="flex justify-end gap-2">
-                <Button onClick={() => setEditingNotes(false)}>
+                <Button
+                  onClick={() => {
+                    setNotesValue(currentItem?.notes || "")
+                    setEditingNotes(false)
+                    setNotesDirty(false)
+                    setNotesSaveState("idle")
+                    clearNotesAutosaveTimer()
+                  }}
+                >
                   {t("common:cancel", "Cancel")}
                 </Button>
-                <Button type="primary" onClick={handleSaveNotes} loading={actionLoading}>
+                <Button type="primary" onClick={handleSaveNotes} loading={notesSaving}>
                   {t("common:save", "Save")}
                 </Button>
               </div>

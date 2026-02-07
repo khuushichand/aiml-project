@@ -801,15 +801,14 @@ _HAS_KANBAN = False
 _HAS_DATA_TABLES = False
 
 # Minimal test-app gating: when enabled, skip importing heavy routers
-from os import getenv as _getenv_min
-
 from tldw_Server_API.app.api.v1.endpoints.auth import router as auth_router
+from tldw_Server_API.app.core.testing import env_flag_enabled as _env_flag_enabled
 
-_MINIMAL_TEST_APP = _getenv_min("MINIMAL_TEST_APP", "").lower() in {"1", "true", "yes", "on"}
+_MINIMAL_TEST_APP = _env_flag_enabled("MINIMAL_TEST_APP")
 # Ultra-minimal diagnostic mode: only import health endpoints
-_ULTRA_MINIMAL_APP = _getenv_min("ULTRA_MINIMAL_APP", "").lower() in {"1", "true", "yes", "on"}
+_ULTRA_MINIMAL_APP = _env_flag_enabled("ULTRA_MINIMAL_APP")
 # Opt-in startup tracing
-_STARTUP_TRACE = _getenv_min("STARTUP_TRACE", "").lower() in {"1", "true", "yes", "on"}
+_STARTUP_TRACE = _env_flag_enabled("STARTUP_TRACE")
 
 
 def _startup_trace(msg: str) -> None:
@@ -1317,6 +1316,24 @@ async def lifespan(app: FastAPI):
     except ImportError as _content_import_err:
         logger.debug(f"Content backend validation skipped (import error): {_content_import_err}")
 
+    # Startup: preserve fail-fast semantics for critical lazy subsystems in non-test runtime.
+    # Warm lazy managers early so configuration errors surface at startup.
+    try:
+        if not globals().get("_TEST_MODE") and route_enabled("evaluations"):
+            from tldw_Server_API.app.core.Evaluations.connection_pool import (
+                get_connection_manager as _get_evaluations_connection_manager,
+            )
+            from tldw_Server_API.app.core.Evaluations.webhook_manager import (
+                get_webhook_manager as _get_webhook_manager,
+            )
+
+            _get_evaluations_connection_manager()
+            _get_webhook_manager()
+            logger.info("App Startup: Warmed lazy Evaluations managers (fail-fast enabled)")
+    except _STARTUP_GUARD_EXCEPTIONS as _lazy_warmup_err:
+        logger.exception(f"Startup aborted: lazy subsystem warmup failed: {_lazy_warmup_err}")
+        raise
+
     # Startup: Initialize telemetry and metrics
     logger.info("App Startup: Initializing telemetry and metrics...")
     try:
@@ -1811,10 +1828,12 @@ async def lifespan(app: FastAPI):
         try:
             from tldw_Server_API.app.core.config import load_comprehensive_config_with_tts
             from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
+            from tldw_Server_API.app.core.TTS.voice_manager import init_voice_manager
 
             cfg_obj = load_comprehensive_config_with_tts()
             tts_cfg_dict = cfg_obj.get_tts_config() if hasattr(cfg_obj, "get_tts_config") else None
             await get_tts_service_v2(config=tts_cfg_dict)
+            await init_voice_manager()
             logger.info(
                 ("Deferred startup: " if deferred else "App Startup: ")
                 + "TTS service "
@@ -3369,7 +3388,9 @@ async def lifespan(app: FastAPI):
     # Shutdown TTS Service
     try:
         from tldw_Server_API.app.core.TTS.tts_service_v2 import close_tts_service_v2
+        from tldw_Server_API.app.core.TTS.voice_manager import shutdown_voice_manager
 
+        await shutdown_voice_manager()
         await close_tts_service_v2()
         logger.info("App Shutdown: TTS service shutdown complete")
     except _IMPORT_EXCEPTIONS as e:
@@ -4273,13 +4294,13 @@ from tldw_Server_API.app.core.Security.request_id_middleware import RequestIDMid
 from tldw_Server_API.app.core.Security.setup_access_guard import SetupAccessGuardMiddleware
 from tldw_Server_API.app.core.Security.setup_csp import SetupCSPMiddleware
 
-from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime as _is_explicit_pytest_runtime
-
-_TEST_TRUTHY = {"1", "true", "yes", "on"}
-_TEST_FLAGS_SET = any(
-    _env_os.getenv(name, "").strip().lower() in _TEST_TRUTHY
-    for name in ("TEST_MODE", "TESTING", "TLDW_TEST_MODE")
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _test_env_flag_enabled,
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_test_mode as _shared_is_test_mode,
 )
+
+_TEST_FLAGS_SET = _shared_is_test_mode() or _test_env_flag_enabled("TESTING")
 _EXPLICIT_PYTEST_RUNTIME = _is_explicit_pytest_runtime()
 _TEST_MODE = _EXPLICIT_PYTEST_RUNTIME and (
     _TEST_FLAGS_SET or bool(_env_os.getenv("PYTEST_CURRENT_TEST"))
@@ -5047,15 +5068,20 @@ elif _MINIMAL_TEST_APP:
         app.include_router(_sch_wf_router, prefix="", tags=["scheduler"])
     except _IMPORT_EXCEPTIONS as _sch_min_err:
         logger.debug(f"Skipping scheduler workflows router in minimal test app: {_sch_min_err}")
-    # Evaluations endpoints for abtest tests
+    # Evaluations endpoints in minimal mode: policy-gated by route toggles.
     try:
-        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
+        if route_enabled("evaluations"):
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_unified import router as _evaluations_router
 
-        app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
-        from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import abtest_router as _abtest_router
+            app.include_router(_evaluations_router, prefix=f"{API_V1_PREFIX}", tags=["evaluations"])
+            from tldw_Server_API.app.api.v1.endpoints.evaluations.evaluations_embeddings_abtest import (
+                abtest_router as _abtest_router,
+            )
 
-        app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
-    except _IMPORT_EXCEPTIONS as _evals_min_err:
+            app.include_router(_abtest_router, prefix=f"{API_V1_PREFIX}/evaluations", tags=["evaluations"])
+        else:
+            logger.info("Route disabled by policy: evaluations (minimal test app)")
+    except _STARTUP_GUARD_EXCEPTIONS as _evals_min_err:
         logger.debug(f"Skipping evaluations routers in minimal test app: {_evals_min_err}")
 else:
     # Small helper to guard route inclusion via config.txt and ENV

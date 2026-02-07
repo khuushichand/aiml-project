@@ -123,6 +123,28 @@ DEFAULT_USER_AGENT = (
 )
 BEST_FIRST_BATCH_SIZE = 10
 
+# Stable skip reasons for crawl observability. Keep this list small and
+# explicit to prevent accidental metric cardinality growth.
+CRAWL_SKIP_REASON_VISITED = "visited"
+CRAWL_SKIP_REASON_MAX_DEPTH = "max_depth"
+CRAWL_SKIP_REASON_DUPLICATE = "duplicate"
+CRAWL_SKIP_REASON_FILTER_CHAIN = "filter_chain"
+CRAWL_SKIP_REASON_PATH_DEPTH = "path_depth"
+CRAWL_SKIP_REASON_ROBOTS = "robots"
+CRAWL_SKIP_REASON_BELOW_THRESHOLD = "below_threshold"
+CRAWL_SKIP_REASON_CUSTOM_FILTER = "custom_filter"
+CRAWL_SKIP_REASON_OTHER = "other"
+CRAWL_SKIP_REASON_LABELS = {
+    CRAWL_SKIP_REASON_VISITED,
+    CRAWL_SKIP_REASON_MAX_DEPTH,
+    CRAWL_SKIP_REASON_DUPLICATE,
+    CRAWL_SKIP_REASON_FILTER_CHAIN,
+    CRAWL_SKIP_REASON_PATH_DEPTH,
+    CRAWL_SKIP_REASON_ROBOTS,
+    CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+    CRAWL_SKIP_REASON_CUSTOM_FILTER,
+}
+
 
 def _default_rules_path() -> str:
     here = Path(__file__).resolve()
@@ -1949,6 +1971,54 @@ class EnhancedWebScraper:
         def _relative_path_depth(url: str) -> int:
             return max(0, _path_segment_count(url) - base_path_segments)
 
+        def _record_skip(
+            *,
+            reason: str,
+            strategy: str,
+            url: str,
+            depth: int,
+            detail: Optional[str] = None,
+        ) -> None:
+            safe_reason = reason if reason in CRAWL_SKIP_REASON_LABELS else CRAWL_SKIP_REASON_OTHER
+            with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
+                log_counter("webscraping.crawl.urls_skipped", labels={"reason": safe_reason})
+            if detail:
+                logger.debug(
+                    "Skip URL [{}:{} depth={}]: {} ({})",
+                    strategy,
+                    safe_reason,
+                    depth,
+                    url,
+                    detail,
+                )
+            else:
+                logger.debug(
+                    "Skip URL [{}:{} depth={}]: {}",
+                    strategy,
+                    safe_reason,
+                    depth,
+                    url,
+                )
+
+        def _log_accept(
+            *,
+            strategy: str,
+            url: str,
+            depth: int,
+            relevance_score: float,
+            ordering_score: float,
+            parent_url: Optional[str],
+        ) -> None:
+            logger.debug(
+                "Accept URL [{} depth={}]: {} (score={:.3f}, ordering_score={:.3f}, parent={})",
+                strategy,
+                depth,
+                url,
+                relevance_score,
+                ordering_score,
+                parent_url,
+            )
+
         # Build filter chain based on config (include_external, allow/deny, patterns, content types)
         # Prefer instance config provided at construction; do not override with
         # on-disk config unless necessary. Tests pass config={} to exercise
@@ -2071,14 +2141,22 @@ class EnhancedWebScraper:
                 while pq and len(batch) < batch_n:
                     neg_s, depth, _tie, url, parent = heappop(pq)
                     cur = normalize_for_crawl(url, base_norm)
-                    if cur in visited or depth > max_depth:
-                        # Count URL skipped due to visited or exceeding depth
-                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "visited_or_depth"})
-                        if cur in visited:
-                            logger.debug(f"Skip URL (visited): {cur}")
-                        elif depth > max_depth:
-                            logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
+                    if cur in visited:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_VISITED,
+                            strategy="best_first",
+                            url=cur,
+                            depth=depth,
+                        )
+                        continue
+                    if depth > max_depth:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_MAX_DEPTH,
+                            strategy="best_first",
+                            url=cur,
+                            depth=depth,
+                            detail=f"max_depth={max_depth}",
+                        )
                         continue
                     # Keep original URL string for scraping/results; use 'cur' only for visited checks
                     batch.append((neg_s, depth, _tie, url, parent))
@@ -2136,12 +2214,13 @@ class EnhancedWebScraper:
                     })
 
                     if res.get('extraction_successful'):
-                        logger.debug(
-                            "Crawled page success: {} depth={} score={:.3f} ordering_score={:.3f}",
-                            r_url,
-                            depth,
-                            relevance_score,
-                            ordering_score,
+                        _log_accept(
+                            strategy="best_first",
+                            url=r_url,
+                            depth=depth,
+                            relevance_score=relevance_score,
+                            ordering_score=ordering_score,
+                            parent_url=parent,
                         )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
@@ -2160,26 +2239,34 @@ class EnhancedWebScraper:
                                     break
                                 cand = normalize_for_crawl(link, r_url)
                                 if cand in visited or cand in seen:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "dup_seen"})
-                                    logger.debug(f"Skip URL (duplicate): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_DUPLICATE,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 if not filter_chain.apply(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
-                                    logger.debug(f"Skip URL (filters reject): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_FILTER_CHAIN,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 # Enforce path-depth limit relative to base URL path.
                                 cand_rel_depth = _relative_path_depth(cand)
                                 if cand_rel_depth > max_depth:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "path_depth"})
-                                    logger.debug(
-                                        "Skip URL (relative path depth>{}; base_segments={}; cand_segments={}): {}",
-                                        max_depth,
-                                        base_path_segments,
-                                        _path_segment_count(cand),
-                                        cand,
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_PATH_DEPTH,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=(
+                                            f"relative_path_depth={cand_rel_depth}, "
+                                            f"max_depth={max_depth}, base_segments={base_path_segments}, "
+                                            f"candidate_segments={_path_segment_count(cand)}"
+                                        ),
                                     )
                                     continue
                                 # Optional robots gating (execute only for egress-allowed hosts)
@@ -2194,9 +2281,12 @@ class EnhancedWebScraper:
                                             increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "robots"})
-                                        logger.debug(f"Skip URL (robots disallow): {cand}")
+                                        _record_skip(
+                                            reason=CRAWL_SKIP_REASON_ROBOTS,
+                                            strategy="best_first",
+                                            url=cand,
+                                            depth=depth + 1,
+                                        )
                                         continue
                                 try:
                                     s_val = composite.score(cand)
@@ -2206,14 +2296,21 @@ class EnhancedWebScraper:
                                 with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                                     log_histogram("webscraping.crawl.score", float(s_val))
                                 if s_val < score_threshold:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "below_threshold"})
-                                    logger.debug(f"Skip URL (score {s_val:.3f} < threshold {score_threshold:.3f}): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"score={s_val:.3f}, threshold={score_threshold:.3f}",
+                                    )
                                     continue
                                 if url_filter and not url_filter(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "custom_filter"})
-                                    logger.debug(f"Skip URL (custom filter): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_CUSTOM_FILTER,
+                                        strategy="best_first",
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 # Tie-break on path segment count (deeper paths first)
                                 _ps2 = _path_segment_count(cand)
@@ -2253,13 +2350,22 @@ class EnhancedWebScraper:
                 while q and len(batch_fifo) < batch_n:
                     depth, url, parent = q.popleft()
                     cur = normalize_for_crawl(url, base_norm)
-                    if cur in visited or depth > max_depth:
-                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "visited_or_depth"})
-                        if cur in visited:
-                            logger.debug(f"Skip URL (visited): {cur}")
-                        elif depth > max_depth:
-                            logger.debug(f"Skip URL (depth>{max_depth}): {cur}")
+                    if cur in visited:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_VISITED,
+                            strategy=eff_strategy,
+                            url=cur,
+                            depth=depth,
+                        )
+                        continue
+                    if depth > max_depth:
+                        _record_skip(
+                            reason=CRAWL_SKIP_REASON_MAX_DEPTH,
+                            strategy=eff_strategy,
+                            url=cur,
+                            depth=depth,
+                            detail=f"max_depth={max_depth}",
+                        )
                         continue
                     # Preserve original 'url' string for scraping/results; use 'cur' only for visited checks
                     batch_fifo.append((depth, url, parent))
@@ -2307,12 +2413,13 @@ class EnhancedWebScraper:
                     })
 
                     if res.get('extraction_successful'):
-                        logger.debug(
-                            "Crawled page success: {} depth={} score={:.3f} ordering_score={:.3f}",
-                            r_url,
-                            depth,
-                            relevance_score,
-                            ordering_score,
+                        _log_accept(
+                            strategy=eff_strategy,
+                            url=r_url,
+                            depth=depth,
+                            relevance_score=relevance_score,
+                            ordering_score=ordering_score,
+                            parent_url=parent,
                         )
                         with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
                             log_counter("webscraping.crawl.pages_crawled")
@@ -2330,14 +2437,36 @@ class EnhancedWebScraper:
                                     break
                                 cand = normalize_for_crawl(link, r_url)
                                 if cand in visited or cand in seen_fifo:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "dup_seen"})
-                                    logger.debug(f"Skip URL (duplicate): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_DUPLICATE,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 if not filter_chain.apply(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "filter_chain"})
-                                    logger.debug(f"Skip URL (filters reject): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_FILTER_CHAIN,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
+                                    continue
+                                # Enforce path-depth limit relative to base URL path for parity
+                                # with best-first strategy and stable observability.
+                                cand_rel_depth = _relative_path_depth(cand)
+                                if cand_rel_depth > max_depth:
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_PATH_DEPTH,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=(
+                                            f"relative_path_depth={cand_rel_depth}, "
+                                            f"max_depth={max_depth}, base_segments={base_path_segments}, "
+                                            f"candidate_segments={_path_segment_count(cand)}"
+                                        ),
+                                    )
                                     continue
                                 if robots_filter is not None:
                                     try:
@@ -2350,9 +2479,12 @@ class EnhancedWebScraper:
                                             increment_counter("scrape_blocked_by_robots_total", labels={"domain": parsed.netloc})
                                         except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                             pass
-                                        with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                            log_counter("webscraping.crawl.urls_skipped", labels={"reason": "robots"})
-                                        logger.debug(f"Skip URL (robots disallow): {cand}")
+                                        _record_skip(
+                                            reason=CRAWL_SKIP_REASON_ROBOTS,
+                                            strategy=eff_strategy,
+                                            url=cand,
+                                            depth=depth + 1,
+                                        )
                                         continue
                                 try:
                                     s_val = float(composite.score(cand))
@@ -2360,14 +2492,21 @@ class EnhancedWebScraper:
                                 except _WEBSCRAPE_NONCRITICAL_EXCEPTIONS:
                                     s_val = 0.0
                                 if s_val < score_threshold:
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "below_threshold"})
-                                    logger.debug(f"Skip URL (score {s_val:.3f} < threshold {score_threshold:.3f}): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_BELOW_THRESHOLD,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                        detail=f"score={s_val:.3f}, threshold={score_threshold:.3f}",
+                                    )
                                     continue
                                 if url_filter and not url_filter(cand):
-                                    with contextlib.suppress(_WEBSCRAPE_NONCRITICAL_EXCEPTIONS):
-                                        log_counter("webscraping.crawl.urls_skipped", labels={"reason": "custom_filter"})
-                                    logger.debug(f"Skip URL (custom filter): {cand}")
+                                    _record_skip(
+                                        reason=CRAWL_SKIP_REASON_CUSTOM_FILTER,
+                                        strategy=eff_strategy,
+                                        url=cand,
+                                        depth=depth + 1,
+                                    )
                                     continue
                                 q.append((depth + 1, cand, r_url))
                                 seen_fifo.add(cand)

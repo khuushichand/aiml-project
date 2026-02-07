@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 from loguru import logger
 
 from tldw_Server_API.app.core.config_paths import resolve_config_file
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 if TYPE_CHECKING:
     from tldw_Server_API.app.core.Local_LLM.LLM_Inference_Schemas import LlamaCppConfig
@@ -1752,11 +1753,7 @@ def load_settings():
         try:
             import os as _os
             import sys as _sys
-            _in_test = (
-                bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                or str(_os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
-                or ("pytest" in _sys.modules)
-            )
+            _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or is_test_mode() or ("pytest" in _sys.modules)
         except _CONFIG_NONCRITICAL_EXCEPTIONS:
             _in_test = False
 
@@ -2187,7 +2184,7 @@ def rg_enabled(default: bool = True) -> bool:
         try:
             import sys as _sys
 
-            _test_mode = str(os.getenv("TEST_MODE", "")).strip().lower() in {"1", "true", "yes", "on"}
+            _test_mode = is_test_mode()
             _pytest_active = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in _sys.modules)
             if _test_mode or _pytest_active:
                 return False
@@ -2600,7 +2597,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
 
     # Hard-enable critical test routes when the minimal test app is active to
     # avoid 404s in unit tests even if config.txt marks them experimental.
-    _minimal = str(os.getenv("MINIMAL_TEST_APP", "")).strip().lower() in {"1", "true", "yes", "on"}
+    _minimal = env_flag_enabled("MINIMAL_TEST_APP")
     if _minimal and key in {"workflows", "scheduler"}:
         return True
     policy = _route_toggle_policy()
@@ -2622,7 +2619,7 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
 
     # In test environments, force-enable certain routes commonly used by tests
     try:
-        _test_mode = os.getenv('TEST_MODE', '').strip().lower() in {"1", "true", "yes", "on"}
+        _test_mode = is_test_mode()
         _pytest_active = bool(os.getenv('PYTEST_CURRENT_TEST')) or 'pytest' in sys.modules
         # Force-enable a small set of routes that tests rely on, regardless of
         # stable/experimental gating or import order. This avoids 404s when
@@ -2636,7 +2633,6 @@ def route_enabled(route_key: str, *, default_stable: bool = True) -> bool:
             "tools",
             "jobs",
             "personalization",
-            "evaluations",
             "orgs",
             "org-invites",
             "prompt-studio",

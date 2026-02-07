@@ -1,0 +1,58 @@
+{
+  "run_id": "voice-latency-20260207-sample",
+  "fixture": {
+    "mode": "short",
+    "base_url": "http://127.0.0.1:8000",
+    "source": "metrics_scrape",
+    "note": "Sample artifact for schema/reference only"
+  },
+  "runs": {
+    "requested": 1,
+    "completed": 1,
+    "mode": "short",
+    "started_at": "2026-02-07T11:35:00Z",
+    "finished_at": "2026-02-07T11:35:00Z",
+    "duration_seconds": 0.042
+  },
+  "metrics": {
+    "stt_final_latency_seconds": {
+      "p50": 0.184,
+      "p90": 0.341
+    },
+    "tts_ttfb_seconds": {
+      "p50": 0.112,
+      "p90": 0.196
+    },
+    "voice_to_voice_seconds": {
+      "p50": 0.329,
+      "p90": 0.548
+    },
+    "audio_chat_latency_seconds": {
+      "p50": 1.437,
+      "p90": 1.921
+    }
+  },
+  "raw_metrics": {
+    "stt_final_latency_seconds": {
+      "values": [
+        0.151,
+        0.184,
+        0.341
+      ]
+    },
+    "tts_ttfb_seconds": {
+      "values": [
+        0.087,
+        0.112,
+        0.196
+      ]
+    },
+    "voice_to_voice_seconds": {
+      "values": [
+        0.271,
+        0.329,
+        0.548
+      ]
+    }
+  }
+}

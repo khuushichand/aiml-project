@@ -3941,6 +3941,7 @@ export class TldwApiClient {
           id: String(highlight.id),
           item_id: String(highlight.item_id),
           color: highlight.color || "yellow",
+          state: highlight.state || "active",
           anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
         }))
       : []
@@ -3976,6 +3977,7 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
+      state: highlight.state || "active",
       anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
     }
   }
@@ -3996,6 +3998,7 @@ export class TldwApiClient {
       id: String(highlight.id),
       item_id: String(highlight.item_id),
       color: highlight.color || "yellow",
+      state: highlight.state || "active",
       anchor_strategy: highlight.anchor_strategy || "fuzzy_quote"
     }
   }

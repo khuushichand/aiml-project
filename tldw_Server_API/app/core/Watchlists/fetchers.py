@@ -34,6 +34,7 @@ from lxml.etree import XPath, XPathError
 from lxml.html import HtmlElement
 
 from tldw_Server_API.app.core.Security.egress import is_url_allowed, is_url_allowed_for_tenant
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 
 _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -57,7 +58,6 @@ _WATCHLISTS_FETCHERS_NONCRITICAL_EXCEPTIONS = (
     XPathError,
 )
 
-_TEST_MODE_VALUES = {"1", "true", "yes"}
 _SELECTOR_CACHE_MAX = 512
 _XPATH_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
 _CSS_SELECTOR_CACHE: OrderedDict[str, Any] = OrderedDict()
@@ -65,7 +65,7 @@ _SELECTOR_CACHE_LOCK = Lock()
 
 
 def _in_test_mode() -> bool:
-    return os.getenv("TEST_MODE", "").lower() in _TEST_MODE_VALUES
+    return _is_test_mode()
 
 
 def get_selector_cache_stats() -> dict[str, int]:
@@ -1226,7 +1226,7 @@ async def fetch_rss_items(urls: list[str], *, limit: int = 10, tenant_id: str = 
         return []
 
     # Offline mode for unit tests
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if _in_test_mode():
         return [{"title": "Test Item", "url": "https://example.com/x", "summary": "Test", "published": None}][:limit]
 
     try:
@@ -1303,7 +1303,7 @@ async def fetch_site_top_links(base_url: str, *, top_n: int = 10, method: str = 
     if top_n <= 0:
         return []
 
-    if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+    if _in_test_mode():
         # Provide stable deterministic links
         return [base_url] * min(top_n, 3)
 

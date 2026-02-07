@@ -465,21 +465,9 @@ try:
     existing_disable = os.getenv("ROUTES_DISABLE", "")
     if "research" not in existing_disable:
         os.environ["ROUTES_DISABLE"] = (existing_disable + ",research").strip(",")
-    # Unless explicitly opted-in, disable Evaluations routes during tests to avoid heavy imports
-    _run_evals = str(os.getenv("RUN_EVALUATIONS", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
-    _rd = os.getenv("ROUTES_DISABLE", "")
-    if _run_evals:
-        # Evaluations suite is enabled: ensure routes are not disabled
-        parts = [p for p in _rd.replace(" ", ",").split(",") if p]
-        parts = [p for p in parts if p.lower() != "evaluations"]
-        os.environ["ROUTES_DISABLE"] = ",".join(dict.fromkeys(parts))
-        # Evaluations rely on the full app profile; disable minimal-test app mode
-        os.environ["MINIMAL_TEST_APP"] = "0"
-    else:
-        # Default: prefer minimal app profile for faster, deterministic tests
-        os.environ.setdefault("MINIMAL_TEST_APP", "1")
-        if "evaluations" not in ",".join([_rd]):
-            os.environ["ROUTES_DISABLE"] = ((_rd + ",evaluations").strip(","))
+    # Default: prefer minimal app profile for faster, deterministic tests.
+    # Evaluations routes remain included by default; heavy suites are marker-gated.
+    os.environ.setdefault("MINIMAL_TEST_APP", "1")
     # Ensure Workflows/Scheduler routes stay enabled in tests to avoid 404s when stable_only is true
     try:
         _re = os.getenv("ROUTES_ENABLE", "")

@@ -86,6 +86,43 @@ Debug logs annotate rejections, scores, thresholds, enqueues, and successes with
 - Each result includes `metadata: { depth, parent_url, score }`.
 - Persistence stores `crawl_depth`, `crawl_parent_url`, and `crawl_score` in safe metadata and embeds them in formatted content for context.
 
+## Fallback Behavior (Legacy Path)
+
+When enhanced scraping is unavailable, the service falls back to legacy extractors. Stage 5 hardens this path for predictable behavior:
+
+- Responses include:
+  - `engine: "legacy_fallback"`
+  - `fallback_context` with:
+    - `trigger_error_type` (why fallback activated)
+    - `degraded_controls_applied` (e.g., `max_pages`)
+    - `unsupported_controls` (stable list)
+
+- Unsupported controls now return explicit `400` instead of being silently ignored:
+  - `Recursive Scraping` (legacy):
+    - Rejects `custom_headers`
+    - Rejects `crawl_strategy=best_first` (default is accepted)
+    - Rejects `include_external=true`
+    - Rejects `score_threshold>0`
+  - `URL Level`, `Sitemap`, `Individual URLs` (legacy):
+    - Rejects `custom_headers`
+    - Rejects any `crawl_strategy`
+    - Rejects `include_external=true`
+    - Rejects `score_threshold>0`
+
+- Predictable degradation:
+  - `max_pages` is enforced post-fetch for `URL Level` and `Sitemap` in fallback mode.
+  - `Recursive Scraping` continues to enforce `max_pages` and `max_depth` natively in legacy code.
+
+### API Consumer Migration Guidance
+
+- Treat `engine` as a runtime capability signal:
+  - If `engine != "legacy_fallback"`: enhanced controls are available.
+  - If `engine == "legacy_fallback"`: remove unsupported controls or retry later.
+- If your client depends on advanced controls (`best_first`, `include_external=true`, `score_threshold>0`, `custom_headers`), fail fast in client code when fallback is reported.
+- For backward compatibility with mixed deployments:
+  - Keep sending `max_pages` for `URL Level`/`Sitemap`; fallback now applies it deterministically.
+  - Prefer `crawl_strategy="default"` when you must tolerate fallback behavior.
+
 ## Recommended Defaults
 
 - `include_external=false` for predictable scope and speed.

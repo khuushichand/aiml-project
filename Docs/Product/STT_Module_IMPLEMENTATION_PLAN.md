@@ -40,7 +40,7 @@
 **Tests**:
 - Unit: phoneme mapping correctness (boundaries, case, overlaps, invalid entries); Kokoro adapter behavior with and without overrides.
 - Integration: REST PCM TTS path remains stable; WS TTS (when enabled) passes slow‑reader, disconnect, and quota tests; latency metrics for `tts_ttfb_seconds` update as expected.
-**Status**: Not Started (phoneme override work is scoped in `STT-IMPLEMENTATION_PLAN.md` Stage 4; WS TTS is coordinated with `TTS_Module_PRD.md` and `Realtime_Voice_Latency_PRD.md`)
+**Status**: Complete (Kokoro overrides + WS TTS parity shipped; see `tldw_Server_API/app/core/TTS/phoneme_overrides.py`, `tldw_Server_API/app/api/v1/endpoints/audio/audio_streaming.py`, and `Docs/Product/STT_TTS_WS_TTS_SIGNOFF_20260207.md`)
 
 ## Stage 5: Metrics Harness, Docs & Operational Hardening (M4 Alignment)
 **Goal**: Provide a small voice‑to‑voice latency harness and refreshed docs so contributors and operators can validate STT/TTS metrics and behavior end‑to‑end.
@@ -48,4 +48,4 @@
 **Tests**:
 - Harness: manual and (optionally) automated runs of the harness in short mode that verify JSON output structure and non‑zero metrics; basic failure handling (server unavailable, auth errors).
 - Docs: link/lint checks; targeted integration tests that perform one REST STT call and one WS STT session and assert that key metrics and logs are emitted.
-**Status**: Not Started (partial harness stub exists in `Helper_Scripts/voice_latency_harness/harness.py`; needs STT integration and doc alignment)
+**Status**: Complete (harness schema, sample artifact, and docs/troubleshooting shipped; see `Helper_Scripts/voice_latency_harness/run.py`, `Helper_Scripts/voice_latency_harness/README.md`, and `Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc`)

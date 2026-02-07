@@ -1,5 +1,5 @@
 import React from "react"
-import { Button, Tooltip } from "antd"
+import { Button, Tag, Tooltip } from "antd"
 import { ExternalLink, Trash2, Edit } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import type { Highlight, HighlightColor } from "@/types/collections"
@@ -39,6 +39,11 @@ export const HighlightCard: React.FC<HighlightCardProps> = ({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
+          {highlight.state === "stale" && (
+            <Tag color="orange" className="mb-2">
+              {t("collections:highlights.state.stale", "Stale")}
+            </Tag>
+          )}
           <blockquote className="text-sm italic text-zinc-700 dark:text-zinc-200">
             "{highlight.quote}"
           </blockquote>

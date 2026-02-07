@@ -50,7 +50,7 @@ Purpose: speech in → transcript → LLM → speech out (optional action execut
 ## Testing / Harness
 - Unit: validation, action execution, error mapping.
 - Integration: `tldw_Server_API/tests/Audio/test_audio_chat_endpoint.py`, `test_speech_chat_service.py`.
-- Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Outputs p50/p90 for STT/TTS/voice-to-voice/audio_chat latencies.
+- Harness: `python Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (metrics scrape) or run a real turn (omit `--short`; pass `--api-key`/`--base-url` if needed). Output JSON includes `run_id`, `fixture`, `runs`, and `metrics` with p50/p90 values for STT/TTS/voice-to-voice (and audio_chat when available).
 
 # /api/v1/audio/chat/stream (Streaming Voice Chat v2)
 

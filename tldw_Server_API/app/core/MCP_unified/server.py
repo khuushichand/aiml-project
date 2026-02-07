@@ -21,6 +21,12 @@ from tldw_Server_API.app.core.AuthNZ.exceptions import InvalidTokenError, TokenE
 from tldw_Server_API.app.core.AuthNZ.jwt_service import get_jwt_service
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
 from tldw_Server_API.app.core.Streaming.streams import WebSocketStream
+from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _env_flag_enabled,
+    is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_test_mode as _is_test_mode,
+    is_truthy as _is_truthy,
+)
 
 from .auth.authnz_rbac import get_rbac_policy
 from .auth.jwt_manager import JWTManager, get_jwt_manager
@@ -258,11 +264,7 @@ class MCPServer:
             try:
                 # Fail fast on insecure production configurations
                 try:
-                    import os as _os
-                    _test_mode = (
-                        _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
-                        or bool(_os.getenv("PYTEST_CURRENT_TEST"))
-                    )
+                    _test_mode = _is_test_mode() or _is_explicit_pytest_runtime()
                     if not self.config.debug_mode and not _test_mode:
                         ok = validate_config()
                         if not ok:
@@ -272,8 +274,7 @@ class MCPServer:
                     raise
                 # Warn if demo auth is enabled in a non-debug environment
                 try:
-                    import os as _os
-                    if _os.getenv("MCP_ENABLE_DEMO_AUTH", "").lower() in {"1", "true", "yes"} and not self.config.debug_mode:
+                    if _env_flag_enabled("MCP_ENABLE_DEMO_AUTH") and not self.config.debug_mode:
                         logger.warning("MCP_ENABLE_DEMO_AUTH is enabled - for development only; DO NOT USE IN PRODUCTION")
                 except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
                     pass
@@ -398,8 +399,8 @@ class MCPServer:
                         logger.warning(f"Invalid MCP_MODULES item format: '{item}'")
 
             # 3) Optional default: enable media module if flag is set and nothing else specified
-            enable_media_flag = os.getenv("MCP_ENABLE_MEDIA_MODULE", "false").lower() in {"1", "true", "yes"}
-            test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+            enable_media_flag = _env_flag_enabled("MCP_ENABLE_MEDIA_MODULE")
+            test_mode = _is_test_mode()
             if enable_media_flag and not modules_to_load:
                 default_media_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                 modules_to_load.append({
@@ -418,7 +419,7 @@ class MCPServer:
 
             # 4) Test convenience: default-enable media module when TEST_MODE unless explicitly disabled
             if test_mode and not any(m.get("id") == "media" for m in modules_to_load):
-                if os.getenv("MCP_ENABLE_MEDIA_MODULE", "").lower() not in {"0", "false", "off"}:
+                if os.getenv("MCP_ENABLE_MEDIA_MODULE", "").strip().lower() not in {"0", "false", "off", "no", "n"}:
                     default_media_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
                     modules_to_load.append({
                         "id": "media",
@@ -435,7 +436,7 @@ class MCPServer:
                     logger.info("TEST_MODE auto-enabled MediaModule for deterministic tool catalogs")
 
             # 5) Optional: Sandbox module (code interpreter) - disabled by default
-            if os.getenv("MCP_ENABLE_SANDBOX_MODULE", "").lower() in {"1", "true", "yes", "on"}:
+            if _env_flag_enabled("MCP_ENABLE_SANDBOX_MODULE"):
                 modules_to_load.append({
                     "id": "sandbox",
                     "class": "tldw_Server_API.app.core.MCP_unified.modules.implementations.sandbox_module:SandboxModule",
@@ -656,10 +657,7 @@ class MCPServer:
         resolved_ip = controller.resolve_client_ip(raw_remote_ip, forwarded_for, real_ip)
         # Test harness mapping and bypass: allow WS in pytest/TEST_MODE and map 'testclient' to loopback
         try:
-            import os as _os
-            _is_test_env = bool(
-                _os.getenv("PYTEST_CURRENT_TEST") or _os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes"}
-            )
+            _is_test_env = bool(_is_explicit_pytest_runtime() or _is_test_mode())
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:
             _is_test_env = False
         if resolved_ip == "testclient" or resolved_ip is None and _is_test_env:
@@ -842,7 +840,7 @@ class MCPServer:
                 import os as _os
                 override = _os.getenv("MCP_WS_AUTH_REQUIRED")
                 if override is not None:
-                    override_val = override.strip().lower() in {"1", "true", "yes", "on"}
+                    override_val = _is_truthy(override)
                     if self.config.ws_auth_required == self._ws_auth_required_initial:
                         ws_auth_required = override_val
         except _MCP_SERVER_NONCRITICAL_EXCEPTIONS:

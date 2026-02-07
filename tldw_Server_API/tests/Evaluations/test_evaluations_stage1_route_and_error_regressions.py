@@ -27,14 +27,27 @@ def _build_eval_only_app(monkeypatch) -> FastAPI:
     return app
 
 
-def _reload_main_app(monkeypatch, *, minimal: bool):
+def _reload_main_app(
+    monkeypatch,
+    *,
+    minimal: bool,
+    routes_enable: str | None = "evaluations",
+    routes_disable: str | None = "research",
+):
     monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setenv("ULTRA_MINIMAL_APP", "0")
     monkeypatch.setenv("MINIMAL_TEST_APP", "1" if minimal else "0")
 
-    # Ensure evaluations route toggles are consistent for reload-time gating.
-    monkeypatch.setenv("ROUTES_ENABLE", "evaluations")
-    monkeypatch.setenv("ROUTES_DISABLE", "research")
+    # Ensure route toggles are consistent for reload-time gating.
+    if routes_enable is None or not str(routes_enable).strip():
+        monkeypatch.delenv("ROUTES_ENABLE", raising=False)
+    else:
+        monkeypatch.setenv("ROUTES_ENABLE", str(routes_enable))
+
+    if routes_disable is None or not str(routes_disable).strip():
+        monkeypatch.delenv("ROUTES_DISABLE", raising=False)
+    else:
+        monkeypatch.setenv("ROUTES_DISABLE", str(routes_disable))
 
     from tldw_Server_API.app.core import config as config_mod
 
@@ -59,6 +72,19 @@ def test_main_mounts_evaluations_routes_in_full_startup(monkeypatch):
     assert "/api/v1/evaluations/geval" in paths
     assert "/api/v1/evaluations/rag" in paths
     assert "/api/v1/evaluations/embeddings/abtest" in paths
+
+
+def test_main_omits_evaluations_routes_in_minimal_startup_when_disabled(monkeypatch):
+    app = _reload_main_app(
+        monkeypatch,
+        minimal=True,
+        routes_enable=None,
+        routes_disable="research,evaluations",
+    )
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    assert "/api/v1/evaluations/geval" not in paths
+    assert "/api/v1/evaluations/rag" not in paths
+    assert "/api/v1/evaluations/embeddings/abtest" not in paths
 
 
 def test_propositions_preserves_http_429_when_rate_limited(monkeypatch):

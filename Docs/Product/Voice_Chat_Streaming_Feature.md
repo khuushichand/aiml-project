@@ -85,7 +85,7 @@ audio_chat_allowed_actions = tool1,tool2
 3. Client hint: include `metadata.action: "tool_name"` in the config frame (or `llm.extra_params.action`).
 4. Server behavior:
    - Actions run after the final transcript; result is sent as `action_result` and echoed in `assistant_summary.action`.
-   - Tool outputs are not yet persisted to ChaChaNotes for WS; if needed, extend `websocket_audio_chat_stream` to write to the conversation DB (mirror non-streaming `/audio/chat` behavior).
+   - When WS persistence is enabled, user/assistant/tool turns are also persisted to ChaChaNotes.
 5. Logging: action failures are emitted as status payloads; they do not tear down the stream.
 
 ## WebUI Consumer
@@ -103,6 +103,19 @@ audio_chat_allowed_actions = tool1,tool2
 - Quotas: daily minutes via `check_daily_minutes_allow` + `add_daily_minutes`; concurrent streams via `can_start_stream`.
 - Close code policy: default `4003`, or `1008` when `AUDIO_WS_QUOTA_CLOSE_1008=1`.
 
+## Session Persistence (Stage 4)
+- Optional WS persistence can be enabled via either:
+  - server env `AUDIO_CHAT_WS_PERSISTENCE=1`, or
+  - first config frame metadata: `"metadata": {"persist_history": true}`
+- When enabled, the server resolves/creates a ChaChaNotes conversation and emits:
+  - `{"type":"session","session_id":"..."}`
+- Per committed turn, WS persists:
+  - user transcript message
+  - assistant text message
+  - optional tool/action result message (`sender="tool"`)
+- Conversation settings also store WS session context under `audio_chat_ws` (including action hint and metadata).
+- Persistence is fail-soft: DB/setup failures emit a warning with `warning_type="persistence_unavailable"` and the stream continues.
+
 ## Testing & Verification
 - Unit tests: `python -m pytest tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py tldw_Server_API/tests/Audio/test_ws_tts_endpoint.py`
 - Manual: use the WebUI tab or a simple client to:
@@ -111,6 +124,22 @@ audio_chat_allowed_actions = tool1,tool2
   - Trigger `metadata.action` and validate `action_result`
   - Exceed quota in a test env to see `quota_exceeded` frame/close code
 - Perf/latency: `Helper_Scripts/voice_latency_harness/run.py --short` (scrapes `voice_to_voice_seconds`).
+- Stage 4 regression checks:
+  - WS persistence success path (`session` frame + persisted user/assistant/tool turns).
+  - WS persistence fail-soft path (warning emitted; stream still completes with TTS audio).
+
+## Staged Implementation Tracker
+- Stage 1 (WS Persistence Wiring): Complete
+  - Opt-in persistence via env or config metadata.
+  - ChaChaNotes session resolution + per-turn writes added.
+- Stage 2 (Failure Isolation): Complete
+  - Persistence setup/write failures emit `persistence_unavailable` warning and do not stop streaming.
+- Stage 3 (Documentation Alignment): Complete
+  - Stage 4 behavior and regression checks documented in this guide.
+- Stage 4 (Verification And Closeout): Complete
+  - Verified with:
+    - `python -m pytest -q tldw_Server_API/tests/Audio/test_ws_audio_chat_stream.py tldw_Server_API/tests/Audio/test_ws_tts_endpoint.py tldw_Server_API/tests/Audio/test_audio_chat_endpoint.py`
+  - Result: all tests passed.
 
 ## Troubleshooting
 - No TTS audio: check format (`mp3|opus|pcm`) and provider keys; inspect `audio_stream_errors_total`.

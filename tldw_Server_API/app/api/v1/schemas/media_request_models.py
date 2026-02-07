@@ -686,7 +686,11 @@ class WebScrapingRequest(BaseModel):
     scrape_method: str  # "individual", "sitemap", "url_level", "recursive_scraping"
     url_input: str
     url_level: Optional[int] = None
-    max_pages: int = 10
+    max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional crawl page cap. When omitted, service config default is used.",
+    )
     max_depth: int = 3
     summarize_checkbox: bool = False
     custom_prompt: Optional[str] = None
@@ -714,7 +718,11 @@ class IngestWebContentRequest(BaseModel):
     # Advanced scraping selection
     scrape_method: ScrapeMethod = ScrapeMethod.INDIVIDUAL
     url_level: Optional[int] = 2
-    max_pages: Optional[int] = 10
+    max_pages: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional crawl page cap. When omitted, service config default is used.",
+    )
     max_depth: Optional[int] = 3
 
     # Summarization / analysis fields

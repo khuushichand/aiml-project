@@ -196,6 +196,40 @@ Each section highlights installation, configuration, and a smoke test.
     -d '{"model":"kokoro","voice":"af_bella","input":"Local Kokoro test","response_format":"mp3"}' \
     --output kokoro.mp3
   ```
+- **Phoneme/Lexicon overrides (optional)**:
+  - File-based global/provider overrides: `tldw_Server_API/Config_Files/tts_phonemes.yaml`
+  - Precedence at runtime: `request > provider > global`
+  - Minimal file shape:
+    ```yaml
+    version: 1
+    global:
+      - term: "SQL"
+        phonemes: "ˈs iː k w ə l"
+        lang: "en"
+        boundary: true
+    providers:
+      kokoro:
+        - term: "OpenAI"
+          phonemes: "oʊ p ən aɪ"
+          lang: "en"
+          boundary: true
+    ```
+  - Per-request override example (`extra_params`):
+    ```json
+    {
+      "model": "kokoro",
+      "voice": "af_bella",
+      "input": "OpenAI and SQL",
+      "extra_params": {
+        "phoneme_overrides": {
+          "OpenAI": "oʊ p ən aɪ"
+        },
+        "disable_phoneme_overrides": false
+      }
+    }
+    ```
+  - Request-level aliases accepted: `phoneme_overrides` and `phoneme_map`.
+  - Matching is case-insensitive; `boundary: true` prevents mid-word substitutions.
 
 ### NeuTTS Air
 - **Install**: `pip install -e ".[TTS_neutts]"`; ensure `espeak-ng` is installed for phonemizer support.

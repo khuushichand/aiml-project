@@ -3,14 +3,21 @@ voice_latency_harness/run.py
 
 A lightweight harness to measure end-to-end voice latency using existing APIs/metrics.
 
-- Short mode (default): uses mock providers and a short synthetic clip to avoid downloads.
-- Full mode: optional, requires real providers and a running server at BASE_URL.
+- Short mode (`--short`): scrape existing metrics only (CI-friendly).
+- Full mode: post a short synthetic clip to `/api/v1/audio/chat`, then scrape metrics.
 
 Outputs a JSON summary with p50/p90 for:
   - stt_final_latency_seconds
   - tts_ttfb_seconds
   - voice_to_voice_seconds
   - audio_chat_latency_seconds (when available)
+
+Top-level output schema:
+  - run_id
+  - fixture
+  - runs
+  - metrics
+  - raw_metrics
 
 Usage:
   python Helper_Scripts/voice_latency_harness/run.py --out out.json --short
@@ -21,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 import io
 import json
 import time
@@ -28,6 +36,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable, Sequence
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 from loguru import logger
@@ -101,30 +110,30 @@ def _b64_audio(audio_bytes: bytes) -> str:
 @dataclass
 class HarnessResult:
     """
-    Aggregated latency percentiles plus raw metrics payload from the server.
+    Aggregated latency summary plus metadata and raw metrics payload.
 
     Attributes:
-        stt_final_latency_seconds: Percentile map (e.g., p50, p90) for STT final latency.
-        tts_ttfb_seconds: Percentile map for TTS time-to-first-byte.
-        voice_to_voice_seconds: Percentile map for end-to-end voice-to-voice latency.
-        audio_chat_latency_seconds: Percentile map for audio chat endpoint latency.
+        run_id: Unique identifier for this harness execution.
+        fixture: Fixture metadata describing run mode/inputs.
+        runs: Run metadata (requested/completed counts and timing info).
+        metrics: Percentile maps keyed by metric name.
         raw_metrics: Unprocessed metrics dictionary from the server.
     """
 
-    stt_final_latency_seconds: Dict[str, float]
-    tts_ttfb_seconds: Dict[str, float]
-    voice_to_voice_seconds: Dict[str, float]
-    audio_chat_latency_seconds: Dict[str, float]
+    run_id: str
+    fixture: Dict[str, Any]
+    runs: Dict[str, Any]
+    metrics: Dict[str, Dict[str, float]]
     raw_metrics: Dict[str, Any]
 
     def to_json(self) -> str:
         """Serialize the harness result to formatted JSON."""
         return json.dumps(
             {
-                "stt_final_latency_seconds": self.stt_final_latency_seconds,
-                "tts_ttfb_seconds": self.tts_ttfb_seconds,
-                "voice_to_voice_seconds": self.voice_to_voice_seconds,
-                "audio_chat_latency_seconds": self.audio_chat_latency_seconds,
+                "run_id": self.run_id,
+                "fixture": self.fixture,
+                "runs": self.runs,
+                "metrics": self.metrics,
                 "raw_metrics": self.raw_metrics,
             },
             indent=2,
@@ -333,7 +342,33 @@ def _extract_histogram_percentiles(metrics: Dict[str, Any], name: str) -> Dict[s
     return _percentiles(values)
 
 
-def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
+def _build_metric_summary(
+    metrics: Dict[str, Any],
+    *,
+    audio_chat_latency_override: Optional[Dict[str, float]] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Build percentile summaries for the harness output schema."""
+    summary: Dict[str, Dict[str, float]] = {
+        "stt_final_latency_seconds": _extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),
+        "tts_ttfb_seconds": _extract_histogram_percentiles(metrics, "tts_ttfb_seconds"),
+        "voice_to_voice_seconds": _extract_histogram_percentiles(metrics, "voice_to_voice_seconds"),
+    }
+    audio_chat = _extract_histogram_percentiles(metrics, "audio_chat_latency_seconds")
+    if audio_chat_latency_override:
+        audio_chat = audio_chat_latency_override
+    if audio_chat:
+        summary["audio_chat_latency_seconds"] = audio_chat
+    return summary
+
+
+def run_short_mode(
+    base_url: str,
+    api_key: Optional[str],
+    *,
+    run_id: Optional[str] = None,
+    fixture: Optional[Dict[str, Any]] = None,
+    runs: Optional[Dict[str, Any]] = None,
+) -> HarnessResult:
     """
     Scrape /metrics endpoint and derive latency percentiles without issuing new requests.
 
@@ -347,11 +382,12 @@ def run_short_mode(base_url: str, api_key: Optional[str]) -> HarnessResult:
         HarnessResult containing percentile maps for all latency metrics.
     """
     metrics = _fetch_metrics(base_url, api_key)
+    metrics_summary = _build_metric_summary(metrics)
     return HarnessResult(
-        stt_final_latency_seconds=_extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),
-        tts_ttfb_seconds=_extract_histogram_percentiles(metrics, "tts_ttfb_seconds"),
-        voice_to_voice_seconds=_extract_histogram_percentiles(metrics, "voice_to_voice_seconds"),
-        audio_chat_latency_seconds=_extract_histogram_percentiles(metrics, "audio_chat_latency_seconds"),
+        run_id=run_id or f"voice-latency-{uuid4().hex[:12]}",
+        fixture=fixture or {"mode": "short", "base_url": base_url, "source": "metrics_scrape"},
+        runs=runs or {"requested": 1, "completed": 1, "mode": "short"},
+        metrics=metrics_summary,
         raw_metrics=metrics,
     )
 
@@ -361,6 +397,10 @@ def run_full_turn(
     api_key: Optional[str],
     model: str = "gpt-4o-mini",
     provider: str = "openai",
+    *,
+    run_id: Optional[str] = None,
+    fixture: Optional[Dict[str, Any]] = None,
+    runs: Optional[Dict[str, Any]] = None,
 ) -> HarnessResult:
     """
     Post a short silent clip to /api/v1/audio/chat, then scrape metrics to derive latency percentiles.
@@ -398,11 +438,20 @@ def run_full_turn(
     if not audio_chat_p:
         logger.debug(f"No histogram for audio_chat_latency_seconds; using measured latency: {latency:.3f}s")
         audio_chat_p = {"p50": latency, "p90": latency}
+    metrics_summary = _build_metric_summary(metrics, audio_chat_latency_override=audio_chat_p)
     return HarnessResult(
-        stt_final_latency_seconds=_extract_histogram_percentiles(metrics, "stt_final_latency_seconds"),
-        tts_ttfb_seconds=_extract_histogram_percentiles(metrics, "tts_ttfb_seconds"),
-        voice_to_voice_seconds=_extract_histogram_percentiles(metrics, "voice_to_voice_seconds"),
-        audio_chat_latency_seconds=audio_chat_p,
+        run_id=run_id or f"voice-latency-{uuid4().hex[:12]}",
+        fixture=fixture
+        or {
+            "mode": "full",
+            "base_url": base_url,
+            "source": "/api/v1/audio/chat",
+            "model": model,
+            "provider": provider,
+            "input_fixture": "silence_wav_0.2s",
+        },
+        runs=runs or {"requested": 1, "completed": 1, "mode": "full"},
+        metrics=metrics_summary,
         raw_metrics=metrics,
     )
 
@@ -414,6 +463,7 @@ def main():
     parser.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL, help="Server base URL")
     parser.add_argument("--api-key", type=str, default=None, help="API key (if required)")
     parser.add_argument("--short", action="store_true", help="Short mode: no calls, just scrape metrics")
+    parser.add_argument("--runs", type=int, default=1, help="Number of harness iterations to execute (default: 1)")
     parser.add_argument(
         "--model",
         type=str,
@@ -430,10 +480,57 @@ def main():
 
     try:
         configure_local_egress(args.base_url)
-        if args.short:
-            result = run_short_mode(args.base_url, args.api_key)
-        else:
-            result = run_full_turn(args.base_url, args.api_key, model=args.model, provider=args.provider)
+        requested_runs = max(1, int(args.runs))
+        start_ts = time.time()
+        run_id = f"voice-latency-{int(start_ts)}-{uuid4().hex[:8]}"
+        result: Optional[HarnessResult] = None
+
+        for run_idx in range(requested_runs):
+            runs_meta = {"requested": requested_runs, "completed": run_idx + 1, "mode": "short" if args.short else "full"}
+            if args.short:
+                fixture = {"mode": "short", "base_url": args.base_url, "source": "metrics_scrape"}
+                result = run_short_mode(
+                    args.base_url,
+                    args.api_key,
+                    run_id=run_id,
+                    fixture=fixture,
+                    runs=runs_meta,
+                )
+            else:
+                fixture = {
+                    "mode": "full",
+                    "base_url": args.base_url,
+                    "source": "/api/v1/audio/chat",
+                    "model": args.model,
+                    "provider": args.provider,
+                    "input_fixture": "silence_wav_0.2s",
+                }
+                result = run_full_turn(
+                    args.base_url,
+                    args.api_key,
+                    model=args.model,
+                    provider=args.provider,
+                    run_id=run_id,
+                    fixture=fixture,
+                    runs=runs_meta,
+                )
+
+        if result is None:
+            raise RuntimeError("Harness did not produce a result")
+
+        finished_ts = time.time()
+        result.runs.update(
+            {
+                "requested": requested_runs,
+                "completed": requested_runs,
+                "mode": "short" if args.short else "full",
+                "started_at": datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+                "finished_at": datetime.fromtimestamp(finished_ts, tz=timezone.utc).isoformat().replace(
+                    "+00:00", "Z"
+                ),
+                "duration_seconds": round(finished_ts - start_ts, 6),
+            }
+        )
     except Exception as exc:
         logger.error(f"Harness failed: {exc}")
         logger.exception("Full traceback:")

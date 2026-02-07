@@ -12,13 +12,13 @@ This module includes adapters for academic search operations:
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
+from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.core.Workflows.adapters._common import _resolve_artifacts_dir
 from tldw_Server_API.app.core.Workflows.adapters._registry import registry
 from tldw_Server_API.app.core.Workflows.adapters.research._config import (
@@ -64,7 +64,7 @@ async def run_arxiv_search_adapter(config: dict[str, Any], context: dict[str, An
         return {"papers": [], "error": "missing_query"}
 
     # TEST_MODE: return simulated results without network call
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "papers": [
                 {
@@ -170,7 +170,7 @@ async def run_arxiv_download_adapter(config: dict[str, Any], context: dict[str, 
         return {"error": "missing_arxiv_id_or_pdf_url", "downloaded": False}
 
     # TEST_MODE: return simulated result without actual download
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "pdf_path": f"/tmp/simulated_{arxiv_id or 'paper'}.pdf",
             "downloaded": True,
@@ -247,7 +247,7 @@ async def run_pubmed_search_adapter(config: dict[str, Any], context: dict[str, A
         return {"papers": [], "error": "missing_query"}
 
     # TEST_MODE: return simulated results without network call
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "papers": [
                 {
@@ -351,7 +351,7 @@ async def run_semantic_scholar_search_adapter(config: dict[str, Any], context: d
         return {"papers": [], "error": "missing_query"}
 
     # TEST_MODE: return simulated results without network call
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "papers": [
                 {
@@ -436,7 +436,7 @@ async def run_google_scholar_search_adapter(config: dict[str, Any], context: dic
         return {"papers": [], "error": "missing_query"}
 
     # TEST_MODE: return simulated results without network call (Google Scholar is rate-limited)
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "papers": [
                 {
@@ -518,7 +518,7 @@ async def run_patent_search_adapter(config: dict[str, Any], context: dict[str, A
         return {"patents": [], "error": "missing_query"}
 
     # TEST_MODE: return simulated results without network call
-    if os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}:
+    if _is_test_mode():
         return {
             "patents": [
                 {

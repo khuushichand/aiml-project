@@ -18,7 +18,10 @@ from loguru import logger
 from starlette import status
 
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import require_token_scope
-from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
+from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import (
+    get_chacha_db_for_user,
+    get_chacha_db_for_user_id,
+)
 from tldw_Server_API.app.api.v1.API_Deps.personalization_deps import UsageEventLogger, get_usage_event_logger
 from tldw_Server_API.app.api.v1.endpoints.audio.audio_tts import get_tts_service
 from tldw_Server_API.app.api.v1.schemas.audio_schemas import (
@@ -41,6 +44,10 @@ from tldw_Server_API.app.core.AuthNZ.byok_runtime import resolve_byok_credential
 from tldw_Server_API.app.core.AuthNZ.settings import is_multi_user_mode
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.Chat.chat_service import perform_chat_api_call_async as chat_api_call_async
+from tldw_Server_API.app.core.Chat.chat_helpers import (
+    get_or_create_character_context,
+    get_or_create_conversation,
+)
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.core.Ingestion_Media_Processing.Audio.Audio_Streaming_Unified import (
@@ -176,6 +183,37 @@ async def _shim_get_tts_service():
     except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
         fn = get_tts_service
     return await fn()
+
+
+async def _shim_get_chacha_db_for_user_id(user_id: int, client_id: Optional[str] = None):
+    try:
+        fn = _audio_shim_attr("get_chacha_db_for_user_id")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_chacha_db_for_user_id
+    return await fn(user_id, client_id=client_id)
+
+
+async def _shim_get_or_create_character_context(db: CharactersRAGDB, character_id: Optional[str], loop):
+    try:
+        fn = _audio_shim_attr("get_or_create_character_context")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_or_create_character_context
+    return await fn(db, character_id, loop)
+
+
+async def _shim_get_or_create_conversation(
+    db: CharactersRAGDB,
+    conversation_id: Optional[str],
+    character_id: int,
+    character_name: str,
+    client_id: str,
+    loop,
+):
+    try:
+        fn = _audio_shim_attr("get_or_create_conversation")
+    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS:
+        fn = get_or_create_conversation
+    return await fn(db, conversation_id, character_id, character_name, client_id, loop)
 
 
 async def _can_start_stream(user_id: int):
@@ -916,8 +954,35 @@ async def websocket_audio_chat_stream(
         stt_cfg = cfg_data.get("stt") or cfg_data
         llm_cfg = cfg_data.get("llm") or {}
         tts_cfg = cfg_data.get("tts") or {}
-        session_id = cfg_data.get("session_id")
+        raw_session_id = cfg_data.get("session_id")
+        session_id = str(raw_session_id).strip() if raw_session_id else None
         metadata = cfg_data.get("metadata") if isinstance(cfg_data.get("metadata"), dict) else None
+
+        def _coerce_bool(value: Any, default: bool = False) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                return value.strip().lower() in {"1", "true", "yes", "on"}
+            return default
+
+        persist_hint = cfg_data.get("persist_history")
+        if persist_hint is None and metadata:
+            persist_hint = (
+                metadata.get("persist_history")
+                if "persist_history" in metadata
+                else metadata.get("persist_session")
+            )
+        persist_default = _coerce_bool(os.getenv("AUDIO_CHAT_WS_PERSISTENCE", "0"), default=False)
+        persistence_enabled = _coerce_bool(persist_hint, default=persist_default)
+        persistence_db: Optional[CharactersRAGDB] = None
+        persistence_session_id: Optional[str] = session_id
+        persistence_ready = False
+        persistence_warning_sent = False
+        persistence_announced = False
 
         config = UnifiedStreamingConfig()
         try:
@@ -1043,6 +1108,156 @@ async def websocket_audio_chat_stream(
             except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001
                 logger.debug(f"Failed to read action hint from llm_extra_params: {exc}")
             return None
+
+        async def _send_persistence_warning(message: str, details: Optional[str] = None) -> None:
+            nonlocal persistence_warning_sent
+            if persistence_warning_sent:
+                return
+            persistence_warning_sent = True
+            payload: dict[str, Any] = {
+                "type": "warning",
+                "warning_type": "persistence_unavailable",
+                "message": message,
+            }
+            if details:
+                payload["details"] = details
+            try:
+                if _outer_stream:
+                    await _outer_stream.send_json(payload)
+                else:
+                    await websocket.send_json(payload)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as send_exc:
+                logger.debug(f"audio.chat.stream persistence warning send failed: {send_exc}")
+
+        async def _ensure_persistence_context() -> Optional[tuple[CharactersRAGDB, str]]:
+            nonlocal persistence_db
+            nonlocal persistence_session_id
+            nonlocal persistence_ready
+            nonlocal persistence_enabled
+            nonlocal session_id
+            nonlocal persistence_announced
+            if not persistence_enabled:
+                return None
+            if persistence_ready and persistence_db is not None and persistence_session_id:
+                return persistence_db, persistence_session_id
+            try:
+                if persistence_db is None:
+                    persistence_db = await _shim_get_chacha_db_for_user_id(
+                        int(user_id_for_usage),
+                        client_id=str(user_id_for_usage),
+                    )
+                loop = asyncio.get_running_loop()
+                character_card, character_db_id = await _shim_get_or_create_character_context(
+                    persistence_db,
+                    None,
+                    loop,
+                )
+                if not character_db_id:
+                    raise ValueError("Unable to resolve character context for WS persistence")
+                character_name = "Helpful AI Assistant"
+                if isinstance(character_card, dict) and character_card.get("name"):
+                    character_name = str(character_card.get("name"))
+
+                persistence_session_id, _ = await _shim_get_or_create_conversation(
+                    persistence_db,
+                    persistence_session_id,
+                    int(character_db_id),
+                    character_name,
+                    str(user_id_for_usage),
+                    loop,
+                )
+                session_id = persistence_session_id
+
+                if session_id and not any(
+                    msg.get("role") == "system" and msg.get("content") == f"session:{session_id}"
+                    for msg in chat_history
+                ):
+                    chat_history.insert(0, {"role": "system", "content": f"session:{session_id}"})
+
+                action_hint = _action_hint()
+                settings_payload = {
+                    "audio_chat_ws": {
+                        "session_id": persistence_session_id,
+                        "action_hint": action_hint,
+                        "metadata": metadata or {},
+                    }
+                }
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        persistence_db.upsert_conversation_settings,
+                        persistence_session_id,
+                        settings_payload,
+                    )
+                except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as settings_exc:
+                    logger.debug(f"audio.chat.stream conversation_settings upsert failed: {settings_exc}")
+
+                if _outer_stream and not persistence_announced:
+                    await _outer_stream.send_json({"type": "session", "session_id": persistence_session_id})
+                    persistence_announced = True
+
+                persistence_ready = True
+                return persistence_db, persistence_session_id
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(f"audio.chat.stream persistence unavailable: {exc}")
+                persistence_enabled = False
+                await _send_persistence_warning(
+                    "Session persistence unavailable; continuing without persistence",
+                    _maybe_debug_details(exc),
+                )
+                return None
+
+        async def _persist_turn(
+            transcript_text: str,
+            assistant_text: str,
+            action_result: Optional[dict[str, Any]],
+        ) -> None:
+            context = await _ensure_persistence_context()
+            if not context:
+                return
+            chat_db, conversation_id = context
+
+            def _persist_sync() -> None:
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "user",
+                        "content": transcript_text,
+                        "client_id": str(user_id_for_usage),
+                    }
+                )
+                chat_db.add_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "sender": "assistant",
+                        "content": assistant_text,
+                        "client_id": str(user_id_for_usage),
+                    }
+                )
+                if action_result is not None:
+                    try:
+                        tool_content = json.dumps(action_result)
+                    except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                        logger.warning(f"Failed to serialize action_result for WS persistence: {exc}")
+                    else:
+                        chat_db.add_message(
+                            {
+                                "conversation_id": conversation_id,
+                                "sender": "tool",
+                                "content": tool_content,
+                                "client_id": str(user_id_for_usage),
+                            }
+                        )
+
+            try:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _persist_sync)
+            except _AUDIO_STREAMING_NONCRITICAL_EXCEPTIONS as exc:
+                logger.warning(f"audio.chat.stream turn persistence failed: {exc}")
+                await _send_persistence_warning(
+                    "Failed to persist chat turn; continuing stream",
+                    _maybe_debug_details(exc),
+                )
 
         async def _maybe_run_action(transcript_text: str) -> Optional[dict[str, Any]]:
             action_name = _action_hint()
@@ -1394,6 +1609,7 @@ async def websocket_audio_chat_stream(
                         logger.debug(f"Failed to append action_result to chat_history: {exc}")
                     if _outer_stream:
                         await _outer_stream.send_json({"type": "action_result", **action_result})
+                await _persist_turn(transcript_text, assistant_text, action_result)
                 await _stream_tts(assistant_text, final_emit_at)
             finally:
                 try:

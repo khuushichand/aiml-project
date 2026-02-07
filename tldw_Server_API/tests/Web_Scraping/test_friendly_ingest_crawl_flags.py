@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -16,9 +17,15 @@ def client_with_token(client_user_only):
             self._c = c
 
         def post(self, *a, **k):
-            headers = k.pop("headers", {}) or {}
-            headers.setdefault("token", "test-token")
-            return self._c.post(*a, headers=headers, **k)
+            default_headers = dict(getattr(self._c, "headers", {}) or {})
+            request_headers = k.pop("headers", {}) or {}
+            default_headers.update(request_headers)
+            default_headers.setdefault("token", "test-token")
+            default_headers.setdefault(
+                "X-API-KEY",
+                os.getenv("SINGLE_USER_API_KEY", "test-api-key-12345"),
+            )
+            return self._c.post(*a, headers=default_headers, **k)
 
     return _Client(client_user_only)
 

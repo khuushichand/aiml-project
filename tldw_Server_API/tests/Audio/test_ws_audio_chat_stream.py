@@ -10,6 +10,7 @@ from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 import pytest
 
 from tldw_Server_API.app.api.v1.endpoints import audio
+from tldw_Server_API.app.api.v1.endpoints.audio import audio_streaming as audio_streaming_module
 
 
 class DummyWebSocket:
@@ -209,6 +210,118 @@ async def test_audio_chat_ws_streams_llm_and_tts(monkeypatch: pytest.MonkeyPatch
     assert any(msg.get("type") == "llm_delta" for msg in ws.sent_json)
     assert any(msg.get("type") == "tts_done" for msg in ws.sent_json)
     assert ws.sent_bytes == [b"tts1", b"tts2"]
+    assert ws.closed is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_persists_turn_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model", "extra_params": {"action": "demo_tool"}},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+                "metadata": {"persist_history": True},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "stop"},
+        ]
+    )
+
+    class _DummyChatDB:
+        def __init__(self) -> None:
+            self.messages: List[Dict[str, Any]] = []
+            self.settings: List[tuple[str, Dict[str, Any]]] = []
+
+        def add_message(self, msg_data: Dict[str, Any]) -> str:
+            self.messages.append(dict(msg_data))
+            return "msg-id"
+
+        def upsert_conversation_settings(self, conversation_id: str, settings: Dict[str, Any]) -> bool:
+            self.settings.append((conversation_id, settings))
+            return True
+
+    persisted_db = _DummyChatDB()
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts"])
+
+    async def _get_db_for_user_id(_user_id: int, client_id: Optional[str] = None):  # noqa: ARG001
+        return persisted_db
+
+    async def _character_context(_db: Any, _character_id: Any, _loop: Any):
+        return {"id": 42, "name": "Helpful AI Assistant"}, 42
+
+    async def _conversation_context(
+        _db: Any,
+        _conversation_id: Optional[str],
+        _character_id: int,
+        _character_name: str,
+        _client_id: str,
+        _loop: Any,
+    ):
+        return "ws-session-001", True
+
+    async def _execute_action(_action: str, _transcript: str, _user: Any) -> Dict[str, Any]:
+        return {"action": "demo_tool", "status": "ok", "payload": {"value": 1}}
+
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+    monkeypatch.setattr(audio, "get_chacha_db_for_user_id", _get_db_for_user_id, raising=False)
+    monkeypatch.setattr(audio, "get_or_create_character_context", _character_context, raising=False)
+    monkeypatch.setattr(audio, "get_or_create_conversation", _conversation_context, raising=False)
+    monkeypatch.setattr(audio_streaming_module.speech_chat_service, "_actions_enabled", lambda: True)
+    monkeypatch.setattr(audio_streaming_module.speech_chat_service, "_execute_action", _execute_action)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert any(msg.get("type") == "session" and msg.get("session_id") == "ws-session-001" for msg in ws.sent_json)
+    assert [m.get("sender") for m in persisted_db.messages] == ["user", "assistant", "tool"]
+    assert all(m.get("conversation_id") == "ws-session-001" for m in persisted_db.messages)
+    assert persisted_db.settings
+    _, settings = persisted_db.settings[0]
+    assert settings.get("audio_chat_ws", {}).get("action_hint") == "demo_tool"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_audio_chat_ws_persistence_failure_is_fail_soft(monkeypatch: pytest.MonkeyPatch) -> None:
+    audio_payload = base64.b64encode(b"abc").decode("ascii")
+    ws = DummyWebSocket(
+        [
+            {
+                "type": "config",
+                "stt": {"model": "parakeet"},
+                "llm": {"provider": "stub", "model": "stub-model"},
+                "tts": {"voice": "af_heart", "format": "pcm"},
+                "metadata": {"persist_history": True},
+            },
+            {"type": "audio", "data": audio_payload},
+            {"type": "commit"},
+            {"type": "stop"},
+        ]
+    )
+
+    async def _get_tts_service():
+        return _DummyTTSService([b"tts"])
+
+    async def _db_failure(_user_id: int, client_id: Optional[str] = None):  # noqa: ARG001
+        raise RuntimeError("simulated ChaCha initialization failure")
+
+    monkeypatch.setattr(audio, "get_tts_service", _get_tts_service)
+    monkeypatch.setattr(audio, "get_chacha_db_for_user_id", _db_failure, raising=False)
+
+    await audio.websocket_audio_chat_stream(ws, token=None)
+
+    assert ws.sent_bytes == [b"tts"]
+    assert any(
+        msg.get("type") == "warning" and msg.get("warning_type") == "persistence_unavailable"
+        for msg in ws.sent_json
+    )
+    assert any(msg.get("type") == "tts_done" for msg in ws.sent_json)
     assert ws.closed is True
 
 

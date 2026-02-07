@@ -1,6 +1,6 @@
 # STT Module - Execution Tracker Checklist
 
-Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (section: **Staged Implementation Plan (Execution Roadmap)**). Stage 1 is complete (3/3 items complete).
+Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (section: **Staged Implementation Plan (Execution Roadmap)**). Stages 1-4 are complete (15/15 items complete).
 
 ## Stage 1 - M1 Closure: WS Turn Detection Tuning + Compatibility
 
@@ -10,24 +10,24 @@ Status: Tracker for the staged roadmap in `Docs/Product/STT_Module_PRD.md` (sect
 
 ## Stage 2 - M2 Build: Kokoro Phoneme/Lexicon Overrides
 
-- [ ] Define and commit override config spec (`Config_Files/tts_phonemes.{yaml,json}`) with precedence rules.
-- [ ] Wire override loading/validation and adapter application (`request > provider > global`).
-- [ ] Add/validate unit and integration test fixtures for boundary/case/overlap behavior and mapped-phrase output changes.
-- [ ] Publish user-facing docs for override setup, precedence, and constraints.
+- [x] Define and commit override config spec (`Config_Files/tts_phonemes.{yaml,json}`) with precedence rules.
+- [x] Wire override loading/validation and adapter application (`request > provider > global`).
+- [x] Add/validate unit and integration test fixtures for boundary/case/overlap behavior and mapped-phrase output changes.
+- [x] Publish user-facing docs for override setup, precedence, and constraints.
 
 ## Stage 3 - M3 Build: Optional WS TTS Endpoint
 
-- [ ] Implement `/api/v1/audio/stream/tts` handler with PCM streaming and auth/quota parity.
-- [ ] Document WS TTS protocol (frames, errors, close codes) and backpressure semantics.
-- [ ] Add operational runbook for queue depth and backpressure tuning.
-- [ ] Complete coordinated sign-off with TTS PRD owners.
+- [x] Implement `/api/v1/audio/stream/tts` handler with PCM streaming and auth/quota parity. (See `tldw_Server_API/app/api/v1/endpoints/audio/audio_streaming.py`; verified with `tldw_Server_API/tests/Audio/test_ws_tts_endpoint.py` and `tldw_Server_API/tests/Audio/test_ws_tts_realtime_endpoint.py`.)
+- [x] Document WS TTS protocol (frames, errors, close codes) and backpressure semantics. (`Docs/Audio_Streaming_Protocol.md`)
+- [x] Add operational runbook for queue depth and backpressure tuning. (`Docs/Operations/Audio_Streaming_Backpressure_Runbook.md`)
+- [x] Complete coordinated sign-off with TTS PRD owners. (`Docs/Product/STT_TTS_WS_TTS_SIGNOFF_20260207.md`)
 
 ## Stage 4 - M4 Build: Voice Latency Harness + Docs Refresh
 
-- [ ] Ship harness script(s) (including `--short`) and ensure expected CLI behavior.
-- [ ] Add a sample output JSON artifact with required schema (`run_id`, `fixture`, `runs`, `metrics`).
-- [ ] Publish execution/readme docs for running and interpreting harness results.
-- [ ] Add troubleshooting guidance for common benchmark failures (server unavailable, auth errors, empty metrics).
+- [x] Ship harness script(s) (including `--short`) and ensure expected CLI behavior. (`Helper_Scripts/voice_latency_harness/run.py`, validated by `tldw_Server_API/tests/Helper_Scripts/test_voice_latency_harness.py`)
+- [x] Add a sample output JSON artifact with required schema (`run_id`, `fixture`, `runs`, `metrics`). (`Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc`)
+- [x] Publish execution/readme docs for running and interpreting harness results. (`Helper_Scripts/voice_latency_harness/README.md`, `Docs/Audio_STT_Module.md`, `Docs/API/Audio_Chat.md`)
+- [x] Add troubleshooting guidance for common benchmark failures (server unavailable, auth errors, empty metrics). (`Helper_Scripts/voice_latency_harness/README.md`, `Docs/Audio_STT_Module.md`)
 
 ## Stage 5 - Production Hardening + Release Readiness
 

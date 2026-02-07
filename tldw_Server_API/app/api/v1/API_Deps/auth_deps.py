@@ -59,6 +59,7 @@ from tldw_Server_API.app.core.External_Sources.connectors_service import get_pol
 from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_from_env
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 from tldw_Server_API.app.core.testing import (
+    env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
     is_production_like_env as _is_production_like_env,
 )
@@ -124,12 +125,12 @@ def _looks_like_jwt(token: Optional[str]) -> bool:
 
 
 async def _authenticate_api_key_from_request(request: Request, api_key: str) -> dict[str, Any]:
-    test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+    test_mode = _is_test_mode()
     if test_mode:
         # SECURITY: Warn loudly about TEST_MODE and block in production unless explicitly allowed
-        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        allow_test_in_prod = _env_flag_enabled("ALLOW_TEST_MODE_IN_PRODUCTION")
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
-        prod_flag = os.getenv("tldw_production", "false").strip().lower() in {"1", "true", "yes", "on", "y"}
+        prod_flag = _env_flag_enabled("tldw_production")
         is_production = environment in {"production", "prod"} or prod_flag
         if is_production:
             if not allow_test_in_prod:
@@ -303,7 +304,7 @@ async def get_db_transaction() -> AsyncGenerator[Any, None]:
     # Decide whether to use the lightweight adapter (explicit test mode) or a real transaction
     use_adapter = False
     try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             use_adapter = True
     except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS:
         # If any detection fails, fall back to default transaction behavior
@@ -426,15 +427,13 @@ async def get_session_manager_dep() -> SessionManager:
     # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init.
     # Never use this stub in production-like environments.
     try:
-        import os as _os
-
-        force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
+        force_real = _env_flag_enabled("AUTHNZ_FORCE_REAL_SESSION_MANAGER")
         in_production_like = bool(_is_production_like_env())
         if (
             not force_real
             and not in_production_like
             and _is_explicit_pytest_runtime()
-            and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"))
+            and _is_test_mode()
         ):
             class _StubSessionManager:
                 enabled = True
@@ -611,7 +610,7 @@ async def get_current_user(
     """
     # TEST_MODE diagnostics: log auth header presence
     try:
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             logger.info(
                 "get_current_user: has_bearer={} has_api_key={} path={}",
                 bool(credentials),
@@ -719,7 +718,7 @@ async def get_current_user(
     if not credentials:
         # TEST_MODE: surface why we failed
         extra_headers = {"WWW-Authenticate": "Bearer"}
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             try:
                 present_headers = ",".join(h for h in ("Authorization", "X-API-KEY") if request.headers.get(h)) or "none"
                 extra_headers["X-TLDW-Auth-Reason"] = "missing-bearer"
@@ -758,7 +757,7 @@ async def get_current_user(
             # Normalize 401 semantics for callers: detail must contain
             # "Authentication required" and include WWW-Authenticate header.
             extra_headers = {"WWW-Authenticate": "Bearer"}
-            if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+            if _is_test_mode():
                 try:
                     extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{exc.detail}"
                 except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as inner_exc:  # noqa: BLE001
@@ -782,7 +781,7 @@ async def get_current_user(
                 type(e).__name__,
             )
         extra_headers = {"WWW-Authenticate": "Bearer"}
-        if os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"):
+        if _is_test_mode():
             try:
                 extra_headers["X-TLDW-Auth-Reason"] = f"auth-error:{e}"
             except _AUTH_DEPS_NONCRITICAL_EXCEPTIONS as exc:  # noqa: BLE001

@@ -87,6 +87,7 @@ class GuardianRelationship:
 class SupervisedPolicy:
     id: str
     relationship_id: str
+    governance_policy_id: str | None = None  # optional parent governance policy group
     policy_type: str = "block"  # block | notify
     category: str = ""  # e.g. "explicit_content", "self_harm", "bullying"
     pattern: str = ""  # regex or literal pattern
@@ -171,6 +172,8 @@ class SelfMonitoringRule:
     min_context_length: int = 0  # minimum chars for a match to fire
     enabled: bool = True
     pending_deactivation_at: str | None = None  # cooldown deactivation timestamp
+    deactivation_confirmation_token: str | None = None  # token for confirmation/partner bypass
+    deactivation_requested_at: str | None = None  # ISO timestamp of deactivation request
     created_at: str = ""
     updated_at: str = ""
 
@@ -224,6 +227,7 @@ class GuardianDB:
         self._lock = threading.RLock()
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         self._ensure_schema()
+        self._migrate_schema()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
@@ -268,6 +272,7 @@ class GuardianDB:
                     CREATE TABLE IF NOT EXISTS supervised_policies (
                         id TEXT PRIMARY KEY,
                         relationship_id TEXT NOT NULL,
+                        governance_policy_id TEXT,
                         policy_type TEXT NOT NULL DEFAULT 'block',
                         category TEXT NOT NULL DEFAULT '',
                         pattern TEXT NOT NULL DEFAULT '',
@@ -282,7 +287,8 @@ class GuardianDB:
                         metadata TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
-                        FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id)
+                        FOREIGN KEY (relationship_id) REFERENCES guardian_relationships(id),
+                        FOREIGN KEY (governance_policy_id) REFERENCES governance_policies(id)
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_sp_relationship
@@ -291,6 +297,8 @@ class GuardianDB:
                         ON supervised_policies(category);
                     CREATE INDEX IF NOT EXISTS idx_sp_enabled
                         ON supervised_policies(enabled);
+                    CREATE INDEX IF NOT EXISTS idx_sp_governance
+                        ON supervised_policies(governance_policy_id);
 
                     CREATE TABLE IF NOT EXISTS supervision_audit_log (
                         id TEXT PRIMARY KEY,
@@ -365,6 +373,8 @@ class GuardianDB:
                         min_context_length INTEGER NOT NULL DEFAULT 0,
                         enabled INTEGER NOT NULL DEFAULT 1,
                         pending_deactivation_at TEXT,
+                        deactivation_confirmation_token TEXT,
+                        deactivation_requested_at TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
                         FOREIGN KEY (governance_policy_id) REFERENCES governance_policies(id)
@@ -424,6 +434,29 @@ class GuardianDB:
                         PRIMARY KEY (rule_id, user_id)
                     );
                 """)
+            finally:
+                conn.close()
+
+    def _migrate_schema(self) -> None:
+        """Add columns introduced after the initial schema, if missing."""
+        migrations = [
+            ("supervised_policies", "governance_policy_id", "TEXT"),
+            ("self_monitoring_rules", "deactivation_confirmation_token", "TEXT"),
+            ("self_monitoring_rules", "deactivation_requested_at", "TEXT"),
+        ]
+        with self._lock:
+            conn = self._connect()
+            try:
+                for table, column, col_type in migrations:
+                    existing = {
+                        row["name"]
+                        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                    }
+                    if column not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                        logger.debug(f"Migrated: added {table}.{column} ({col_type})")
+            except _GUARDIAN_NONCRITICAL_EXCEPTIONS as e:
+                logger.warning(f"Guardian DB migration error (non-critical): {e}")
             finally:
                 conn.close()
 
@@ -663,6 +696,7 @@ class GuardianDB:
         message_to_dependent: str | None = None,
         enabled: bool = True,
         metadata: dict[str, Any] | None = None,
+        governance_policy_id: str | None = None,
     ) -> SupervisedPolicy:
         if action not in ("block", "redact", "warn", "notify"):
             raise ValueError(f"Invalid action: {action}")
@@ -678,6 +712,7 @@ class GuardianDB:
         pol = SupervisedPolicy(
             id=_new_id(),
             relationship_id=relationship_id,
+            governance_policy_id=governance_policy_id,
             policy_type=policy_type,
             category=category,
             pattern=pattern,
@@ -698,15 +733,15 @@ class GuardianDB:
             try:
                 conn.execute(
                     """INSERT INTO supervised_policies
-                    (id, relationship_id, policy_type, category, pattern,
-                     pattern_type, action, phase, severity, notify_guardian,
-                     notify_context, message_to_dependent, enabled,
-                     metadata, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (id, relationship_id, governance_policy_id, policy_type,
+                     category, pattern, pattern_type, action, phase, severity,
+                     notify_guardian, notify_context, message_to_dependent,
+                     enabled, metadata, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        pol.id, pol.relationship_id, pol.policy_type,
-                        pol.category, pol.pattern, pol.pattern_type,
-                        pol.action, pol.phase, pol.severity,
+                        pol.id, pol.relationship_id, pol.governance_policy_id,
+                        pol.policy_type, pol.category, pol.pattern,
+                        pol.pattern_type, pol.action, pol.phase, pol.severity,
                         int(pol.notify_guardian), pol.notify_context,
                         pol.message_to_dependent, int(pol.enabled),
                         json.dumps(pol.metadata) if pol.metadata else None,
@@ -846,9 +881,14 @@ class GuardianDB:
                 meta = json.loads(raw_meta)
             except _GUARDIAN_NONCRITICAL_EXCEPTIONS:
                 meta = None
+        try:
+            governance_policy_id = row["governance_policy_id"]
+        except (IndexError, KeyError):
+            governance_policy_id = None
         return SupervisedPolicy(
             id=row["id"],
             relationship_id=row["relationship_id"],
+            governance_policy_id=governance_policy_id,
             policy_type=row["policy_type"],
             category=row["category"],
             pattern=row["pattern"],

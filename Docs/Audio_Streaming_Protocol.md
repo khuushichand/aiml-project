@@ -208,19 +208,38 @@ Endpoint: `/api/v1/audio/stream/tts`
 - Auth/quotas: mirrors streaming STT (API key/JWT/single-user key) with per-user concurrent stream guard. Credentials
   may be supplied via `X-API-KEY`, `Authorization: Bearer <JWT>`, a `token` query parameter (API key or JWT), or
   an initial auth message; single-user setups additionally accept the fixed API key via these sources.
-- Client → server frames: one JSON prompt frame
+- Client → server frames: one JSON prompt/config frame
 
 ```json
-{ "type": "prompt", "text": "Hello world", "voice": "af_heart", "format": "pcm", "model": "kokoro" }
+{
+  "type": "prompt",
+  "text": "Hello world",
+  "voice": "af_heart",
+  "format": "pcm",
+  "model": "kokoro",
+  "provider": "kokoro",
+  "speed": 1.0,
+  "lang": "en",
+  "extra_params": {}
+}
 ```
 
 - Server → client frames:
   - Binary PCM16 audio frames streamed as they are generated.
-  - Error frames: `{ "type": "error", "message": "..." }`.
+  - Error frames (normalized): `{ "type": "error", "code": "...", "error_type": "...", "message": "...", "request_id": "...", "data": {...} }`.
   - Finalizer: `{ "type": "done" }` then the socket closes (policy close code on quota errors when configured).
 
 Notes:
-- Backpressure: bounded queue with underrun counter (`audio_stream_underruns_total{provider}`); slow readers trigger drops with metrics.
+- Backpressure: bounded producer/consumer queue; when full, the oldest chunk is dropped and the new chunk is enqueued. Each overflow increments `audio_stream_underruns_total{provider}`.
+- Queue depth control:
+  - `AUDIO_TTS_WS_QUEUE_MAXSIZE` (preferred) or `AUDIO_WS_TTS_QUEUE_MAXSIZE` (fallback)
+  - Default `8`, clamped to `2..256`
+- Close-code mapping:
+  - `4400`: malformed/missing prompt frame or unsupported request payload
+  - `4401`: authentication required/invalid credentials
+  - `4403`: token/key is valid but not authorized for endpoint/path
+  - `4003` (or `1008` when `AUDIO_WS_QUOTA_CLOSE_1008=1`): quota/concurrency denial
+  - `1011`: transport failure while writing binary audio to the socket
 - Metrics: streaming TTS emits `tts_ttfb_seconds`/`voice_to_voice_seconds{route="audio.stream.tts"}` and error counters on transport failures.
 - Default format is `pcm`; `mp3|opus|aac|flac|wav` are accepted but PCM is preferred for low latency.
 

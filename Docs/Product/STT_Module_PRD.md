@@ -6,7 +6,7 @@
   - Implementation Progress:
     - Provider registry + adapters implemented (`stt_provider_adapter.py`) and used by REST `/api/v1/audio/transcriptions`, ingestion persistence, and Jobs (CPU and GPU workers).
     - Normalized STT artifact shape in place (`to_normalized_stt_artifact`, adapter `transcribe_batch`) and used internally by REST, `/media/add` ingestion, and Jobs; transcripts now upserted into `Transcripts` keyed by `(media_id, whisper_model)` with the full artifact stored in `Transcripts.transcription`.
-    - Unified batch helpers for ingestion and Jobs (`run_stt_batch_via_registry`, `run_stt_job_via_registry`) wired into `perform_transcription` and `audio_jobs_worker`/`audio_transcribe_gpu_worker`; remaining WS streaming/metrics work are still pending.
+    - Unified batch helpers for ingestion and Jobs (`run_stt_batch_via_registry`, `run_stt_job_via_registry`) wired into `perform_transcription` and `audio_jobs_worker`/`audio_transcribe_gpu_worker`; remaining work is centered on release hardening.
 
 - **Project Summary**
   - Speech-to-Text (STT) powers `/api/v1/audio/transcriptions` and `/api/v1/audio/stream/transcribe`.
@@ -14,7 +14,7 @@
   - The STT module should unify these providers, expose consistent REST/WebSocket behaviors, and integrate cleanly with Jobs, Media ingestion, Embeddings, and AuthNZ.
 
 - **Problem Statement**
-  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. Current state: REST + WS parity exists, PCM TTS is available, and STT/TTS/voice-to-voice metrics are wired. Remaining gaps: turn detection/auto-commit, phoneme/lexicon overrides for Kokoro, an optional WS TTS endpoint, and a documented harness to validate latency end-to-end.
+  Contributors need a single, predictable STT subsystem that accepts uploaded or streamed audio, selects the appropriate provider, and yields normalized transcripts plus metadata suitable for RAG pipelines. Current state: REST + WS parity exists, PCM TTS is available, and STT/TTS/voice-to-voice metrics are wired. Remaining gaps are primarily release hardening and production-readiness packaging.
 
 - **Goals**
   - Complete turn detection/auto-commit in unified WS STT for lower final latency (fail-open if VAD unavailable).
@@ -151,13 +151,13 @@
      - **Status**: Implemented in unified WS path (fail-open); needs real-world threshold tuning + doc polish.
   2. **M2 - Phoneme/Lexicon Overrides**: configurable pronunciation maps for Kokoro with safe defaults and precedence rules; demo request shows changed pronunciation.
      - **Acceptance**: Given a documented test phrase and phoneme map, Kokoro output changes as expected in at least one integration fixture; added latency from applying overrides is ≤ 5% vs baseline on the reference setup.
-     - **Status**: Not started.
- 3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests. Ownership split with TTS PRD; delivery blocked until TTS team signs off.
+     - **Status**: Implemented. See `tldw_Server_API/app/core/TTS/phoneme_overrides.py`, `tldw_Server_API/tests/TTS/test_phoneme_overrides.py`, and docs in `Docs/User_Guides/TTS_Getting_Started.md`.
+ 3. **M3 - Optional WS TTS**: `/api/v1/audio/stream/tts` with backpressure/auth/quota parity and PCM streaming; passes slow-reader/disconnect tests. Ownership split with TTS PRD.
      - **Acceptance**: p50 `tts_ttfb_seconds` over WS ≤ 200ms on the reference setup; slow-reader and disconnect tests complete without resource leaks and emit `audio_stream_underruns_total`/error metrics as expected.
-     - **Status**: Not started (coordination with TTS PRD required).
+     - **Status**: Implemented with protocol/runbook/sign-off artifacts. See `tldw_Server_API/app/api/v1/endpoints/audio/audio_streaming.py`, `tldw_Server_API/tests/Audio/test_ws_tts_endpoint.py`, `Docs/Audio_Streaming_Protocol.md`, `Docs/Operations/Audio_Streaming_Backpressure_Runbook.md`, and `Docs/Product/STT_TTS_WS_TTS_SIGNOFF_20260207.md`.
  4. **M4 - Docs & Harness**: refreshed STT/TTS docs plus a lightweight voice-to-voice latency harness consuming existing metrics; documented CLI/outputs.
      - **Acceptance**: `Helper_Scripts/voice_latency_harness/run.py --out out.json --short` (or equivalent) runs against the reference setup and outputs JSON with at least p50/p90 for `stt_final_latency_seconds`, `tts_ttfb_seconds`, and `voice_to_voice_seconds`; short mode suitable for CI; docs reference the harness and the VAD/metrics knobs.
-     - **Status**: Not started (metrics are wired; harness outstanding).
+     - **Status**: Implemented. See `Helper_Scripts/voice_latency_harness/run.py`, `Helper_Scripts/voice_latency_harness/README.md`, and sample output `Docs/Product/stt_stage4_voice_latency_harness_sample_20260207.jsonc`.
 
 - **Risks & Mitigations**
   - Provider downtime/unavailability → multi-provider fallbacks, local deterministic mock, error escalation.

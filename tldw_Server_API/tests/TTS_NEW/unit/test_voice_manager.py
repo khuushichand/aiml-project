@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.TTS.voice_manager import (
     VoiceDurationError,
     VoiceInfo,
     PROVIDER_REQUIREMENTS,
+    VOICE_RATE_LIMITS,
     VoiceReferenceMetadata,
 )
 
@@ -307,3 +308,145 @@ async def test_encode_voice_reference_stores_artifacts(tmp_path, monkeypatch):
     )
     assert cached.cached is True
     assert cached.ref_codes_len == 3
+
+
+@pytest.mark.asyncio
+async def test_list_user_voices_syncs_after_external_filesystem_changes(tmp_path, monkeypatch):
+    """Registry views should refresh when processed files are added/removed externally."""
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    async def _no_default_voice(user_id: int):
+        return None
+
+    async def _fake_duration(path: Path) -> float:  # type: ignore[override]
+        return 1.25
+
+    monkeypatch.setattr(manager, "ensure_default_voice", _no_default_voice, raising=False)
+    monkeypatch.setattr(manager, "_get_audio_duration", _fake_duration, raising=False)
+
+    before = await manager.list_user_voices(user_id=5)
+    assert before == []
+
+    external_file = voices_root / "processed" / "external-voice.wav"
+    external_file.write_bytes(b"RIFF" + b"\x00" * 128)
+
+    after_add = await manager.list_user_voices(user_id=5)
+    assert any(v.voice_id == "external-voice" for v in after_add)
+
+    external_file.unlink()
+    after_delete = await manager.list_user_voices(user_id=5)
+    assert all(v.voice_id != "external-voice" for v in after_delete)
+
+
+@pytest.mark.asyncio
+async def test_delete_voice_recovers_from_cold_registry_via_filesystem_sync(tmp_path, monkeypatch):
+    """Delete should succeed even when the current process has no in-memory voice entry."""
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    async def _no_default_voice(user_id: int):
+        return None
+
+    async def _fake_duration(path: Path) -> float:  # type: ignore[override]
+        return 3.0
+
+    monkeypatch.setattr(manager, "ensure_default_voice", _no_default_voice, raising=False)
+    monkeypatch.setattr(manager, "_get_audio_duration", _fake_duration, raising=False)
+
+    voice_id = "cold-registry-voice"
+    processed_file = voices_root / "processed" / f"{voice_id}.wav"
+    upload_file = voices_root / "uploads" / f"{voice_id}_original.wav"
+    processed_file.parent.mkdir(parents=True, exist_ok=True)
+    upload_file.parent.mkdir(parents=True, exist_ok=True)
+    processed_file.write_bytes(b"RIFF" + b"\x00" * 128)
+    upload_file.write_bytes(b"RIFF" + b"\x00" * 64)
+
+    deleted = await manager.delete_voice(user_id=7, voice_id=voice_id)
+    assert deleted is True
+    assert not processed_file.exists()
+    assert not upload_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_check_rate_limits_uses_filesystem_voice_count(tmp_path, monkeypatch):
+    """Max-voices limit should be enforced from processed files, not just in-memory registry."""
+    manager = VoiceManager()
+
+    from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
+
+    voices_root = tmp_path / "voices"
+
+    def _fake_user_db_base_dir(*, allow_legacy_alias: bool = False):
+        return tmp_path
+
+    def _fake_user_voices_dir(user_id):
+        voices_root.mkdir(parents=True, exist_ok=True)
+        (voices_root / "uploads").mkdir(parents=True, exist_ok=True)
+        (voices_root / "processed").mkdir(parents=True, exist_ok=True)
+        (voices_root / "temp").mkdir(parents=True, exist_ok=True)
+        return voices_root
+
+    monkeypatch.setattr(DatabasePaths, "get_user_db_base_dir", _fake_user_db_base_dir, raising=True)
+    monkeypatch.setattr(DatabasePaths, "get_user_voices_dir", _fake_user_voices_dir, raising=True)
+
+    processed_file = voices_root / "processed" / "voice-a.wav"
+    processed_file.parent.mkdir(parents=True, exist_ok=True)
+    processed_file.write_bytes(b"RIFF" + b"\x00" * 16)
+    monkeypatch.setitem(VOICE_RATE_LIMITS, "max_voices_per_user", 1)
+
+    ok, msg = await manager.check_rate_limits(user_id=12)
+    assert ok is False
+    assert "Maximum voice limit reached" in msg
+
+
+@pytest.mark.asyncio
+async def test_background_task_lifecycle_idempotent():
+    """Starting/stopping cleanup worker repeatedly should be safe."""
+    manager = VoiceManager()
+    manager.cleanup_interval = 60
+
+    await manager.start_background_tasks()
+    first_task = manager._cleanup_task
+    assert first_task is not None
+
+    await manager.start_background_tasks()
+    assert manager._cleanup_task is first_task
+
+    await manager.stop_background_tasks()
+    assert manager._cleanup_task is None
+
+    # Second stop should be a no-op
+    await manager.stop_background_tasks()

@@ -465,6 +465,7 @@ async def test_get_session_manager_dep_does_not_use_stub_without_explicit_pytest
 @pytest.mark.asyncio
 async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "0")
 
     sentinel = object()
 
@@ -491,5 +492,46 @@ async def test_get_db_transaction_requires_explicit_test_mode(monkeypatch: pytes
     try:
         conn = await agen.__anext__()
         assert conn is sentinel
+    finally:
+        await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_db_transaction_uses_adapter_when_tldw_test_mode_is_y(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_MODE", "0")
+    monkeypatch.setenv("TLDW_TEST_MODE", "y")
+
+    class _Conn:
+        async def execute(self, query: str, params: Any) -> Any:
+            return SimpleNamespace()
+
+        async def commit(self) -> None:
+            return None
+
+    class _Acquire:
+        async def __aenter__(self) -> _Conn:
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+    class _Pool:
+        def acquire(self) -> _Acquire:
+            return _Acquire()
+
+        def transaction(self) -> object:
+            raise AssertionError("transaction() path should not be used when TLDW_TEST_MODE=y")
+
+    async def _fake_get_db_pool() -> _Pool:
+        return _Pool()
+
+    monkeypatch.setattr(auth_deps, "get_db_pool", _fake_get_db_pool)
+
+    agen = auth_deps.get_db_transaction()
+    try:
+        conn = await agen.__anext__()
+        assert hasattr(conn, "execute")
     finally:
         await agen.aclose()

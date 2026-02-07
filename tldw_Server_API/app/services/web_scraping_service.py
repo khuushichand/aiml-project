@@ -43,11 +43,89 @@ from tldw_Server_API.app.services.ephemeral_store import ephemeral_storage
 #
 # Functions:
 
+_FALLBACK_UNSUPPORTED_CONTROLS = (
+    "custom_headers",
+    "crawl_strategy",
+    "include_external",
+    "score_threshold",
+)
+
+
+def _normalize_strategy_value(crawl_strategy: Optional[str]) -> Optional[str]:
+    if crawl_strategy is None:
+        return None
+    value = crawl_strategy.strip().lower()
+    if not value:
+        return None
+    if value in {"best-first", "bestfirst"}:
+        return "best_first"
+    return value
+
+
+def _collect_fallback_unsupported_controls(
+    *,
+    scrape_method: str,
+    custom_headers: Optional[dict[str, str]],
+    crawl_strategy: Optional[str],
+    include_external: Optional[bool],
+    score_threshold: Optional[float],
+) -> list[str]:
+    """
+    Return controls that cannot be honored by the legacy fallback implementation.
+
+    Legacy behavior is intentionally conservative:
+    - Recursive fallback only supports the default BFS-like traversal.
+    - URL-level/sitemap/individual fallback do not support advanced crawl controls.
+    - score_threshold is only meaningfully supported when > 0.0.
+    """
+    unsupported: list[str] = []
+    normalized_strategy = _normalize_strategy_value(crawl_strategy)
+
+    if custom_headers:
+        unsupported.append("custom_headers")
+
+    score_threshold_active = (
+        score_threshold is not None and float(score_threshold) > 0.0
+    )
+
+    if scrape_method == "Recursive Scraping":
+        if normalized_strategy and normalized_strategy != "default":
+            unsupported.append("crawl_strategy")
+        if include_external is True:
+            unsupported.append("include_external")
+        if score_threshold_active:
+            unsupported.append("score_threshold")
+    else:
+        if normalized_strategy:
+            unsupported.append("crawl_strategy")
+        if include_external is True:
+            unsupported.append("include_external")
+        if score_threshold_active:
+            unsupported.append("score_threshold")
+
+    return sorted(set(unsupported))
+
+
+def _build_fallback_context(
+    *,
+    fallback_error: Exception,
+    scrape_method: str,
+    degraded_controls: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "engine": "legacy_fallback",
+        "scrape_method": scrape_method,
+        "trigger_error_type": type(fallback_error).__name__,
+        "degraded_controls_applied": degraded_controls or [],
+        "unsupported_controls": list(_FALLBACK_UNSUPPORTED_CONTROLS),
+    }
+
 async def process_web_scraping_task(
     scrape_method: str,
     url_input: str,
     url_level: Optional[int],
-    max_pages: int,
+    max_pages: Optional[int],
     max_depth: int,
     summarize_checkbox: bool,
     custom_prompt: Optional[str],
@@ -92,19 +170,17 @@ async def process_web_scraping_task(
 
     Fallback behaviour:
     - When the enhanced service is unavailable, a legacy implementation is used.
-    - For the "Recursive Scraping" method, advanced crawl options
-      (`custom_headers`, `crawl_strategy`, `include_external`, `score_threshold`)
-      are not supported by the legacy path; if any of these are provided when
-      the fallback is active, the request is rejected with an explicit error
-      instead of silently ignoring them.
+    - The fallback path validates advanced crawl controls and returns explicit
+      `400` errors for unsupported options instead of silently ignoring them.
+    - Fallback responses include `engine="legacy_fallback"` and
+      `fallback_context` to make degradation observable for API clients.
     """
     # Normalize and validate crawl overrides before dispatch
     normalized_crawl_strategy: Optional[str] = None
     if crawl_strategy is not None:
-        candidate_strategy = crawl_strategy.strip().lower()
-        # Canonicalize aliases for internal consistency.
-        if candidate_strategy in {"best-first", "bestfirst"}:
-            candidate_strategy = "best_first"
+        candidate_strategy = _normalize_strategy_value(crawl_strategy)
+        if candidate_strategy is None:
+            candidate_strategy = "default"
         allowed_strategies = {"default", "best_first"}
         if candidate_strategy not in allowed_strategies:
             raise HTTPException(
@@ -152,7 +228,7 @@ async def process_web_scraping_task(
             url_count = len([u for u in url_input.split('\n') if u.strip()])
             if url_count > 10:
                 priority = "high"
-        elif max_pages > 50:
+        elif (max_pages or 0) > 50:
             priority = "high"
 
         # Call enhanced service
@@ -190,9 +266,32 @@ async def process_web_scraping_task(
         logging.exception(f"Enhanced scraping service failed: {str(e)}")
         logging.exception(f"Full traceback: {traceback.format_exc()}")
         logging.warning("Falling back to legacy implementation")
+        fallback_context = _build_fallback_context(
+            fallback_error=e,
+            scrape_method=scrape_method,
+        )
 
         # Fallback to legacy implementation
         try:
+            unsupported_controls = _collect_fallback_unsupported_controls(
+                scrape_method=scrape_method,
+                custom_headers=custom_headers,
+                crawl_strategy=crawl_strategy,
+                include_external=include_external,
+                score_threshold=score_threshold,
+            )
+            if unsupported_controls:
+                detail = (
+                    "Enhanced web scraping options are only available when the enhanced "
+                    f"scraping service is running. The legacy fallback for '{scrape_method}' "
+                    "does not support the following parameters: "
+                    f"{', '.join(sorted(unsupported_controls))}. "
+                    "Retry when enhanced scraping is available, or remove unsupported fields."
+                )
+                raise HTTPException(status_code=400, detail=detail)
+
+            degraded_controls: list[str] = []
+
             # 1) Perform scraping based on method
             if scrape_method == "Individual URLs":
                 # For multi-line text input, your existing function supports that
@@ -216,34 +315,14 @@ async def process_web_scraping_task(
                     raise ValueError("`url_level` must be provided when scraping method is 'URL Level'")
                 result_list = await asyncio.to_thread(scrape_by_url_level, url_input, url_level)
             elif scrape_method == "Recursive Scraping":
-                # Legacy recursive scraping cannot honor advanced crawl flags that
-                # are supported only by the enhanced service. Make this explicit.
-                advanced_flags = {
-                    "custom_headers": custom_headers if custom_headers else None,
-                    "crawl_strategy": (crawl_strategy or "").strip() or None,
-                    "include_external": include_external
-                    if include_external is not None
-                    else None,
-                    "score_threshold": score_threshold
-                    if score_threshold is not None
-                    else None,
-                }
-                unsupported = [name for name, value in advanced_flags.items() if value is not None]
-                if unsupported:
-                    detail = (
-                        "Enhanced web scraping options are only available when the enhanced "
-                        "scraping service is running. The legacy fallback for 'Recursive "
-                        "Scraping' does not support the following parameters: "
-                        f"{', '.join(sorted(unsupported))}."
-                    )
-                    raise HTTPException(status_code=400, detail=detail)
-
                 # Call the existing async recursive_scrape implementation.
                 # It returns a list of dicts:
                 # { url, title, content, extraction_successful, ... }
                 recursive_kwargs: dict[str, Any] = {
                     "base_url": url_input,
-                    "max_pages": max_pages,
+                    # Legacy fallback has no config-driven default resolution.
+                    # Keep historical behavior when explicit value is unavailable.
+                    "max_pages": max_pages if max_pages is not None else 10,
                     "max_depth": max_depth,
                     "progress_callback": (lambda x: None),  # no-op
                     "delay": 1.0,
@@ -257,6 +336,27 @@ async def process_web_scraping_task(
                 result_list = await recursive_scrape(**recursive_kwargs)
             else:
                 raise ValueError(f"Unknown scrape method: {scrape_method}")
+
+            # 1b) Apply predictable max_pages cap for legacy methods that do not
+            # natively support page-count control.
+            if (
+                max_pages is not None
+                and scrape_method in {"Sitemap", "URL Level"}
+                and isinstance(result_list, list)
+            ):
+                before_count = len(result_list)
+                result_list = result_list[:max_pages]
+                if before_count != len(result_list):
+                    degraded_controls.append("max_pages")
+                logging.info(
+                    "Legacy fallback applied max_pages cap for %s: requested=%s, before=%s, after=%s",
+                    scrape_method,
+                    max_pages,
+                    before_count,
+                    len(result_list),
+                )
+
+            fallback_context["degraded_controls_applied"] = degraded_controls
 
             # 2) Summarize after the fact, if the method doesn't handle it
             #    (For "Individual URLs," you already did so inside scrape_and_summarize_multiple.)
@@ -288,7 +388,9 @@ async def process_web_scraping_task(
                     "status": "ephemeral-ok",
                     "media_id": ephemeral_id,
                     "total_articles": len(result_list),
-                    "results": result_list
+                    "results": result_list,
+                    "engine": "legacy_fallback",
+                    "fallback_context": fallback_context,
                 }
             else:
                 # Get the database path and create instance
@@ -391,7 +493,9 @@ async def process_web_scraping_task(
                 return {
                     "status": "persist-ok",
                     "media_ids": media_ids,
-                    "total_articles": len(result_list)
+                    "total_articles": len(result_list),
+                    "engine": "legacy_fallback",
+                    "fallback_context": fallback_context,
                 }
 
         except HTTPException:
@@ -599,6 +703,7 @@ async def ingest_web_content_orchestrate(
 
         base_url = urls[0]
         level = getattr(request, "url_level", None) or 2
+        requested_max_pages = getattr(request, "max_pages", None)
 
         custom_cookies_list = parse_cookies()
 
@@ -616,7 +721,7 @@ async def ingest_web_content_orchestrate(
                 scrape_method="URL Level",
                 url_input=base_url,
                 url_level=level,
-                max_pages=getattr(request, "max_pages", None) or 10,
+                max_pages=requested_max_pages,
                 max_depth=level,
                 summarize_checkbox=bool(
                     getattr(request, "perform_analysis", False)
@@ -667,7 +772,7 @@ async def ingest_web_content_orchestrate(
             return []
 
         base_url = urls[0]
-        max_pages = getattr(request, "max_pages", None) or 10
+        max_pages = getattr(request, "max_pages", None)
         max_depth = getattr(request, "max_depth", None) or 3
 
         custom_cookies_list = parse_cookies()

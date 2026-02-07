@@ -339,6 +339,107 @@ class VoiceManager:
         self.cleanup_interval = 3600  # 1 hour
         self.user_upload_counts: dict[int, list[datetime]] = {}
         self._processing_tasks: dict[str, asyncio.Task] = {}
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_stop_event: Optional[asyncio.Event] = None
+        # Tracks filesystem snapshot for fast cross-process registry invalidation.
+        # Format: {user_id: (voice_file_count, newest_mtime_ns)}
+        self._registry_snapshots: dict[int, tuple[int, int]] = {}
+
+    def _invalidate_registry_snapshot(self, user_id: int) -> None:
+        """Mark a user's cached registry snapshot stale."""
+        self._registry_snapshots.pop(user_id, None)
+
+    def _get_processed_snapshot(self, user_id: int) -> tuple[int, int]:
+        """Return a lightweight snapshot of processed voice files for a user."""
+        voices_path = self.get_user_voices_path(user_id)
+        processed_path = voices_path / "processed"
+        if not processed_path.exists():
+            return (0, 0)
+
+        count = 0
+        newest_mtime_ns = 0
+        for voice_file in processed_path.iterdir():
+            if not voice_file.is_file():
+                continue
+            if voice_file.suffix.lower() not in VoiceFileValidator.ALLOWED_EXTENSIONS:
+                continue
+            try:
+                stat = voice_file.stat()
+            except _VOICE_IO_EXCEPTIONS:
+                continue
+            count += 1
+            newest_mtime_ns = max(newest_mtime_ns, int(stat.st_mtime_ns))
+
+        return (count, newest_mtime_ns)
+
+    async def _sync_registry_from_filesystem(self, user_id: int, *, force: bool = False) -> list[VoiceInfo]:
+        """Refresh in-memory registry when filesystem state changed or refresh is forced."""
+        current_snapshot = self._get_processed_snapshot(user_id)
+        cached_snapshot = self._registry_snapshots.get(user_id)
+        current_registry = await self.registry.list_voices(user_id)
+
+        if not force and cached_snapshot == current_snapshot and current_registry:
+            return current_registry
+
+        await self.registry.clear_user_voices(user_id)
+        voices = await self._scan_user_voices(user_id)
+        self._registry_snapshots[user_id] = self._get_processed_snapshot(user_id)
+        return voices
+
+    def _voice_file_exists(self, user_id: int, voice: VoiceInfo) -> bool:
+        """Return True if the registry entry points to an existing in-bounds file."""
+        voices_path = self.get_user_voices_path(user_id).resolve()
+        try:
+            candidate = (voices_path / voice.file_path).resolve()
+            candidate.relative_to(voices_path)
+        except _VOICE_IO_EXCEPTIONS:
+            return False
+        return candidate.exists()
+
+    async def _unregister_voice_clone_generated_files(
+        self,
+        *,
+        user_id: int,
+        storage_path: str,
+    ) -> None:
+        """
+        Best-effort unregister generated_files entries for a voice clone artifact.
+
+        This keeps quota/accounting records aligned when deleting voice references.
+        """
+        normalized_target = str(storage_path or "").replace("\\", "/").strip()
+        if not normalized_target:
+            return
+
+        target_name = Path(normalized_target).name
+        try:
+            storage_service = await get_storage_service()
+            files_repo = await storage_service.get_generated_files_repo()
+            rows, _total = await files_repo.list_files(
+                user_id=user_id,
+                file_category=FILE_CATEGORY_VOICE_CLONE,
+                source_feature=SOURCE_FEATURE_VOICE_STUDIO,
+                offset=0,
+                limit=500,
+            )
+            for row in rows:
+                file_id = row.get("id")
+                if not isinstance(file_id, int):
+                    continue
+                row_storage_path = str(row.get("storage_path") or "").replace("\\", "/").strip()
+                if (
+                    row_storage_path == normalized_target
+                    or row_storage_path.endswith(f"/{normalized_target}")
+                    or Path(row_storage_path).name == target_name
+                ):
+                    await storage_service.unregister_generated_file(file_id, hard_delete=True)
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(
+                "Failed to unregister generated voice-clone file for user {} path {}: {}",
+                user_id,
+                normalized_target,
+                e,
+            )
 
     def get_user_voices_path(self, user_id: int) -> Path:
         """Get the voices directory path for a user.
@@ -427,8 +528,10 @@ class VoiceManager:
     async def ensure_default_voice(self, user_id: int) -> Optional[VoiceInfo]:
         """Ensure the bundled default NeuTTS voice exists for a user."""
         existing = await self.registry.get_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
-        if existing:
+        if existing and self._voice_file_exists(user_id, existing):
             return existing
+        if existing:
+            await self.registry.remove_voice(user_id, DEFAULT_NEUTTS_VOICE_ID)
 
         voices_path = self.get_user_voices_path(user_id)
         processed_path = voices_path / "processed"
@@ -444,6 +547,7 @@ class VoiceManager:
                     audio_path=candidate,
                 )
                 await self.registry.register_voice(user_id, voice_info)
+                self._invalidate_registry_snapshot(user_id)
                 return voice_info
 
         if not DEFAULT_NEUTTS_VOICE_PATH.exists():
@@ -467,6 +571,7 @@ class VoiceManager:
                 audio_path=processed_file,
             )
             await self.registry.register_voice(user_id, voice_info)
+            self._invalidate_registry_snapshot(user_id)
 
             reference_text = None
             if DEFAULT_NEUTTS_VOICE_TEXT_PATH.exists():
@@ -530,12 +635,18 @@ class VoiceManager:
         )
 
     async def _get_voice_info(self, user_id: int, voice_id: str) -> Optional[VoiceInfo]:
+        return await self.get_voice(user_id, voice_id)
+
+    async def get_voice(self, user_id: int, voice_id: str, *, refresh: bool = False) -> Optional[VoiceInfo]:
+        """Get a voice with automatic filesystem-backed registry synchronization."""
+        if voice_id == DEFAULT_NEUTTS_VOICE_ID:
+            await self.ensure_default_voice(user_id)
+        await self._sync_registry_from_filesystem(user_id, force=refresh)
         voice = await self.registry.get_voice(user_id, voice_id)
-        if voice:
-            return voice
-        # Populate registry from disk if needed
-        await self.list_user_voices(user_id)
-        return await self.registry.get_voice(user_id, voice_id)
+        if voice and not self._voice_file_exists(user_id, voice):
+            await self._sync_registry_from_filesystem(user_id, force=True)
+            return await self.registry.get_voice(user_id, voice_id)
+        return voice
 
     async def _get_voice_audio_path(self, user_id: int, voice_id: str) -> Path:
         voice_info = await self._get_voice_info(user_id, voice_id)
@@ -576,12 +687,28 @@ class VoiceManager:
             dt for dt in self.user_upload_counts[user_id]
             if dt > hour_ago
         ]
+        memory_recent_upload_count = len(self.user_upload_counts[user_id])
+        fs_recent_upload_count = 0
+        # Cross-instance consistency: also inspect upload artifacts on disk.
+        voices_path = self.get_user_voices_path(user_id)
+        uploads_dir = voices_path / "uploads"
+        if uploads_dir.exists():
+            for upload_file in uploads_dir.glob("*"):
+                if not upload_file.is_file():
+                    continue
+                try:
+                    mtime = datetime.utcfromtimestamp(upload_file.stat().st_mtime)
+                except _VOICE_IO_EXCEPTIONS:
+                    continue
+                if mtime > hour_ago:
+                    fs_recent_upload_count += 1
 
-        if len(self.user_upload_counts[user_id]) >= VOICE_RATE_LIMITS["upload_per_hour"]:
+        recent_upload_count = max(memory_recent_upload_count, fs_recent_upload_count)
+
+        if recent_upload_count >= VOICE_RATE_LIMITS["upload_per_hour"]:
             return False, f"Rate limit exceeded: {VOICE_RATE_LIMITS['upload_per_hour']} uploads per hour"
 
         # Check total storage
-        voices_path = self.get_user_voices_path(user_id)
         total_size = sum(
             f.stat().st_size for f in voices_path.rglob("*") if f.is_file()
         )
@@ -590,8 +717,8 @@ class VoiceManager:
         if total_size > max_storage:
             return False, f"Storage quota exceeded: {total_size / 1024 / 1024:.1f}MB / {VOICE_RATE_LIMITS['total_storage_mb']}MB"
 
-        # Check voice count
-        voice_count = len(await self.registry.list_voices(user_id))
+        # Check voice count from filesystem (cross-instance safe).
+        voice_count, _ = self._get_processed_snapshot(user_id)
         if voice_count >= VOICE_RATE_LIMITS["max_voices_per_user"]:
             return False, f"Maximum voice limit reached: {VOICE_RATE_LIMITS['max_voices_per_user']} voices"
 
@@ -714,6 +841,7 @@ class VoiceManager:
 
             # Register voice
             await self.registry.register_voice(user_id, voice_info)
+            self._invalidate_registry_snapshot(user_id)
 
             # Store optional reference metadata
             if request.reference_text:
@@ -937,17 +1065,10 @@ class VoiceManager:
             shutil.copy2(input_path, output_path)
             return output_path
 
-    async def list_user_voices(self, user_id: int) -> list[VoiceInfo]:
+    async def list_user_voices(self, user_id: int, *, refresh: bool = False) -> list[VoiceInfo]:
         """List all voices for a user"""
         await self.ensure_default_voice(user_id)
-        # Get from registry
-        voices = await self.registry.list_voices(user_id)
-
-        # If empty, scan filesystem
-        if not voices:
-            voices = await self._scan_user_voices(user_id)
-
-        return voices
+        return await self._sync_registry_from_filesystem(user_id, force=refresh)
 
     async def _scan_user_voices(self, user_id: int) -> list[VoiceInfo]:
         """Scan filesystem for user's voices"""
@@ -971,6 +1092,8 @@ class VoiceManager:
                                 provider_name = maybe_provider.lower()
                             if maybe_id:
                                 voice_id = maybe_id
+                        elif stem == DEFAULT_NEUTTS_VOICE_ID:
+                            provider_name = "neutts"
 
                         # Get file info
                         stat = voice_file.stat()
@@ -979,7 +1102,8 @@ class VoiceManager:
                         # Create voice info
                         voice_info = VoiceInfo(
                             voice_id=voice_id,
-                            name=voice_id,  # Use ID as name if not stored
+                            name="Default" if voice_id == DEFAULT_NEUTTS_VOICE_ID else voice_id,
+                            description="Bundled NeuTTS default voice" if voice_id == DEFAULT_NEUTTS_VOICE_ID else None,
                             file_path=str(voice_file.relative_to(voices_path)),
                             format=voice_file.suffix[1:],
                             duration=duration,
@@ -1002,12 +1126,19 @@ class VoiceManager:
     async def delete_voice(self, user_id: int, voice_id: str) -> bool:
         """Delete a voice"""
         # Get voice info
-        voice_info = await self.registry.get_voice(user_id, voice_id)
+        voice_info = await self.get_voice(user_id, voice_id)
         if not voice_info:
             return False
 
         # Delete files
         voices_path = self.get_user_voices_path(user_id)
+        storage_relative_path = str(voice_info.file_path)
+
+        # Best-effort storage accounting cleanup for generated voice-clone records.
+        await self._unregister_voice_clone_generated_files(
+            user_id=user_id,
+            storage_path=storage_relative_path,
+        )
 
         # Delete processed file
         try:
@@ -1032,8 +1163,17 @@ class VoiceManager:
             except (ValueError, RuntimeError):
                 logger.warning(f"Skipping invalid upload file path: {upload_file}")
 
+        # Delete reference metadata json if present
+        try:
+            metadata_path = self.get_user_voice_metadata_path(user_id, voice_id)
+            if metadata_path.exists():
+                metadata_path.unlink()
+        except _VOICE_NONCRITICAL_EXCEPTIONS as e:
+            logger.warning(f"Failed to delete metadata for voice {voice_id}: {e}")
+
         # Remove from registry
         await self.registry.remove_voice(user_id, voice_id)
+        self._invalidate_registry_snapshot(user_id)
 
         logger.info(f"Deleted voice {voice_id} for user {user_id}")
         return True
@@ -1060,15 +1200,42 @@ class VoiceManager:
 
     async def start_background_tasks(self):
         """Start background processing tasks"""
-        # Start cleanup task
-        asyncio.create_task(self._cleanup_worker())
+        if self._cleanup_task and not self._cleanup_task.done():
+            return
+        self._cleanup_stop_event = asyncio.Event()
+        self._cleanup_task = asyncio.create_task(self._cleanup_worker(self._cleanup_stop_event))
         logger.info("Voice manager background tasks started")
 
-    async def _cleanup_worker(self):
+    async def stop_background_tasks(self):
+        """Stop background processing tasks."""
+        if self._cleanup_task is None:
+            return
+
+        stop_event = self._cleanup_stop_event
+        if stop_event is not None:
+            stop_event.set()
+
+        cleanup_task = self._cleanup_task
+        try:
+            await asyncio.wait_for(cleanup_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            cleanup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cleanup_task
+        finally:
+            self._cleanup_task = None
+            self._cleanup_stop_event = None
+            logger.info("Voice manager background tasks stopped")
+
+    async def _cleanup_worker(self, stop_event: asyncio.Event):
         """Background worker for cleanup"""
-        while True:
+        while not stop_event.is_set():
             try:
-                await asyncio.sleep(self.cleanup_interval)
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=self.cleanup_interval)
+                    break
+                except asyncio.TimeoutError:
+                    pass
                 await self.cleanup_temp_files()
             except _VOICE_NONCRITICAL_EXCEPTIONS as e:
                 logger.error(f"Cleanup worker error: {e}")
@@ -1091,3 +1258,12 @@ async def init_voice_manager():
     manager = get_voice_manager()
     await manager.start_background_tasks()
     logger.info("Voice manager initialized")
+
+
+async def shutdown_voice_manager() -> bool:
+    """Shutdown the global voice manager background tasks."""
+    global _voice_manager
+    if _voice_manager is None:
+        return False
+    await _voice_manager.stop_background_tasks()
+    return True

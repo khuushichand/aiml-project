@@ -1,6 +1,13 @@
 Release Notes
 =============
 
+2026-02-07
+
+- Web scraping fallback hardening: responses now include `engine="legacy_fallback"` and `fallback_context` when enhanced scraping is unavailable.
+- Legacy fallback now rejects unsupported advanced crawl controls with explicit `400` errors (instead of silently ignoring them), including `custom_headers`, unsupported `crawl_strategy`, `include_external=true`, and `score_threshold>0`.
+- Predictable fallback degradation: `max_pages` is now enforced post-fetch for legacy `URL Level` and `Sitemap` runs.
+- Added fallback-focused tests covering contract errors, fallback forcing, and smoke behavior for both `ephemeral` and `persist` modes.
+
 2026-02-06
 
 - Watchlists outputs: optional small-run TTS brief auto-generation now honors per-job `output_prefs` (`tts_brief`/`audio_brief`) and records metadata flags when auto mode is applied.
