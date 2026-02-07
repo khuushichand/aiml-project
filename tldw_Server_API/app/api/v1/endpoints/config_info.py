@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from tldw_Server_API.app.core.config import load_comprehensive_config
 from tldw_Server_API.app.core.config import settings as global_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter()
 
@@ -323,7 +324,7 @@ async def get_jobs_config_info():
             "JOBS_LEASE_RENEW_SECONDS": _to_int("JOBS_LEASE_RENEW_SECONDS", 30),
             "JOBS_LEASE_RENEW_JITTER_SECONDS": _to_int("JOBS_LEASE_RENEW_JITTER_SECONDS", 5),
             "JOBS_LEASE_MAX_SECONDS": _to_int("JOBS_LEASE_MAX_SECONDS", 3600),
-            "JOBS_ENFORCE_LEASE_ACK": str(os.getenv("JOBS_ENFORCE_LEASE_ACK", "")).lower() in {"1", "true", "yes", "y", "on"},
+            "JOBS_ENFORCE_LEASE_ACK": is_truthy(os.getenv("JOBS_ENFORCE_LEASE_ACK")),
         },
         "notes": "DSN is not exposed for security. Configure via the environment (PostgreSQL DSN) to use a Postgres backend."
     }

@@ -179,3 +179,44 @@
     - `.venv/bin/python -m pytest -q --maxfail=1`
     - Result: collection succeeded; run stopped on first runtime failure outside Stage 7 scope:
       - `tests/Admin/test_admin_watchlists_org_settings.py::test_admin_update_org_watchlists_settings` returning `500 failed_to_fetch_org_watchlists_settings`.
+- Stage 7 continued blocker cleanup (runtime failures after collection fixes):
+  - Fixed Admin watchlists settings runtime 500 in test DB adapter:
+    - `app/api/v1/API_Deps/auth_deps.py`
+    - Corrected sqlite row normalization in `_ConnAdapter.fetch`/`_ConnAdapter.fetchrow` to use `row.keys()` mapping.
+  - Fixed Agent Client Protocol regressions:
+    - `app/api/v1/endpoints/agent_client_protocol.py`
+    - Replaced stale `JWT_Manager` import with `jwt_service` wiring.
+    - Added module-level `get_jwt_manager()` compatibility shim for existing websocket monkeypatch tests.
+    - Added robust `create_session` signature handling and permission-response fallback for mocked `_pending_permissions`.
+    - Updated websocket tests for async state convergence:
+      - `tests/Agent_Client_Protocol/test_acp_websocket.py`
+  - Fixed audio quota monkeypatch compatibility:
+    - `app/api/v1/endpoints/audio/audio_transcriptions.py`
+    - `_audio_shim_attr` now treats `tldw_Server_API.tests.*` callables as explicit overrides.
+  - Fixed flaky WS concurrent-stream denial path in full-suite context:
+    - `app/api/v1/endpoints/audio/audio_streaming.py`
+    - `_audio_shim_attr` now treats `tldw_Server_API.tests.*` callables as explicit overrides, preventing stale package-level references from shadowing test monkeypatches.
+  - Fixed Audiobooks integration auth regression:
+    - `tests/Audiobooks/integration/test_audiobook_alignment_flow.py`
+    - Added `X-API-KEY` test-client default header from `get_settings().SINGLE_USER_API_KEY` for `/api/v1/audio/speech` calls guarded by `require_token_scope(..., require_if_present=True)`.
+  - Fixed AuthNZ API key rotation integration test isolation:
+    - `tests/AuthNZ/integration/test_api_key_rotation_audit.py`
+    - Added per-test temporary sqlite DB fixture (`sqlite_authnz_pool`) with explicit `DATABASE_URL` override and singleton resets.
+    - Bound `APIKeyManager(db_pool=pool)` to the isolated pool to avoid shared `Databases/users.db` corruption/state coupling.
+- Stage 7 verification slices (this round):
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Agent_Client_Protocol/test_acp_endpoints.py`
+    - Result: `5 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Agent_Client_Protocol/test_acp_websocket.py`
+    - Result: `15 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_http_quota_validation.py`
+    - Result: `2 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audio/test_ws_concurrent_streams.py`
+    - Result: `1 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audiobooks/integration/test_audiobook_alignment_flow.py`
+    - Result: `1 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/Audiobooks`
+    - Result: `93 passed`.
+  - `.venv/bin/python -m pytest -q tldw_Server_API/tests/AuthNZ/integration/test_api_key_rotation_audit.py`
+    - Result: `2 passed`.
+- Remaining Stage 7 status:
+  - Full-suite `--maxfail=1` progression is still ongoing beyond these fixes; no new stable “first failing test” has been confirmed yet after the latest AuthNZ/Audiobooks blocker resolutions.

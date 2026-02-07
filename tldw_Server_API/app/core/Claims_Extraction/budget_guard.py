@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-_TRUTHY = {"1", "true", "yes", "y", "on"}
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 def _as_optional_int(value: Any) -> int | None:
@@ -32,7 +32,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in _TRUTHY
+    return is_truthy(str(value).strip().lower())
 
 
 def estimate_claims_tokens(text: str) -> int:

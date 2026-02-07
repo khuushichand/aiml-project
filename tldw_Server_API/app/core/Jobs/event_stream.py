@@ -8,6 +8,7 @@ from sqlite3 import Error as SQLiteError
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 from .audit_bridge import submit_job_audit_event
 
@@ -38,7 +39,7 @@ _OUTBOX_NONCRITICAL_EXCEPTIONS: tuple[type[Exception], ...] = (
 
 
 def _events_enabled() -> bool:
-    return str(os.getenv("JOBS_EVENTS_ENABLED", "")).lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(os.getenv("JOBS_EVENTS_ENABLED"))
 
 
 def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict[str, Any] | None = None) -> None:
@@ -53,7 +54,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
         # Audit integration is best-effort. Errors should never break job flow.
         pass
     # Only skip entirely when neither logging nor outbox are enabled
-    if not (_events_enabled() or str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {"1","true","yes","y","on"}):
+    if not (_events_enabled() or is_truthy(os.getenv("JOBS_EVENTS_OUTBOX"))):
         return
     meta = {}
     if job:
@@ -68,7 +69,7 @@ def emit_job_event(event: str, *, job: dict[str, Any] | None = None, attrs: dict
     # Outbox write (append-only) when enabled
     # Optional soft rate-limit for extremely high churn
     try:
-        if _events_enabled() or str(os.getenv("JOBS_EVENTS_OUTBOX", "")).lower() in {"1","true","yes","y","on"}:
+        if _events_enabled() or is_truthy(os.getenv("JOBS_EVENTS_OUTBOX")):
             # Basic rate limiter: drop writes if exceeding JOBS_EVENTS_RATE_LIMIT_HZ
             try:
                 hz = float(os.getenv("JOBS_EVENTS_RATE_LIMIT_HZ", "0") or "0")

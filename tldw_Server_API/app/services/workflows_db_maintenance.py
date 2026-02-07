@@ -18,6 +18,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
+from tldw_Server_API.app.core.testing import is_truthy
 
 _WORKFLOWS_DB_MAINTENANCE_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -35,7 +36,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
     v = os.getenv(name, "")
     if not v:
         return default
-    return v.lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(v.lower())
 
 
 async def run_workflows_db_maintenance(stop_event: asyncio.Event) -> None:

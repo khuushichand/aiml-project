@@ -54,11 +54,11 @@
       "heading": "Configuraciones de la Interfaz Web",
       "speechRecognitionLang": {
         "label": "Idioma de Reconocimiento de Voz",
-        "placeholder": "Selecione un idioma"
+        "placeholder": "Seleccione un idioma"
       },
       "language": {
         "label": "Idioma",
-        "placeholder": "Selecione un idioma"
+        "placeholder": "Seleccione un idioma"
       },
       "darkMode": {
         "label": "Cambiar Tema",
@@ -153,17 +153,17 @@
       }
     },
     "webSearch": {
-      "heading": "Manejo de la busqueda Web",
+      "heading": "Manejo de la búsqueda Web",
       "searchMode": {
-        "label": "Realizar busquedas Simples en Internet"
+        "label": "Realizar búsquedas Simples en Internet"
       },
       "provider": {
-        "label": "Motor de Busqueda",
-        "placeholder": "Selecione un motor de busqueda"
+        "label": "Motor de Búsqueda",
+        "placeholder": "Seleccione un motor de búsqueda"
       },
       "totalSearchResults": {
-        "label": "Resultados totales de la busqueda",
-        "placeholder": "Ingresar el total de Resultados de la busqueda"
+        "label": "Resultados totales de la búsqueda",
+        "placeholder": "Ingresar el total de Resultados de la búsqueda"
       },
       "visitSpecificWebsite": {
         "label": "Visita el sitio web mencionado en el mensaje"
@@ -218,7 +218,7 @@
       "import": {
         "label": "Importar Histórico del Chat, Base de Conocimiento y Prompts",
         "button": "Importar Datos",
-        "success": "Importación existosa",
+        "success": "Importación exitosa",
         "error": "Error de importación"
       }
     },
@@ -232,11 +232,11 @@
       },
       "ttsProvider": {
         "label": "Proveedor de Text-to-speech",
-        "placeholder": "Selecione un proveedor"
+        "placeholder": "Seleccione un proveedor"
       },
       "ttsVoice": {
         "label": "Voz de Text-to-speech",
-        "placeholder": "Selecione una voz"
+        "placeholder": "Seleccione una voz"
       },
       "ssmlEnabled": {
         "label": "Habilitar SSML (Speech Synthesis Markup Language)"
@@ -371,7 +371,7 @@
     }
   },
   "manageModels": {
-    "title": "Administar de Modelos",
+    "title": "Administrar modelos",
     "addBtn": "Agregar Nuevo Modelo",
     "columns": {
       "name": "Nombre",
@@ -385,8 +385,8 @@
       "parentModel": "Modelo Padre",
       "format": "Formato",
       "family": "Familia",
-      "parameterSize": "Tamaño de Parametros",
-      "quantizationLevel": "Nível de Quantización"
+      "parameterSize": "Tamaño de parámetros",
+      "quantizationLevel": "Nivel de cuantización"
     },
     "tooltip": {
       "delete": "Borrar Modelo",
@@ -394,8 +394,8 @@
       "editNickname": "Editar alias"
     },
     "confirm": {
-      "delete": "¿Esta seguro que desea borrar este modelos?",
-      "repull": "¿Esta seguro que desea traer nuevamente este modelo?"
+      "delete": "¿Está seguro de que desea borrar este modelo?",
+      "repull": "¿Está seguro de que desea traer nuevamente este modelo?"
     },
     "modal": {
       "title": "Traer Nuevo Modelo",
@@ -415,7 +415,7 @@
     }
   },
   "managePrompts": {
-    "title": "Administrar de Prompts",
+    "title": "Administrar prompts",
     "addBtn": "Agregar Nuevo Prompt",
     "option1": "Estándar",
     "option2": "RAG",
@@ -595,8 +595,8 @@
     }
   },
   "manageSearch": {
-    "title": "Administrar Busqueda Web",
-    "heading": "Configurar Busqueda Web"
+    "title": "Administrar Búsqueda Web",
+    "heading": "Configurar Búsqueda Web"
   },
   "about": {
     "title": "Sobre",
@@ -774,9 +774,9 @@
       "label": "Configuraciones de RAG",
       "model": {
         "label": "Modelo de embeddings",
-        "required": "Por favor, selecione un modelo",
+        "required": "Por favor, seleccione un modelo",
         "help": "Es recomendable usar modelos de embeddings como `nomic-embed-text`.",
-        "placeholder": "Selecione un modelo",
+        "placeholder": "Seleccione un modelo",
         "helpRecommended": "Recomendado: {{model}} (desde la configuración del servidor)",
         "helpMissing": "El modelo de embedding guardado anteriormente ya no está disponible en el servidor. Elija otro modelo."
       },
@@ -816,14 +816,14 @@
       "alert": "Es obsoleto configurar aquí el prompt del sistema. Por favor, use la sección de Administrar Prompts para agregar o editar prompts. Esta sección se quitará en una versión futura",
       "systemPrompt": "Prompt del Sistema",
       "systemPromptPlaceholder": "Ingresar el prompt del sistema",
-      "webSearchPrompt": "Prompt de la busqueda Web",
+      "webSearchPrompt": "Prompt de la búsqueda Web",
       "webSearchPromptHelp": "No borre `{search_results}` del prompt.",
-      "webSearchPromptError": "Por favor, ingresar un prompt de busqueda web",
-      "webSearchPromptPlaceholder": "Ingrese un prompt de busqueda web",
-      "webSearchFollowUpPrompt": "Prompt de Seguimiento de busqueda Web",
+      "webSearchPromptError": "Por favor, ingresar un prompt de búsqueda web",
+      "webSearchPromptPlaceholder": "Ingrese un prompt de búsqueda web",
+      "webSearchFollowUpPrompt": "Prompt de Seguimiento de búsqueda Web",
       "webSearchFollowUpPromptHelp": "No borre `{chat_history}` y `{question}` del prompt.",
-      "webSearchFollowUpPromptError": "Por favor, ingrese el prompt de seguimiento de la busqueda web",
-      "webSearchFollowUpPromptPlaceholder": "Su prompt de seguimiento de busqueda web"
+      "webSearchFollowUpPromptError": "Por favor, ingrese el prompt de seguimiento de la búsqueda web",
+      "webSearchFollowUpPromptPlaceholder": "Su prompt de seguimiento de búsqueda web"
     }
   },
   "onboarding": {

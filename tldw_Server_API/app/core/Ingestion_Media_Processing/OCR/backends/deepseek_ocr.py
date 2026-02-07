@@ -6,6 +6,7 @@ import tempfile
 import threading
 
 from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.base import OCRBackend
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 _TF_MODEL = None
@@ -42,7 +43,7 @@ def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+    return is_truthy(str(raw).strip().lower())
 
 
 def _env_int(name: str, default: int) -> int:

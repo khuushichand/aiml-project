@@ -13,7 +13,7 @@ def _has_tiktoken():
     except Exception:
         return False
 
-    network_enabled = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+    network_enabled = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "y", "on"}
     if network_enabled:
         return True
 

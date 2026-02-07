@@ -7,6 +7,7 @@ import os
 from loguru import logger
 
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 async def run_jobs_integrity_sweeper(stop_event: asyncio.Event | None = None) -> None:
@@ -17,11 +18,11 @@ async def run_jobs_integrity_sweeper(stop_event: asyncio.Event | None = None) ->
       - JOBS_INTEGRITY_SWEEP_INTERVAL_SEC=60
       - JOBS_INTEGRITY_SWEEP_FIX=true|false (when true, attempts self-heal)
     """
-    if str(os.getenv("JOBS_INTEGRITY_SWEEP_ENABLED", "")).lower() not in {"1","true","yes","y","on"}:
+    if not is_truthy(os.getenv("JOBS_INTEGRITY_SWEEP_ENABLED")):
         return
 
     interval = float(os.getenv("JOBS_INTEGRITY_SWEEP_INTERVAL_SEC", "60") or "60")
-    do_fix = str(os.getenv("JOBS_INTEGRITY_SWEEP_FIX", "")).lower() in {"1","true","yes","y","on"}
+    do_fix = is_truthy(os.getenv("JOBS_INTEGRITY_SWEEP_FIX"))
     jm = JobManager()
     logger.info(f"Starting Jobs integrity sweeper (every {interval}s, fix={do_fix})")
     while True:

@@ -796,7 +796,7 @@ def create_add_media_form_data(**overrides) -> Dict[str, Any]:
 
 # Capability flags for conditional skipping
 HAS_FFMPEG = bool(shutil.which('ffmpeg') or os.path.exists('/opt/homebrew/bin/ffmpeg') or os.path.exists('/usr/local/bin/ffmpeg') or os.path.exists('/usr/bin/ffmpeg'))
-NETWORK_TESTS_ENABLED = os.getenv('ENABLE_NETWORK_TESTS', '').lower() in {"1", "true", "yes", "on"}
+NETWORK_TESTS_ENABLED = os.getenv('ENABLE_NETWORK_TESTS', '').lower() in {"1", "true", "yes", "y", "on"}
 
 def test_add_media_invalid_media_type_value(test_api_client, dummy_headers):
 

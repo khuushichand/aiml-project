@@ -11,7 +11,7 @@ pytestmark = pytest.mark.performance
 
 
 def _perf_enabled() -> bool:
-    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "y", "on"}
 
 
 pytestmark = pytest.mark.skipif(not _perf_enabled(), reason="set PERF=1 to run performance checks")

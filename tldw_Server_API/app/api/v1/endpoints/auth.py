@@ -96,6 +96,7 @@ from tldw_Server_API.app.core.testing import (
     env_flag_enabled as _env_flag_enabled,
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
     is_test_mode as _is_test_mode,
+    is_truthy as _is_truthy,
 )
 
 _AUTH_NONCRITICAL_EXCEPTIONS = (
@@ -179,7 +180,7 @@ def _build_deprecation_headers(successor: str) -> dict[str, str]:
 
 def _legacy_user_me_enabled() -> bool:
     raw = os.getenv("ENABLE_LEGACY_USER_ME_ENDPOINTS", "true")
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _is_truthy(str(raw).strip().lower())
 
 
 def _legacy_warning_payload(successor: str) -> dict[str, str]:

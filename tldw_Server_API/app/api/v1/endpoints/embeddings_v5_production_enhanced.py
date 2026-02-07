@@ -637,7 +637,7 @@ def _is_test_context() -> bool:
             return True
     except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
         pass
-    return env_flag_enabled("TESTING") or env_flag_enabled("TEST_MODE")
+    return env_flag_enabled("TESTING") or is_test_mode()
 
 
 def _should_skip_missing_key(
@@ -797,7 +797,7 @@ class TTLCache:
         self._cleanup_thread: threading.Thread | None = None
         self._cleanup_stop: threading.Event | None = None
         try:
-            self._use_thread = str(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true")).lower() in ("1", "true", "yes", "on")
+            self._use_thread = is_truthy(os.getenv("EMBEDDINGS_TTLCACHE_DAEMON", "true"))
         except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
             self._use_thread = True
         self.hits = 0
@@ -2449,7 +2449,7 @@ async def create_embedding_endpoint(
             # Strict by default: do NOT fallback when `x-provider` header is set.
             # To allow fallback even with header, set EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER=true
             try:
-                allow_hdr = os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER", "").lower() in ("1", "true", "yes", "on")
+                allow_hdr = is_truthy(os.getenv("EMBEDDINGS_ALLOW_FALLBACK_WITH_HEADER"))
             except _EMBEDDINGS_NONCRITICAL_EXCEPTIONS:
                 allow_hdr = False
             fallback_disabled = (x_provider is not None and not allow_hdr)

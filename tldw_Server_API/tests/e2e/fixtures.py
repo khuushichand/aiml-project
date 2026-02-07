@@ -32,7 +32,7 @@ TEST_TIMEOUT = 120  # seconds for each request (increased for video transcriptio
 RATE_LIMIT_RETRY_DELAY = float(os.getenv("E2E_RATE_LIMIT_DELAY", "0.5"))  # Delay after rate limit
 MAX_RETRIES = int(os.getenv("E2E_MAX_RETRIES", "3"))  # Max retries for rate limit errors
 SERVER_STARTUP_TIMEOUT = int(os.getenv("E2E_SERVER_STARTUP_TIMEOUT", "30"))  # Max time to wait for server
-E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "on"}
+E2E_INPROCESS = os.getenv("E2E_INPROCESS", "").lower() in {"1", "true", "yes", "y", "on"}
 _INPROCESS_DB_URL: Optional[str] = None
 NO_RETRY_HEADER = "X-E2E-No-Retry"
 FALLBACK_CHAT_MODEL = "gpt4o"
@@ -1299,7 +1299,7 @@ def data_tracker(api_client):
     # Cleanup files after tests
     tracker.cleanup_files()
     # Optionally cleanup server-side resources unless preservation requested
-    preserve = str(os.getenv("E2E_PRESERVE_ARTIFACTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    preserve = str(os.getenv("E2E_PRESERVE_ARTIFACTS", "")).strip().lower() in {"1", "true", "yes", "y", "on"}
     try:
         tracker.cleanup_resources(preserve=preserve)
     except Exception as _e:

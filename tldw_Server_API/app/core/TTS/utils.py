@@ -16,7 +16,8 @@ import re
 import unicodedata
 from typing import Any
 
-TRUTHY_STRINGS = {"1", "true", "yes", "y", "on"}
+from tldw_Server_API.app.core.testing import is_truthy
+
 FALSY_STRINGS = {"0", "false", "no", "n", "off", "none", "null", ""}
 _TTS_TEXT_WS_RE = re.compile(r"\s+", flags=re.UNICODE)
 
@@ -43,7 +44,7 @@ def parse_bool(value: Any, default: bool | None = False) -> bool:
             return bool(default) if default is not None else False
     if isinstance(value, str):
         s = value.strip().lower()
-        if s in TRUTHY_STRINGS:
+        if is_truthy(s):
             return True
         if s in FALSY_STRINGS:
             return False

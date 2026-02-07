@@ -313,8 +313,7 @@ class TTSConfigManager:
 
                 # Global switch: auto download local models
                 if "auto_download_local_models" in tts_section:
-                    val = str(tts_section['auto_download_local_models']).strip().lower()
-                    auto_dl = val in ("1", "true", "yes", "on")
+                    auto_dl = parse_bool(tts_section['auto_download_local_models'], default=False)
                     if 'providers' not in config_dict:
                         config_dict['providers'] = {}
                     for provider in [
@@ -332,8 +331,7 @@ class TTSConfigManager:
                 # Provider-specific auto-download toggles
                 def _bool_from_section(key: str) -> Optional[bool]:
                     if key in tts_section:
-                        v = str(tts_section[key]).strip().lower()
-                        return v in ("1", "true", "yes", "on")
+                        return parse_bool(tts_section[key], default=False)
                     return None
 
                 for prov, key in (

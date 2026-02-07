@@ -16,6 +16,7 @@ from tldw_Server_API.app.core.Metrics.metrics_manager import (
     MetricType,
     get_metrics_registry,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 _RG_METRICS_REGISTERED = False
 
@@ -142,7 +143,7 @@ def rg_metrics_entity_label_enabled() -> bool:
         v = os.getenv("RG_METRICS_ENTITY_LABEL")
         if v is None:
             return False
-        return str(v).strip().lower() in ("1", "true", "yes", "on")
+        return is_truthy(str(v).strip())
     except Exception:
         return False
 

@@ -13,6 +13,7 @@ from loguru import logger
 
 from tldw_Server_API.app.core.config import rg_redis_fail_mode
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_async_redis_client
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 from .daily_caps import check_daily_cap
 from .governor import MemoryResourceGovernor, ResourceGovernor, RGDecision, RGRequest
@@ -295,7 +296,11 @@ class RedisResourceGovernor(ResourceGovernor):
             if limit <= 0:
                 return
             # Detect pytest/test mode preference
-            prefer_aw = bool(os.getenv("PYTEST_CURRENT_TEST") or os.getenv("RG_TEST_FORCE_STUB_RATE") or os.getenv("TEST_MODE"))
+            prefer_aw = bool(
+                os.getenv("PYTEST_CURRENT_TEST")
+                or env_flag_enabled("RG_TEST_FORCE_STUB_RATE")
+                or is_test_mode()
+            )
             # Always attempt for real Redis; for stub this provides no value
             if not (await self._is_real_redis()) and not prefer_aw:
                 return

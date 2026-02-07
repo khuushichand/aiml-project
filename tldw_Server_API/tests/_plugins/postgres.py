@@ -118,7 +118,7 @@ def _connect_admin(host: str, port: int, user: str, password: str):
         raise RuntimeError("psycopg (or psycopg2) is required for Postgres‑backed tests")
 
     last_err = None
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
     for _ in range(10):
         try:
             if _PG_DRIVER == "psycopg":  # pragma: no cover - env dependent
@@ -178,8 +178,8 @@ def pg_server() -> Dict[str, str | int]:
     from tldw_Server_API.tests.helpers.pg_env import get_pg_env
 
     env = get_pg_env()
-    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "y", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
 
     ok = _ensure_postgres_available(env.host, env.port, env.user, env.password, require_pg=require_pg)
     if not ok:
@@ -209,8 +209,8 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
     if _PG_DRIVER is None:  # pragma: no cover - env dependent
         pytest.skip("psycopg not installed; skipping Postgres‑backed tests")
 
-    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "on")
-    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "on")
+    require_pg = os.getenv("TLDW_TEST_POSTGRES_REQUIRED", "").lower() in ("1", "true", "yes", "y", "on")
+    debug = os.getenv("TLDW_TEST_PG_DEBUG", "").lower() in ("1", "true", "yes", "y", "on")
 
     try:
         _create_database(host, port, user, password, db_name)
@@ -218,7 +218,7 @@ def _temp_db_generator(pg_server) -> Generator[Dict[str, object], None, None]:
         # First try a local Docker fallback on an alternate port if we're on localhost
         alt_port_env = os.getenv("TLDW_TEST_PG_ALT_PORT", "5434")
         alt_port = int(alt_port_env) if alt_port_env.isdigit() else 5434
-        can_attempt_docker = str(host) in {"127.0.0.1", "localhost", "::1"} and os.getenv("TLDW_TEST_NO_DOCKER", "").lower() not in ("1", "true", "yes", "on")
+        can_attempt_docker = str(host) in {"127.0.0.1", "localhost", "::1"} and os.getenv("TLDW_TEST_NO_DOCKER", "").lower() not in ("1", "true", "yes", "y", "on")
         tried_docker = False
         if can_attempt_docker and alt_port != int(port):
             tried_docker = True

@@ -3247,7 +3247,7 @@ def load_and_log_configs():
             if raw is None:
                 return default
             s = str(raw).strip().lower()
-            if s in {"1", "true", "yes", "y", "on"}:
+            if is_truthy(s):
                 return True
             if s in {"0", "false", "no", "n", "off"}:
                 return False

@@ -6,10 +6,11 @@ from contextlib import contextmanager
 from typing import Any
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 def _enabled() -> bool:
-    return str(os.getenv("JOBS_TRACING", "")).lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(os.getenv("JOBS_TRACING"))
 
 
 @contextmanager

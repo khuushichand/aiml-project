@@ -29,7 +29,7 @@ def _sample_audio_path() -> Path:
 
 @pytest.mark.e2e
 def test_audio_transcription_local_workflow(page, server_url):
-    if os.getenv("RUN_AUDIO_E2E", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("RUN_AUDIO_E2E", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Audio E2E disabled; set RUN_AUDIO_E2E=1 to enable.")
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not available; skipping audio transcription workflow.")
@@ -86,7 +86,7 @@ def test_audio_transcription_local_workflow(page, server_url):
 
 @pytest.mark.e2e
 def test_audio_transcription_external_workflow(page, server_url):
-    if os.getenv("TLDW_E2E_EXTERNAL_AUDIO", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("TLDW_E2E_EXTERNAL_AUDIO", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("External audio E2E disabled; set TLDW_E2E_EXTERNAL_AUDIO=1 to enable.")
 
     headers = _auth_headers()

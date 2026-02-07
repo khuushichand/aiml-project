@@ -35,7 +35,7 @@ from tldw_Server_API.app.core.AuthNZ.orgs_teams import (
 from tldw_Server_API.app.core.AuthNZ.principal_model import AuthContext, AuthPrincipal
 from tldw_Server_API.app.core.AuthNZ.repos.rbac_repo import AuthnzRbacRepo
 from tldw_Server_API.app.core.AuthNZ.session_manager import get_session_manager
-from tldw_Server_API.app.core.testing import env_flag_enabled, is_truthy
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
 
 #
 # Local Imports
@@ -314,10 +314,7 @@ def _is_test_context() -> bool:
         pass
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
-    for flag in ("TEST_MODE", "TLDW_TEST_MODE", "TESTING"):
-        if env_flag_enabled(flag):
-            return True
-    return False
+    return is_test_mode() or env_flag_enabled("TESTING")
 
 
 def _is_strict_test_bypass_context() -> bool:
@@ -330,9 +327,8 @@ def _is_strict_test_bypass_context() -> bool:
     """
     if os.getenv("PYTEST_CURRENT_TEST") is not None:
         return True
-    for flag in ("TEST_MODE", "TLDW_TEST_MODE"):
-        if env_flag_enabled(flag):
-            return True
+    if is_test_mode():
+        return True
     try:
         if getattr(get_settings(), "TEST_MODE", False):
             return True
@@ -1423,7 +1419,7 @@ async def get_request_user(
         import os as _os
         _prod = _is_production_like_env()
         if _prod and (
-            env_flag_enabled("TEST_MODE")
+            is_test_mode()
             or env_flag_enabled("TESTING")
         ) and not getattr(get_request_user, "_warned_testflags_prod", False):
             logger.warning(

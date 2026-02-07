@@ -133,7 +133,7 @@ def pytest_addoption(parser):
 
 
 def _env_truthy(name: str) -> bool:
-    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "y", "on"}
 
 # Attach the shared test results dict to config so sessionfinish can print a summary
 @pytest.fixture(scope="session", autouse=True)

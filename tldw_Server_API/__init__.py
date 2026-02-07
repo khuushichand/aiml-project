@@ -13,6 +13,7 @@ import os
 import sys
 
 from loguru import logger
+from tldw_Server_API.app.core.testing import is_truthy
 
 
 def _under_pytest() -> bool:
@@ -26,8 +27,7 @@ def _under_pytest() -> bool:
 
 
 def _env_flag_true(name: str) -> bool:
-    val = os.getenv(name, "").strip().lower()
-    return val in {"1", "true", "yes", "on"}
+    return is_truthy(os.getenv(name))
 
 
 if _env_flag_true("TESTING") or _under_pytest():

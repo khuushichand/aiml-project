@@ -168,7 +168,7 @@ class ModerationService:
         # Boolean helpers
         def _b(key: str, default: bool) -> bool:
             val = str(mod_cfg.get(key, default)).strip().lower()
-            return val in {"1", "true", "yes", "y", "on"}
+            return is_truthy(val)
 
         def _anchor(p: str) -> str:
             try:
@@ -715,7 +715,7 @@ class ModerationService:
             return v
         if v is None:
             return default
-        return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
+        return is_truthy(str(v).strip().lower())
 
     @staticmethod
     def _parse_bool_value(v: object) -> bool | None:
@@ -727,7 +727,7 @@ class ModerationService:
             return bool(v)
         if isinstance(v, str):
             val = v.strip().lower()
-            if val in {"1", "true", "yes", "y", "on"}:
+            if is_truthy(val):
                 return True
             if val in {"0", "false", "no", "n", "off"}:
                 return False

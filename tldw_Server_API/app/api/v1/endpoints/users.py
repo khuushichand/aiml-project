@@ -66,6 +66,7 @@ from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.UserProfiles.service import UserProfileService
 from tldw_Server_API.app.core.UserProfiles.update_service import UserProfileUpdateService
 from tldw_Server_API.app.core.UserProfiles.user_profile_catalog import load_user_profile_catalog
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.services.storage_quota_service import StorageQuotaService
 
 _USERS_AUDIT_EXCEPTIONS = (
@@ -114,7 +115,7 @@ def _build_deprecation_headers(successor: str) -> dict[str, str]:
 
 def _legacy_user_me_enabled() -> bool:
     raw = os.getenv("ENABLE_LEGACY_USER_ME_ENDPOINTS", "true")
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(raw).strip().lower())
 
 
 def _legacy_warning_payload(successor: str) -> dict[str, str]:

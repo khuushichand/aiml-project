@@ -32,6 +32,7 @@ from loguru import logger
 from tldw_Server_API.app.core.config import get_stt_config
 from tldw_Server_API.app.core.exceptions import BadRequestError, CancelCheckError, TranscriptionCancelled
 from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import resolve_safe_local_path
+from tldw_Server_API.app.core.testing import is_truthy
 
 # Global cache for loaded models
 _MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
@@ -58,7 +59,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     s = str(value).strip().lower()
-    if s in {"1", "true", "yes", "y", "on"}:
+    if is_truthy(s):
         return True
     if s in {"0", "false", "no", "n", "off"}:
         return False

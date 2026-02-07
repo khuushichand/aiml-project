@@ -10,10 +10,10 @@
   "chatDictionariesNav": "Chatordbøger",
   "charactersNav": "Karakterer",
   "mediaNav": "Medier",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "Guardian og overvågning",
   "guardian": {
-    "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableTitle": "Guardian-indstillinger er ikke tilgængelige",
+    "unavailableDescription": "Din nuværende server udstiller ikke Guardian- eller selvovervågningsendpoints."
   },
   "chatAppearance": {
     "title": "Chat-udseende",
@@ -225,7 +225,7 @@
     "tts": {
       "heading": "Tekst-til-tale Indstillinger",
       "ttsEnabled": {
-        "label": "Tilføj Teskt-til-Tale"
+        "label": "Tilføj Tekst-til-Tale"
       },
       "ttsAutoPlay": {
         "label": "Automatisk afspilning af stemmerespons efter færdiggørelse"
@@ -545,8 +545,8 @@
       "confirm": {
         "delete": "Er du sikker på du vil slette denne deling? Dette kan ikke fortrydes."
       },
-      "label": "Administrer Page Deling",
-      "description": "Tilføj eller disable the page share feature"
+      "label": "Administrer sidedeling",
+      "description": "Tilføj eller deaktiver sidedelingsfunktionen"
     },
     "notification": {
       "pageShareSuccess": "Page Deling URL Updateret korrekt",
@@ -828,8 +828,8 @@
     }
   },
   "onboarding": {
-    "title": "Welcome — Let’s get you connected",
-    "description": "Configure your server and authentication. We’ll verify the connection and RAG health inline.",
+    "title": "Velkommen — Lad os få dig forbundet",
+    "description": "Konfigurer din server og godkendelse. Vi verificerer forbindelsen og RAG-sundheden undervejs.",
     "learnMoreTldw": "Lær hvordan tldw-serveren fungerer",
     "serverDocsUrl": "https://github.com/rmusser01/tldw_browser_assistant",
     "serverUrl": {
@@ -875,7 +875,7 @@
       "unknown": "Ukendt",
       "connected": "Forbundet",
       "failed": "Mislykkedes",
-      "continueAnyway": "You can continue and complete setup now. You’ll be able to verify the connection later from Settings."
+      "continueAnyway": "Du kan fortsætte og fuldføre opsætningen nu. Du kan bekræfte forbindelsen senere fra Indstillinger."
     },
     "rag": {
       "label": "RAG:",
@@ -985,7 +985,7 @@
         "label": "Adfærd / instruktioner",
         "placeholder": "F.eks. Du er en tålmodig matematiklærer, der forklarer begreber trin for trin og tjekker forståelsen med korte eksempler.",
         "help": "Forklar karakterens rolle, tone og begrænsninger. For eksempel: \"Du er en tålmodig matematiklærer, der forklarer begreber trin for trin.\"",
-        "min": "Add a short description so the character knows how to respond.",
+        "min": "Tilføj en kort beskrivelse, så karakteren ved, hvordan den skal svare.",
         "required": "Tilføj instruktioner for at styre svarene.",
         "max": "Systemprompten skal være på 2000 tegn eller mindre."
       },
@@ -1121,7 +1121,7 @@
   "charactersOpenWorkspace": "Åbn arbejdsområde for karakterer",
   "mermaid": "Mermaid-diagrammer",
   "healthSummary": {
-    "diagnostics": "Diagnostics",
+    "diagnostics": "Diagnostik",
     "diagnosticsTooltip": "Åbn detaljeret diagnostik for at fejlfinde eller inspicere sundhedstjek.",
     "core": "Serveren",
     "rag": "Viden",

@@ -20,7 +20,7 @@ import asyncio
 from tldw_Server_API.app.core.config import clear_config_cache
 
 # Skip this module when TEST_MODE is enabled; limiter is permissive in TEST_MODE
-if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "on"}:
+if str(os.getenv("TEST_MODE", "")).lower() in {"1", "true", "yes", "y", "on"}:
     pytest.skip("Character_Chat rate-limit tests require TEST_MODE=0", allow_module_level=True)
 
 
@@ -218,7 +218,7 @@ async def test_soft_message_limit_blocks_non_persisted_completion():
 
 @pytest.mark.asyncio
 async def test_chat_completion_per_minute_rate_limit():
-    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("RG_ENABLED", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Character chat rate limits are enforced by Resource Governor when enabled.")
     tmpdir = tempfile.mkdtemp(prefix="chacha_limit_complete_")
     env_overrides = {

@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 
 from .manager import JobManager
 
@@ -203,7 +203,7 @@ class WorkerSDK:
                     result=result,
                     worker_id=self.cfg.worker_id,
                     lease_id=lease_id_str,
-                    completion_token=(lease_id_str if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                    completion_token=(lease_id_str if is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN")) else None),
                     enforce=enforce,
                 )
                 if not ok:
@@ -220,7 +220,7 @@ class WorkerSDK:
                         backoff_seconds=backoff_s,
                         worker_id=self.cfg.worker_id,
                         lease_id=lease_id_str,
-                        completion_token=(lease_id_str if os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN", "").lower() in {"1","true","yes","y","on"} else None),
+                        completion_token=(lease_id_str if is_truthy(os.getenv("JOBS_REQUIRE_COMPLETION_TOKEN")) else None),
                         enforce=enforce,
                         error_code="worker_exception",
                     )

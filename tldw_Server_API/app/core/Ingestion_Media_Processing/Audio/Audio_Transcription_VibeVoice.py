@@ -31,6 +31,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.path_utils import (
     open_safe_local_path,
     resolve_safe_local_path,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 
 # Global cache for local model components
 _MODEL_CACHE: dict[str, tuple[Any, Any, str]] = {}
@@ -62,7 +63,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
     s = str(value).strip().lower()
-    if s in {"1", "true", "yes", "y", "on"}:
+    if is_truthy(s):
         return True
     if s in {"0", "false", "no", "n", "off"}:
         return False

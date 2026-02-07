@@ -11,6 +11,7 @@ from typing import Any
 from loguru import logger
 
 from tldw_Server_API.app.core.Infrastructure.redis_factory import create_sync_redis_client
+from tldw_Server_API.app.core.testing import is_truthy
 
 _STAGE_STREAM_DEFAULTS = {
     "chunking": "embeddings:chunking",
@@ -30,7 +31,7 @@ def _env_bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key)
     if raw is None:
         return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(raw).strip().lower())
 
 
 def _env_int(key: str, default: int) -> int:

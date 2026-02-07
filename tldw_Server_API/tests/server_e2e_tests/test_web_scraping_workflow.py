@@ -54,7 +54,7 @@ def test_web_scraping_local_ephemeral_workflow(page, server_url):
 
 @pytest.mark.e2e
 def test_web_scraping_external_ephemeral_workflow(page, server_url):
-    if os.getenv("TLDW_E2E_EXTERNAL_WEB_SCRAPE", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("TLDW_E2E_EXTERNAL_WEB_SCRAPE", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("External web scraping disabled; set TLDW_E2E_EXTERNAL_WEB_SCRAPE=1 to enable.")
 
     headers = _auth_headers()

@@ -105,10 +105,10 @@ MAX_RESPONSE_LIST_LENGTH = _parse_int(
 
 # Offload sync iterators to a background thread to avoid blocking the event loop
 try:
-    STREAMING_SYNC_BRIDGE_ENABLED = str(
+    STREAMING_SYNC_BRIDGE_ENABLED = is_truthy(str(
         os.getenv('STREAMING_SYNC_BRIDGE_ENABLED') or
         _chat_config.get('streaming_sync_bridge_enabled', 'true')
-    ).lower() in {"1", "true", "yes", "y", "on"}
+    ).lower())
 except (ValueError, TypeError) as exc:
     logger.debug(f"Failed to parse STREAMING_SYNC_BRIDGE_ENABLED, using default: {exc}")
     STREAMING_SYNC_BRIDGE_ENABLED = True

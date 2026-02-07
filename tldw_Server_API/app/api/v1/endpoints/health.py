@@ -10,6 +10,7 @@ from loguru import logger
 from tldw_Server_API.app.core.DB_Management.DB_Manager import create_workflows_database, get_content_backend_instance
 from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 from tldw_Server_API.app.core.Workflows.engine import WorkflowScheduler
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _HEALTH_NONCRITICAL_EXCEPTIONS = (
     AttributeError,
@@ -171,9 +172,9 @@ async def api_health():
         # In test environments, optionally expose a test API key only with explicit opt-in
         # This prevents accidental leakage of SINGLE_USER_API_KEY unless HEALTH_EXPOSE_TEST_API_KEY=true
         if (
-            os.getenv("TEST_MODE")
+            is_test_mode()
             and body["auth_mode"] == "single_user"
-            and str(os.getenv("HEALTH_EXPOSE_TEST_API_KEY", "")).strip().lower() == "true"
+            and env_flag_enabled("HEALTH_EXPOSE_TEST_API_KEY")
         ):
             _key = getattr(_s, "SINGLE_USER_API_KEY", None)
             if _key:

@@ -15,7 +15,7 @@ import os
 from loguru import logger
 
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
-from tldw_Server_API.app.core.testing import env_flag_enabled
+from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode
 
 _HMAC_KDF_SALT_LEGACY = b"tldw_authnz_hmac_kdf_v1"
 _HMAC_KDF_SALT_PREFIX = b"tldw_authnz_hmac_kdf_v2:"
@@ -90,7 +90,7 @@ def derive_hmac_key_candidates(settings: Settings | None = None) -> list[bytes]:
     auth_mode = getattr(s, "AUTH_MODE", "single_user")
 
     # Detect pytest context and known deterministic JWT secret used only for testing
-    test_mode_env = env_flag_enabled("TEST_MODE")
+    test_mode_env = is_test_mode()
     allow_test_fallback = test_mode_env or env_flag_enabled("TLDW_ALLOW_TEST_FALLBACK_KEYS")
     pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
     in_test_context = test_mode_env or pytest_active

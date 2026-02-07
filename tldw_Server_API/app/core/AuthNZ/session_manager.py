@@ -54,7 +54,7 @@ from tldw_Server_API.app.core.AuthNZ.repos.sessions_repo import AuthnzSessionsRe
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
-from tldw_Server_API.app.core.testing import env_flag_enabled, is_test_mode, is_truthy
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 
 _SESSION_MANAGER_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -438,7 +438,7 @@ class SessionManager:
             _append(derived)
 
         if not key_bytes:
-            test_mode = env_flag_enabled("TEST_MODE")
+            test_mode = is_test_mode()
             pytest_active = os.getenv("PYTEST_CURRENT_TEST") is not None
             if test_mode or pytest_active:
                 logger.warning("Generating temporary session encryption key for test context.")

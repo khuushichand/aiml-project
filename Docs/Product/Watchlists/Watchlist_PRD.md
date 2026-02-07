@@ -113,7 +113,7 @@ v1 Enhancements (in progress)
   - Future: templating, MECE/newsletter variants, TTS audio, Chatbook export
 - Observability & Logs
   - Per-run stats: items discovered/new/updated/ignored; errors; duration
-  - View run logs; WebSocket stream for live status (optional v1)
+  - View run logs; WebSocket stream for live status (implemented)
 - AuthNZ & Security
   - Per-user ownership; AuthNZ integrated (single-user API key or JWT)
   - Respect robots.txt by default (configurable per job with warning)
@@ -172,7 +172,7 @@ Jobs
 - `GET /api/v1/watchlists/jobs/{id}/runs` list runs
 - `GET /api/v1/watchlists/runs/{run_id}` run details
 - `GET /api/v1/watchlists/runs/{run_id}/log` log text
-- `WS  /api/v1/watchlists/runs/{run_id}/stream` live status (optional v1)
+- `WS  /api/v1/watchlists/runs/{run_id}/stream` live status (implemented)
 
 Items
 - `GET  /api/v1/watchlists/items` (filters: `run_id`, `job_id`, `source_id`, `status`, `reviewed`, `q`, `since`, `until`)
@@ -188,7 +188,7 @@ Outputs
 Settings
 - `GET /api/v1/watchlists/settings` returns default TTLs/environment info used by WebUI
 
-Not yet implemented: watchlist-level CRUD, WS streams, Chatbook export, audio output, preview/dry-run endpoints.
+Remaining roadmap beyond current implementation: watchlist-level CRUD abstractions, richer Chatbook export enhancements, and audio output.
 
 Schemas
 - Pydantic in `tldw_Server_API/app/api/v1/schemas/watchlists.py`

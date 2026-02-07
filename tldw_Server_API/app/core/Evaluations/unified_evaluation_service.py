@@ -73,11 +73,11 @@ from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
 from tldw_Server_API.app.core.Evaluations.response_quality_evaluator import ResponseQualityEvaluator
 from tldw_Server_API.app.core.Evaluations.webhook_identity import webhook_user_id_from_value
 from tldw_Server_API.app.core.Evaluations.webhook_manager import WebhookEvent
-from tldw_Server_API.app.core.testing import env_flag_enabled
+from tldw_Server_API.app.core.testing import is_test_mode
 
 
 def _await_webhook_inline_in_test_mode() -> bool:
-    return env_flag_enabled("TEST_MODE")
+    return is_test_mode()
 
 
 class EvaluationType(str, Enum):

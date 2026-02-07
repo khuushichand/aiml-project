@@ -41,6 +41,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.PDF.PDF_Processing_Lib 
 )
 from tldw_Server_API.app.core.Jobs.manager import JobManager
 from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.TTS.adapter_registry import TTSProvider
 from tldw_Server_API.app.core.TTS.audio_converter import AudioConverter
 from tldw_Server_API.app.core.TTS.tts_service_v2 import get_tts_service_v2
@@ -240,7 +241,7 @@ def _should_recompute_audiobook_usage() -> bool:
     raw = env_val if env_val not in (None, "") else cfg_val
     if raw is None:
         return False
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(raw).strip().lower())
 
 
 def _init_audiobook_quota(collections_db: CollectionsDatabase) -> AudiobookArtifactQuota | None:

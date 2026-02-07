@@ -17,6 +17,7 @@ from tldw_Server_API.app.core.Ingestion_Media_Processing.OCR.types import (
     OCRResult,
     normalize_ocr_format,
 )
+from tldw_Server_API.app.core.testing import is_truthy
 from tldw_Server_API.app.core.Utils.Utils import logging
 
 _DEFAULT_PROMPT = "</s><s><predict_bbox><predict_classes><output_markdown>"
@@ -62,7 +63,7 @@ def _env_bool(name: str, default: bool) -> bool:
     val = os.getenv(name)
     if val is None:
         return default
-    return str(val).lower() in ("1", "true", "yes", "on")
+    return is_truthy(str(val))
 
 
 def _resolve_skip_special_tokens(

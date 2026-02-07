@@ -11,7 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 
 def _perf_enabled() -> bool:
-    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "on"}
+    return os.getenv("PERF", "0").lower() in {"1", "true", "yes", "y", "on"}
 
 
 pytestmark = [

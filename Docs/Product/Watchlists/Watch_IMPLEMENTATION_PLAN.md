@@ -17,7 +17,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 **Success Criteria**
 - API docs include `GET /api/v1/watchlists/runs`, `include_tallies` for Run Detail, and OPML export `group` filter.
 - Deprecation path finalized: all `/api/v1/subscriptions/*` return 410 with Link header and docs + release notes updated.
-- YouTube normalization hardened (handles/vanity accepted → canonical; normalization headers logged in diagnostics).
+- YouTube normalization hardened (channel/user/playlist forms accepted and canonicalized to feeds; unsupported `@handle` and `/c/...` forms return 400; normalization headers logged in diagnostics).
 - Admin Runs view shows per-run counters and supports CSV/JSON export.
 
 **Tests**
@@ -119,7 +119,7 @@ Stage 5 scale target matrix is tracked in:
 ## Notes
 - Include-only gating: default can be set per-org (and via env); tests should cover both job-flag and org-default paths.
 - Keep tests deterministic; mock external services (feeds, email, Chatbook, TTS). Mark performance tests with `@pytest.mark.perf`.
-- Update Docs/Published/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
+- Update Docs/API-related/Watchlists_API.md and Docs/Published/RELEASE_NOTES.md alongside code changes.
 
 ### Operational Limits (enforced via Pydantic Query constraints)
 

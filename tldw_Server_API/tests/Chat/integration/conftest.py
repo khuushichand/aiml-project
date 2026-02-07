@@ -42,7 +42,7 @@ try:
 
     @pytest.fixture(scope="session", autouse=True)
     def _auto_configure_openai_mock(request):  # noqa: F811
-        use_mock = os.getenv("USE_OPENAI_MOCK_SERVER", "").lower() in {"1", "true", "yes", "on"}
+        use_mock = os.getenv("USE_OPENAI_MOCK_SERVER", "").lower() in {"1", "true", "yes", "y", "on"}
         has_real_key = bool(os.getenv("OPENAI_API_KEY"))
         if not use_mock and has_real_key:
             yield

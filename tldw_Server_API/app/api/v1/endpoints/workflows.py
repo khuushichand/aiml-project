@@ -1489,8 +1489,7 @@ async def run_saved(
     try:
         _test_mode = (
             is_explicit_pytest_runtime()
-            or env_flag_enabled("TLDW_TEST_MODE")
-            or env_flag_enabled("TEST_MODE")
+            or is_test_mode()
         )
         if _test_mode and run.status in {None, "", "queued"}:
             await engine.start_run(run_id, run_mode)

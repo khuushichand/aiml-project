@@ -103,7 +103,7 @@ def test_rag_pipeline_local_workflow(page, server_url):
 
 @pytest.mark.e2e
 def test_rag_pipeline_external_embedding_workflow(page, server_url):
-    if os.getenv("TLDW_E2E_EXTERNAL_RAG", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("TLDW_E2E_EXTERNAL_RAG", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("External RAG flow disabled; set TLDW_E2E_EXTERNAL_RAG=1 to enable.")
     if not os.getenv("OPENAI_API_KEY"):
         pytest.skip("OPENAI_API_KEY not set; skipping external embeddings flow.")

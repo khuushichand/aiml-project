@@ -33,11 +33,10 @@ from tldw_Server_API.app.core.exceptions import (
     ServiceInitializationError,
     ServiceInitializationTimeoutError,
 )
-from tldw_Server_API.app.core.testing import is_test_mode
+from tldw_Server_API.app.core.testing import is_test_mode, is_truthy
 
 #######################################################################################################################
 
-_TRUTHY = {"1", "true", "yes", "y", "on"}
 _FALSEY = {"0", "false", "no", "n", "off"}
 _VALID_STORAGE_MODES = {"per_user", "shared"}
 
@@ -96,7 +95,7 @@ def _settings_bool(key: str, default: bool) -> bool:
     if raw is None:
         return default
     s = str(raw).strip().lower()
-    if s in _TRUTHY:
+    if is_truthy(s):
         return True
     if s in _FALSEY:
         return False

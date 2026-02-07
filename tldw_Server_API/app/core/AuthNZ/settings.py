@@ -60,7 +60,8 @@ try:
     )
 except _SETTINGS_IMPORT_EXCEPTIONS:
     def _is_truthy(value: str | None) -> bool:
-        return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+        s = str(value or "").strip().lower()
+        return s == "1" or s == "true" or s == "yes" or s == "y" or s == "on"
 
     def _is_explicit_pytest_runtime() -> bool:
         return bool(os.getenv("PYTEST_CURRENT_TEST"))
@@ -996,7 +997,7 @@ _settings: Optional[Settings] = None
 
 
 def _bool_from_str(val: str) -> bool:
-    return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return _is_truthy(str(val).strip())
 
 
 def _split_csv(val) -> list[str]:
@@ -1147,7 +1148,7 @@ def get_settings() -> Settings:
         try:
             import os as _os
             def _alias_bool(env_name: str) -> bool:
-                return str(_os.getenv(env_name, "")).strip().lower() in {"1", "true", "yes", "y", "on"}
+                return _is_truthy(str(_os.getenv(env_name, "")).strip())
             # REGISTRATION_ENABLED -> ENABLE_REGISTRATION
             if _os.getenv("REGISTRATION_ENABLED") is not None and "ENABLE_REGISTRATION" not in overrides:
                 overrides["ENABLE_REGISTRATION"] = _alias_bool("REGISTRATION_ENABLED")

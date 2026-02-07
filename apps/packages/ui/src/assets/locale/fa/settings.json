@@ -10,10 +10,10 @@
   "chatDictionariesNav": "واژه‌نامه‌های چت",
   "charactersNav": "شخصیت‌ها",
   "mediaNav": "رسانه",
-  "guardianNav": "Guardian & Monitoring",
+  "guardianNav": "نگهبان و نظارت",
   "guardian": {
-    "unavailableTitle": "Guardian settings unavailable",
-    "unavailableDescription": "Your current server does not expose Guardian or Self-Monitoring endpoints."
+    "unavailableTitle": "تنظیمات نگهبان در دسترس نیست",
+    "unavailableDescription": "سرور فعلی شما نقاط پایانی نگهبان یا خودنظارت را ارائه نمی‌دهد."
   },
   "chatAppearance": {
     "title": "ظاهر چت",

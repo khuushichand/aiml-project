@@ -5,7 +5,7 @@ Owner: Core Maintainers (Server/API + WebUI)
 Updated: 2025-10-29
 
 Related:
-- Docs/Product/Watchlist_PRD.md (primary PRD)
+- Docs/Product/Watchlists/Watchlist_PRD.md (primary PRD)
 - Docs/Product/Content_Collections_PRD.md
 - Docs/Operations/Watchlists_Migration_Notes.md (migration notes)
 - SUBS/01_OVERVIEW.md, SUBS/02_ARCHITECTURE.md, SUBS/03_DATABASE_SCHEMA.md, SUBS/04_API_DESIGN.md, SUBS/05_IMPLEMENTATION_PHASES.md, SUBS/06_RSS_YOUTUBE_INTEGRATION.md, SUBS/07_BACKGROUND_TASKS.md, SUBS/08_UI_MOCKUPS.md
@@ -183,11 +183,11 @@ Export (`GET /watchlists/sources/export`):
 - Optional filters (`tag`, `group`, `type`) to scope the export. Group filter supports multiple ids (OR semantics) and can be combined with tag (AND semantics).
  - Unknown group ids result in an empty RSS list (HTTP 200 with an empty body list), avoiding partial matches by design.
 
-Link: see Docs/Published/API-related/Watchlists_API.md for request/response examples and guidance.
+Link: see Docs/API-related/Watchlists_API.md for request/response examples and guidance.
 
 Include-only gating reference
 
-See the quick behavior table in Docs/Published/API-related/Watchlists_API.md (Job Filters and Include-Only Gating). The UI and preview endpoint follow the same semantics; org defaults can be changed via the admin setting.
+See the quick behavior table in Docs/API-related/Watchlists_API.md (Job Filters and Include-Only Gating). The UI and preview endpoint follow the same semantics; org defaults can be changed via the admin setting.
 
 ## 9) Scheduling & Timezone Semantics
 
@@ -252,7 +252,7 @@ Phase B (next):
 ## 14) Risks & Mitigations
 
 - Inconsistent OPML forms → robust parsing + per-entry error details; ignore unsupported outlines.
-- Over-aggressive filters → “dry-run preview” on jobs (planned) and filter stats per run.
+- Over-aggressive filters → dry-run preview on jobs (implemented) and filter stats per run.
 - YouTube feed variability → document canonical URL patterns, fallback discovery, and limits.
 
 ## 15) Acceptance Criteria

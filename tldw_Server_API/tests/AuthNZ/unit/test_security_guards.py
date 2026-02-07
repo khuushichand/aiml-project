@@ -34,8 +34,8 @@ class TestTestModeProductionGuard:
         # This tests that the guard is in place
         with pytest.raises(Exception):
             # Simulate the check that happens in auth_deps
-            test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-            allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+            test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+            allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "y", "on"}
             environment = os.getenv("ENVIRONMENT", "").strip().lower()
             if test_mode and environment in {"production", "prod"} and not allow_test_in_prod:
                 raise RuntimeError("TEST_MODE cannot be enabled in production environment")
@@ -47,8 +47,8 @@ class TestTestModeProductionGuard:
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("ALLOW_TEST_MODE_IN_PRODUCTION", "1")
 
-        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
-        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "y", "on"}
+        allow_test_in_prod = os.getenv("ALLOW_TEST_MODE_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "y", "on"}
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
 
         # Should not raise
@@ -62,7 +62,7 @@ class TestTestModeProductionGuard:
         monkeypatch.setenv("ENVIRONMENT", "development")
         monkeypatch.delenv("ALLOW_TEST_MODE_IN_PRODUCTION", raising=False)
 
-        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+        test_mode = os.getenv("TEST_MODE", "").strip().lower() in {"1", "true", "yes", "y", "on"}
         environment = os.getenv("ENVIRONMENT", "").strip().lower()
 
         # Non-production should not be blocked

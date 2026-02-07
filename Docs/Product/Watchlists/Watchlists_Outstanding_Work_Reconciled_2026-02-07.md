@@ -40,13 +40,13 @@ Scope audited:
 
 ## 1) Documentation Reconciliation (Immediate)
 
-- [ ] Align YouTube policy wording in `Watch_IMPLEMENTATION_PLAN.md` with current behavior (reject `@handle` and `/c/...` forms; canonicalize only supported URL types).
-- [ ] Update stale "Not yet implemented" section in `Watchlist_PRD.md` (preview endpoint and WS stream are implemented).
-- [ ] Update `Watchlists_Filters.md` status and endpoint section from "planned" to implemented.
-- [ ] Reconcile `Watchlists_Remaining_Checklist.md` with shipped coverage:
+- [x] Align YouTube policy wording in `Watch_IMPLEMENTATION_PLAN.md` with current behavior (reject `@handle` and `/c/...` forms; canonicalize only supported URL types).
+- [x] Update stale "Not yet implemented" section in `Watchlist_PRD.md` (preview endpoint and WS stream are implemented).
+- [x] Update `Watchlists_Filters.md` status and endpoint section from "planned" to implemented.
+- [x] Reconcile `Watchlists_Remaining_Checklist.md` with shipped coverage:
   - mark completed: OPML export edge tests, admin org edge tests, site include-only e2e, docs polish follow-ups, runs CSV/rich metrics polish, strict rate-limit tests.
   - mark migration CLI as "Not Required" (or move to explicitly deferred backlog).
-- [ ] Fix stale API doc path references to the current location (`Docs/API-related/Watchlists_API.md`).
+- [x] Fix stale API doc path references to the current location (`Docs/API-related/Watchlists_API.md`).
 
 ## 2) Product/Engineering Backlog (Confirmed Open or Optional)
 

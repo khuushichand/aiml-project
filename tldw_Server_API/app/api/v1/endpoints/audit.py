@@ -17,7 +17,7 @@ from tldw_Server_API.app.core.Audit.unified_audit_service import (
 from tldw_Server_API.app.core.AuthNZ.permissions import SYSTEM_LOGS
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.config import settings
-from tldw_Server_API.app.core.environment.validation import is_truthy
+from tldw_Server_API.app.core.testing import is_truthy
 
 router = APIRouter()
 

@@ -11,7 +11,7 @@ def _enable_adapters(monkeypatch):
     yield
 
 
-NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "on"}
+NETWORK_TESTS_ENABLED = os.getenv("ENABLE_NETWORK_TESTS", "").lower() in {"1", "true", "yes", "y", "on"}
 
 
 class _FakeResponse:

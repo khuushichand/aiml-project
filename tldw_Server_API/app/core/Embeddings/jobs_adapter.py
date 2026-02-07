@@ -7,6 +7,7 @@ from typing import Any
 
 from tldw_Server_API.app.core.Embeddings import redis_pipeline
 from tldw_Server_API.app.core.Jobs.manager import JobManager
+from tldw_Server_API.app.core.testing import is_truthy
 
 _EMBEDDINGS_DOMAIN = "embeddings"
 _EMBEDDINGS_ROOT_JOB_TYPE = "embeddings_pipeline"
@@ -17,7 +18,7 @@ def _env_bool(key: str, default: bool = False) -> bool:
     raw = os.getenv(key)
     if raw is None:
         return default
-    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+    return is_truthy(str(raw).strip().lower())
 
 
 def _jobs_queue() -> str:

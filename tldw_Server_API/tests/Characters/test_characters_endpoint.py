@@ -704,8 +704,8 @@ class TestCharacterAPIIntegration:
 
 # ======================= PROPERTY-BASED TESTS (API) =========================
 
-_PBT_DEBUG = os.getenv("PBT_DEBUG", "").lower() in {"1", "true", "yes", "on"}
-_PBT_RELAX = os.getenv("PBT_RELAX", "").lower() in {"1", "true", "yes", "on"}
+_PBT_DEBUG = os.getenv("PBT_DEBUG", "").lower() in {"1", "true", "yes", "y", "on"}
+_PBT_RELAX = os.getenv("PBT_RELAX", "").lower() in {"1", "true", "yes", "y", "on"}
 
 
 @settings(

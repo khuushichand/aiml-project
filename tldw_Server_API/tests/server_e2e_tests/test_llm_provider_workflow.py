@@ -61,7 +61,7 @@ def _chat_payload(provider_name: str, model: str, message: str, stream: bool) ->
 @pytest.mark.e2e
 @pytest.mark.local_llm_service
 def test_llm_provider_local_workflow(page, server_url):
-    if os.getenv("RUN_LOCAL_LLM_E2E", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("RUN_LOCAL_LLM_E2E", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Local LLM E2E disabled; set RUN_LOCAL_LLM_E2E=1 to enable.")
 
     headers = _auth_headers()
@@ -109,7 +109,7 @@ def test_llm_provider_local_workflow(page, server_url):
 @pytest.mark.e2e
 @pytest.mark.external_api
 def test_llm_provider_external_workflow(page, server_url):
-    if os.getenv("RUN_COMMERCIAL_CHAT_TESTS", "").lower() not in {"1", "true", "yes", "on"}:
+    if os.getenv("RUN_COMMERCIAL_CHAT_TESTS", "").lower() not in {"1", "true", "yes", "y", "on"}:
         pytest.skip("Commercial chat tests disabled; set RUN_COMMERCIAL_CHAT_TESTS=1 to enable.")
 
     headers = _auth_headers()

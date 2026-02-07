@@ -20,7 +20,7 @@ from tldw_Server_API.app.core.DB_Management.DB_Manager import (
     get_content_backend_instance,
 )
 from tldw_Server_API.app.core.DB_Management.db_path_utils import DatabasePaths
-from tldw_Server_API.app.core.testing import env_flag_enabled
+from tldw_Server_API.app.core.testing import is_test_mode
 
 # Local imports
 from tldw_Server_API.app.core.DB_Management.PromptStudioDatabase import (
@@ -177,7 +177,7 @@ async def get_prompt_studio_user(
 
     # 1) Test mode: prefer patched hook if available; otherwise use deterministic test user id
     client_id_value = x_client_id if isinstance(x_client_id, str) else None
-    if env_flag_enabled("TEST_MODE"):
+    if is_test_mode():
         try:
             maybe_user = get_current_active_user()  # may be sync or async, or None
             if asyncio.iscoroutine(maybe_user):
@@ -238,7 +238,7 @@ async def get_prompt_studio_user(
     path = (request.url.path or "")
     method = request.method.upper()
     if not authz and not api_key_hdr:
-        test_mode = env_flag_enabled("TEST_MODE")
+        test_mode = is_test_mode()
         # Explicitly require auth for project list endpoint (without trailing slash) to satisfy tests
         if path == "/api/v1/prompt-studio/projects" and method == "GET":
             raise HTTPException(
@@ -370,7 +370,7 @@ async def get_prompt_studio_db(
     if (
         user_id == "anonymous"
         and not settings.get("ALLOW_ANONYMOUS_PROMPT_STUDIO", False)
-        and not env_flag_enabled("TEST_MODE")
+        and not is_test_mode()
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -487,7 +487,7 @@ async def check_rate_limit(
         HTTPException: If rate limit exceeded
     """
     # Bypass in tests or when globally disabled
-    if env_flag_enabled("TEST_MODE"):
+    if is_test_mode():
         return True
     if not security_config.enable_rate_limiting:
         return True
