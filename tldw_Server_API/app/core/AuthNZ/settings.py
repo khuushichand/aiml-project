@@ -53,6 +53,14 @@ except _SETTINGS_IMPORT_EXCEPTIONS:
     load_comprehensive_config = None  # Fallback if import graph changes
     core_settings = None
 
+try:
+    from tldw_Server_API.app.core.testing import (
+        is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    )
+except _SETTINGS_IMPORT_EXCEPTIONS:
+    def _is_explicit_pytest_runtime() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
 SECURE_KEY_INIT_COMMAND = "python -m tldw_Server_API.app.core.AuthNZ.initialize"
 SECURE_KEY_GUIDANCE = f"Generate a secure key via:\n  {SECURE_KEY_INIT_COMMAND}"
 SINGLE_USER_KEY_MISSING = (
@@ -733,11 +741,8 @@ class Settings(BaseSettings):
             logger.info("Using configured JWT secret key")
             return
 
-        # Allow deterministic fallback in explicit test contexts
-        test_mode = (
-            os.getenv("PYTEST_CURRENT_TEST") is not None
-            or os.getenv("TEST_MODE", "").lower() in {"1", "true", "yes", "on"}
-        )
+        # Allow deterministic fallback only in explicit pytest runtime.
+        test_mode = _is_explicit_pytest_runtime()
         if test_mode:
             fallback = os.getenv(
                 "JWT_SECRET_TEST_KEY",
@@ -766,12 +771,7 @@ class Settings(BaseSettings):
             # Detect explicit test contexts where the server should expose a
             # stable key so client tests can authenticate. Only rely on server
             # environment variables; never trust request headers.
-            in_test_context = (
-                os.getenv("TEST_MODE", "").lower() in ("true", "1", "yes")
-                or os.getenv("TESTING", "").lower() in ("true", "1", "yes")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
-                or os.getenv("E2E_TEST_BASE_URL") is not None
-            )
+            in_test_context = _is_explicit_pytest_runtime() or os.getenv("E2E_TEST_BASE_URL") is not None
 
             if not self.SINGLE_USER_API_KEY:
                 if explicit_env_key:

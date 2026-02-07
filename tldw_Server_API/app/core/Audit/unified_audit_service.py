@@ -747,6 +747,18 @@ class RiskScorer:
                         continue
                     if isinstance(v, bool):
                         merged_thr[key] = v
+                    elif isinstance(v, str):
+                        normalized = v.strip().lower()
+                        if normalized in {"1", "true", "yes", "on", "y"}:
+                            merged_thr[key] = True
+                            continue
+                        if normalized in {"0", "false", "no", "off", "n"}:
+                            merged_thr[key] = False
+                            continue
+                        try:
+                            merged_thr[key] = int(v)  # type: ignore[assignment]
+                        except _AUDIT_NONCRITICAL_EXCEPTIONS:
+                            continue
                     else:
                         try:
                             merged_thr[key] = int(v)  # type: ignore[assignment]

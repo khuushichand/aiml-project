@@ -60,6 +60,7 @@ from tldw_Server_API.app.core.External_Sources.policy import get_default_policy_
 from tldw_Server_API.app.core.MCP_unified.monitoring import metrics
 from tldw_Server_API.app.core.testing import (
     is_explicit_pytest_runtime as _is_explicit_pytest_runtime,
+    is_production_like_env as _is_production_like_env,
 )
 from tldw_Server_API.app.core.testing import is_test_mode as _is_test_mode
 from tldw_Server_API.app.services.registration_service import RegistrationService, get_registration_service
@@ -422,13 +423,16 @@ async def get_jwt_service_dep() -> JWTService:
 
 async def get_session_manager_dep() -> SessionManager:
     """Get session manager dependency"""
-    # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init
+    # In explicit pytest runtime + test mode, return a lightweight stub to avoid heavy init.
+    # Never use this stub in production-like environments.
     try:
         import os as _os
 
         force_real = _os.getenv("AUTHNZ_FORCE_REAL_SESSION_MANAGER", "").lower() in ("1", "true", "yes")
+        in_production_like = bool(_is_production_like_env())
         if (
             not force_real
+            and not in_production_like
             and _is_explicit_pytest_runtime()
             and (_os.getenv("TEST_MODE", "").lower() in ("1", "true", "yes"))
         ):
@@ -1675,7 +1679,8 @@ def require_token_scope(
       it must match the provided `scope` or 403.
     - If `require_schedule_match=True` and the token includes 'schedule_id', the value must
       match the request path param `schedule_path_param` when present, or header `schedule_header`.
-    - In single-user mode, or when no bearer token is present, this check is bypassed.
+    - When `require_if_present=True`, missing/invalid credentials fail closed (401).
+      API keys are accepted via `X-API-KEY` or Authorization bearer (non-JWT).
     - If `allow_admin_bypass=True`, admin users skip this enforcement.
     - If the bearer token is not a JWT, enforce API key constraints using that token.
     """
@@ -1894,6 +1899,14 @@ def require_token_scope(
             api_key = None
         if not api_key and token and not token_is_jwt:
             api_key = token
+        if not api_key:
+            if require_if_present:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Authentication required",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return None
         if api_key:
             try:
                 from tldw_Server_API.app.core.AuthNZ.api_key_manager import (
@@ -1924,7 +1937,13 @@ def require_token_scope(
                     record_usage=False,
                 )
                 if not info:
-                    # Let upstream auth fail; do not enforce here
+                    if require_if_present:
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Could not validate credentials",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                    # Optional mode: let upstream auth fail.
                     return None
                 # Admin bypass via scope 'admin'
                 key_scopes = _normalize_scope(info.get("scope"))

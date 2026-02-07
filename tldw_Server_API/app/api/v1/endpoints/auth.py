@@ -2058,9 +2058,7 @@ async def verify_email(
     """
     try:
         # Verify token cryptographically
-        # NOTE: Using sync verify_token() is acceptable for email_verification tokens because:
-        # 1. These are effectively single-use - once is_verified is set, the token is useless
-        # 2. Replaying the token just re-sets is_verified=true, which is idempotent
+        # NOTE: Using sync verify_token() is acceptable for email_verification tokens.
         try:
             payload = jwt_service.verify_token(token, token_type="email_verification")
         except _AUTH_NONCRITICAL_EXCEPTIONS:
@@ -2069,26 +2067,67 @@ async def verify_email(
                 detail="Invalid or expired verification token",
             )
 
-        user_id = int(payload["sub"])
-        email = payload["email"]
+        try:
+            user_id = int(payload.get("sub"))
+            email = str(payload.get("email") or "").strip()
+            if not email:
+                raise ValueError("Missing email claim")
+        except _AUTH_NONCRITICAL_EXCEPTIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
 
-        # Update user's verification status
+        # Update user's verification status only when it is currently unverified.
+        updated_rows = 0
         is_pg = await is_postgres_backend()
         if is_pg:
             # PostgreSQL
-            await db.execute(
-                "UPDATE users SET is_verified = true, updated_at = $1 WHERE id = $2 AND email = $3",
+            updated = await db.fetchrow(
+                """
+                UPDATE users
+                   SET is_verified = true, updated_at = $1
+                 WHERE id = $2
+                   AND lower(email) = lower($3)
+                   AND COALESCE(is_verified, false) = false
+                 RETURNING id
+                """,
                 datetime.utcnow(),
                 user_id,
                 email,
             )
+            updated_rows = 1 if updated else 0
         else:
             # SQLite
-            await db.execute(
-                "UPDATE users SET is_verified = 1, updated_at = ? WHERE id = ? AND email = ?",
+            update_cursor = await db.execute(
+                """
+                UPDATE users
+                   SET is_verified = 1, updated_at = ?
+                 WHERE id = ?
+                   AND lower(email) = lower(?)
+                   AND COALESCE(is_verified, 0) != 1
+                """,
                 (datetime.utcnow().isoformat(), user_id, email),
             )
+            rowcount = getattr(update_cursor, "rowcount", None)
+            try:
+                if rowcount is not None and int(rowcount) >= 0:
+                    updated_rows = int(rowcount)
+                else:
+                    raise ValueError("sqlite rowcount unavailable")
+            except _AUTH_NONCRITICAL_EXCEPTIONS:
+                # Fallback for adapters/backends where cursor.rowcount is unset.
+                changes_cursor = await db.execute("SELECT changes()")
+                changes_row = await changes_cursor.fetchone()
+                if changes_row:
+                    updated_rows = int(changes_row[0])
             await db.commit()
+
+        if updated_rows < 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
 
         if get_settings().PII_REDACT_LOGS:
             logger.info("Email verified for authenticated user (details redacted)")

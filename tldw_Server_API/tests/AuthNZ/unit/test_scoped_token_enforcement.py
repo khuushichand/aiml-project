@@ -332,6 +332,87 @@ def test_require_token_scope_rejects_invalid_jwt():
     assert exc.value.status_code == 401
 
 
+def test_require_token_scope_fails_closed_when_credentials_missing():
+    dep = require_token_scope(
+        "workflows",
+        require_if_present=True,
+        endpoint_id="unit.missing_creds",
+    )
+    req = SimpleNamespace(
+        method="GET",
+        headers={},
+        scope={"path": "/protected"},
+        path_params={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        state=SimpleNamespace(),
+    )
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dep(request=req, credentials=None, jwt_service=object(), db_pool=object()))
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Authentication required"
+
+
+def test_require_token_scope_allows_missing_credentials_when_optional():
+    dep = require_token_scope(
+        "workflows",
+        require_if_present=False,
+        endpoint_id="unit.optional_scope",
+    )
+    req = SimpleNamespace(
+        method="GET",
+        headers={},
+        scope={"path": "/protected"},
+        path_params={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        state=SimpleNamespace(),
+    )
+
+    # Optional mode should not force credentials.
+    asyncio.run(dep(request=req, credentials=None, jwt_service=object(), db_pool=object()))
+
+
+def test_require_token_scope_fails_closed_for_invalid_api_key(monkeypatch):
+    class _StubAPIKeyManager:
+        async def validate_api_key(self, api_key: str, ip_address=None, record_usage=True):
+            assert api_key == "tldw_invalid.key"
+            assert record_usage is False
+            return None
+
+    async def _fake_get_api_key_manager():
+        return _StubAPIKeyManager()
+
+    monkeypatch.setattr(auth_deps, "get_api_key_manager", _fake_get_api_key_manager)
+
+    dep = require_token_scope(
+        "any",
+        require_if_present=True,
+        endpoint_id="unit.invalid_api_key",
+        allow_admin_bypass=False,
+    )
+    req = SimpleNamespace(
+        method="GET",
+        headers={},
+        scope={"path": "/protected"},
+        url=SimpleNamespace(path="/protected"),
+        path_params={},
+        client=SimpleNamespace(host="127.0.0.1"),
+        state=SimpleNamespace(),
+    )
+    creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="tldw_invalid.key")
+
+    import pytest
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(dep(request=req, credentials=creds, jwt_service=object(), db_pool=object()))
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Could not validate credentials"
+
+
 def test_require_token_scope_fails_closed_on_api_key_metadata_parse_error(monkeypatch):
     class _StubAPIKeyManager:
         async def validate_api_key(self, api_key: str, ip_address=None, record_usage=True):

@@ -77,11 +77,22 @@ class AuditMigrationCounts:
     events_read: int = 0
     events_inserted: int = 0
     events_skipped: int = 0
+    # stats_* are event-level counters for audit_daily_stats derivation.
+    # stats_read = source events considered for stats, stats_inserted =
+    # events that contributed to a daily stats bucket, stats_skipped =
+    # events that could not contribute (duplicate event IDs or invalid timestamp).
     stats_read: int = 0
     stats_inserted: int = 0
     stats_skipped: int = 0
     failed: bool = False
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class AuditStatsUpdateResult:
+    events_contributed: int = 0
+    events_skipped: int = 0
+    buckets_updated: int = 0
 
 
 @dataclass
@@ -96,6 +107,10 @@ class AuditMigrationReport:
     @property
     def total_events_skipped(self) -> int:
         return sum(c.events_skipped for c in self.sources)
+
+    @property
+    def total_stats_read(self) -> int:
+        return sum(c.stats_read for c in self.sources)
 
     @property
     def total_stats_inserted(self) -> int:
@@ -576,9 +591,9 @@ async def _update_shared_daily_stats_from_records(
     records: list[dict[str, Any]],
     *,
     unidentified_tenant_id: str,
-) -> int:
+) -> AuditStatsUpdateResult:
     if not records:
-        return 0
+        return AuditStatsUpdateResult()
     stats = defaultdict(lambda: {
         "total": 0,
         "high_risk": 0,
@@ -587,12 +602,16 @@ async def _update_shared_daily_stats_from_records(
         "tokens": 0,
         "durations": [],
     })
+    stats_events_contributed = 0
+    stats_events_skipped = 0
 
     for record in records:
         tenant_id = record.get("tenant_user_id") or unidentified_tenant_id
         date_val = _parse_timestamp_to_date(record.get("timestamp"))
         if date_val is None:
+            stats_events_skipped += 1
             continue
+        stats_events_contributed += 1
         category = str(record.get("category") or "system")
         key = (tenant_id, date_val, category)
         stats[key]["total"] += 1
@@ -651,7 +670,11 @@ async def _update_shared_daily_stats_from_records(
             ),
         )
         updated_rows += 1
-    return updated_rows
+    return AuditStatsUpdateResult(
+        events_contributed=stats_events_contributed,
+        events_skipped=stats_events_skipped,
+        buckets_updated=updated_rows,
+    )
 
 
 async def _migrate_source(
@@ -732,6 +755,7 @@ async def _migrate_source(
                         break
 
                     counts.events_read += len(rows)
+                    counts.stats_read += len(rows)
                     records: list[dict[str, Any]] = []
                     seen: set[str] = set()
                     duplicates_in_chunk: list[str] = []
@@ -756,9 +780,10 @@ async def _migrate_source(
                     )
                     filtered = [r for r in records if r.get("event_id") not in existing]
                     duplicates_existing = [r["event_id"] for r in records if r.get("event_id") in existing]
+                    duplicates_total = len(duplicates_in_chunk) + len(duplicates_existing)
 
                     counts.events_inserted += len(filtered)
-                    counts.events_skipped += len(duplicates_in_chunk) + len(duplicates_existing)
+                    counts.events_skipped += duplicates_total
 
                     if duplicates_in_chunk:
                         logger.warning(
@@ -777,14 +802,16 @@ async def _migrate_source(
                             duplicates_existing[:5],
                         )
 
+                    counts.stats_skipped += duplicates_total
                     if filtered:
                         await shared_db.executemany(insert_sql, filtered)
-                        stats_updated = await _update_shared_daily_stats_from_records(
+                        stats_result = await _update_shared_daily_stats_from_records(
                             shared_db,
                             filtered,
                             unidentified_tenant_id=unidentified_tenant_id,
                         )
-                        counts.stats_inserted += stats_updated
+                        counts.stats_inserted += stats_result.events_contributed
+                        counts.stats_skipped += stats_result.events_skipped
 
                     last_row = rows[-1]
                     with contextlib.suppress(_AUDIT_COERCE_EXCEPTIONS):
@@ -886,11 +913,12 @@ async def migrate_to_shared_audit_db(
 
     report = AuditMigrationReport(shared_db_path=shared_path, sources=counts)
     logger.info(
-        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_inserted={}, stats_skipped={}",
+        "Audit migration complete. sources={}, failures={}, events_inserted={}, events_skipped={}, stats_read={}, stats_inserted={}, stats_skipped={}",
         len(report.sources),
         report.total_failures,
         report.total_events_inserted,
         report.total_events_skipped,
+        report.total_stats_read,
         report.total_stats_inserted,
         report.total_stats_skipped,
     )

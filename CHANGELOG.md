@@ -49,6 +49,9 @@ and this project adheres to Some kind of Versioning
 
 ### Fixed
 - Workspace selector remove handler now uses the imported MouseEvent type instead of the React namespace.
+- Audit read paths no longer return empty results on DB failures; `/api/v1/audit/export` and `/api/v1/audit/count` now surface server errors when reads fail.
+- Audit fallback replay now quarantines malformed JSONL lines into `audit_fallback_queue.bad.jsonl` instead of silently dropping them.
+- Audit export now rejects non-positive `max_rows`, `audit_operation` ignores reserved kwarg collisions safely, and shared-audit migration stats counters now track read/inserted/skipped events correctly.
 
 
 ## [0.1.20] 2026-02-01

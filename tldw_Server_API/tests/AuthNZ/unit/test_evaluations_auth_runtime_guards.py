@@ -54,7 +54,7 @@ async def test_verify_api_key_test_mode_single_user_bypass_requires_explicit_pyt
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AUTH_MODE", "single_user")
-    monkeypatch.setenv("SINGLE_USER_API_KEY", "primary-key")
+    monkeypatch.setenv("SINGLE_USER_API_KEY", "primary-key-123456")
     monkeypatch.setenv("TEST_MODE", "true")
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     reset_settings()

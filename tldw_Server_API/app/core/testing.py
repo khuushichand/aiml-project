@@ -9,6 +9,15 @@ from __future__ import annotations
 import os
 
 _TRUTHY = {"1", "true", "yes", "y", "on"}
+_PRODUCTION_VALUES = {"production", "prod", "live"}
+_PRODUCTION_ENV_KEYS = (
+    "ENVIRONMENT",
+    "APP_ENV",
+    "DEPLOYMENT_ENV",
+    "FASTAPI_ENV",
+    "TLDW_ENV",
+)
+_TEST_FLAG_KEYS = ("TEST_MODE", "TESTING", "TLDW_TEST_MODE")
 
 
 def _env_truthy(val: str | None) -> bool:
@@ -44,6 +53,32 @@ def is_explicit_pytest_runtime() -> bool:
         return False
 
 
+def is_production_like_env() -> bool:
+    """Detect production-like runtime from common deployment environment variables."""
+    try:
+        if _env_truthy(os.getenv("tldw_production")):
+            return True
+    except Exception:
+        return False
+
+    for key in _PRODUCTION_ENV_KEYS:
+        try:
+            value = str(os.getenv(key, "")).strip().lower()
+        except Exception:
+            value = ""
+        if value in _PRODUCTION_VALUES:
+            return True
+    return False
+
+
+def _active_test_mode_flags() -> list[str]:
+    active: list[str] = []
+    for key in _TEST_FLAG_KEYS:
+        if _env_truthy(os.getenv(key)):
+            active.append(key)
+    return active
+
+
 def validate_test_runtime_flags() -> None:
     """Fail fast when test-mode flags are enabled outside explicit pytest runtime.
 
@@ -52,17 +87,15 @@ def validate_test_runtime_flags() -> None:
     - TESTING
     - TLDW_TEST_MODE
     """
-    try:
-        test_mode = _env_truthy(os.getenv("TEST_MODE"))
-        testing = _env_truthy(os.getenv("TESTING"))
-        tldw_test_mode = _env_truthy(os.getenv("TLDW_TEST_MODE"))
-    except Exception:
-        test_mode = False
-        testing = False
-        tldw_test_mode = False
+    active_flags = _active_test_mode_flags()
+    if not active_flags:
+        return
+    if is_explicit_pytest_runtime():
+        return
 
-    if (test_mode or testing or tldw_test_mode) and not is_explicit_pytest_runtime():
-        raise RuntimeError(
-            "Unsafe startup configuration: TEST_MODE/TESTING/TLDW_TEST_MODE "
-            "is enabled outside explicit pytest runtime (PYTEST_CURRENT_TEST)."
-        )
+    enabled = ", ".join(active_flags)
+    raise RuntimeError(
+        "Unsafe startup configuration: test-mode flags are enabled outside explicit pytest "
+        f"runtime (missing PYTEST_CURRENT_TEST): {enabled}. "
+        "Unset test flags or run under pytest."
+    )
