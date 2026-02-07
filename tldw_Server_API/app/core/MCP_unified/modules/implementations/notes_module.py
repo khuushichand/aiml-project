@@ -13,6 +13,7 @@ from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 _NOTES_MODULE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -94,7 +95,6 @@ class NotesModule(BaseModule):
             checks["driver_available"] = False
         # Check Databases directory has free space
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
@@ -102,8 +102,7 @@ class NotesModule(BaseModule):
             except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
                 # Anchor to package root if project root resolution fails
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
         except _NOTES_MODULE_NONCRITICAL_EXCEPTIONS:
             checks["disk_space"] = False

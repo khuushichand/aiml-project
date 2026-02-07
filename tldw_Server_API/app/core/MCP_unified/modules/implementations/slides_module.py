@@ -15,6 +15,7 @@ from loguru import logger
 
 from ....Slides.slides_db import ConflictError
 from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 # Available Reveal.js themes
 REVEAL_THEMES = [
@@ -41,17 +42,15 @@ class SlidesModule(BaseModule):
         except (ImportError, AttributeError):
             checks["driver_available"] = False
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
             except (ImportError, AttributeError, RuntimeError):
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
-        except (OSError, ValueError, RuntimeError):
+        except (AttributeError, OSError, TypeError, ValueError, RuntimeError):
             checks["disk_space"] = False
         return checks
 

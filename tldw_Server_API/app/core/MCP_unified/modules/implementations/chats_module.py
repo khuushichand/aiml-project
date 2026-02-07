@@ -13,6 +13,7 @@ from loguru import logger
 
 from ....DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 _CHATS_HEALTHCHECK_EXCEPTIONS = (
     OSError,
@@ -46,15 +47,13 @@ class ChatsModule(BaseModule):
         except NameError:
             checks["driver_available"] = False
         try:
-            import os
             from pathlib import Path
             try:
                 from tldw_Server_API.app.core.Utils.Utils import get_project_root
                 base = Path(get_project_root())
             except (ImportError, OSError, RuntimeError, TypeError, ValueError):
                 base = Path(__file__).resolve().parents[5]
-            stat = os.statvfs(str(base))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
         except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False

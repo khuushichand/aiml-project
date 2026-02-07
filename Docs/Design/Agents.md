@@ -12,7 +12,7 @@ https://blog.securitybreak.io/coding-agents-the-insider-threat-you-installed-you
 https://github.com/glittercowboy/get-shit-done
 https://github.com/fr0gger/nova-framework
 https://developers.googleblog.com/a-guide-to-fine-tuning-functiongemma/
-
+https://ivopbernardo.medium.com/building-a-personal-ai-agent-in-a-couple-of-hours-7bea912f9a12
 https://mariozechner.at/posts/2025-11-30-pi-coding-agent/
 https://github.com/mitsuhiko/agent-stuff/blob/main/pi-extensions/todos.ts
 https://github.com/nicobailon/pi-mcp-adapter

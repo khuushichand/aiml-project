@@ -12,6 +12,7 @@ from loguru import logger
 
 from ....DB_Management.Prompts_DB import PromptsDatabase
 from ..base import BaseModule, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 _PROMPTS_HEALTHCHECK_EXCEPTIONS = (
     OSError,
@@ -40,8 +41,7 @@ class PromptsModule(BaseModule):
         try:
             import os
             base = os.path.dirname("./Databases/test.db") or "."
-            stat = os.statvfs(base)
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            free_gb = get_free_disk_space_gb(base)
             checks["disk_space"] = free_gb > 1
         except (AttributeError, OSError, TypeError, ValueError):
             checks["disk_space"] = False

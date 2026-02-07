@@ -31,6 +31,7 @@ from ....DB_Management.Media_DB_v2 import (
     permanently_delete_item,
 )
 from ..base import BaseModule, create_resource_definition, create_tool_definition
+from ..disk_space import get_free_disk_space_gb
 
 _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS = (
     asyncio.CancelledError,
@@ -181,8 +182,8 @@ class MediaModule(BaseModule):
             # Check disk space
             default_db_path = str(DatabasePaths.get_media_db_path(DatabasePaths.get_single_user_id()))
             db_path = self.config.settings.get("db_path", default_db_path)
-            stat = os.statvfs(os.path.dirname(db_path))
-            free_gb = (stat.f_bavail * stat.f_frsize) / (1024 ** 3)
+            db_dir = os.path.dirname(db_path) or "."
+            free_gb = get_free_disk_space_gb(db_dir)
             checks["disk_space"] = free_gb > 1  # At least 1GB free
 
         except _MEDIA_MODULE_NONCRITICAL_EXCEPTIONS as e:

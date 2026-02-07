@@ -70,6 +70,7 @@ https://medium.com/@ryan.almeida86/10-tiny-ui-fixes-that-make-a-big-difference-9
 https://www.grug.design/know
 https://www.designsystemscollective.com/good-design-doesnt-happen-by-default-c400cbdd332b?gi=3b7cf76aa01d
 https://icones.js.org/
+https://syntaxstream.substack.com/p/the-ai-delegation-matrix-what-parts
 
 https://github.com/vibeflowing-inc/vibe_figma
 https://ant.design/docs/spec/colors/
