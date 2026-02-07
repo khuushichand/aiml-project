@@ -230,7 +230,10 @@ class TestMigrations(unittest.TestCase):
         with open(backup_path + ".json") as f:
             metadata = json.load(f)
 
-        self.assertEqual(metadata["original_path"], self.db_path)
+        self.assertEqual(
+            Path(metadata["original_path"]).resolve(),
+            Path(self.db_path).resolve(),
+        )
         self.assertEqual(metadata["description"], "test_backup")
 
     def test_verify_migrations(self):
