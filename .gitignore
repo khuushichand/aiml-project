@@ -351,3 +351,4 @@ tldw_Server_API/Config_Files/session_encryption.key
 tldw_Server_API/Config_Files/session_encryption.key
 Dockerfiles/Monitoring/secrets/
 /apps/extension/.output
+/Docs/Performance

@@ -290,6 +290,7 @@ async def _maybe_auto_generate_output(
         _build_output_filename,
         _outputs_dir_for_user,
         _resolve_output_path_for_user,
+        build_items_context_from_content_items,
         render_output_template,
     )
 
@@ -314,18 +315,10 @@ async def _maybe_auto_generate_output(
         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
             logger.debug(f"auto-output: template {template_name!r} not found, using default")
 
-    # Build context (simplified version of endpoint's _build_output_context)
+    # Build context (reuses shared helper for consistent dict shape)
     job_name = getattr(job, "name", None) or f"Job-{getattr(job, 'id', '?')}"
     title = f"{job_name}-Auto-{run.id}"
-    items_payload: list[dict[str, Any]] = []
-    for itm in items_rows:
-        items_payload.append({
-            "title": getattr(itm, "title", None) or "Untitled",
-            "url": getattr(itm, "url", None) or "",
-            "summary": getattr(itm, "summary", None) or "",
-            "published_at": getattr(itm, "published_at", None) or "",
-            "tags": getattr(itm, "tags_json", None) or "[]",
-        })
+    items_payload = build_items_context_from_content_items(items_rows)
 
     if template_content:
         context = {

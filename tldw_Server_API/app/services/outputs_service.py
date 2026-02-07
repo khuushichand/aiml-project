@@ -135,8 +135,22 @@ def build_items_context_from_content_items(rows: Iterable[Any]) -> list[dict[str
         media_id = getattr(row, "media_id", None)
         item_id = media_id if media_id is not None else getattr(row, "id", None)
         tags = getattr(row, "tags", None)
+        if callable(tags):
+            try:
+                tags = tags()
+            except Exception:
+                tags = []
         if not isinstance(tags, list):
-            tags = []
+            raw_json = getattr(row, "tags_json", None)
+            if isinstance(raw_json, str):
+                try:
+                    tags = json.loads(raw_json)
+                    if not isinstance(tags, list):
+                        tags = []
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    tags = []
+            else:
+                tags = []
         items.append(
             {
                 "id": item_id,
