@@ -172,3 +172,62 @@ def test_weather_injection_with_args(monkeypatch):
     assert any(m.get("role") == "system" and any(
         (p.get("type") == "text" and "/weather" in p.get("text", "") and "Boston" in p.get("text", "")) for p in (m.get("content") or [])
     ) for m in captured_payload)
+
+
+def test_system_injection_truncates_to_max_chars(monkeypatch):
+    monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
+    monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
+    monkeypatch.setenv("CHAT_COMMANDS_MAX_CHARS", "22")
+
+    class Result:
+        ok = True
+        content = "very long command output " * 20
+        metadata = {}
+
+    async def fake_async_dispatch(ctx, name, args):
+        return Result()
+
+    monkeypatch.setattr(command_router_module, "async_dispatch_command", fake_async_dispatch)
+
+    captured_payload: List[Dict[str, Any]] = []
+
+    def fake_call(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
+    async def fake_call_async(api_endpoint: str, messages_payload: List[Dict[str, Any]], **kwargs):
+        nonlocal captured_payload
+        captured_payload = messages_payload
+        return "ok"
+
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call", fake_call)
+    monkeypatch.setattr(chat_orchestrator, "chat_api_call_async", fake_call_async)
+
+    resp = chat_orchestrator.chat(
+        message="/time",
+        history=[],
+        media_content=None,
+        selected_parts=[],
+        api_endpoint="openai",
+        api_key=None,
+        custom_prompt=None,
+        temperature=0.2,
+        system_message=None,
+        streaming=False,
+        chatdict_entries=None,
+    )
+
+    assert resp == "ok"
+    sys_messages = [m for m in captured_payload if m.get("role") == "system"]
+    assert sys_messages
+    text_part = next(
+        (
+            p for p in (sys_messages[-1].get("content") or [])
+            if p.get("type") == "text"
+        ),
+        None,
+    )
+    assert text_part is not None
+    assert text_part.get("text", "").startswith("[/time]")
+    assert len(text_part.get("text", "")) <= 22

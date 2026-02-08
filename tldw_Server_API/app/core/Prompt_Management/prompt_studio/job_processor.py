@@ -482,6 +482,15 @@ class JobProcessor:
             if optimization is None:
                 raise ValueError(f"Optimization {optimization_id} not found")
 
+            try:
+                max_iterations = int(
+                    payload.get("max_iterations")
+                    or optimization.get("max_iterations")
+                    or max_iterations
+                )
+            except (TypeError, ValueError):
+                max_iterations = 20
+
             project_id = optimization.get("project_id")
             if initial_prompt_id is None:
                 initial_prompt_id = optimization.get("initial_prompt_id")

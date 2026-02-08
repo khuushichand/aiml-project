@@ -70,7 +70,7 @@ RPM_VALUE_RE = re.compile(
 )
 
 
-def _cfg() -> any | None:
+def _cfg() -> Any | None:
     try:
         return load_comprehensive_config()
     except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS:
@@ -230,6 +230,24 @@ def _command_max_chars() -> int:
 
 def default_rate_limit_display() -> str:
     return f"per-user {_per_command_user_rpm()}/min, global {_per_command_global_rpm()}/min"
+
+
+def build_injection_text(command: str, content: str) -> str:
+    """Build bounded slash-command injection text with a standard prefix."""
+    max_chars = _command_max_chars()
+    if max_chars <= 0:
+        return ""
+    prefix = f"[/{str(command).strip().lower()}] "
+    if len(prefix) >= max_chars:
+        return prefix[:max_chars]
+
+    source = content if isinstance(content, str) else str(content)
+    remaining = max_chars - len(prefix)
+    if len(source) <= remaining:
+        return f"{prefix}{source}"
+    if remaining <= 3:
+        return f"{prefix}{source[:remaining]}"
+    return f"{prefix}{source[:remaining - 3].rstrip()}..."
 
 
 @dataclass
@@ -551,9 +569,11 @@ def _weather_handler(ctx: CommandContext, args: str | None) -> CommandResult:
         client = get_weather_client()
     try:
         result = client.get_current(location=location or None)
+        metadata = dict(getattr(result, "metadata", {}) or {})
         if result.ok:
-            return CommandResult(ok=True, command="weather", content=result.summary, metadata=result.metadata)
-        return CommandResult(ok=False, command="weather", content=result.summary, metadata={"error": "unavailable"})
+            return CommandResult(ok=True, command="weather", content=result.summary, metadata=metadata)
+        metadata.setdefault("error", "unavailable")
+        return CommandResult(ok=False, command="weather", content=result.summary, metadata=metadata)
     except _COMMAND_ROUTER_NONCRITICAL_EXCEPTIONS as e:
         logger.error(f"Weather provider error: {e}", exc_info=True)
         return CommandResult(ok=False, command="weather", content=f"Weather unavailable: {e}", metadata={"error": "exception"})

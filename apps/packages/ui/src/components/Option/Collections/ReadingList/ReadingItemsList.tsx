@@ -18,6 +18,7 @@ import dayjs from "dayjs"
 import { Filter, Plus, RefreshCw, Search, Star, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useCollectionsStore } from "@/store/collections"
 import type { ReadingStatus } from "@/types/collections"
 import { normalizeBulkTags, getBulkFailureLines } from "./bulkActions"
@@ -43,9 +44,17 @@ const AddUrlModal = React.lazy(() =>
   import("./AddUrlModal").then((m) => ({ default: m.AddUrlModal }))
 )
 
+const normalizeReadingStatus = (value: unknown): ReadingStatus => {
+  if (value === "saved" || value === "reading" || value === "read" || value === "archived") {
+    return value
+  }
+  return "saved"
+}
+
 export const ReadingItemsList: React.FC = () => {
   const { t } = useTranslation(["collections", "common"])
   const api = useTldwApiClient()
+  const { showUndoNotification } = useUndoNotification()
 
   // Store state
   const items = useCollectionsStore((s) => s.items)
@@ -413,6 +422,154 @@ export const ReadingItemsList: React.FC = () => {
     }
   }, [applyBulkAction, tagActionMode, tagInput, t])
 
+  const restoreDeletedItems = useCallback(
+    async (statusByItemId: Record<string, ReadingStatus>) => {
+      const grouped = new Map<ReadingStatus, string[]>()
+      Object.entries(statusByItemId).forEach(([itemId, status]) => {
+        const normalizedStatus = normalizeReadingStatus(status)
+        const existing = grouped.get(normalizedStatus)
+        if (existing) {
+          existing.push(itemId)
+        } else {
+          grouped.set(normalizedStatus, [itemId])
+        }
+      })
+
+      let failed = 0
+      for (const [status, itemIds] of grouped.entries()) {
+        const response = await api.bulkUpdateReadingItems({
+          item_ids: itemIds,
+          action: "set_status",
+          status
+        })
+        failed += response.failed
+      }
+
+      await fetchItems()
+      if (failed > 0) {
+        throw new Error(`Failed to restore ${failed} items`)
+      }
+    },
+    [api, fetchItems]
+  )
+
+  const executeBulkDelete = useCallback(
+    async (hardDelete: boolean) => {
+      if (selectedItemIds.length === 0) {
+        message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+        return
+      }
+
+      const previousStatusById = new Map<string, ReadingStatus>()
+      selectedItemIds.forEach((itemId) => {
+        const item = items.find((entry) => entry.id === itemId)
+        previousStatusById.set(itemId, normalizeReadingStatus(item?.status))
+      })
+
+      setBulkActionLoading(true)
+      try {
+        const response = await api.bulkUpdateReadingItems({
+          item_ids: selectedItemIds,
+          action: "delete",
+          hard: hardDelete
+        })
+
+        const succeededIds = new Set(
+          response.results
+            .filter((entry) => entry.success)
+            .map((entry) => entry.item_id)
+        )
+
+        if (succeededIds.size > 0) {
+          setSelectedItemIds((prev) => prev.filter((id) => !succeededIds.has(id)))
+          await fetchItems()
+        }
+
+        const actionLabel = hardDelete
+          ? t("collections:reading.bulk.actions.deletePermanent", "Delete permanently")
+          : t("collections:reading.bulk.actions.delete", "Delete")
+
+        if (response.failed > 0) {
+          const failureLines = getBulkFailureLines(response)
+          Modal.info({
+            title: t("collections:reading.bulk.summaryTitle", "Bulk action summary"),
+            width: 620,
+            content: (
+              <div className="space-y-2">
+                <p>
+                  {t(
+                    "collections:reading.bulk.summaryBody",
+                    "{{action}} completed. {{succeeded}} succeeded, {{failed}} failed.",
+                    {
+                      action: actionLabel,
+                      succeeded: response.succeeded,
+                      failed: response.failed
+                    }
+                  )}
+                </p>
+                {failureLines.length > 0 && (
+                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                    {failureLines.map((line) => (
+                      <div key={line}>{line}</div>
+                    ))}
+                    {response.failed > failureLines.length && (
+                      <div>
+                        {t("collections:reading.bulk.moreFailures", "+{{count}} more failures", {
+                          count: response.failed - failureLines.length
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        }
+
+        if (response.succeeded > 0 && hardDelete) {
+          message.success(
+            t(
+              "collections:reading.bulk.deletePermanentSuccess",
+              "Permanently deleted {{count}} items",
+              { count: response.succeeded }
+            )
+          )
+        }
+
+        if (response.succeeded > 0 && !hardDelete) {
+          const statusByItemId: Record<string, ReadingStatus> = {}
+          response.results
+            .filter((entry) => entry.success)
+            .forEach((entry) => {
+              statusByItemId[entry.item_id] = previousStatusById.get(entry.item_id) || "saved"
+            })
+
+          const restoredCount = Object.keys(statusByItemId).length
+          showUndoNotification({
+            title:
+              restoredCount === 1
+                ? t("collections:reading.bulk.deletedSingle", "Article deleted")
+                : t("collections:reading.bulk.deletedMulti", "{{count}} articles deleted", {
+                    count: restoredCount
+                  }),
+            description: t(
+              "collections:reading.bulk.deleteUndoHint",
+              "Moved to archived. Undo to restore previous statuses."
+            ),
+            onUndo: async () => {
+              await restoreDeletedItems(statusByItemId)
+            }
+          })
+        }
+      } catch (error: any) {
+        message.error(error?.message || "Bulk delete failed")
+      } finally {
+        setBulkActionLoading(false)
+      }
+    },
+    [api, fetchItems, items, restoreDeletedItems, selectedItemIds, showUndoNotification, t]
+  )
+
   const handleBulkDelete = useCallback(() => {
     if (selectedItemIds.length === 0) {
       message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
@@ -421,20 +578,37 @@ export const ReadingItemsList: React.FC = () => {
     Modal.confirm({
       title: t("collections:reading.bulk.deleteTitle", "Delete selected articles"),
       content: t(
-        "collections:reading.bulk.deleteBody",
-        "This permanently deletes selected items. Continue?"
+        "collections:reading.bulk.deleteSoftBody",
+        "Selected items will be moved to archived. You can undo this action."
       ),
       okText: t("common:delete", "Delete"),
       okButtonProps: { danger: true, loading: bulkActionLoading },
       cancelText: t("common:cancel", "Cancel"),
       onOk: async () => {
-        await applyBulkAction(
-          { action: "delete", hard: true },
-          t("collections:reading.bulk.actions.delete", "Delete")
-        )
+        await executeBulkDelete(false)
       }
     })
-  }, [applyBulkAction, bulkActionLoading, selectedItemIds.length, t])
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
+
+  const handleBulkHardDelete = useCallback(() => {
+    if (selectedItemIds.length === 0) {
+      message.warning(t("collections:reading.bulk.selectWarning", "Select at least one item"))
+      return
+    }
+    Modal.confirm({
+      title: t("collections:reading.bulk.deletePermanentTitle", "Delete selected articles permanently"),
+      content: t(
+        "collections:reading.bulk.deletePermanentBody",
+        "This permanently deletes selected items and cannot be undone. Continue?"
+      ),
+      okText: t("collections:reading.bulk.actions.deletePermanent", "Delete permanently"),
+      okButtonProps: { danger: true, loading: bulkActionLoading },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: async () => {
+        await executeBulkDelete(true)
+      }
+    })
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
 
   const openBulkOutputModal = useCallback(async () => {
     if (selectedItemIds.length === 0) {
@@ -735,6 +909,16 @@ export const ReadingItemsList: React.FC = () => {
                 loading={bulkActionLoading}
               >
                 {t("collections:reading.bulk.actions.delete", "Delete")}
+              </Button>
+
+              <Button
+                danger
+                size="small"
+                type="text"
+                onClick={handleBulkHardDelete}
+                loading={bulkActionLoading}
+              >
+                {t("collections:reading.bulk.actions.deletePermanent", "Delete permanently")}
               </Button>
             </div>
           )}

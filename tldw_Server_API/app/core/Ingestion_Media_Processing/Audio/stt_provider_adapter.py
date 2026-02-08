@@ -678,22 +678,6 @@ class ExternalAdapter(SttProviderAdapter):
             },
         }
 
-
-def _normalize_provider_name(name: str | None) -> str:
-    """
-    Normalize provider identifiers from config or call sites.
-
-    This uses the shared provider registry normalizer to keep naming behavior
-    aligned with other provider domains while still preserving STT-specific
-    aliases.
-    """
-    return _STT_PROVIDER_NAME_REGISTRY.resolve_provider_name(name)
-
-
-def _build_stt_provider_name_registry() -> ProviderRegistryBase[Any]:
-    return ProviderRegistryBase[SttProviderAdapter](aliases=_STT_PROVIDER_ALIASES)
-
-
 _STT_PROVIDER_ALIASES: dict[str, str] = {
     # Whisper/faster-whisper aliases
     "whisper": SttProviderName.FASTER_WHISPER.value,
@@ -710,9 +694,6 @@ _STT_PROVIDER_ALIASES: dict[str, str] = {
     # External aliases
     "external-provider": SttProviderName.EXTERNAL.value,
 }
-
-
-_STT_PROVIDER_NAME_REGISTRY = _build_stt_provider_name_registry()
 
 
 class SttProviderRegistry:
@@ -742,6 +723,12 @@ class SttProviderRegistry:
         for provider_name, adapter_spec in self.DEFAULT_ADAPTERS.items():
             self._base.register_adapter(provider_name, adapter_spec)
 
+    def normalize_provider_name(self, provider_name: str | None) -> str:
+        """
+        Normalize provider identifiers using the shared base registry.
+        """
+        return self._base.resolve_provider_name(provider_name)
+
     def _is_provider_enabled_by_config(self, provider_name: str) -> bool | None:
         """
         STT keeps provider enablement decisions outside registry lookup today.
@@ -761,7 +748,7 @@ class SttProviderRegistry:
         aliases: list[str] | tuple[str, ...] | set[str] | None = None,
         enabled: bool = True,
     ) -> None:
-        normalized = _normalize_provider_name(provider_name)
+        normalized = self.normalize_provider_name(provider_name)
         if not normalized:
             raise ValueError("Provider name must be non-empty")
         self._base.register_adapter(normalized, adapter, aliases=aliases, enabled=enabled)
@@ -786,7 +773,7 @@ class SttProviderRegistry:
             cfg = {}
 
         raw_default = cfg.get("default_transcriber") or cfg.get("default_stt_provider") or "faster-whisper"
-        normalized = _normalize_provider_name(raw_default)
+        normalized = self.normalize_provider_name(raw_default)
         return normalized or "faster-whisper"
 
     def get_adapter(self, provider_name: str | None = None) -> SttProviderAdapter:
@@ -797,7 +784,7 @@ class SttProviderRegistry:
         resolved via config and used. As a final safety net, the
         'faster-whisper' adapter is returned.
         """
-        key = _normalize_provider_name(provider_name) if provider_name else self.get_default_provider_name()
+        key = self.normalize_provider_name(provider_name) if provider_name else self.get_default_provider_name()
 
         adapter = self._base.get_adapter(key)
         if adapter is not None:
@@ -878,7 +865,7 @@ class SttProviderRegistry:
             # Defensive: treat unknown models as Whisper-family
             raw_provider, model, variant = "whisper", (model_name or "").strip(), None
 
-        provider = _normalize_provider_name(raw_provider)
+        provider = self.normalize_provider_name(raw_provider)
         if provider == "whisper":
             # Internally, Whisper-family models are handled via faster-whisper.
             provider = SttProviderName.FASTER_WHISPER.value

@@ -624,6 +624,39 @@ async def _maybe_rg_shadow_chat_decision(
 async def list_chat_commands(
     current_user: User = Depends(get_request_user),
 ):
+    def _as_chat_command_from_spec(name: str, spec: Any) -> ChatCommandInfo:
+        return ChatCommandInfo(
+            name=name,
+            description=getattr(spec, "description", name),
+            required_permission=getattr(spec, "required_permission", None),
+            usage=getattr(spec, "usage", None),
+            args=list(getattr(spec, "args", []) or []),
+            requires_api_key=bool(getattr(spec, "requires_api_key", True)),
+            rate_limit=(
+                getattr(spec, "rate_limit", None)
+                or command_router.default_rate_limit_display()
+            ),
+            rbac_required=bool(
+                getattr(
+                    spec,
+                    "rbac_required",
+                    bool(getattr(spec, "required_permission", None)),
+                )
+            ),
+        )
+
+    def _as_chat_command_from_dict(entry: dict[str, Any]) -> ChatCommandInfo:
+        return ChatCommandInfo(
+            name=str(entry.get("name", "")),
+            description=str(entry.get("description", "")),
+            required_permission=entry.get("required_permission"),
+            usage=entry.get("usage"),
+            args=list(entry.get("args", []) or []),
+            requires_api_key=entry.get("requires_api_key"),
+            rate_limit=entry.get("rate_limit"),
+            rbac_required=entry.get("rbac_required"),
+        )
+
     # If commands are globally disabled, return empty list for discoverability
     if not command_router.commands_enabled():
         return ChatCommandsListResponse(commands=[])
@@ -632,27 +665,15 @@ async def list_chat_commands(
     require_perms = _cfg_bool_cmds("CHAT_COMMANDS_REQUIRE_PERMISSIONS", "require_permissions", False)
 
     if not require_perms:
-        # Include required_permission metadata from the registry even if not filtering
+        # Include metadata from registry even if not filtering.
         reg = getattr(command_router, "_registry", {})
         items = []
         if isinstance(reg, dict) and reg:
             for name, spec in reg.items():  # type: ignore
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=getattr(spec, "required_permission", None),
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
         else:
             for c in command_router.list_commands():
-                items.append(
-                    ChatCommandInfo(
-                        name=c.get("name", ""),
-                        description=c.get("description", ""),
-                        required_permission=None,
-                    )
-                )
+                items.append(_as_chat_command_from_dict(c))
         return ChatCommandsListResponse(commands=items)
 
     # Permission-filtered list using registry metadata
@@ -665,13 +686,7 @@ async def list_chat_commands(
         for name, spec in reg.items():  # type: ignore
             perm = getattr(spec, "required_permission", None)
             if not perm:
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=perm,
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
                 continue
 
             has_perm_claim = perm in perms_claim
@@ -683,23 +698,11 @@ async def list_chat_commands(
                     has_perm_db = False
 
             if has_perm_claim or has_perm_db:
-                items.append(
-                    ChatCommandInfo(
-                        name=name,
-                        description=getattr(spec, "description", name),
-                        required_permission=perm,
-                    )
-                )
+                items.append(_as_chat_command_from_spec(name, spec))
     except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
         # Fallback: unfiltered list if registry not accessible
         for c in command_router.list_commands():
-            items.append(
-                ChatCommandInfo(
-                    name=c.get("name", ""),
-                    description=c.get("description", ""),
-                    required_permission=None,
-                )
-            )
+            items.append(_as_chat_command_from_dict(c))
 
     return ChatCommandsListResponse(commands=items)
 
@@ -1522,7 +1525,7 @@ async def create_chat_completion(
                             'conversation_id': request_data.conversation_id,
                         }
                         # Prepare content for injection and run input moderation on it
-                        content_text = f"[/{cmd_name}] {result.content}"
+                        content_text = command_router.build_injection_text(cmd_name, result.content)
                         moderated_content_text = content_text
                         inj_mod = {
                             'action': 'pass',

@@ -399,6 +399,22 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
                 raise HTTPException(status_code=400, detail=f"{name} must be <= {le_f}")
             return fv
 
+        def _as_bool(name: str, value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)) and int(value) in {0, 1}:
+                return bool(int(value))
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"true", "1", "yes", "y", "on"}:
+                    return True
+                if normalized in {"false", "0", "no", "n", "off"}:
+                    return False
+            raise HTTPException(
+                status_code=400,
+                detail=f"{name} must be a boolean (true/false)",
+            )
+
         sims = _get("mcts_simulations")
         if sims is not None:
             _as_int("mcts_simulations", sims, ge=1, le=200)
@@ -419,6 +435,14 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
         if sbin is not None:
             _as_float("score_dedup_bin", sbin, ge_f=0.01, le_f=0.5)
 
+        min_quality = _get("min_quality")
+        if min_quality is not None:
+            _as_float("min_quality", min_quality, ge_f=0.0, le_f=1.0)
+
+        feedback_enabled = _get("feedback_enabled")
+        if feedback_enabled is not None:
+            _as_bool("feedback_enabled", feedback_enabled)
+
         thr = _get("feedback_threshold")
         if thr is not None:
             _as_float("feedback_threshold", thr, ge_f=0.0, le_f=10.0)
@@ -435,11 +459,26 @@ def _validate_strategy_config(optimizer_type: str, cfg: dict[str, Any]) -> None:
         if noimp is not None:
             _as_int("early_stop_no_improve", noimp, ge=1, le=50)
 
-        # Optional strings: scorer_model / rollout_model if provided must be non-empty strings
-        for name in ("scorer_model", "rollout_model"):
-            val = _get(name)
-            if val is not None and (not isinstance(val, str) or not val.strip()):
-                raise HTTPException(status_code=400, detail=f"{name} must be a non-empty string if provided")
+        ws_every = _get("ws_throttle_every")
+        if ws_every is not None:
+            _as_int("ws_throttle_every", ws_every, ge=1, le=200)
+
+        trace_top_k = _get("trace_top_k")
+        if trace_top_k is not None:
+            _as_int("trace_top_k", trace_top_k, ge=1, le=20)
+
+        scorer_model = _get("scorer_model")
+        if scorer_model is not None and (not isinstance(scorer_model, str) or not scorer_model.strip()):
+            raise HTTPException(status_code=400, detail="scorer_model must be a non-empty string if provided")
+
+        rollout_model = _get("rollout_model")
+        if rollout_model is not None:
+            if not isinstance(rollout_model, str) or not rollout_model.strip():
+                raise HTTPException(status_code=400, detail="rollout_model must be a non-empty string if provided")
+            raise HTTPException(
+                status_code=400,
+                detail="rollout_model is currently unsupported for optimizer_type='mcts'",
+            )
 
 # Compatibility: base POST returns job info directly
 @router.post("")

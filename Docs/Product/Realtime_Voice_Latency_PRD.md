@@ -1,7 +1,7 @@
 # Realtime Voice Latency PRD
 
 Owner: Core Voice & API Team
-Status: Draft (v0.1)
+Status: In Progress (Partially Implemented; updated 2026-02-08)
 
 ## Overview
 
@@ -48,6 +48,14 @@ Elevate the realtime voice experience (STT → LLM → TTS) to deliver natural, 
 
 ### Phase 3: WebRTC Egress (Optional)
 - Add a minimal WebRTC transport for browser playback where ultra‑low latency is required.
+
+## Implementation Status (2026-02-08)
+
+- [x] Phase 1 core implementation is present in code (VAD auto-commit, latency metrics, PCM support, phoneme mapping hooks).
+- [ ] Phase 1 performance targets are not yet validated on the reference benchmark setup.
+- [x] Phase 2 WS TTS endpoint is implemented (`/api/v1/audio/stream/tts` and realtime variant).
+- [ ] Phase 2 structured streaming (`spoke_response`/`code_blocks`/`links`) is deferred.
+- [ ] Phase 3 WebRTC egress is deferred.
 
 ## Reference Setup
 
@@ -225,10 +233,12 @@ Performance
 ## Rollout Plan
 
 Phase 1 (default on via flags)
-- Ship VAD turn detection, latency metrics, PCM format, phoneme map hooks.
+- Shipped in code: VAD turn detection, latency metrics, PCM format, phoneme map hooks.
+- Remaining: benchmark/validation pass against PRD latency targets.
 
 Phase 2 (opt‑in)
-- Structured JSON streaming; WS TTS behind feature flags.
+- WS TTS shipped in code.
+- Structured JSON streaming remains deferred.
 
 Phase 3 (optional)
 - WebRTC egress (aiortc) behind feature flag and environment readiness guide.
@@ -255,10 +265,10 @@ Documentation
 
 ## Acceptance Criteria
 
-- [ ] p50 voice‑to‑voice ≤ 1.0s on a local reference setup; p90 ≤ 1.8s.
-- [ ] p50 STT final latency ≤ 600ms; p50 TTS TTFB ≤ 250ms (reference setup).
-- [ ] PCM streaming option documented and validated with example clients.
-- [ ] Optional phoneme map configurable and applied in Kokoro path.
-- [ ] Structured streaming mode available and tested end‑to‑end.
-- [ ] Metrics exported and visible in existing registry with labels.
- - [ ] No regressions in quotas/auth for audio endpoints; REST streaming remains backwards‑compatible.
+- [ ] p50 voice‑to‑voice ≤ 1.0s on a local reference setup; p90 ≤ 1.8s. (Pending benchmark validation)
+- [ ] p50 STT final latency ≤ 600ms; p50 TTS TTFB ≤ 250ms (reference setup). (Pending benchmark validation)
+- [ ] PCM streaming option documented and validated with example clients. (Partially implemented in code; docs/client validation pending)
+- [x] Optional phoneme map configurable and applied in Kokoro path. (Implemented)
+- [ ] Structured streaming mode available and tested end‑to‑end. (Deferred)
+- [x] Metrics exported and visible in existing registry with labels. (Implemented)
+- [ ] No regressions in quotas/auth for audio endpoints; REST streaming remains backwards‑compatible. (Pending regression sweep)

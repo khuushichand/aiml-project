@@ -300,21 +300,23 @@ def test_resolve_provider_for_model_qwen3_asr_aliases(monkeypatch):
 @pytest.mark.unit
 def test_normalize_provider_name_qwen3_asr():
     spa = _import_module()
+    registry = spa.SttProviderRegistry()
 
     # Test various aliases
-    assert spa._normalize_provider_name("qwen3-asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("qwen3_asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("qwen3asr") == "qwen3-asr"
-    assert spa._normalize_provider_name("Qwen3-ASR") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3-asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3_asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("qwen3asr") == "qwen3-asr"
+    assert registry.normalize_provider_name("Qwen3-ASR") == "qwen3-asr"
 
 
 @pytest.mark.unit
 def test_normalize_provider_name_additional_aliases():
     spa = _import_module()
+    registry = spa.SttProviderRegistry()
 
-    assert spa._normalize_provider_name("whisper") == "faster-whisper"
-    assert spa._normalize_provider_name("vibevoice_asr") == "vibevoice"
-    assert spa._normalize_provider_name("nemo-parakeet") == "parakeet"
+    assert registry.normalize_provider_name("whisper") == "faster-whisper"
+    assert registry.normalize_provider_name("vibevoice_asr") == "vibevoice"
+    assert registry.normalize_provider_name("nemo-parakeet") == "parakeet"
 
 
 @pytest.mark.unit

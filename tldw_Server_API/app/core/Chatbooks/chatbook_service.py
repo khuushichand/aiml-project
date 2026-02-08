@@ -35,10 +35,17 @@ import aiofiles
 import aiofiles.os
 from loguru import logger
 
-from tldw_Server_API.app.core.config import settings as core_settings
+from tldw_Server_API.app.core.config import load_comprehensive_config, settings as core_settings
+from tldw_Server_API.app.core.testing import is_truthy
 
 from ..DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from ..DB_Management.db_path_utils import DatabasePaths
+from ..Templating.template_renderer import (
+    TemplateContext,
+    TemplateEnv,
+    options_from_env,
+)
+from ..Templating.template_renderer import render as render_template
 
 # Legacy job queue shim removed; using in-process task registry
 from .chatbook_models import (
@@ -90,6 +97,8 @@ _CHATBOOK_NONCRITICAL_EXCEPTIONS: tuple[type[BaseException], ...] = (
     zipfile.BadZipFile,
     asyncio.CancelledError,
 )
+
+_CHATBOOK_TEMPLATE_MODES = {"pass_through", "render_on_export", "render_on_import"}
 
 try:  # Prompts database is optional in some deployments
     from ..DB_Management.Prompts_DB import PromptsDatabase  # type: ignore
@@ -272,6 +281,126 @@ class ChatbookService:
             if limit is not None:
                 return limit
         return None
+
+    @staticmethod
+    def _truthy_env(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return is_truthy(str(raw))
+
+    @classmethod
+    def _chat_dict_templates_enabled(cls) -> bool:
+        """Return whether dictionary templating is globally enabled."""
+        if cls._truthy_env("CHAT_DICT_TEMPLATES_ENABLED", False):
+            return True
+        try:
+            cp = load_comprehensive_config()
+            if cp and cp.has_section("Chat-Templating"):
+                raw = cp.get("Chat-Templating", "enable_templates", fallback="false")
+                return is_truthy(str(raw))
+        except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
+            pass
+        return False
+
+    @classmethod
+    def _default_chatbook_template_metadata(cls) -> dict[str, Any]:
+        """Build default manifest template metadata from environment settings."""
+        mode = str(os.getenv("CHATBOOKS_TEMPLATE_MODE", "pass_through")).strip().lower()
+        if mode not in _CHATBOOK_TEMPLATE_MODES:
+            mode = "pass_through"
+
+        template_defaults: dict[str, Any] = {}
+        raw_defaults = os.getenv("CHATBOOKS_TEMPLATE_DEFAULTS_JSON", "").strip()
+        if raw_defaults:
+            try:
+                parsed = json.loads(raw_defaults)
+                if isinstance(parsed, dict):
+                    template_defaults = parsed
+            except json.JSONDecodeError:
+                logger.warning("CHATBOOKS_TEMPLATE_DEFAULTS_JSON is invalid JSON; ignoring")
+
+        timezone_value = str(
+            os.getenv("CHATBOOKS_TEMPLATE_TIMEZONE")
+            or os.getenv("TEMPLATE_DEFAULT_TZ")
+            or "UTC"
+        ).strip() or "UTC"
+        locale_raw = os.getenv("CHATBOOKS_TEMPLATE_LOCALE") or os.getenv("TEMPLATE_DEFAULT_LOCALE")
+        locale_value = str(locale_raw).strip() if locale_raw is not None else ""
+
+        metadata: dict[str, Any] = {"template_mode": mode}
+        if template_defaults:
+            metadata["template_defaults"] = template_defaults
+        if timezone_value:
+            metadata["template_timezone"] = timezone_value
+        if locale_value:
+            metadata["template_locale"] = locale_value
+        return metadata
+
+    @staticmethod
+    def _resolve_template_settings(manifest: ChatbookManifest) -> dict[str, Any]:
+        metadata = dict((manifest.metadata or {}))
+        mode = str(metadata.get("template_mode", "pass_through")).strip().lower()
+        if mode not in _CHATBOOK_TEMPLATE_MODES:
+            mode = "pass_through"
+
+        defaults = metadata.get("template_defaults")
+        if not isinstance(defaults, dict):
+            defaults = {}
+
+        timezone_value = str(
+            metadata.get("template_timezone")
+            or os.getenv("TEMPLATE_DEFAULT_TZ")
+            or "UTC"
+        ).strip() or "UTC"
+        locale_raw = metadata.get("template_locale") or os.getenv("TEMPLATE_DEFAULT_LOCALE")
+        locale_value = str(locale_raw).strip() if locale_raw is not None else ""
+
+        return {
+            "mode": mode,
+            "defaults": defaults,
+            "timezone": timezone_value,
+            "locale": locale_value or None,
+        }
+
+    @staticmethod
+    def _should_render_for_stage(template_mode: str, stage: str) -> bool:
+        stage_norm = str(stage).strip().lower()
+        mode_norm = str(template_mode).strip().lower()
+        return (
+            (stage_norm == "export" and mode_norm == "render_on_export")
+            or (stage_norm == "import" and mode_norm == "render_on_import")
+        )
+
+    def _render_chatbook_text(
+        self,
+        text: Any,
+        *,
+        template_settings: dict[str, Any],
+        stage: str,
+        metrics_source: str = "chatbook",
+        require_dict_templates_enabled: bool = False,
+    ) -> Any:
+        """Render text according to manifest template settings and stage."""
+        if not isinstance(text, str) or "{{" not in text:
+            return text
+        if not self._should_render_for_stage(str(template_settings.get("mode", "pass_through")), stage):
+            return text
+        if require_dict_templates_enabled and not self._chat_dict_templates_enabled():
+            return text
+
+        env = TemplateEnv(
+            timezone=str(template_settings.get("timezone") or "UTC"),
+            locale=template_settings.get("locale"),
+        )
+        extra = dict(template_settings.get("defaults") or {})
+        extra.setdefault("_metrics_source", metrics_source)
+        ctx = TemplateContext(
+            user={"id": self.user_id, "display_name": self.user_id},
+            env=env,
+            extra=extra,
+        )
+        return render_template(text, ctx, options_from_env())
 
     @staticmethod
     def _build_export_filename(name: str, timestamp: str) -> str:
@@ -1272,7 +1401,8 @@ class ChatbookService:
                 media_quality=media_quality,
                 tags=tags or [],
                 categories=categories or [],
-                export_id=str(uuid4())
+                export_id=str(uuid4()),
+                metadata=self._default_chatbook_template_metadata(),
             )
             manifest.binary_limits = self._get_binary_limits_bytes()
 
@@ -2930,6 +3060,8 @@ class ChatbookService:
         """Collect notes for export."""
         notes_dir = work_dir / "content" / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
+        template_settings = self._resolve_template_settings(manifest)
+
         def _yaml_scalar(value: Any) -> str:
             """Render a safe YAML scalar for frontmatter."""
             text = "" if value is None else str(value)
@@ -2952,11 +3084,24 @@ class ChatbookService:
                 if not note:
                     continue
 
+                rendered_title = self._render_chatbook_text(
+                    note.get("title", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+                rendered_content = self._render_chatbook_text(
+                    note.get("content", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+
                 # Create note data
                 note_data = {
                     "id": note['id'],
-                    "title": note['title'],
-                    "content": note['content'],
+                    "title": rendered_title,
+                    "content": rendered_content,
                     "created_at": note['created_at'].isoformat() if hasattr(note['created_at'], 'isoformat') else note['created_at']
                 }
 
@@ -2966,10 +3111,10 @@ class ChatbookService:
                     # Write frontmatter
                     f.write("---\n")
                     f.write(f"id: {note['id']}\n")
-                    f.write(f"title: {_yaml_scalar(note['title'])}\n")
+                    f.write(f"title: {_yaml_scalar(note_data['title'])}\n")
                     f.write(f"created_at: {note_data['created_at']}\n")
                     f.write("---\n\n")
-                    f.write(note['content'])
+                    f.write(str(note_data['content']))
 
                 # Add to content
                 content.notes[note_id] = note_data
@@ -2978,7 +3123,7 @@ class ChatbookService:
                 manifest.content_items.append(ContentItem(
                     id=note_id,
                     type=ContentType.NOTE,
-                    title=note['title'],
+                    title=str(note_data['title']),
                     file_path=f"content/notes/note_{note_id}.md"
                 ))
 
@@ -3075,6 +3220,7 @@ class ChatbookService:
         """Collect chat dictionaries for export."""
         dict_dir = work_dir / "content" / "dictionaries"
         dict_dir.mkdir(parents=True, exist_ok=True)
+        template_settings = self._resolve_template_settings(manifest)
 
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
@@ -3091,6 +3237,41 @@ class ChatbookService:
                     dict_data.setdefault("description", dict_meta.get("description"))
                     dict_data["id"] = dict_meta.get("id", dict_id)
                     dict_data["is_active"] = dict_meta.get("is_active", True)
+
+                dict_data["name"] = self._render_chatbook_text(
+                    dict_data.get("name", "Unnamed"),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+                dict_data["description"] = self._render_chatbook_text(
+                    dict_data.get("description", ""),
+                    template_settings=template_settings,
+                    stage="export",
+                    metrics_source="chatbook",
+                )
+
+                entries = dict_data.get("entries")
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        if "replacement" in entry:
+                            entry["replacement"] = self._render_chatbook_text(
+                                entry.get("replacement"),
+                                template_settings=template_settings,
+                                stage="export",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+                        if "content" in entry:
+                            entry["content"] = self._render_chatbook_text(
+                                entry.get("content"),
+                                template_settings=template_settings,
+                                stage="export",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
 
                 # Convert datetime objects to strings for JSON serialization
                 dict_data_serializable = self._convert_datetimes(dict_data)
@@ -3326,6 +3507,8 @@ class ChatbookService:
     ):
         """Import notes from chatbook."""
         notes_dir = extract_dir / "content" / "notes"
+        template_settings = self._resolve_template_settings(manifest)
+
         def _parse_yaml_scalar(text: str) -> str:
             if not text:
                 return ""
@@ -3384,6 +3567,19 @@ class ChatbookService:
                         except _CHATBOOK_NONCRITICAL_EXCEPTIONS:
                             note_title = _extract_title_frontmatter(frontmatter, note_title)
                         note_content = parts[2].strip()
+
+                note_title = self._render_chatbook_text(
+                    note_title,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+                note_content = self._render_chatbook_text(
+                    note_content,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
 
                 if prefix_imported:
                     note_title = f"[Imported] {note_title}"
@@ -3546,6 +3742,8 @@ class ChatbookService:
     ):
         """Import chat dictionaries from chatbook."""
         dict_dir = extract_dir / "content" / "dictionaries"
+        template_settings = self._resolve_template_settings(manifest)
+        strict_dict_import = self._truthy_env("CHATBOOKS_IMPORT_DICT_STRICT", False)
 
         # Import the dictionary service
         from ..Character_Chat.chat_dictionary import ChatDictionaryService
@@ -3567,12 +3765,48 @@ class ChatbookService:
 
                 # Handle import with conflict resolution
                 dict_name = dict_data.get('name', 'Unnamed')
+                dict_name = self._render_chatbook_text(
+                    dict_name,
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+                dict_data['name'] = dict_name
+                dict_data['description'] = self._render_chatbook_text(
+                    dict_data.get('description', ''),
+                    template_settings=template_settings,
+                    stage="import",
+                    metrics_source="chatbook",
+                )
+
+                entries = dict_data.get('entries')
+                if isinstance(entries, list):
+                    for entry in entries:
+                        if not isinstance(entry, dict):
+                            continue
+                        if "replacement" in entry:
+                            entry["replacement"] = self._render_chatbook_text(
+                                entry.get("replacement"),
+                                template_settings=template_settings,
+                                stage="import",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+                        if "content" in entry:
+                            entry["content"] = self._render_chatbook_text(
+                                entry.get("content"),
+                                template_settings=template_settings,
+                                stage="import",
+                                metrics_source="dict",
+                                require_dict_templates_enabled=True,
+                            )
+
                 if prefix_imported:
                     dict_name = f"[Imported] {dict_name}"
                     dict_data['name'] = dict_name
 
                 # Check for existing dictionary
-                existing = dict_service.get_dictionary_by_name(dict_name)
+                existing = dict_service.get_dictionary(name=dict_name)
                 if existing and conflict_resolution == ConflictResolution.SKIP:
                     status.skipped_items += 1
                     continue
@@ -3582,6 +3816,9 @@ class ChatbookService:
 
                 # Validate dictionary entries (structure + regex/template lint)
                 try:
+                    from ..Chat.validate_dictionary import (
+                        FATAL_ERROR_CODES as _FATAL_ERROR_CODES,
+                    )
                     from ..Chat.validate_dictionary import validate_dictionary as _validate_dict
 
                     # Normalize entries for validator shape
@@ -3610,15 +3847,21 @@ class ChatbookService:
 
                     vres = _validate_dict({'name': dict_name, 'entries': norm_entries}, schema_version=1, strict=False)
                     if vres.errors:
-                        # Accumulate warning summary; optionally enforce strict rejection
                         codes = sorted({err.get('code', 'unknown') for err in vres.errors})
-                        status.warnings.append(
-                            f"Dictionary '{dict_name}' validation found errors: {', '.join(codes)}"
-                        )
-                        if os.getenv('CHATBOOKS_IMPORT_DICT_STRICT', '').strip().lower() in {'1','true','yes','on'}:
-                            status.failed_items += 1
-                            # Skip importing this dictionary entirely
-                            continue
+                        fatal_codes = sorted({c for c in codes if c in _FATAL_ERROR_CODES})
+                        non_fatal_codes = sorted({c for c in codes if c not in _FATAL_ERROR_CODES})
+                        if fatal_codes:
+                            status.warnings.append(
+                                f"Dictionary '{dict_name}' validation fatal errors: {', '.join(fatal_codes)}"
+                            )
+                            if strict_dict_import:
+                                status.skipped_items += 1
+                                # Skip importing this dictionary entirely.
+                                continue
+                        if non_fatal_codes:
+                            status.warnings.append(
+                                f"Dictionary '{dict_name}' validation non-fatal errors: {', '.join(non_fatal_codes)}"
+                            )
                     if vres.warnings:
                         wc = sorted({w.get('code', 'warn') for w in vres.warnings})
                         status.warnings.append(
@@ -3632,10 +3875,12 @@ class ChatbookService:
                 new_dict_id = dict_service.create_dictionary(
                     dict_name,
                     dict_data.get('description', ''),
-                    dict_data.get('is_active', True)
                 )
 
                 if new_dict_id:
+                    if not bool(dict_data.get('is_active', True)):
+                        with contextlib.suppress(_CHATBOOK_NONCRITICAL_EXCEPTIONS):
+                            dict_service.update_dictionary(dictionary_id=int(new_dict_id), is_active=False)
                     # Import entries
                     for entry in dict_data.get('entries', []):
                         # Support both legacy and current export shapes

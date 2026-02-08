@@ -108,6 +108,15 @@ class MCTSOptimizer:
         target_metric: MetricType = MetricType.ACCURACY,
         strategy_params: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
+        def _coerce_bool(value: Any, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(int(value))
+            return is_truthy(str(value))
+
         params = strategy_params or {}
         n_sims = int(params.get("mcts_simulations") or max_iterations or 20)
         early_no_improve = int(params.get("early_stop_no_improve") or 5)
@@ -118,7 +127,7 @@ class MCTSOptimizer:
         score_bin_size = float(params.get("score_dedup_bin") or 0.1)
         token_budget = int(params.get("token_budget") or 0)  # 0 => unlimited
         scorer_model = params.get("scorer_model")
-        feedback_enabled = bool(params.get("feedback_enabled", True))
+        feedback_enabled = _coerce_bool(params.get("feedback_enabled"), True)
         feedback_threshold = float(params.get("feedback_threshold", 6.0))
         feedback_max_retries = int(params.get("feedback_max_retries", 2))
         ws_throttle_every = int(params.get("ws_throttle_every") or max(1, int(n_sims // 50) or 1))
@@ -425,6 +434,16 @@ class MCTSOptimizer:
                     "mcts_max_depth": max_depth,
                     "prompt_candidates_per_node": k_candidates,
                     "mcts_exploration_c": exploration_c,
+                    "mcts_simulations": n_sims,
+                    "min_quality": min_quality,
+                    "score_dedup_bin": score_bin_size,
+                    "token_budget": token_budget,
+                    "scorer_model": str(scorer_model) if scorer_model is not None else None,
+                    "feedback_enabled": bool(feedback_enabled),
+                    "feedback_threshold": feedback_threshold,
+                    "feedback_max_retries": feedback_max_retries,
+                    "ws_throttle_every": ws_throttle_every,
+                    "trace_top_k": trace_top_k,
                 },
             },
         }

@@ -25,7 +25,16 @@ class _FakeProviderManager:
 def test_provider_details_includes_capabilities_and_health(monkeypatch):
     monkeypatch.setenv("TEST_MODE", "true")
     with TestClient(app) as client:
-        with patch("tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager", return_value=_FakeProviderManager()):
+        with (
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.llm_providers.get_provider_manager",
+                return_value=_FakeProviderManager(),
+            ),
+            patch(
+                "tldw_Server_API.app.api.v1.endpoints.llm_providers.discover_models_from_endpoint",
+                return_value=[],
+            ),
+        ):
             # First call list to ensure providers exist and health is attached
             lst = client.get("/api/v1/llm/providers").json()
             assert 'providers' in lst

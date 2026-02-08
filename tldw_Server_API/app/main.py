@@ -990,19 +990,19 @@ else:
 
     # Prompt Studio (guarded)
     try:
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_evaluations import (
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_evaluations import (
             router as prompt_studio_evaluations_router,
         )
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_optimization import (
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_optimization import (
             router as prompt_studio_optimization_router,
         )
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_projects import router as prompt_studio_projects_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_prompts import router as prompt_studio_prompts_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_status import router as prompt_studio_status_router
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_test_cases import (
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_projects import router as prompt_studio_projects_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_prompts import router as prompt_studio_prompts_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_status import router as prompt_studio_status_router
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_test_cases import (
             router as prompt_studio_test_cases_router,
         )
-        from tldw_Server_API.app.api.v1.endpoints.prompt_studio_websocket import (
+        from tldw_Server_API.app.api.v1.endpoints.prompt_studio.prompt_studio_websocket import (
             router as prompt_studio_websocket_router,
         )
 

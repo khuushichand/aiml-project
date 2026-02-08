@@ -236,6 +236,14 @@ class CharacterExemplarSelectionConfig(BaseModel):
     budget_tokens: int = Field(default=600, ge=1, le=20_000)
     max_exemplar_tokens: int = Field(default=120, ge=1, le=20_000)
     mmr_lambda: float = Field(default=0.7, ge=0.0, le=1.0)
+    use_embedding_scores: bool = Field(
+        default=False,
+        description="Enable embedding-backed semantic scoring in selector debug flow.",
+    )
+    embedding_model_id: Optional[str] = Field(
+        default=None,
+        description="Optional embedding model override when semantic scoring is enabled.",
+    )
 
 
 class CharacterExemplarSelectionDebugRequest(BaseModel):

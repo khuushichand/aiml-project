@@ -115,4 +115,30 @@ describe("ImportExportPanel filename hints", () => {
       expect(hint.textContent).toContain("Scope: filtered list")
     })
   })
+
+  it("renders top import errors and truncates overflow with a summary line", async () => {
+    useCollectionsStore.getState().setImportWizardStep("result")
+    useCollectionsStore.getState().setImportResult({
+      imported: 3,
+      updated: 1,
+      skipped: 2,
+      errors: [
+        "bad row 1",
+        "bad row 2",
+        "bad row 3",
+        "bad row 4",
+        "bad row 5",
+        "bad row 6",
+        "bad row 7"
+      ]
+    })
+
+    render(<ImportExportPanel />)
+
+    expect(await screen.findByText("Top import errors")).toBeTruthy()
+    expect(screen.getByText("bad row 1")).toBeTruthy()
+    expect(screen.getByText("bad row 5")).toBeTruthy()
+    expect(screen.queryByText("bad row 6")).toBeNull()
+    expect(screen.getByText("+2 more errors")).toBeTruthy()
+  })
 })

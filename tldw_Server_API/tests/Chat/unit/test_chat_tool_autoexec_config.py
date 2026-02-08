@@ -13,6 +13,7 @@ def test_tool_autoexec_getters_use_defaults_when_env_absent(monkeypatch: pytest.
         "CHAT_TOOL_TIMEOUT_MS",
         "CHAT_TOOL_ALLOW_CATALOG",
         "CHAT_TOOL_IDEMPOTENCY",
+        "CHAT_TOOL_AUTO_CONTINUE_ONCE",
     )
     for key in keys:
         monkeypatch.delenv(key, raising=False)
@@ -22,6 +23,7 @@ def test_tool_autoexec_getters_use_defaults_when_env_absent(monkeypatch: pytest.
     assert chat_service.get_chat_tool_timeout_ms() == chat_service.CHAT_TOOL_TIMEOUT_MS
     assert chat_service.get_chat_tool_allow_catalog() == chat_service.CHAT_TOOL_ALLOW_CATALOG
     assert chat_service.should_attach_tool_idempotency() is chat_service.CHAT_TOOL_IDEMPOTENCY
+    assert chat_service.should_auto_continue_tools_once() is chat_service.CHAT_TOOL_AUTO_CONTINUE_ONCE
 
 
 @pytest.mark.unit
@@ -31,12 +33,14 @@ def test_tool_autoexec_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CHAT_TOOL_TIMEOUT_MS", "3200")
     monkeypatch.setenv("CHAT_TOOL_ALLOW_CATALOG", "notes.search,media.*")
     monkeypatch.setenv("CHAT_TOOL_IDEMPOTENCY", "false")
+    monkeypatch.setenv("CHAT_TOOL_AUTO_CONTINUE_ONCE", "true")
 
     assert chat_service.should_auto_execute_tools() is True
     assert chat_service.get_chat_max_tool_calls() == 7
     assert chat_service.get_chat_tool_timeout_ms() == 3200
     assert chat_service.get_chat_tool_allow_catalog() == ["notes.search", "media.*"]
     assert chat_service.should_attach_tool_idempotency() is False
+    assert chat_service.should_auto_continue_tools_once() is True
 
 
 @pytest.mark.unit

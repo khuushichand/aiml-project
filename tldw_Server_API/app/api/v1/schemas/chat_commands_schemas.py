@@ -16,6 +16,26 @@ class ChatCommandInfo(BaseModel):
         None,
         description="Permission required to invoke this command when RBAC enforcement is enabled",
     )
+    usage: str | None = Field(
+        None,
+        description="Usage string shown to users, e.g. `/weather [location]`",
+    )
+    args: list[str] = Field(
+        default_factory=list,
+        description="Ordered argument names expected by this command",
+    )
+    requires_api_key: bool | None = Field(
+        None,
+        description="Whether invoking this command requires API key-backed access",
+    )
+    rate_limit: str | None = Field(
+        None,
+        description="Human-readable rate-limit summary for this command",
+    )
+    rbac_required: bool | None = Field(
+        None,
+        description="Whether command invocation is guarded by RBAC permissions",
+    )
 
 
 class ChatCommandsListResponse(BaseModel):

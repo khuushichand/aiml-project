@@ -166,6 +166,13 @@ from tldw_Server_API.app.core.Character_Chat.Character_Chat_Lib_facade import (
 )
 from tldw_Server_API.app.core.Character_Chat.character_limits import get_character_limits
 from tldw_Server_API.app.core.Character_Chat.character_rate_limiter import get_character_rate_limiter
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector import (
+    PersonaExemplarSelectorConfig,
+    select_character_exemplars,
+)
+from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings import (
+    score_exemplars_with_embeddings,
+)
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
     CharactersRAGDB,
@@ -357,16 +364,6 @@ def _convert_db_exemplar_to_response_model(exemplar_dict_from_db: dict[str, Any]
     }
 
     return CharacterExemplarResponse.model_validate(response_data)
-
-
-def _score_exemplar_overlap(user_turn: str, exemplar_text: str) -> float:
-    """Simple lexical overlap score for debug output."""
-    user_terms = {token.strip(".,!?;:()[]{}\"'").lower() for token in user_turn.split() if token.strip()}
-    exemplar_terms = {token.strip(".,!?;:()[]{}\"'").lower() for token in exemplar_text.split() if token.strip()}
-    if not user_terms or not exemplar_terms:
-        return 0.0
-    overlap = user_terms.intersection(exemplar_terms)
-    return round(len(overlap) / len(user_terms), 4)
 
 
 # --- API Endpoints ---
@@ -917,70 +914,39 @@ async def select_character_exemplars_debug_endpoint(
             )
 
         selection_config: CharacterExemplarSelectionConfig = request.selection_config
-        candidates, _ = db.search_character_exemplars(
-            character_id,
-            query=request.user_turn,
-            limit=200,
-            offset=0,
+        selector_config = PersonaExemplarSelectorConfig(
+            budget_tokens=selection_config.budget_tokens,
+            max_exemplar_tokens=selection_config.max_exemplar_tokens,
+            mmr_lambda=selection_config.mmr_lambda,
         )
-        if not candidates:
-            candidates = db.list_character_exemplars(character_id, limit=200, offset=0)
+        embedding_callback = None
+        if selection_config.use_embedding_scores:
+            embedding_model_id = selection_config.embedding_model_id
 
-        selected: list[dict[str, Any]] = []
-        scores: list[dict[str, Any]] = []
-        seen_text: set[str] = set()
-        used_budget = 0
-        coverage = {"openers": 0, "emphasis": 0, "enders": 0, "catchphrases_used": 0}
+            def _embedding_callback(user_turn: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
+                return score_exemplars_with_embeddings(
+                    user_turn,
+                    candidates,
+                    model_id_override=embedding_model_id,
+                )
 
-        for candidate in candidates:
-            text = str(candidate.get('text') or '').strip()
-            if not text:
-                continue
-            dedupe_key = text.lower()
-            if dedupe_key in seen_text:
-                continue
+            embedding_callback = _embedding_callback
 
-            try:
-                length_tokens = int(candidate.get('length_tokens') or max(1, len(text.split())))
-            except (TypeError, ValueError):
-                length_tokens = max(1, len(text.split()))
-
-            if length_tokens > selection_config.max_exemplar_tokens:
-                continue
-            if used_budget + length_tokens > selection_config.budget_tokens:
-                continue
-
-            selected.append(candidate)
-            seen_text.add(dedupe_key)
-            used_budget += length_tokens
-
-            rhetorical = {item.lower() for item in _coerce_string_list(candidate.get('rhetorical'))}
-            if 'opener' in rhetorical:
-                coverage['openers'] += 1
-            if 'emphasis' in rhetorical:
-                coverage['emphasis'] += 1
-            if 'ender' in rhetorical:
-                coverage['enders'] += 1
-            if 'catchphrase' in rhetorical:
-                coverage['catchphrases_used'] += 1
-
-            scores.append(
-                {
-                    "id": str(candidate.get('id')),
-                    "score": _score_exemplar_overlap(request.user_turn, text),
-                }
-            )
-
-            if used_budget >= selection_config.budget_tokens:
-                break
+        selected_result = select_character_exemplars(
+            db=db,
+            character_id=character_id,
+            user_turn=request.user_turn,
+            config=selector_config,
+            embedding_score_fn=embedding_callback,
+        )
 
         return CharacterExemplarSelectionDebug(
-            selected=[_convert_db_exemplar_to_response_model(item) for item in selected],
-            budget_tokens=used_budget,
-            coverage=coverage,
-            scores=scores,
+            selected=[_convert_db_exemplar_to_response_model(item) for item in selected_result.selected],
+            budget_tokens=selected_result.budget_tokens_used,
+            coverage=selected_result.coverage,
+            scores=selected_result.scores,
         )
-    except InputError as e:
+    except (InputError, ValueError) as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except CharactersRAGDBError as e:
         logger.error(f"DB error running exemplar debug selection for character {character_id}: {e}", exc_info=True)

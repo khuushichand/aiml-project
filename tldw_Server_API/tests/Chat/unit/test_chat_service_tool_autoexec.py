@@ -301,3 +301,147 @@ async def test_non_stream_autoexec_failure_is_non_fatal(monkeypatch: pytest.Monk
     assert len(saved_payloads) == 1
     assert saved_payloads[0]["role"] == "assistant"
     assert "tldw_tool_results" not in response
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_non_stream_auto_continue_runs_once_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+    monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
+    monkeypatch.setattr(chat_service, "get_chat_max_tool_calls", lambda: 2)
+    monkeypatch.setattr(chat_service, "get_chat_tool_timeout_ms", lambda: 3500)
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["notes.*"])
+    monkeypatch.setattr(chat_service, "should_attach_tool_idempotency", lambda: True)
+    monkeypatch.setattr(chat_service, "should_auto_continue_tools_once", lambda: True)
+
+    autoexec_called = {"count": 0}
+
+    async def fake_autoexec(**_kwargs):
+        autoexec_called["count"] += 1
+        rec = ToolExecutionRecord(
+            tool_call_id="c1",
+            tool_name="notes.search",
+            ok=True,
+            result={"ok": 1},
+            module="notes",
+            content='{"ok":true}',
+        )
+        return ToolExecutionBatchResult(
+            requested_calls=1,
+            processed_calls=1,
+            execution_attempts=1,
+            executed_calls=1,
+            truncated=False,
+            results=[rec],
+        )
+
+    monkeypatch.setattr(chat_service, "execute_assistant_tool_calls", fake_autoexec)
+
+    continuation_calls: list[dict[str, Any]] = []
+
+    async def fake_followup_call(**kwargs):
+        continuation_calls.append(kwargs)
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Final answer from continuation",
+                        "tool_calls": [
+                            {
+                                "id": "c2",
+                                "type": "function",
+                                "function": {"name": "notes.other", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call_async", fake_followup_call)
+
+    saved_payloads: list[dict[str, Any]] = []
+
+    async def save_message_fn(_db, _conv_id, payload, use_transaction=True):
+        saved_payloads.append(payload)
+        return f"m-{len(saved_payloads)}"
+
+    response = await _run_execute_non_stream_call(
+        llm_call_func=_build_llm_response_with_tool_calls,
+        save_message_fn=save_message_fn,
+    )
+
+    assert autoexec_called["count"] == 1
+    assert len(continuation_calls) == 1
+    continuation_messages = continuation_calls[0]["messages_payload"]
+    assert continuation_messages[-2]["role"] == "assistant"
+    assert continuation_messages[-2]["tool_calls"][0]["id"] == "c1"
+    assert continuation_messages[-1]["role"] == "tool"
+    assert continuation_messages[-1]["tool_call_id"] == "c1"
+
+    assert [p["role"] for p in saved_payloads] == ["assistant", "tool", "assistant"]
+    assert response["choices"][0]["message"]["content"] == "Final answer from continuation"
+    assert response["tldw_tool_results"][0]["tool_call_id"] == "c1"
+    assert response["tldw_tool_auto_continue"] == {"attempted": True, "succeeded": True}
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_non_stream_auto_continue_failure_is_non_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_log_llm_usage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(chat_service, "log_llm_usage", fake_log_llm_usage)
+    monkeypatch.setattr(chat_service, "get_topic_monitoring_service", lambda: None)
+    monkeypatch.setattr(chat_service, "should_auto_execute_tools", lambda: True)
+    monkeypatch.setattr(chat_service, "get_chat_max_tool_calls", lambda: 2)
+    monkeypatch.setattr(chat_service, "get_chat_tool_timeout_ms", lambda: 3500)
+    monkeypatch.setattr(chat_service, "get_chat_tool_allow_catalog", lambda: ["notes.*"])
+    monkeypatch.setattr(chat_service, "should_attach_tool_idempotency", lambda: True)
+    monkeypatch.setattr(chat_service, "should_auto_continue_tools_once", lambda: True)
+
+    async def fake_autoexec(**_kwargs):
+        rec = ToolExecutionRecord(
+            tool_call_id="c1",
+            tool_name="notes.search",
+            ok=True,
+            result={"ok": 1},
+            module="notes",
+            content='{"ok":true}',
+        )
+        return ToolExecutionBatchResult(
+            requested_calls=1,
+            processed_calls=1,
+            execution_attempts=1,
+            executed_calls=1,
+            truncated=False,
+            results=[rec],
+        )
+
+    monkeypatch.setattr(chat_service, "execute_assistant_tool_calls", fake_autoexec)
+
+    async def fake_followup_call(**_kwargs):
+        raise RuntimeError("continuation failed")
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call_async", fake_followup_call)
+
+    saved_payloads: list[dict[str, Any]] = []
+
+    async def save_message_fn(_db, _conv_id, payload, use_transaction=True):
+        saved_payloads.append(payload)
+        return f"m-{len(saved_payloads)}"
+
+    response = await _run_execute_non_stream_call(
+        llm_call_func=_build_llm_response_with_tool_calls,
+        save_message_fn=save_message_fn,
+    )
+
+    assert [p["role"] for p in saved_payloads] == ["assistant", "tool"]
+    assert response["choices"][0]["message"]["content"] == "Calling tool"
+    assert response["tldw_tool_auto_continue"] == {"attempted": True, "succeeded": False}

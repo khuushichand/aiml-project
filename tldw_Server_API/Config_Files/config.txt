@@ -186,6 +186,9 @@ chat_tool_allow_catalog = *
 # Attach idempotency keys when auto-executing tools (recommended for write-capable tools).
 # Env: CHAT_TOOL_IDEMPOTENCY=true|false
 chat_tool_idempotency = true
+# Run one follow-up non-streaming assistant turn after tool results are persisted.
+# Env: CHAT_TOOL_AUTO_CONTINUE_ONCE=true|false
+chat_tool_auto_continue_once = false
 
 [Chat-Commands]
 # Enable slash commands (env: CHAT_COMMANDS_ENABLED)

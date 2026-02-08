@@ -860,24 +860,25 @@ def _chat_sync_impl(
                 cmd_res = _run_coro_sync(
                     command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
                 )
+                injected_text = command_router.build_injection_text(cmd_name, cmd_res.content)
                 if cmd_res.ok:
                     injection_mode = command_router.get_injection_mode()
                     # Start with the args-only message (command token removed)
                     base_args = (cmd_args or "").strip()
                     if injection_mode == "preface":
-                        prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
+                        prefix = f"{injected_text}\n\n"
                         message = f"{prefix}{base_args}" if base_args else prefix.strip()
                     elif injection_mode == "replace":
                         # Replace the user's message content with the command result
                         # Include the marker for traceability, consistent with preface
-                        message = f"[/{cmd_name}] {cmd_res.content}".strip()
+                        message = injected_text.strip()
                     else:  # default: system injection
                         message = base_args
-                        injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                        injected_command_system_text = injected_text
                 else:
                     # On error, provide a short system injection so the model has context; strip the command from user text
                     message = (cmd_args or "").strip()
-                    injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                    injected_command_system_text = injected_text
 
         # Process message with Chat Dictionary (text only for now)
         processed_text_message = message
@@ -1367,20 +1368,21 @@ async def achat(
                     auth_user_int = None
                 ctx = command_router.CommandContext(user_id=llm_user_identifier or "anonymous", auth_user_id=auth_user_int)
                 cmd_res = await command_router.async_dispatch_command(ctx, cmd_name, cmd_args)
+                injected_text = command_router.build_injection_text(cmd_name, cmd_res.content)
                 if cmd_res.ok:
                     injection_mode = command_router.get_injection_mode()
                     base_args = (cmd_args or "").strip()
                     if injection_mode == "preface":
-                        prefix = f"[/{cmd_name}] {cmd_res.content}\n\n"
+                        prefix = f"{injected_text}\n\n"
                         message = f"{prefix}{base_args}" if base_args else prefix.strip()
                     elif injection_mode == "replace":
-                        message = f"[/{cmd_name}] {cmd_res.content}".strip()
+                        message = injected_text.strip()
                     else:
                         message = base_args
-                        injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                        injected_command_system_text = injected_text
                 else:
                     message = (cmd_args or "").strip()
-                    injected_command_system_text = f"[/{cmd_name}] {cmd_res.content}"
+                    injected_command_system_text = injected_text
 
         processed_text_message = message
         if chatdict_entries and message:

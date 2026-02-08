@@ -25,6 +25,9 @@ _WEATHER_NONCRITICAL_EXCEPTIONS = (
     httpx.HTTPError,
 )
 
+# Test seam for controlled outbound behavior without patching httpx directly.
+http_client_factory = httpx.Client
+
 
 @dataclass
 class WeatherResult:
@@ -145,7 +148,7 @@ class OpenWeatherClient(WeatherClient):
             )
 
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with http_client_factory(timeout=self.timeout_seconds) as client:
                 response = client.get(self._BASE_URL, params=params)
             if response.status_code >= 400:
                 return WeatherResult(

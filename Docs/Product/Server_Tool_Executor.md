@@ -52,6 +52,7 @@ chat_max_tool_calls = 3               # per response ceiling
 chat_tool_timeout_ms = 15000          # per call budget
 chat_tool_allow_catalog = *           # comma-sep names/prefixes or '*' (server still enforces RBAC)
 chat_tool_idempotency = true          # attach idempotencyKey for write tools
+chat_tool_auto_continue_once = false  # optional single non-stream follow-up turn
 ```
 
 Server will only auto-execute when explicitly enabled; otherwise behavior stays as today.
@@ -64,7 +65,9 @@ Server will only auto-execute when explicitly enabled; otherwise behavior stays 
      - Call `ToolExecutor.execute` with user context.
      - On success, persist a `role=tool` message with `{name, content}` into the conversation.
      - Stream an event (NDJSON) `{ "tool_results": [{ name, content }] }` to the client.
-   - Optionally auto-continue one more assistant turn using the updated history.
+   - If `chat_tool_auto_continue_once=true` (non-stream only), auto-continue one assistant turn using updated history.
+   - Continuation runs at most once per request and reports metadata:
+     - `tldw_tool_auto_continue = { attempted, succeeded }`
 3. Full audit and usage logging already occurs inside MCP; add a lightweight “tool_executed” audit at Chat layer if needed.
 
 ## Security Considerations

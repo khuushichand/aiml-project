@@ -124,7 +124,7 @@ Provide a `ProviderRegistryBase` with:
 
 ## 15. Requirement-by-Requirement Implementation Checklist
 Current assessment date: 2026-02-08
-Current implementation status: Partially implemented (R1-R13 complete; R14-R15 still pending)
+Current implementation status: Implemented (R1-R15 complete)
 
 Use this as the execution tracker for this PRD. Mark each item complete only when code, tests, and API behavior are all verified.
 
@@ -143,8 +143,8 @@ Use this as the execution tracker for this PRD. Mark each item complete only whe
 | R11 | Config integration via callback without precedence changes (Section 8.3) | Add config callback interface to base and wire per-domain callback implementations (LLM/TTS/STT) without changing existing precedence rules. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py`, domain registries above | `tldw_Server_API/tests/Infrastructure/test_provider_registry_config_callback.py` (new), domain regression tests | [x] |
 | R12 | Standard `list_capabilities()` envelope across domains (Section 8.4, Acceptance Criteria) | Define common envelope shape: `{provider, availability, capabilities}`; implement in each wrapper and keep domain capability payload in `capabilities`. | `tldw_Server_API/app/core/Infrastructure/provider_registry.py`, `tldw_Server_API/app/core/LLM_Calls/adapter_registry.py`, `tldw_Server_API/app/core/TTS/adapter_registry.py`, `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/stt_provider_adapter.py` | New/updated wrapper tests for capability envelope; endpoint tests listed below | [x] |
 | R13 | Endpoint parity with unified capability envelope (Goal/Acceptance impact) | Update endpoints that expose provider capabilities/health to consume standardized wrapper outputs without response regressions. | `tldw_Server_API/app/api/v1/endpoints/llm_providers.py`, `tldw_Server_API/app/api/v1/endpoints/audio/audio_health.py`, `tldw_Server_API/app/api/v1/endpoints/audio/audio_transcriptions.py` | Endpoint integration tests under `tldw_Server_API/tests/Chat_NEW/`, `tldw_Server_API/tests/TTS_NEW/integration/`, `tldw_Server_API/tests/STT/` | [x] |
-| R14 | Cleanup duplicate helpers and old normalization paths (Phase 4) | Remove superseded registry duplication, consolidate normalization helpers into base, and delete dead code paths. | Same registry modules and any extracted helper modules | Regression suite across LLM/TTS/STT before and after cleanup | [ ] |
-| R15 | Testing plan complete (Section 12) and acceptance criteria met (Section 13) | Ensure base unit tests, wrapper parity tests, and capability listing tests all pass; verify acceptance criteria in PR summary. | Test suite + PR checklist | `python -m pytest -m "unit" -v` plus targeted integration tests for LLM/TTS/STT registries/endpoints | [ ] |
+| R14 | Cleanup duplicate helpers and old normalization paths (Phase 4) | Remove superseded registry duplication, consolidate normalization helpers into base, and delete dead code paths. | Same registry modules and any extracted helper modules | Regression suite across LLM/TTS/STT before and after cleanup | [x] |
+| R15 | Testing plan complete (Section 12) and acceptance criteria met (Section 13) | Ensure base unit tests, wrapper parity tests, and capability listing tests all pass; verify acceptance criteria in PR summary. | Test suite + PR checklist | `python -m pytest -m "unit" -v` plus targeted integration tests for LLM/TTS/STT registries/endpoints | [x] |
 
 ### Suggested Execution Order
 1. Implement R1-R7 in shared base with dedicated unit tests.
@@ -203,3 +203,36 @@ Use this as the execution tracker for this PRD. Mark each item complete only whe
 - Validation run completed successfully:
   - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/python -m pytest -q tldw_Server_API/tests/LLM_Adapters/unit/test_llm_providers_capabilities_merge.py tldw_Server_API/tests/Audio/test_audio_transcriptions_adapter_path.py tldw_Server_API/tests/TTS/test_audio_endpoint_neutts.py`
   - Result: `6 passed, 2 skipped`.
+
+### R14 Execution Notes (2026-02-08)
+- Removed superseded STT normalization path that used a separate module-level helper registry:
+  - deleted `_STT_PROVIDER_NAME_REGISTRY` and related helper functions.
+  - `SttProviderRegistry` now exposes `normalize_provider_name(...)` and routes normalization/alias resolution through its shared `ProviderRegistryBase` instance.
+  - updated STT adapter tests to validate normalization via the wrapper API instead of removed internals.
+- Removed redundant TTS wrapper failure-tracking mirror state:
+  - deleted `_failed_providers` shadow tracking from `TTSAdapterRegistry`.
+  - retained failure/backoff behavior via shared `ProviderRegistryBase` only, eliminating duplicated bookkeeping paths.
+- Updated files:
+  - `tldw_Server_API/app/core/Ingestion_Media_Processing/Audio/stt_provider_adapter.py`
+  - `tldw_Server_API/app/core/TTS/adapter_registry.py`
+  - `tldw_Server_API/tests/Audio/test_stt_provider_adapter.py`
+- Validation run completed successfully:
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/python -m pytest -q tldw_Server_API/tests/Infrastructure/test_provider_registry_normalization.py tldw_Server_API/tests/LLM_Calls/test_adapter_registry_wrapper_migration.py tldw_Server_API/tests/TTS/test_tts_adapter_registry_wrapper_migration.py tldw_Server_API/tests/Audio/test_stt_provider_registry_wrapper_migration.py tldw_Server_API/tests/Audio/test_stt_provider_adapter.py`
+  - Result: `42 passed`.
+
+### R15 Execution Notes (2026-02-08)
+- Completed final validation pass for base registry behavior, wrapper migration parity, and capability/endpoint surfaces.
+- Stabilized two endpoint capability/health unit tests to avoid network-coupled local model discovery during listing:
+  - `tldw_Server_API/tests/Chat_NEW/unit/test_llm_provider_details.py`
+  - `tldw_Server_API/tests/Chat_NEW/unit/test_llm_providers_health.py`
+  - Change: patched `tldw_Server_API.app.api.v1.endpoints.llm_providers.discover_models_from_endpoint` to return `[]` in-test so assertions target capability/health envelope behavior only.
+- Validation run completed successfully (base registry + wrappers):
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/python -m pytest -q -m unit tldw_Server_API/tests/Infrastructure/test_provider_registry_base.py tldw_Server_API/tests/Infrastructure/test_provider_registry_backoff.py tldw_Server_API/tests/Infrastructure/test_provider_registry_status.py tldw_Server_API/tests/Infrastructure/test_provider_registry_normalization.py tldw_Server_API/tests/Infrastructure/test_provider_registry_capabilities.py tldw_Server_API/tests/Infrastructure/test_provider_registry_async.py tldw_Server_API/tests/Infrastructure/test_provider_registry_config_callback.py tldw_Server_API/tests/LLM_Calls/test_adapter_registry_wrapper_migration.py tldw_Server_API/tests/TTS/test_tts_adapter_registry_wrapper_migration.py tldw_Server_API/tests/Audio/test_stt_provider_registry_wrapper_migration.py tldw_Server_API/tests/Audio/test_stt_provider_adapter.py`
+  - Result: `83 passed, 16 warnings`.
+- Validation run completed successfully (capability + endpoint parity slice):
+  - `/Users/macbook-dev/Documents/GitHub/tldw_server2/.venv/bin/python -m pytest -q tldw_Server_API/tests/LLM_Adapters/unit/test_llm_providers_capabilities_merge.py tldw_Server_API/tests/Chat_NEW/unit/test_llm_provider_details.py tldw_Server_API/tests/Chat_NEW/unit/test_llm_providers_health.py tldw_Server_API/tests/Audio/test_audio_transcriptions_adapter_path.py tldw_Server_API/tests/TTS/test_audio_endpoint_neutts.py tldw_Server_API/tests/TTS/test_audio_endpoint_neutts_stream.py tldw_Server_API/tests/TTS/test_audio_endpoint_neutts_stream_mp3.py tldw_Server_API/tests/STT/test_audio_transcription_health.py`
+  - Result: `10 passed, 4 skipped, 16 warnings`.
+- Acceptance criteria verification:
+  - Thin wrappers over shared base: verified via wrapper migration suites for LLM/TTS/STT.
+  - Consistent provider naming normalization: verified via base normalization tests and STT wrapper normalization assertions.
+  - Common capability envelope across domains: verified in wrapper capability envelope tests and endpoint parity tests.

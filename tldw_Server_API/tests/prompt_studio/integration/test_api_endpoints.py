@@ -472,55 +472,35 @@ class TestEvaluationEndpoints:
             assert "evaluations" in data
             assert isinstance(data["evaluations"], list)
 
-    def test_create_evaluation_uses_test_runner_path(self, client, auth_headers, mock_user):
+    def test_create_evaluation_uses_test_runner_path(self, client, auth_headers, mock_user, test_db):
 
         """Evaluation creation should execute through TestRunner.run_single_test."""
         with patch('tldw_Server_API.app.api.v1.API_Deps.prompt_studio_deps.get_current_active_user', return_value=mock_user):
-            project_resp = client.post(
-                "/api/v1/prompt-studio/projects/",
-                json={"name": "Eval Runner Project", "status": "active"},
-                headers=auth_headers,
+            project = test_db.create_project(
+                name="Eval Runner Project",
+                status="active",
+                user_id=mock_user.get("id"),
             )
-            assert project_resp.status_code in [200, 201], project_resp.text
-            project_payload = project_resp.json()
-            project_id = project_payload.get("data", {}).get("id") or project_payload.get("id")
+            project_id = project["id"]
 
-            prompt_body = {
-                "project_id": project_id,
-                "name": "Eval Runner Prompt",
-                "system_prompt": "You are helpful.",
-                "user_prompt": "Answer {q}",
-                "version_number": 1,
-            }
-            prompt_resp = client.post(
-                "/api/v1/prompt-studio/prompts",
-                json=prompt_body,
-                headers=auth_headers,
+            prompt = test_db.create_prompt(
+                project_id=project_id,
+                name="Eval Runner Prompt",
+                system_prompt="You are helpful.",
+                user_prompt="Answer {q}",
+                version_number=1,
             )
-            if prompt_resp.status_code == 404:
-                prompt_resp = client.post(
-                    "/api/v1/prompt-studio/prompts/create",
-                    json=prompt_body,
-                    headers=auth_headers,
-                )
-            assert prompt_resp.status_code in [200, 201], prompt_resp.text
-            prompt_payload = prompt_resp.json()
-            prompt_id = prompt_payload.get("id") or prompt_payload.get("data", {}).get("id")
+            prompt_id = prompt["id"]
 
-            tc_resp = client.post(
-                "/api/v1/prompt-studio/test-cases/create",
-                json={
-                    "project_id": project_id,
-                    "name": "Eval Runner Case",
-                    "inputs": {"q": "ping"},
-                    "expected_outputs": {"response": "pong"},
-                    "tags": [],
-                    "is_golden": False,
-                },
-                headers=auth_headers,
+            test_case = test_db.create_test_case(
+                project_id=project_id,
+                name="Eval Runner Case",
+                inputs={"q": "ping"},
+                expected_outputs={"response": "pong"},
+                tags=[],
+                is_golden=False,
             )
-            assert tc_resp.status_code in [200, 201], tc_resp.text
-            tc_id = tc_resp.json()["data"]["id"]
+            tc_id = test_case["id"]
 
             calls = {"n": 0}
 

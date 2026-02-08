@@ -257,6 +257,15 @@ if _env_chat_tool_idempotency is not None:
     _chat_tool_idempotency = _coerce_bool(_env_chat_tool_idempotency, _chat_tool_idempotency)
 CHAT_TOOL_IDEMPOTENCY = _chat_tool_idempotency
 
+_chat_tool_auto_continue_once = _coerce_bool(_chat_config.get("chat_tool_auto_continue_once"), False)
+_env_chat_tool_auto_continue_once = os.getenv("CHAT_TOOL_AUTO_CONTINUE_ONCE")
+if _env_chat_tool_auto_continue_once is not None:
+    _chat_tool_auto_continue_once = _coerce_bool(
+        _env_chat_tool_auto_continue_once,
+        _chat_tool_auto_continue_once,
+    )
+CHAT_TOOL_AUTO_CONTINUE_ONCE = _chat_tool_auto_continue_once
+
 
 def should_force_normalize_string_responses() -> bool:
     """Return True when raw-string LLM responses should be wrapped in OpenAI format."""
@@ -314,6 +323,14 @@ def should_attach_tool_idempotency() -> bool:
     if raw is not None:
         return _coerce_bool(raw, CHAT_TOOL_IDEMPOTENCY)
     return CHAT_TOOL_IDEMPOTENCY
+
+
+def should_auto_continue_tools_once() -> bool:
+    """Return whether chat should run one follow-up assistant turn after tool execution."""
+    raw = os.getenv("CHAT_TOOL_AUTO_CONTINUE_ONCE")
+    if raw is not None:
+        return _coerce_bool(raw, CHAT_TOOL_AUTO_CONTINUE_ONCE)
+    return CHAT_TOOL_AUTO_CONTINUE_ONCE
 
 
 # --- Cached helpers (module scope) -------------------------------------------
@@ -2359,6 +2376,7 @@ async def execute_streaming_call(
     ):
         nonlocal stream_metrics_recorded
         saved_message_id: str | None = None
+        tool_execution_payload: list[dict[str, Any]] | None = None
         full_reply_to_save = full_reply
         post_stream_blocked = False
 
@@ -2533,6 +2551,43 @@ async def execute_streaming_call(
                 message_payload,
                 use_transaction=True,
             )
+
+        if (
+            not post_stream_blocked
+            and should_auto_execute_tools()
+            and isinstance(tool_calls, list)
+            and tool_calls
+        ):
+            try:
+                req_user_id = None
+                try:
+                    if request is not None and hasattr(request, "state"):
+                        req_user_id = getattr(request.state, "user_id", None)
+                except _CHAT_NONCRITICAL_EXCEPTIONS:
+                    req_user_id = None
+
+                autoexec_result = await execute_assistant_tool_calls(
+                    tool_calls=tool_calls,
+                    user_id=str(req_user_id) if req_user_id is not None else None,
+                    client_id=client_id,
+                    max_tool_calls=get_chat_max_tool_calls(),
+                    timeout_ms=get_chat_tool_timeout_ms(),
+                    allow_catalog=get_chat_tool_allow_catalog(),
+                    attach_idempotency=should_attach_tool_idempotency(),
+                    idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
+                )
+                tool_execution_payload = autoexec_result.event_payload().get("tool_results", [])
+
+                if should_persist and final_conversation_id:
+                    for tool_message in autoexec_result.tool_messages():
+                        await save_message_fn(
+                            chat_db,
+                            final_conversation_id,
+                            tool_message,
+                            use_transaction=True,
+                        )
+            except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
+                logger.warning("Streaming chat tool auto-execution skipped due to error: {}", autoexec_err)
         # Usage logging (estimated) after stream completes
         total_est = 0
         try:
@@ -2601,6 +2656,16 @@ async def execute_streaming_call(
                 await on_success(selected_provider)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+        if tool_execution_payload is not None:
+            return {
+                "saved_message_id": saved_message_id,
+                "events": [
+                    {
+                        "event": "tool_results",
+                        "data": {"tool_results": tool_execution_payload},
+                    }
+                ],
+            }
         return saved_message_id
 
     async def tracked_streaming_generator():
@@ -3392,6 +3457,7 @@ async def execute_non_stream_call(
 
     assistant_message_id: str | None = None
     tool_execution_payload: list[dict[str, Any]] | None = None
+    tool_auto_continue_meta: dict[str, bool] | None = None
     should_save_response = (
         should_persist
         and final_conversation_id
@@ -3435,15 +3501,98 @@ async def execute_non_stream_call(
                 idempotency_seed=str(final_conversation_id) if final_conversation_id else None,
             )
             tool_execution_payload = autoexec_result.event_payload().get("tool_results", [])
+            tool_messages = autoexec_result.tool_messages()
+
+            failed_results = len([r for r in autoexec_result.results if not r.ok])
+            timed_out_results = len([r for r in autoexec_result.results if r.timed_out])
+            logger.info(
+                "Chat tool auto-exec summary (conv={} requested={} attempts={} executed={} failed={} timed_out={} truncated={})",
+                final_conversation_id,
+                autoexec_result.requested_calls,
+                autoexec_result.execution_attempts,
+                autoexec_result.executed_calls,
+                failed_results,
+                timed_out_results,
+                autoexec_result.truncated,
+            )
 
             if should_persist and final_conversation_id:
-                for tool_message in autoexec_result.tool_messages():
+                for tool_message in tool_messages:
                     await save_message_fn(
                         chat_db,
                         final_conversation_id,
                         tool_message,
                         use_transaction=True,
                     )
+
+            if should_auto_continue_tools_once() and tool_messages:
+                tool_auto_continue_meta = {"attempted": True, "succeeded": False}
+                try:
+                    continuation_messages: list[dict[str, Any]] = list(templated_llm_payload)
+                    assistant_context_message: dict[str, Any] = {"role": "assistant"}
+                    if content_to_save is not None:
+                        assistant_context_message["content"] = content_to_save
+                    if tool_calls_to_save is not None:
+                        assistant_context_message["tool_calls"] = tool_calls_to_save
+                    if function_call_to_save is not None:
+                        assistant_context_message["function_call"] = function_call_to_save
+                    if len(assistant_context_message) > 1:
+                        continuation_messages.append(assistant_context_message)
+                    continuation_messages.extend(tool_messages)
+
+                    continuation_args = dict(cleaned_args)
+                    continuation_args["messages_payload"] = continuation_messages
+                    continuation_args["streaming"] = False
+                    continuation_response = await perform_chat_api_call_async(**continuation_args)
+                    if isinstance(continuation_response, str) and should_force_normalize_string_responses():
+                        continuation_response = _wrap_raw_string_response(continuation_response, model)
+
+                    continuation_content: str | None = None
+                    continuation_tool_calls: Any | None = None
+                    continuation_function_call: Any | None = None
+                    if continuation_response and isinstance(continuation_response, dict):
+                        continuation_choices = continuation_response.get("choices")
+                        if continuation_choices and isinstance(continuation_choices, list):
+                            continuation_message = continuation_choices[0].get("message") or {}
+                            if isinstance(continuation_message, dict):
+                                continuation_content = continuation_message.get("content")
+                                continuation_tool_calls = continuation_message.get("tool_calls")
+                                continuation_function_call = continuation_message.get("function_call")
+                    elif isinstance(continuation_response, str):
+                        continuation_content = continuation_response
+
+                    if continuation_response is not None:
+                        llm_response = continuation_response
+                        content_to_save = continuation_content
+                        tool_calls_to_save = continuation_tool_calls
+                        function_call_to_save = continuation_function_call
+
+                        if (
+                            should_persist
+                            and final_conversation_id
+                            and (content_to_save or tool_calls_to_save or function_call_to_save)
+                        ):
+                            asst_name = sanitize_sender_name(
+                                character_card_for_context.get("name") if character_card_for_context else None
+                            )
+                            continuation_payload: dict[str, Any] = {"role": "assistant", "name": asst_name}
+                            if content_to_save is not None:
+                                continuation_payload["content"] = content_to_save
+                            if tool_calls_to_save is not None:
+                                continuation_payload["tool_calls"] = tool_calls_to_save
+                            if function_call_to_save is not None:
+                                continuation_payload["function_call"] = function_call_to_save
+                            continuation_message_id = await save_message_fn(
+                                chat_db,
+                                final_conversation_id,
+                                continuation_payload,
+                                use_transaction=True,
+                            )
+                            if continuation_message_id:
+                                assistant_message_id = continuation_message_id
+                        tool_auto_continue_meta["succeeded"] = True
+                except _CHAT_NONCRITICAL_EXCEPTIONS as continue_err:
+                    logger.warning("Chat tool auto-continue skipped due to error: {}", continue_err)
         except _CHAT_NONCRITICAL_EXCEPTIONS as autoexec_err:
             logger.warning("Chat tool auto-execution skipped due to error: {}", autoexec_err)
 
@@ -3489,6 +3638,8 @@ async def execute_non_stream_call(
             encoded_payload["tldw_system_message_id"] = system_message_id
         if tool_execution_payload is not None:
             encoded_payload["tldw_tool_results"] = tool_execution_payload
+        if tool_auto_continue_meta is not None:
+            encoded_payload["tldw_tool_auto_continue"] = tool_auto_continue_meta
 
     # Audit success
     if audit_service and audit_context:

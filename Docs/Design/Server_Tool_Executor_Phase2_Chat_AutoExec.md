@@ -11,6 +11,7 @@ Integrate MCP-backed server tool execution into Chat flows in a gated, default-o
 - `chat_tool_timeout_ms` (int, default `15000`, clamped to `1000..120000`)
 - `chat_tool_allow_catalog` (string, default `*`)
 - `chat_tool_idempotency` (bool, default `true`)
+- `chat_tool_auto_continue_once` (bool, default `false`)
 
 Environment overrides:
 
@@ -19,6 +20,7 @@ Environment overrides:
 - `CHAT_TOOL_TIMEOUT_MS`
 - `CHAT_TOOL_ALLOW_CATALOG`
 - `CHAT_TOOL_IDEMPOTENCY`
+- `CHAT_TOOL_AUTO_CONTINUE_ONCE`
 
 Allow-catalog semantics:
 
@@ -44,8 +46,21 @@ Allow-catalog semantics:
    - `data: {"tool_results":[...]}`
 4. Preserve existing stream framing (`stream_start`, `stream_end`, `[DONE]`).
 
+## Optional Auto-Continue (Stage 5)
+1. If `chat_tool_auto_continue_once=true` and non-streaming auto-exec produced at least one tool result:
+   - Build a one-shot follow-up request with:
+     - original request messages
+     - first assistant tool-call message
+     - generated `role=tool` messages
+   - Execute a single follow-up assistant turn.
+2. Persist follow-up assistant message when chat persistence is enabled.
+3. Never recurse in the same request (at most one continuation turn).
+4. Expose continuation status in response metadata:
+   - `tldw_tool_auto_continue: { attempted: bool, succeeded: bool }`
+
 ## Safety Invariants
 - Endpoint auth/RBAC remains unchanged.
 - MCP remains authoritative for per-tool permission and write-policy enforcement.
 - Tool auto-execution failures must be isolated to tool result records; they should not crash the chat endpoint.
+- Auto-continue failures must not fail the request; the original assistant/tool outputs remain authoritative.
 - Default behavior must remain unchanged when `chat_auto_execute_tools=false`.

@@ -378,6 +378,52 @@ class TestSafeStreamGenerator:
         assert end_payload.get("tldw_system_message_id") == "sys_123"
         assert end_payload.get("tldw_conversation_id") == "conv_123"
 
+    async def test_save_callback_can_emit_additional_events(self):
+        handler = StreamingResponseHandler("conv_events", "gpt-4")
+        tool_result_payload = {
+            "tool_results": [
+                {
+                    "tool_call_id": "c1",
+                    "name": "notes.search",
+                    "ok": True,
+                    "content": "{\"ok\":true}",
+                }
+            ]
+        }
+
+        async def mock_stream():
+            yield "Content"
+
+        async def save_callback(_content, _tool_calls=None, _function_call=None):
+            return {
+                "saved_message_id": "msg_stream_1",
+                "events": [
+                    {
+                        "event": "tool_results",
+                        "data": tool_result_payload,
+                    }
+                ],
+            }
+
+        messages = []
+        async for message in handler.safe_stream_generator(mock_stream(), save_callback):
+            messages.append(message)
+
+        tool_events = [m for m in messages if m.startswith("event: tool_results")]
+        assert len(tool_events) == 1
+        tool_lines = [line for line in tool_events[0].splitlines() if line.startswith("data: ")]
+        assert len(tool_lines) == 1
+        payload = json.loads(tool_lines[0][6:])
+        assert payload["tool_results"][0]["tool_call_id"] == "c1"
+        assert payload["tldw_message_id"] == "msg_stream_1"
+        assert payload["tldw_conversation_id"] == "conv_events"
+
+        tool_idx = next(i for i, msg in enumerate(messages) if msg.startswith("event: tool_results"))
+        finish_idx = next(i for i, msg in enumerate(messages) if '"finish_reason": "stop"' in msg)
+        end_idx = next(i for i, msg in enumerate(messages) if msg.startswith("event: stream_end"))
+        done_idx = next(i for i, msg in enumerate(messages) if "data: [DONE]" in msg)
+        assert tool_idx < finish_idx < end_idx < done_idx
+
     @pytest.mark.asyncio
     async def test_sync_stream_closed_on_cancel(self):
         """Ensure underlying sync generator is explicitly closed on cancel."""

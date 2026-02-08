@@ -32,11 +32,13 @@ def _relax_chat_rate_limits_for_command_tests(monkeypatch, _reset_chat_rate_limi
 @pytest.mark.asyncio
 async def test_chat_command_p50_latency(async_client, auth_headers, monkeypatch):
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "1")
-    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT", "1000")
+    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT_USER", "1000")
+    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT_GLOBAL", "1000")
     monkeypatch.setenv("CHAT_COMMAND_INJECTION_MODE", "system")
     monkeypatch.delenv("CHAT_COMMANDS_ASYNC_ONLY", raising=False)
 
     command_router._buckets.clear()
+    command_router._global_buckets.clear()
 
     from tldw_Server_API.app.api.v1.endpoints import chat as chat_endpoint
 

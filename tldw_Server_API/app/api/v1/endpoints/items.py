@@ -238,6 +238,8 @@ def _content_item_to_schema(row: ContentItemRow) -> Item:
         domain=domain or "",
         summary=summary,
         published_at=row.published_at,
+        status=row.status,
+        favorite=bool(row.favorite),
         tags=row.tags,
         type=row.origin,
     )
@@ -287,6 +289,8 @@ def _media_row_to_item(row, *, db, domain_filter: str | None) -> Item | None:
         domain=dom,
         summary=summary or None,
         published_at=published_at,
+        status="saved",
+        favorite=False,
         tags=tag_list,
         type=row.get("type") or None,
     )

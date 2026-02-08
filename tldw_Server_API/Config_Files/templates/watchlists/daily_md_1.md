@@ -1,0 +1,1 @@
+{{ title }}\n{% for item in items %}- {{ loop.index }}. {{ item.title }}{% endfor %}

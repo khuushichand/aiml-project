@@ -9,6 +9,10 @@ from unittest.mock import patch
 from tldw_Server_API.app.main import app
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user, DEFAULT_CHARACTER_NAME
+from tldw_Server_API.app.core.Chat.tool_auto_exec import (
+    ToolExecutionBatchResult,
+    ToolExecutionRecord,
+)
 
 
 def _make_test_db():
@@ -190,6 +194,240 @@ def test_endpoint_streaming_normalizes_multiline_event_and_data_frames():
                             normalized_chunks.append(text)
                 assert normalized_chunks, "Expected at least one normalized chunk"
                 assert "".join(normalized_chunks) == "Part A"
+
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        _app = app  # type: ignore[assignment]
+        try:
+            getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_endpoint_streaming_emits_tool_results_event_before_stream_end():
+    db, db_path = _make_test_db()
+    try:
+        _app: Any = app
+        _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+
+        with _make_test_client(db) as client:
+            tool_delta = {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "notes.search", "arguments": "{}"},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+
+            def upstream_stream():
+                yield f"data: {json.dumps(tool_delta)}\n\n"
+                yield "data: [DONE]\n\n"
+
+            async def fake_autoexec(**_kwargs):
+                rec = ToolExecutionRecord(
+                    tool_call_id="c1",
+                    tool_name="notes.search",
+                    ok=True,
+                    result={"ok": True},
+                    module="notes",
+                    content='{"ok":true}',
+                )
+                return ToolExecutionBatchResult(
+                    requested_calls=1,
+                    processed_calls=1,
+                    execution_attempts=1,
+                    executed_calls=1,
+                    truncated=False,
+                    results=[rec],
+                )
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "OPENAI_API_KEY": "sk-test",
+                        "CHAT_AUTO_EXECUTE_TOOLS": "1",
+                        "CHAT_MAX_TOOL_CALLS": "2",
+                        "CHAT_TOOL_TIMEOUT_MS": "4500",
+                        "CHAT_TOOL_ALLOW_CATALOG": "notes.*",
+                        "CHAT_TOOL_IDEMPOTENCY": "1",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                    return_value=upstream_stream(),
+                ),
+                patch(
+                    "tldw_Server_API.app.core.Chat.chat_service.execute_assistant_tool_calls",
+                    side_effect=fake_autoexec,
+                ),
+            ):
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": True,
+                    "save_to_db": True,
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                assert "text/event-stream" in r.headers.get("content-type", "").lower()
+
+                events = [evt for evt in r.text.split("\n\n") if evt.strip()]
+                tool_idx = next(i for i, evt in enumerate(events) if evt.startswith("event: tool_results"))
+                end_idx = next(i for i, evt in enumerate(events) if evt.startswith("event: stream_end"))
+                done_idx = next(i for i, evt in enumerate(events) if evt.strip() == "data: [DONE]")
+                assert tool_idx < end_idx < done_idx
+
+                data_line = next(line for line in events[tool_idx].splitlines() if line.startswith("data: "))
+                payload = json.loads(data_line[6:])
+                assert payload["tool_results"][0]["tool_call_id"] == "c1"
+                assert payload["tool_results"][0]["ok"] is True
+                assert payload.get("tldw_conversation_id")
+
+    finally:
+        try:
+            os.unlink(db_path)
+            if os.path.exists(db_path + "-wal"):
+                os.unlink(db_path + "-wal")
+            if os.path.exists(db_path + "-shm"):
+                os.unlink(db_path + "-shm")
+        except Exception:
+            pass
+        _app = app  # type: ignore[assignment]
+        try:
+            getattr(_app, "dependency_overrides", {}).pop(get_chacha_db_for_user, None)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+def test_endpoint_non_stream_auto_continue_returns_followup_assistant_content():
+    db, db_path = _make_test_db()
+    try:
+        _app: Any = app
+        _app.dependency_overrides[get_chacha_db_for_user] = lambda: db
+
+        with _make_test_client(db) as client:
+            first_response = {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Calling tool",
+                            "tool_calls": [
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {"name": "notes.search", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            }
+            followup_response = {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Final assistant answer",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+            }
+
+            async def fake_autoexec(**_kwargs):
+                rec = ToolExecutionRecord(
+                    tool_call_id="c1",
+                    tool_name="notes.search",
+                    ok=True,
+                    result={"ok": True},
+                    module="notes",
+                    content='{"ok":true}',
+                )
+                return ToolExecutionBatchResult(
+                    requested_calls=1,
+                    processed_calls=1,
+                    execution_attempts=1,
+                    executed_calls=1,
+                    truncated=False,
+                    results=[rec],
+                )
+
+            continuation_calls: list[dict[str, Any]] = []
+
+            async def fake_followup_call(**kwargs):
+                continuation_calls.append(kwargs)
+                return followup_response
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "OPENAI_API_KEY": "sk-test",
+                        "CHAT_AUTO_EXECUTE_TOOLS": "1",
+                        "CHAT_MAX_TOOL_CALLS": "2",
+                        "CHAT_TOOL_TIMEOUT_MS": "4500",
+                        "CHAT_TOOL_ALLOW_CATALOG": "notes.*",
+                        "CHAT_TOOL_IDEMPOTENCY": "1",
+                        "CHAT_TOOL_AUTO_CONTINUE_ONCE": "1",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "tldw_Server_API.app.api.v1.endpoints.chat.perform_chat_api_call",
+                    return_value=first_response,
+                ),
+                patch(
+                    "tldw_Server_API.app.core.Chat.chat_service.execute_assistant_tool_calls",
+                    side_effect=fake_autoexec,
+                ),
+                patch(
+                    "tldw_Server_API.app.core.Chat.chat_service.perform_chat_api_call_async",
+                    side_effect=fake_followup_call,
+                ),
+            ):
+                body = {
+                    "api_provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "stream": False,
+                    "save_to_db": True,
+                }
+                r = _post_with_csrf(client, "/api/v1/chat/completions", json=body, headers=_auth_headers(client))
+                assert r.status_code == 200
+                payload = r.json()
+                assert payload["choices"][0]["message"]["content"] == "Final assistant answer"
+                assert payload["tldw_tool_results"][0]["tool_call_id"] == "c1"
+                assert payload["tldw_tool_auto_continue"] == {"attempted": True, "succeeded": True}
+
+            assert len(continuation_calls) == 1
+            continuation_messages = continuation_calls[0]["messages_payload"]
+            assert continuation_messages[-1]["role"] == "tool"
+            assert continuation_messages[-1]["tool_call_id"] == "c1"
 
     finally:
         try:

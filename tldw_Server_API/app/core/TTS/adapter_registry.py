@@ -3,9 +3,7 @@
 #
 import asyncio
 import importlib
-import math
 import os
-import time
 from enum import Enum
 from typing import Any, Optional, Union
 
@@ -196,7 +194,6 @@ class TTSAdapterRegistry:
             self.DEFAULT_ADAPTERS.copy() if include_defaults else {}
         )
         self._initialized_providers: set[TTSProvider] = set()
-        self._failed_providers: dict[TTSProvider, float] = {}  # Legacy mirror for status reporting
 
         def _extract_retry_seconds(raw_cfg: Any) -> Optional[float]:
             if raw_cfg is None:
@@ -273,7 +270,6 @@ class TTSAdapterRegistry:
         self._adapter_specs[resolved_provider] = adapter
         self._adapters.pop(resolved_provider, None)
         self._initialized_providers.discard(resolved_provider)
-        self._failed_providers.pop(resolved_provider, None)
         self._base.register_adapter(resolved_provider.value, adapter)
         try:
             name = adapter.__name__  # type: ignore[attr-defined]
@@ -284,10 +280,6 @@ class TTSAdapterRegistry:
     def _schedule_retry(self, provider: TTSProvider) -> None:
         """Record a failed provider with optional retry backoff."""
         self._base.mark_failure(provider.value)
-        if self._failure_retry_seconds is None:
-            self._failed_providers[provider] = math.inf
-        else:
-            self._failed_providers[provider] = time.time() + self._failure_retry_seconds
 
     def _resolve_adapter_class(self, spec: Any) -> type[TTSAdapter]:
         """Resolve an adapter class from a class object or dotted path string."""
@@ -353,19 +345,10 @@ class TTSAdapterRegistry:
             )
         adapter = await self._base.get_adapter_async(resolved_provider.value)
         if adapter is None:
-            status = self._base.get_status(resolved_provider.value)
-            if status == RegistryProviderStatus.FAILED:
-                if self._failure_retry_seconds is None:
-                    self._failed_providers[resolved_provider] = math.inf
-                else:
-                    self._failed_providers[resolved_provider] = (
-                        time.time() + self._failure_retry_seconds
-                    )
             return None
         if adapter.status == ProviderStatus.AVAILABLE:
             self._adapters[resolved_provider] = adapter
             self._initialized_providers.add(resolved_provider)
-            self._failed_providers.pop(resolved_provider, None)
             return adapter
 
         logger.warning(
@@ -910,7 +893,6 @@ class TTSAdapterRegistry:
 
         self._adapters.clear()
         self._initialized_providers.clear()
-        self._failed_providers.clear()
         self._base.clear_cache()
         self._base.reset_failures()
 

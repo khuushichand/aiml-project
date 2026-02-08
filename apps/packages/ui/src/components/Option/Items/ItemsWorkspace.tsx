@@ -20,6 +20,7 @@ import { Filter, RefreshCw, Search, Star, Trash2 } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { PageShell } from "@/components/Common/PageShell"
 import { useTldwApiClient } from "@/hooks/useTldwApiClient"
+import { useUndoNotification } from "@/hooks/useUndoNotification"
 import { useServerOnline } from "@/hooks/useServerOnline"
 
 type ItemStatus = "saved" | "reading" | "read" | "archived"
@@ -33,6 +34,8 @@ type SharedItem = {
   domain?: string
   summary?: string
   published_at?: string
+  status?: ItemStatus
+  favorite?: boolean
   tags: string[]
   type?: string
 }
@@ -69,9 +72,17 @@ const getBulkFailureLines = (response: SharedItemsBulkResponse, maxLines = 10): 
     .map((entry) => `#${entry.item_id}: ${entry.error || "update_failed"}`)
 }
 
+const normalizeItemStatus = (value: unknown): ItemStatus => {
+  if (value === "saved" || value === "reading" || value === "read" || value === "archived") {
+    return value
+  }
+  return "saved"
+}
+
 export const ItemsWorkspace: React.FC = () => {
   const { t } = useTranslation(["option", "collections", "common"])
   const api = useTldwApiClient()
+  const { showUndoNotification } = useUndoNotification()
   const isOnline = useServerOnline()
 
   const [items, setItems] = useState<SharedItem[]>([])
@@ -283,6 +294,125 @@ export const ItemsWorkspace: React.FC = () => {
     }
   }, [applyBulkAction, tagActionMode, tagInput])
 
+  const restoreDeletedItems = useCallback(
+    async (statusByItemId: Record<string, ItemStatus>) => {
+      const grouped = new Map<ItemStatus, string[]>()
+      Object.entries(statusByItemId).forEach(([itemId, status]) => {
+        const normalizedStatus = normalizeItemStatus(status)
+        const existing = grouped.get(normalizedStatus)
+        if (existing) {
+          existing.push(itemId)
+        } else {
+          grouped.set(normalizedStatus, [itemId])
+        }
+      })
+
+      let failed = 0
+      for (const [status, itemIds] of grouped.entries()) {
+        const response = await api.bulkUpdateItems({
+          item_ids: itemIds,
+          action: "set_status",
+          status
+        })
+        failed += response.failed
+      }
+
+      await fetchItems()
+      if (failed > 0) {
+        throw new Error(`Failed to restore ${failed} items`)
+      }
+    },
+    [api, fetchItems]
+  )
+
+  const executeBulkDelete = useCallback(
+    async (hardDelete: boolean) => {
+      if (selectedItemIds.length === 0) {
+        message.warning("Select at least one item")
+        return
+      }
+
+      const previousStatusById = new Map<string, ItemStatus>()
+      selectedItemIds.forEach((itemId) => {
+        const item = items.find((entry) => entry.id === itemId)
+        previousStatusById.set(itemId, normalizeItemStatus(item?.status))
+      })
+
+      setBulkActionLoading(true)
+      try {
+        const response = await api.bulkUpdateItems({
+          item_ids: selectedItemIds,
+          action: "delete",
+          hard: hardDelete
+        })
+
+        const succeededIds = new Set(
+          response.results
+            .filter((entry) => entry.success)
+            .map((entry) => entry.item_id)
+        )
+
+        if (succeededIds.size > 0) {
+          setSelectedItemIds((prev) => prev.filter((id) => !succeededIds.has(id)))
+          await fetchItems()
+        }
+
+        const actionLabel = hardDelete ? "Delete permanently" : "Delete"
+        if (response.failed > 0) {
+          const failureLines = getBulkFailureLines(response as SharedItemsBulkResponse)
+          Modal.info({
+            title: "Bulk action summary",
+            width: 620,
+            content: (
+              <div className="space-y-2">
+                <p>
+                  {`${actionLabel} completed. ${response.succeeded} succeeded, ${response.failed} failed.`}
+                </p>
+                {failureLines.length > 0 && (
+                  <div className="max-h-52 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                    {failureLines.map((line) => (
+                      <div key={line}>{line}</div>
+                    ))}
+                    {response.failed > failureLines.length && (
+                      <div>{`+${response.failed - failureLines.length} more failures`}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
+          })
+        }
+
+        if (response.succeeded > 0 && hardDelete) {
+          message.success(`Deleted ${response.succeeded} items permanently`)
+        }
+
+        if (response.succeeded > 0 && !hardDelete) {
+          const statusByItemId: Record<string, ItemStatus> = {}
+          response.results
+            .filter((entry) => entry.success)
+            .forEach((entry) => {
+              statusByItemId[entry.item_id] = previousStatusById.get(entry.item_id) || "saved"
+            })
+
+          const restoredCount = Object.keys(statusByItemId).length
+          showUndoNotification({
+            title: restoredCount === 1 ? "Item deleted" : `${restoredCount} items deleted`,
+            description: "Moved to archived. Undo to restore previous statuses.",
+            onUndo: async () => {
+              await restoreDeletedItems(statusByItemId)
+            }
+          })
+        }
+      } catch (error: any) {
+        message.error(error?.message || "Bulk delete failed")
+      } finally {
+        setBulkActionLoading(false)
+      }
+    },
+    [api, fetchItems, items, restoreDeletedItems, selectedItemIds, showUndoNotification]
+  )
+
   const handleBulkDelete = useCallback(() => {
     if (selectedItemIds.length === 0) {
       message.warning("Select at least one item")
@@ -290,15 +420,32 @@ export const ItemsWorkspace: React.FC = () => {
     }
     Modal.confirm({
       title: "Delete selected items",
-      content: "This permanently deletes selected items. Continue?",
+      content: "Selected items will be moved to archived. You can undo this action.",
       okText: t("common:delete", "Delete"),
       okButtonProps: { danger: true, loading: bulkActionLoading },
       cancelText: t("common:cancel", "Cancel"),
       onOk: async () => {
-        await applyBulkAction({ action: "delete", hard: true }, "Delete")
+        await executeBulkDelete(false)
       }
     })
-  }, [applyBulkAction, bulkActionLoading, selectedItemIds.length, t])
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
+
+  const handleBulkHardDelete = useCallback(() => {
+    if (selectedItemIds.length === 0) {
+      message.warning("Select at least one item")
+      return
+    }
+    Modal.confirm({
+      title: "Delete selected items permanently",
+      content: "This permanently deletes selected items and cannot be undone. Continue?",
+      okText: "Delete permanently",
+      okButtonProps: { danger: true, loading: bulkActionLoading },
+      cancelText: t("common:cancel", "Cancel"),
+      onOk: async () => {
+        await executeBulkDelete(true)
+      }
+    })
+  }, [bulkActionLoading, executeBulkDelete, selectedItemIds.length, t])
 
   const openBulkOutputModal = useCallback(async () => {
     if (selectedItemIds.length === 0) {
@@ -628,6 +775,16 @@ export const ItemsWorkspace: React.FC = () => {
               >
                 Delete
               </Button>
+
+              <Button
+                danger
+                size="small"
+                type="text"
+                onClick={handleBulkHardDelete}
+                loading={bulkActionLoading}
+              >
+                Delete permanently
+              </Button>
             </div>
           )}
         </div>
@@ -786,4 +943,3 @@ export const ItemsWorkspace: React.FC = () => {
     </PageShell>
   )
 }
-

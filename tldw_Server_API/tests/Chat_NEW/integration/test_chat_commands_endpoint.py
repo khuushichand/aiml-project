@@ -5,6 +5,8 @@ import pytest
 def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
      # Ensure commands are enabled for this test
     monkeypatch.setenv("CHAT_COMMANDS_ENABLED", "true")
+    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT_USER", "7/min")
+    monkeypatch.setenv("CHAT_COMMANDS_RATE_LIMIT_GLOBAL", "70/min")
     r = test_client.get("/api/v1/chat/commands", headers=auth_headers)
     assert r.status_code == 200
     data = r.json()
@@ -18,6 +20,14 @@ def test_list_chat_commands_basic(test_client, auth_headers, monkeypatch):
     by_name = {c.get("name"): c for c in data["commands"]}
     assert "required_permission" in by_name["time"]
     assert by_name["time"]["required_permission"] in (None, "chat.commands.time")
+    assert by_name["time"]["usage"] == "/time [timezone]"
+    assert by_name["time"]["args"] == ["timezone"]
+    assert by_name["time"]["requires_api_key"] is True
+    assert by_name["time"]["rbac_required"] is True
+    assert "per-user 7/min" in by_name["time"]["rate_limit"]
+    assert "global 70/min" in by_name["time"]["rate_limit"]
+    assert by_name["weather"]["usage"] == "/weather [location]"
+    assert by_name["weather"]["args"] == ["location"]
 
 
 @pytest.mark.integration
@@ -38,3 +48,4 @@ def test_list_chat_commands_rbac_filtering(test_client, auth_headers, monkeypatc
     names = {c.get("name") for c in data["commands"]}
     # Built-in commands that require permissions should be filtered out
     assert "time" not in names
+    assert "weather" not in names

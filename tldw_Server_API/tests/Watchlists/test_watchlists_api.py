@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -412,7 +413,8 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
     # Output templates (DB-backed)
-    db_template_name = f"db_daily_md_{run_id}"
+    unique_suffix = uuid.uuid4().hex[:8]
+    db_template_name = f"db_daily_md_{unique_suffix}"
     db_template_payload = {
         "name": db_template_name,
         "type": "briefing_markdown",
@@ -436,8 +438,9 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
     # Template management
+    legacy_template_name = f"daily_md_{unique_suffix}"
     template_payload = {
-        "name": "daily_md",
+        "name": legacy_template_name,
         "format": "md",
         "content": "{{ title }}\\n{% for item in items %}- {{ loop.index }}. {{ item.title }}{% endfor %}",
         "description": "Markdown summary template",
@@ -452,27 +455,27 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     r = c.get("/api/v1/watchlists/templates")
     assert r.status_code == 200
     templates = r.json()["items"]
-    assert any(t["name"] == "daily_md" for t in templates)
+    assert any(t["name"] == legacy_template_name for t in templates)
 
     # Get template detail
-    r = c.get("/api/v1/watchlists/templates/daily_md")
+    r = c.get(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 200
     template_detail = r.json()
     assert "Markdown summary template" in template_detail["description"]
 
     # Generate output using stored template
-    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": "daily_md", "temporary": True})
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": legacy_template_name, "temporary": True})
     assert r.status_code == 200, r.text
     templated = r.json()
     assert templated["version"] == 5
     assert templated["format"] == "md"
-    assert templated["metadata"].get("template_name") == "daily_md"
+    assert templated["metadata"].get("template_name") == legacy_template_name
     assert templated["metadata"].get("template_source") == "watchlists_templates"
     assert templated["content"].startswith("Daily Digest-Output-5") or "Daily Digest" in templated["content"]
 
     # When both stores have the same template name, DB-backed outputs template wins.
     collision_payload = {
-        "name": "daily_md",
+        "name": legacy_template_name,
         "type": "briefing_markdown",
         "format": "md",
         "body": "DB OVERRIDE {{ title }}",
@@ -482,7 +485,7 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
     colliding_db_template = r.json()
 
-    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": "daily_md", "temporary": True})
+    r = c.post("/api/v1/watchlists/outputs", json={"run_id": run_id, "template_name": legacy_template_name, "temporary": True})
     assert r.status_code == 200, r.text
     collision_output = r.json()
     assert collision_output["version"] == 6
@@ -494,12 +497,12 @@ def test_items_and_outputs_flow(client_with_user, monkeypatch):
     assert r.status_code == 200, r.text
 
     # Delete template and confirm removal
-    r = c.delete("/api/v1/watchlists/templates/daily_md")
+    r = c.delete(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 200
-    r = c.get("/api/v1/watchlists/templates/daily_md")
+    r = c.get(f"/api/v1/watchlists/templates/{legacy_template_name}")
     assert r.status_code == 404
     r = c.get("/api/v1/watchlists/templates")
-    assert all(t["name"] != "daily_md" for t in r.json().get("items", []))
+    assert all(t["name"] != legacy_template_name for t in r.json().get("items", []))
 
 
 def test_watchlists_outputs_variants_and_ingest(client_with_user, monkeypatch):

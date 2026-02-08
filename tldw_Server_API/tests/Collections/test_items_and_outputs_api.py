@@ -127,6 +127,8 @@ def test_items_endpoint_uses_collections_layer(client_with_user):
     assert payload["total"] >= 1
     assert any(item["title"] == "Story Headline" for item in payload["items"])
     assert all(item["type"] == "watchlist" for item in payload["items"])
+    assert all("status" in item for item in payload["items"])
+    assert all("favorite" in item for item in payload["items"])
 
     r = client.get("/api/v1/items", params={"origin": "reading"})
     assert r.status_code == 200
@@ -153,6 +155,8 @@ def test_items_get_by_id(client_with_user):
     item = r.json()
     assert item["id"] == item_id
     assert item["title"] == "Example Article"
+    assert item["status"] == "saved"
+    assert item["favorite"] is False
 
 
 def test_outputs_preview_with_inline_data_and_generate(client_with_user, tmp_path):
