@@ -38,29 +38,54 @@ export const STEP_CATEGORIES: Record<
   { label: string; color: string; order: number }
 > = {
   ai: {
-    label: "AI",
+    label: "AI & LLM",
     color: "purple",
     order: 1
   },
-  data: {
-    label: "Data",
+  search: {
+    label: "Search & RAG",
     color: "blue",
     order: 2
+  },
+  media: {
+    label: "Media & Documents",
+    color: "indigo",
+    order: 3
+  },
+  text: {
+    label: "Text & Data Transform",
+    color: "cyan",
+    order: 4
+  },
+  research: {
+    label: "Research & Academic",
+    color: "violet",
+    order: 5
+  },
+  audio: {
+    label: "Audio",
+    color: "teal",
+    order: 6
+  },
+  video: {
+    label: "Video & Subtitles",
+    color: "emerald",
+    order: 7
   },
   control: {
     label: "Control Flow",
     color: "orange",
-    order: 3
+    order: 8
   },
   io: {
-    label: "Input/Output",
+    label: "Integrations",
     color: "green",
-    order: 4
+    order: 9
   },
   utility: {
     label: "Utility",
     color: "gray",
-    order: 5
+    order: 10
   }
 }
 
@@ -131,7 +156,7 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     type: "rag_search",
     label: "RAG Search",
     description: "Search your knowledge base for relevant documents",
-    category: "data",
+    category: "search",
     icon: "Search",
     color: "bg-blue-500",
     inputs: [
@@ -177,7 +202,7 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     type: "media_ingest",
     label: "Media Ingest",
     description: "Process YouTube videos, audio files, or other media",
-    category: "data",
+    category: "media",
     icon: "Video",
     color: "bg-blue-600",
     inputs: [
@@ -429,7 +454,7 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     type: "tts",
     label: "Text to Speech",
     description: "Convert text to audio",
-    category: "io",
+    category: "audio",
     icon: "Volume2",
     color: "bg-green-600",
     inputs: [
@@ -481,7 +506,7 @@ export const BASE_STEP_REGISTRY: StepRegistry = {
     type: "stt_transcribe",
     label: "Transcribe",
     description: "Convert audio to text",
-    category: "io",
+    category: "audio",
     icon: "Mic",
     color: "bg-green-700",
     inputs: [
@@ -643,6 +668,7 @@ const PORT_OVERRIDES: Record<
   string,
   { inputs: PortDefinition[]; outputs: PortDefinition[] }
 > = {
+  // Control flow
   start: {
     inputs: [],
     outputs: [{ id: "output", label: "Output", dataType: "any" }]
@@ -666,6 +692,14 @@ const PORT_OVERRIDES: Record<
       { id: "results", label: "Results", dataType: "array" }
     ]
   },
+  batch: {
+    inputs: [{ id: "items", label: "Items", dataType: "array", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
+  parallel: {
+    inputs: [{ id: "inputs", label: "Inputs", dataType: "array", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
   wait_for_human: {
     inputs: [{ id: "data", label: "Data", dataType: "any", required: true }],
     outputs: [
@@ -680,25 +714,140 @@ const PORT_OVERRIDES: Record<
       { id: "rejected", label: "Rejected", dataType: "any" }
     ]
   },
+  // Audio
   tts: {
+    inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  multi_voice_tts: {
     inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
     outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
   },
   stt_transcribe: {
     inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
     outputs: [{ id: "text", label: "Text", dataType: "string" }]
+  },
+  audio_normalize: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_concat: {
+    inputs: [{ id: "tracks", label: "Tracks", dataType: "array", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_trim: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_convert: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_extract: {
+    inputs: [{ id: "source", label: "Source", dataType: "file", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_mix: {
+    inputs: [{ id: "tracks", label: "Tracks", dataType: "array", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  audio_diarize: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "segments", label: "Segments", dataType: "array" }]
+  },
+  audio_briefing_compose: {
+    inputs: [{ id: "content", label: "Content", dataType: "string", required: true }],
+    outputs: [{ id: "audio", label: "Audio", dataType: "audio" }]
+  },
+  // Video
+  video_trim: {
+    inputs: [{ id: "video", label: "Video", dataType: "file", required: true }],
+    outputs: [{ id: "video", label: "Video", dataType: "file" }]
+  },
+  video_concat: {
+    inputs: [{ id: "clips", label: "Clips", dataType: "array", required: true }],
+    outputs: [{ id: "video", label: "Video", dataType: "file" }]
+  },
+  video_convert: {
+    inputs: [{ id: "video", label: "Video", dataType: "file", required: true }],
+    outputs: [{ id: "video", label: "Video", dataType: "file" }]
+  },
+  video_thumbnail: {
+    inputs: [{ id: "video", label: "Video", dataType: "file", required: true }],
+    outputs: [{ id: "image", label: "Image", dataType: "file" }]
+  },
+  video_extract_frames: {
+    inputs: [{ id: "video", label: "Video", dataType: "file", required: true }],
+    outputs: [{ id: "frames", label: "Frames", dataType: "array" }]
+  },
+  subtitle_generate: {
+    inputs: [{ id: "audio", label: "Audio", dataType: "audio", required: true }],
+    outputs: [{ id: "subtitles", label: "Subtitles", dataType: "string" }]
+  },
+  subtitle_translate: {
+    inputs: [{ id: "subtitles", label: "Subtitles", dataType: "string", required: true }],
+    outputs: [{ id: "translated", label: "Translated", dataType: "string" }]
+  },
+  subtitle_burn: {
+    inputs: [
+      { id: "video", label: "Video", dataType: "file", required: true },
+      { id: "subtitles", label: "Subtitles", dataType: "string", required: true }
+    ],
+    outputs: [{ id: "video", label: "Video", dataType: "file" }]
+  },
+  // Search
+  rag_search: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
+  web_search: {
+    inputs: [{ id: "query", label: "Query", dataType: "string", required: true }],
+    outputs: [{ id: "results", label: "Results", dataType: "array" }]
+  },
+  embed: {
+    inputs: [{ id: "text", label: "Text", dataType: "string", required: true }],
+    outputs: [{ id: "embedding", label: "Embedding", dataType: "array" }]
+  },
+  rerank: {
+    inputs: [
+      { id: "query", label: "Query", dataType: "string", required: true },
+      { id: "documents", label: "Documents", dataType: "array", required: true }
+    ],
+    outputs: [{ id: "ranked", label: "Ranked", dataType: "array" }]
+  },
+  // Media
+  media_ingest: {
+    inputs: [{ id: "source", label: "Source", dataType: "any" }],
+    outputs: [
+      { id: "content", label: "Content", dataType: "object" },
+      { id: "transcript", label: "Transcript", dataType: "string" }
+    ]
+  },
+  pdf_extract: {
+    inputs: [{ id: "file", label: "File", dataType: "file", required: true }],
+    outputs: [{ id: "text", label: "Text", dataType: "string" }]
+  },
+  ocr: {
+    inputs: [{ id: "image", label: "Image", dataType: "file", required: true }],
+    outputs: [{ id: "text", label: "Text", dataType: "string" }]
   }
 }
 
 const CATEGORY_COLOR_CLASSES: Record<StepCategory, string> = {
   ai: "bg-purple-500",
-  data: "bg-blue-500",
+  search: "bg-blue-500",
+  media: "bg-indigo-500",
+  text: "bg-cyan-500",
+  research: "bg-violet-500",
+  audio: "bg-teal-500",
+  video: "bg-emerald-500",
   control: "bg-orange-500",
   io: "bg-green-500",
   utility: "bg-gray-500"
 }
 
 const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
+  // AI & LLM (22 types)
   prompt: "ai",
   llm: "ai",
   llm_with_tools: "ai",
@@ -720,6 +869,87 @@ const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   slides_generate: "ai",
   diagram_generate: "ai",
   literature_review: "ai",
+  moderation: "ai",
+
+  // Search & RAG (11 types)
+  rag_search: "search",
+  web_search: "search",
+  query_expand: "search",
+  query_rewrite: "search",
+  hyde_generate: "search",
+  semantic_cache_check: "search",
+  search_aggregate: "search",
+  rerank: "search",
+  embed: "search",
+  rss_fetch: "search",
+  atom_fetch: "search",
+
+  // Media & Documents (11 types)
+  media_ingest: "media",
+  process_media: "media",
+  pdf_extract: "media",
+  ocr: "media",
+  document_table_extract: "media",
+  chunking: "media",
+  claims_extract: "media",
+  citations: "media",
+  bibliography_generate: "media",
+  document_merge: "media",
+  document_diff: "media",
+
+  // Text & Data Transform (16 types)
+  json_transform: "text",
+  json_validate: "text",
+  csv_to_json: "text",
+  json_to_csv: "text",
+  regex_extract: "text",
+  text_clean: "text",
+  xml_transform: "text",
+  template_render: "text",
+  markdown_to_html: "text",
+  html_to_markdown: "text",
+  keyword_extract: "text",
+  sentiment_analyze: "text",
+  language_detect: "text",
+  topic_model: "text",
+  entity_extract: "text",
+  context_build: "text",
+
+  // Research & Academic (9 types)
+  arxiv_search: "research",
+  arxiv_download: "research",
+  pubmed_search: "research",
+  semantic_scholar_search: "research",
+  google_scholar_search: "research",
+  patent_search: "research",
+  doi_resolve: "research",
+  reference_parse: "research",
+  bibtex_generate: "research",
+
+  // Audio (11 types)
+  tts: "audio",
+  multi_voice_tts: "audio",
+  stt_transcribe: "audio",
+  audio_normalize: "audio",
+  audio_concat: "audio",
+  audio_trim: "audio",
+  audio_convert: "audio",
+  audio_extract: "audio",
+  audio_mix: "audio",
+  audio_diarize: "audio",
+  audio_briefing_compose: "audio",
+
+  // Video & Subtitles (8 types)
+  video_trim: "video",
+  video_concat: "video",
+  video_convert: "video",
+  video_thumbnail: "video",
+  video_extract_frames: "video",
+  subtitle_generate: "video",
+  subtitle_translate: "video",
+  subtitle_burn: "video",
+
+  // Control Flow (10 types)
   branch: "control",
   map: "control",
   batch: "control",
@@ -730,6 +960,26 @@ const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   workflow_call: "control",
   wait_for_human: "control",
   wait_for_approval: "control",
+
+  // Integrations (16 types)
+  webhook: "io",
+  notify: "io",
+  kanban: "io",
+  s3_upload: "io",
+  s3_download: "io",
+  github_create_issue: "io",
+  email_send: "io",
+  screenshot_capture: "io",
+  mcp_tool: "io",
+  chatbooks: "io",
+  character_chat: "io",
+  notes: "io",
+  prompts: "io",
+  collections: "io",
+  evaluations: "io",
+  schedule_workflow: "io",
+
+  // Utility (10 types)
   delay: "utility",
   log: "utility",
   token_count: "utility",
@@ -739,110 +989,157 @@ const CATEGORY_OVERRIDES: Record<string, StepCategory> = {
   sandbox_exec: "utility",
   timing_start: "utility",
   timing_stop: "utility",
-  webhook: "io",
-  notify: "io",
-  tts: "io",
-  stt_transcribe: "io",
-  kanban: "io",
-  s3_upload: "io",
-  s3_download: "io",
-  github_create_issue: "io",
-  email_send: "io",
-  screenshot_capture: "io",
-  audio_normalize: "io",
-  audio_concat: "io",
-  audio_trim: "io",
-  audio_convert: "io",
-  audio_extract: "io",
-  audio_mix: "io",
-  video_thumbnail: "io",
-  video_trim: "io",
-  video_concat: "io",
-  video_convert: "io",
-  video_extract_frames: "io",
-  subtitle_generate: "io",
-  subtitle_translate: "io",
-  subtitle_burn: "io"
+  eval_readability: "utility"
 }
 
 const ICON_OVERRIDES: Record<string, string> = {
+  // AI & LLM
   prompt: "MessageSquare",
   llm: "MessageSquare",
   llm_with_tools: "Wrench",
-  llm_compare: "Layers",
+  llm_compare: "GitCompareArrows",
   llm_critique: "ShieldCheck",
   summarize: "FileText",
-  rag_search: "Search",
-  query_expand: "Search",
-  query_rewrite: "Search",
-  web_search: "Search",
-  search_aggregate: "Layers",
-  media_ingest: "Video",
-  kanban: "LayoutList",
-  process_media: "FileText",
-  branch: "GitBranch",
-  map: "Layers",
-  batch: "Layers",
-  parallel: "Layers",
-  wait_for_human: "UserCheck",
-  wait_for_approval: "UserCheck",
-  webhook: "Globe",
-  mcp_tool: "Cpu",
-  tts: "Volume2",
-  stt_transcribe: "Mic",
-  delay: "Clock",
-  log: "Terminal",
-  policy_check: "ShieldAlert",
-  diff_change_detector: "ShieldCheck",
-  notify: "Bell",
-  embed: "Database",
-  translate: "Languages",
-  claims_extract: "ScanSearch",
-  character_chat: "Bot",
   image_gen: "Image",
   image_describe: "Image",
-  ocr: "ScanSearch",
-  pdf_extract: "FileText",
-  document_table_extract: "Table2",
-  audio_diarize: "Mic",
-  flashcard_generate: "Layers",
-  quiz_generate: "CheckCircle2",
+  translate: "Languages",
+  voice_intent: "AudioLines",
+  flashcard_generate: "ClipboardList",
+  quiz_generate: "ListChecks",
   quiz_evaluate: "CheckCircle2",
-  outline_generate: "FileText",
+  outline_generate: "ListTree",
   glossary_extract: "BookOpen",
-  mindmap_generate: "GitBranch",
-  eval_readability: "Hash",
-  json_transform: "FileText",
+  mindmap_generate: "Share2",
+  report_generate: "ScrollText",
+  newsletter_generate: "Newspaper",
+  slides_generate: "Presentation",
+  diagram_generate: "GitBranch",
+  literature_review: "BookOpen",
+  moderation: "ShieldAlert",
+
+  // Search & RAG
+  rag_search: "Search",
+  web_search: "Globe",
+  query_expand: "Sparkles",
+  query_rewrite: "RefreshCcw",
+  hyde_generate: "Sparkles",
+  semantic_cache_check: "Database",
+  search_aggregate: "Combine",
+  rerank: "ArrowUpDown",
+  embed: "Database",
+  rss_fetch: "Rss",
+  atom_fetch: "Rss",
+
+  // Media & Documents
+  media_ingest: "Video",
+  process_media: "FileText",
+  pdf_extract: "FileText",
+  ocr: "ScanSearch",
+  document_table_extract: "Table2",
+  chunking: "Scissors",
+  claims_extract: "ScanSearch",
+  citations: "Quote",
+  bibliography_generate: "BookMarked",
+  document_merge: "Merge",
+  document_diff: "FileDiff",
+
+  // Text & Data Transform
+  json_transform: "Braces",
   json_validate: "ShieldCheck",
   csv_to_json: "Table2",
   json_to_csv: "Table2",
-  regex_extract: "Search",
-  text_clean: "FileText",
-  xml_transform: "FileText",
+  regex_extract: "Regex",
+  text_clean: "Eraser",
+  xml_transform: "FileCode",
   template_render: "Code2",
+  markdown_to_html: "Code2",
+  html_to_markdown: "FileText",
+  keyword_extract: "Tags",
+  sentiment_analyze: "Smile",
+  language_detect: "Languages",
+  topic_model: "PieChart",
+  entity_extract: "ScanSearch",
+  context_build: "Layers",
+
+  // Research & Academic
+  arxiv_search: "GraduationCap",
+  arxiv_download: "Download",
+  pubmed_search: "FlaskConical",
+  semantic_scholar_search: "GraduationCap",
+  google_scholar_search: "GraduationCap",
+  patent_search: "FileSearch",
+  doi_resolve: "Link",
+  reference_parse: "BookText",
+  bibtex_generate: "BookMarked",
+
+  // Audio
+  tts: "Volume2",
+  multi_voice_tts: "AudioLines",
+  stt_transcribe: "Mic",
+  audio_normalize: "SlidersHorizontal",
+  audio_concat: "Combine",
+  audio_trim: "Scissors",
+  audio_convert: "RefreshCcw",
+  audio_extract: "Headphones",
+  audio_mix: "Blend",
+  audio_diarize: "Mic2",
+  audio_briefing_compose: "Newspaper",
+
+  // Video & Subtitles
+  video_trim: "Scissors",
+  video_concat: "Combine",
+  video_convert: "MonitorPlay",
+  video_thumbnail: "Image",
+  video_extract_frames: "Film",
+  subtitle_generate: "Captions",
+  subtitle_translate: "Languages",
+  subtitle_burn: "Captions",
+
+  // Control Flow
+  branch: "GitBranch",
+  map: "Layers",
+  batch: "Layers",
+  parallel: "SplitSquareHorizontal",
+  wait_for_human: "UserCheck",
+  wait_for_approval: "BadgeCheck",
   workflow_call: "GitBranch",
   cache_result: "Database",
   retry: "RotateCcw",
   checkpoint: "Save",
+
+  // Integrations
+  webhook: "Globe",
+  notify: "Bell",
+  kanban: "LayoutList",
   s3_upload: "CloudUpload",
   s3_download: "CloudDownload",
   github_create_issue: "Github",
   email_send: "Mail",
   screenshot_capture: "Camera",
+  mcp_tool: "Cpu",
+  chatbooks: "BookOpen",
+  character_chat: "Bot",
+  notes: "NotebookPen",
+  prompts: "MessageSquare",
+  collections: "Library",
+  evaluations: "BarChart",
   schedule_workflow: "Calendar",
+
+  // Utility
+  delay: "Clock",
+  log: "Terminal",
+  token_count: "Hash",
+  context_window_check: "Gauge",
+  policy_check: "ShieldAlert",
+  diff_change_detector: "GitCompareArrows",
+  sandbox_exec: "Terminal",
   timing_start: "Timer",
   timing_stop: "TimerOff",
-  video_thumbnail: "Image",
-  video_extract_frames: "Film",
-  arxiv_search: "Search",
-  pubmed_search: "Search",
-  semantic_scholar_search: "Search",
-  google_scholar_search: "Search",
-  patent_search: "Search",
-  doi_resolve: "Link",
-  bibtex_generate: "BookMarked",
-  bibliography_generate: "BookMarked",
-  literature_review: "BookOpen"
+  eval_readability: "BarChart",
+
+  // Start/End
+  start: "Play",
+  end: "Square"
 }
 
 export const humanizeStepType = (value: string): string => {
@@ -854,10 +1151,17 @@ export const humanizeStepType = (value: string): string => {
 
 export const resolveStepCategory = (stepType: string): StepCategory => {
   if (CATEGORY_OVERRIDES[stepType]) return CATEGORY_OVERRIDES[stepType]
-  if (stepType.includes("wait_for_")) return "control"
-  if (stepType.includes("webhook") || stepType.includes("notify")) return "io"
-  if (stepType.includes("llm") || stepType.includes("summarize")) return "ai"
-  return "data"
+  // Heuristic fallbacks for unknown step types
+  if (stepType.includes("llm") || stepType.includes("_generate") || stepType.includes("summarize")) return "ai"
+  if (stepType.includes("search") || stepType.includes("rag") || stepType.includes("embed") || stepType.includes("rerank")) return "search"
+  if (stepType.includes("audio") || stepType.includes("tts") || stepType.includes("stt")) return "audio"
+  if (stepType.includes("video") || stepType.includes("subtitle")) return "video"
+  if (stepType.includes("media") || stepType.includes("pdf") || stepType.includes("ocr") || stepType.includes("document")) return "media"
+  if (stepType.includes("json") || stepType.includes("csv") || stepType.includes("regex") || stepType.includes("text") || stepType.includes("xml")) return "text"
+  if (stepType.includes("arxiv") || stepType.includes("pubmed") || stepType.includes("scholar") || stepType.includes("patent") || stepType.includes("doi")) return "research"
+  if (stepType.includes("wait_for_") || stepType.includes("branch") || stepType.includes("map") || stepType.includes("batch")) return "control"
+  if (stepType.includes("webhook") || stepType.includes("notify") || stepType.includes("email") || stepType.includes("s3_")) return "io"
+  return "utility"
 }
 
 export const resolveStepIcon = (stepType: string): string =>

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest"
-import { render, screen, fireEvent, cleanup } from "@testing-library/react"
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { ReferencesTab } from "../ReferencesTab"
 import { useDocumentWorkspaceStore } from "@/store/document-workspace"
 import { useConnectionStore } from "@/store/connection"
+import { tldwClient } from "@/services/tldw"
 
 let mockReferencesResponse: any = null
 
@@ -87,5 +88,67 @@ describe("ReferencesTab", () => {
     fireEvent.change(searchInput, { target: { value: "With DOI" } })
     expect(screen.getByText("With DOI")).toBeInTheDocument()
     expect(screen.queryByText("No DOI")).not.toBeInTheDocument()
+  })
+
+  it("enriches a single reference using reference_index", async () => {
+    mockReferencesResponse = {
+      media_id: 1,
+      has_references: true,
+      references: [
+        {
+          raw_text: "First reference raw",
+          title: "First reference",
+          doi: "10.1234/first",
+        },
+        {
+          raw_text: "Second reference raw",
+          title: "Second reference",
+          citation_count: 3,
+        },
+      ],
+      enrichment_source: null,
+    }
+
+    const getDocumentReferencesSpy = vi
+      .spyOn(tldwClient, "getDocumentReferences")
+      .mockResolvedValue({
+        media_id: 1,
+        has_references: true,
+        references: [
+          {
+            raw_text: "First reference raw",
+            title: "First reference",
+            doi: "10.1234/first",
+            citation_count: 22,
+          },
+          {
+            raw_text: "Second reference raw",
+            title: "Second reference",
+            citation_count: 3,
+          },
+        ],
+        enrichment_source: "semantic_scholar",
+      })
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ReferencesTab />
+      </QueryClientProvider>
+    )
+
+    const firstTitle = screen.getByText("First reference")
+    const card = firstTitle.closest(".rounded-lg")
+    expect(card).not.toBeNull()
+    const enrichButton = within(card as HTMLElement).getByRole("button", {
+      name: "Enrich",
+    })
+    fireEvent.click(enrichButton)
+
+    await waitFor(() => {
+      expect(getDocumentReferencesSpy).toHaveBeenCalledWith(1, {
+        enrich: true,
+        referenceIndex: 0,
+      })
+    })
   })
 })

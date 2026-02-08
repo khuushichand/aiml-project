@@ -68,10 +68,35 @@ const CATEGORY_STYLES: Record<string, { border: string; bg: string; header: stri
     bg: "bg-purple-50 dark:bg-purple-950/30",
     header: "bg-purple-500"
   },
-  data: {
+  search: {
     border: "border-blue-500",
     bg: "bg-blue-50 dark:bg-blue-950/30",
     header: "bg-blue-500"
+  },
+  media: {
+    border: "border-indigo-500",
+    bg: "bg-indigo-50 dark:bg-indigo-950/30",
+    header: "bg-indigo-500"
+  },
+  text: {
+    border: "border-cyan-500",
+    bg: "bg-cyan-50 dark:bg-cyan-950/30",
+    header: "bg-cyan-500"
+  },
+  research: {
+    border: "border-violet-500",
+    bg: "bg-violet-50 dark:bg-violet-950/30",
+    header: "bg-violet-500"
+  },
+  audio: {
+    border: "border-teal-500",
+    bg: "bg-teal-50 dark:bg-teal-950/30",
+    header: "bg-teal-500"
+  },
+  video: {
+    border: "border-emerald-500",
+    bg: "bg-emerald-50 dark:bg-emerald-950/30",
+    header: "bg-emerald-500"
   },
   control: {
     border: "border-orange-500",

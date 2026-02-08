@@ -291,3 +291,30 @@ async def test_enrich_with_crossref_sets_cooldown_on_rate_limit():
     assert len(enriched) == 3
     assert call_count == 1
     set_cooldown.assert_called_once_with("crossref")
+
+
+@pytest.mark.asyncio
+async def test_enrich_with_crossref_uses_cached_external_result_without_network_call():
+    refs = [ReferenceEntry(raw_text="Ref 1", doi="10.1234/abc")]
+    cached_item = {
+        "title": "Cached Crossref Title",
+        "authors": "A. Author",
+        "journal": "Journal",
+        "pub_date": "2021-01-01",
+        "doi": "10.1234/abc",
+        "url": "https://doi.org/10.1234/abc",
+        "pdf_url": "https://example.com/cached.pdf",
+    }
+
+    with patch.object(
+        refs_mod,
+        "_get_cached_external",
+        return_value=(cached_item, None),
+    ), patch.object(refs_mod, "_set_cached_external", return_value=None), patch.object(
+        refs_mod.asyncio, "to_thread", new=AsyncMock()
+    ) as to_thread_mock:
+        enriched, performed = await refs_mod._enrich_with_crossref(refs)
+
+    assert performed is True
+    assert enriched[0].title == "Cached Crossref Title"
+    to_thread_mock.assert_not_awaited()

@@ -12,11 +12,16 @@ import type { Node, Edge, XYPosition } from "@xyflow/react"
 export type WorkflowStepType = string
 
 export type StepCategory =
-  | "ai"
-  | "data"
-  | "control"
-  | "io"
-  | "utility"
+  | "ai"       // AI & LLM
+  | "search"   // Search & RAG
+  | "media"    // Media & Documents
+  | "text"     // Text & Data Transform
+  | "research" // Research & Academic
+  | "audio"    // Audio
+  | "video"    // Video & Subtitles
+  | "control"  // Control Flow
+  | "io"       // Integrations
+  | "utility"  // Utility
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Workflow Step Schema (Server-Driven)

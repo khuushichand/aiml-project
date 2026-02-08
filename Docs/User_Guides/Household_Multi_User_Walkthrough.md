@@ -177,7 +177,7 @@ python -m tldw_Server_API.app.core.AuthNZ.initialize
 
 You'll be prompted to create the admin account:
 
-```
+```text
 Enter admin username: householder
 Enter admin email: admin@example.com
 Enter admin password: ********

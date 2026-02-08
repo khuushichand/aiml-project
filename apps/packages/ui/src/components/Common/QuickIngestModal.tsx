@@ -3711,7 +3711,7 @@ export const QuickIngestModal: React.FC<Props> = ({
             <li>
               {qi(
                 'tipsHybrid',
-                'Hybrid input: drop files or paste URLs (comma/newline separated) to build the queue.'
+                'Hybrid input: drop files or paste URLs (one URL per line; commas also supported) to build the queue.'
               )}
             </li>
             <li>
@@ -3800,7 +3800,7 @@ export const QuickIngestModal: React.FC<Props> = ({
                   {qi('pasteUrlsTitle', 'Paste URLs')}
                 </Typography.Text>
                 <Typography.Text className="text-xs text-text-subtle">
-                  {qi('pasteUrlsHint', 'Separate with commas or new lines')}
+                  {qi('pasteUrlsHint', 'One URL per line (commas also supported)')}
                 </Typography.Text>
               </div>
               <label
@@ -3809,26 +3809,31 @@ export const QuickIngestModal: React.FC<Props> = ({
               >
                 {qi('urlsLabel', 'URLs to ingest')}
               </label>
-              <Space.Compact className="w-full">
-                  <Input
-                    id="quick-ingest-url-input"
-                    placeholder={qi('urlsPlaceholder', 'https://example.com, https://...')}
-                    value={pendingUrlInput}
-                    onChange={(e) => setPendingUrlInput(e.target.value)}
-                    disabled={running || !isOnlineForIngest}
-                    aria-label={qi('urlsInputAria', 'Paste URLs input')}
-                    title={qi('urlsInputAria', 'Paste URLs input')}
-                  />
-                  <Button
-                    type="primary"
-                    onClick={() => void addUrlsFromInput(pendingUrlInput)}
-                    disabled={running || !isOnlineForIngest}
-                    aria-label={qi('addUrlsAria', 'Add URLs to queue')}
-                    title={qi('addUrlsAria', 'Add URLs to queue')}
-                  >
-                    {qi('addUrls', 'Add URLs')}
-                  </Button>
-                </Space.Compact>
+              <div className="flex w-full items-start gap-2">
+                <Input.TextArea
+                  id="quick-ingest-url-input"
+                  autoSize={{ minRows: 3, maxRows: 8 }}
+                  placeholder={qi(
+                    'urlsPlaceholder',
+                    'https://example.com\nhttps://example.org'
+                  )}
+                  value={pendingUrlInput}
+                  onChange={(e) => setPendingUrlInput(e.target.value)}
+                  disabled={running || !isOnlineForIngest}
+                  aria-label={qi('urlsInputAria', 'Paste URLs input')}
+                  title={qi('urlsInputAria', 'Paste URLs input')}
+                />
+                <Button
+                  type="primary"
+                  className="shrink-0"
+                  onClick={() => void addUrlsFromInput(pendingUrlInput)}
+                  disabled={running || !isOnlineForIngest}
+                  aria-label={qi('addUrlsAria', 'Add URLs to queue')}
+                  title={qi('addUrlsAria', 'Add URLs to queue')}
+                >
+                  {qi('addUrls', 'Add URLs')}
+                </Button>
+              </div>
               <div className="flex items-center gap-2 text-xs text-text-muted">
                 <AlertTriangle className="w-4 h-4 text-text-subtle" />
                 <span>

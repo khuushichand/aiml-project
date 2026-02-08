@@ -212,6 +212,7 @@ Example Requests
   - Minimum fields for URL ingest:
     - `media_type=document|video|audio|pdf|ebook`
     - `urls=https://example.com/article` (repeat `urls` for multiple items)
+  - Note: request `media_type` (`document|video|audio|pdf|ebook`) expresses client intent, while stored/returned `media_type` may be normalized (for example, input `document` can persist/return as `site`), so validate against the request enum when sending and accept normalized response values like `site`.
   - Example:
     - `curl -X POST "$SERVER/api/v1/media/add" -H "X-API-KEY: $KEY" -F "media_type=document" -F "urls=https://example.com/article"`
   - Expected response (shape):

@@ -25,7 +25,6 @@ PasswordAuthentication no
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
 # Avoid pre-auth chroot in heavily capability-dropped containers.
-UsePrivilegeSeparation no
 PermitUserEnvironment yes
 AllowUsers ${USER_NAME}
 Subsystem sftp /usr/lib/openssh/sftp-server
@@ -45,6 +44,11 @@ fi
 /usr/sbin/sshd -D -e &
 
 tmp_cfg="$(mktemp)"
+cleanup_tmp_cfg() {
+  rm -f "${tmp_cfg}"
+}
+trap cleanup_tmp_cfg EXIT
+
 python3 - <<'PY' > "${tmp_cfg}"
 import json
 import os
@@ -89,7 +93,19 @@ PY
 mkdir -p "${USER_HOME}/.tldw-agent"
 cat "${tmp_cfg}" > "${USER_HOME}/.tldw-agent/config.yaml"
 rm -f "${tmp_cfg}"
+trap - EXIT
+chmod 600 "${USER_HOME}/.tldw-agent/config.yaml"
+chown "${USER_NAME}" "${USER_HOME}/.tldw-agent" "${USER_HOME}/.tldw-agent/config.yaml"
 chmod 600 "${USER_HOME}/.tldw-agent/config.yaml"
 
 export HOME="${USER_HOME}"
-exec /usr/local/bin/tldw-agent-acp
+if command -v gosu >/dev/null 2>&1; then
+  exec gosu "${USER_NAME}" /usr/local/bin/tldw-agent-acp
+elif command -v su-exec >/dev/null 2>&1; then
+  exec su-exec "${USER_NAME}" /usr/local/bin/tldw-agent-acp
+elif command -v runuser >/dev/null 2>&1; then
+  exec runuser -u "${USER_NAME}" --preserve-environment -- /usr/local/bin/tldw-agent-acp
+else
+  echo "No privilege-drop tool available (gosu, su-exec, or runuser)." >&2
+  exit 1
+fi

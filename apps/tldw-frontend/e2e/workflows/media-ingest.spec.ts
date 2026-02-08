@@ -172,7 +172,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Look for URL input
       const _urlInput = authedPage.locator(
-        "input[placeholder*='url' i], input[placeholder*='URL'], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], input[placeholder*='URL'], textarea[placeholder*='URL'], [data-testid='url-input']"
       )
 
       // URL input may exist on media page or in a modal
@@ -190,7 +190,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Find URL input if available
       const urlInput = authedPage.locator(
-        "input[placeholder*='url' i], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], [data-testid='url-input']"
       ).first()
 
       if ((await urlInput.count()) > 0) {
@@ -229,7 +229,7 @@ test.describe("Media Ingestion Workflow", () => {
 
       // Find URL input if available
       const urlInput = authedPage.locator(
-        "input[placeholder*='url' i], [data-testid='url-input']"
+        "input[placeholder*='url' i], textarea[placeholder*='url' i], [data-testid='url-input']"
       ).first()
 
       if ((await urlInput.count()) > 0 && (await urlInput.isVisible())) {

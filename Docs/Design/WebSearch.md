@@ -14,13 +14,12 @@ This page serves as documentation regarding the web search functionality within 
 
 
 ### Current Status
-- Google, DuckDuckGo, Brave, Exa, Firecrawl, Kagi, SearX, Serper, and Tavily are wired through the public API. Advanced options (filters, date ranges, blacklists) are still limited.
+- Google, DuckDuckGo, Brave, Kagi, SearX, Tavily, Serper, Exa, and Firecrawl are wired through the public API and return normalized web search results. Advanced options (filters, date ranges, blacklists) are still limited.
     - Brave: https://api.search.brave.com/app/documentation/web-search/query#WebSearchAPIQueryParameters
-    - Bing: https://docs.microsoft.com/en-us/rest/api/cognitiveservices-bingsearch/bing-web-api-v7-reference
     - DuckDuckGo: https://duckduckgo.com/
     - Google: https://developers.google.com/custom-search/v1/reference/rest/v1/cse/list
-- Baidu, Kagi, SearX, Tavily, and Yandex remain unimplemented or experimental. They are excluded from the API request validator until production-ready implementations exist.
-- Parsing is implemented for Google, DuckDuckGo, Brave, Kagi, SearX, Serper, Tavily, Exa, and Firecrawl.
+- Baidu and Yandex remain unimplemented stubs, and Bing is deprecated (kept only for compatibility/error reporting). These are not production-ready providers.
+- Parsing is implemented for: Google, DuckDuckGo, Brave, Kagi, SearX, Tavily, Serper, Exa, and Firecrawl.
 - Aggregation now produces a structured payload `{text, evidence, confidence}` to satisfy the API contract.
 - Full Pipeline works.
     1. User enters query + Search options

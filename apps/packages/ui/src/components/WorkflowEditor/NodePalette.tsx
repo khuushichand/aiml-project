@@ -28,6 +28,31 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string
     text: "text-blue-600 dark:text-blue-400",
     border: "border-blue-300 dark:border-blue-700"
   },
+  indigo: {
+    bg: "bg-indigo-100 dark:bg-indigo-900/30",
+    text: "text-indigo-600 dark:text-indigo-400",
+    border: "border-indigo-300 dark:border-indigo-700"
+  },
+  cyan: {
+    bg: "bg-cyan-100 dark:bg-cyan-900/30",
+    text: "text-cyan-600 dark:text-cyan-400",
+    border: "border-cyan-300 dark:border-cyan-700"
+  },
+  violet: {
+    bg: "bg-violet-100 dark:bg-violet-900/30",
+    text: "text-violet-600 dark:text-violet-400",
+    border: "border-violet-300 dark:border-violet-700"
+  },
+  teal: {
+    bg: "bg-teal-100 dark:bg-teal-900/30",
+    text: "text-teal-600 dark:text-teal-400",
+    border: "border-teal-300 dark:border-teal-700"
+  },
+  emerald: {
+    bg: "bg-emerald-100 dark:bg-emerald-900/30",
+    text: "text-emerald-600 dark:text-emerald-400",
+    border: "border-emerald-300 dark:border-emerald-700"
+  },
   orange: {
     bg: "bg-orange-100 dark:bg-orange-900/30",
     text: "text-orange-600 dark:text-orange-400",
@@ -93,7 +118,7 @@ interface NodePaletteProps {
 
 export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeKeys, setActiveKeys] = useState<string[]>(["ai", "data", "control"])
+  const [activeKeys, setActiveKeys] = useState<string[]>(["ai", "search", "media", "control"])
 
   const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
   const stepTypesStatus = useWorkflowEditorStore((s) => s.stepTypesStatus)

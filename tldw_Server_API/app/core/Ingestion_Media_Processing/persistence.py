@@ -2237,6 +2237,7 @@ async def process_document_like_item(
     file_bytes: bytes | None = None
     processing_filepath: FilePath | None = None
     processing_filename: str | None = None
+    downloaded_path: FilePath | None = None
 
     try:
         if is_url:
@@ -2415,11 +2416,42 @@ async def process_document_like_item(
 
     except _PERSISTENCE_NONCRITICAL_EXCEPTIONS as prep_err:
         error_detail = str(getattr(prep_err, "detail", prep_err))
-        logger.error(
-            "File preparation/download error for {}: {}",
+        prep_error_type = type(prep_err).__name__
+        temp_dir_exists: bool | None = None
+        processing_source_exists: bool | None = None
+        processing_filepath_exists: bool | None = None
+        downloaded_path_exists: bool | None = None
+
+        with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+            temp_dir_exists = FilePath(temp_dir).exists()
+        if not is_url:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                processing_source_exists = FilePath(processing_source).exists()
+        if processing_filepath is not None:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                processing_filepath_exists = processing_filepath.exists()
+        if downloaded_path is not None:
+            with contextlib.suppress(_PERSISTENCE_NONCRITICAL_EXCEPTIONS):
+                downloaded_path_exists = downloaded_path.exists()
+
+        logger.exception(
+            "File preparation/download error for {}: {} ({}) | context: "
+            "is_url={} temp_dir={} temp_dir_exists={} processing_source={} "
+            "processing_source_exists={} downloaded_path={} downloaded_path_exists={} "
+            "processing_filepath={} processing_filepath_exists={} processing_filename={}",
             item_input_ref,
             error_detail,
-            exc_info=True,
+            prep_error_type,
+            is_url,
+            temp_dir,
+            temp_dir_exists,
+            processing_source,
+            processing_source_exists,
+            downloaded_path,
+            downloaded_path_exists,
+            processing_filepath,
+            processing_filepath_exists,
+            processing_filename,
         )
         final_result.update(
             {
