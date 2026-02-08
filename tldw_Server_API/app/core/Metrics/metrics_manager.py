@@ -1796,6 +1796,28 @@ class MetricsRegistry:
         with self._lock:
             return self._cumulative_counters.get(metric_name, {}).get(label_key, 0.0)
 
+    def get_cumulative_counter_total(self, metric_name: str) -> float:
+        """Get the cumulative counter total across every label-set for a metric."""
+        metric_name = self._normalize_metric_name(metric_name)
+        with self._lock:
+            series = self._cumulative_counters.get(metric_name, {})
+            return float(sum(series.values()))
+
+    def get_cumulative_counter_totals_by_label(self, metric_name: str, label_name: str) -> dict[str, float]:
+        """Aggregate cumulative counter totals grouped by a specific label key."""
+        metric_name = self._normalize_metric_name(metric_name)
+        normalized_label = self._normalize_label_name(label_name)
+        totals: dict[str, float] = defaultdict(float)
+        with self._lock:
+            series = self._cumulative_counters.get(metric_name, {})
+            for label_key, value in series.items():
+                label_dict = dict(label_key)
+                label_value = label_dict.get(normalized_label)
+                if label_value is None:
+                    continue
+                totals[str(label_value)] += float(value)
+        return dict(totals)
+
     def get_metric_stats(self, metric_name: str, labels: Optional[dict[str, str]] = None) -> dict[str, Any]:
         """
         Get statistics for a metric.

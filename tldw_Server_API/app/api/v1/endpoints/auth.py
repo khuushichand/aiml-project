@@ -77,7 +77,7 @@ from tldw_Server_API.app.core.AuthNZ.ip_allowlist import (
 from tldw_Server_API.app.core.AuthNZ.jwt_service import JWTService
 from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_memberships_for_user
 from tldw_Server_API.app.core.AuthNZ.password_service import PasswordService
-from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter, get_rate_limiter
+from tldw_Server_API.app.core.AuthNZ.rate_limiter import RateLimiter
 from tldw_Server_API.app.core.AuthNZ.session_manager import SessionManager
 from tldw_Server_API.app.core.AuthNZ.settings import Settings, get_profile, get_settings
 from tldw_Server_API.app.core.AuthNZ.token_blacklist import get_token_blacklist
@@ -138,18 +138,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}}
 )
 _AUTH_ENDPOINT_RG_LOCK: Optional[asyncio.Lock] = None
-
-_AUTH_RG_FALLBACK_LIMITS: dict[str, tuple[int, int]] = {
-    # policy_id -> (limit, window_minutes)
-    "authnz.default": (60, 1),
-    "authnz.forgot_password": (10, 1),
-    "authnz.reset_password": (4, 1),
-    "authnz.resend_verification": (10, 1),
-    "authnz.magic_link.request": (10, 1),
-    "authnz.magic_link.email": (3, 10),
-    "authnz.mfa.verify": (10, 1),
-    "authnz.mfa.login": (10, 1),
-}
+_AUTH_RG_DIAGNOSTICS_SHIM_LOGGED: set[str] = set()
 
 def _extract_bearer_token(auth_header: Optional[str]) -> str:
     """Parse Authorization header and return Bearer token (case-insensitive)."""
@@ -377,6 +366,33 @@ def _auth_rg_rate_limits_enabled() -> bool:
         return True
 
 
+def _log_auth_rg_diagnostics_only_shim(
+    *,
+    reason: str,
+    policy_id: str,
+    exc: Optional[Exception] = None,
+) -> None:
+    """Emit a one-shot warning when AuthNZ ingress falls back to diagnostics-only mode."""
+    if reason in _AUTH_RG_DIAGNOSTICS_SHIM_LOGGED:
+        return
+    _AUTH_RG_DIAGNOSTICS_SHIM_LOGGED.add(reason)
+    if exc is None:
+        logger.warning(
+            "Auth endpoint ResourceGovernor unavailable for policy {} (reason={}); "
+            "allowing request via diagnostics-only shim.",
+            policy_id,
+            reason,
+        )
+        return
+    logger.warning(
+        "Auth endpoint ResourceGovernor unavailable for policy {} (reason={}); "
+        "allowing request via diagnostics-only shim. error={}",
+        policy_id,
+        reason,
+        exc,
+    )
+
+
 def _auth_rg_policy_defined(request: Request, policy_id: str, governor: Any) -> bool:
     if not policy_id:
         return False
@@ -444,47 +460,20 @@ async def _reserve_auth_rg_requests(
     tags: Optional[dict[str, str]] = None,
     fail_open: bool = True,
 ) -> tuple[bool, Optional[int]]:
+    _ = fail_open  # Compatibility parameter; legacy fallback limiter is retired.
     if not _auth_rg_rate_limits_enabled():
         return True, None
 
     rg_entity = entity or f"ip:{_auth_request_client_ip(request)}"
-    fallback_limit, fallback_window = _AUTH_RG_FALLBACK_LIMITS.get(
-        policy_id,
-        _AUTH_RG_FALLBACK_LIMITS["authnz.default"],
-    )
-
-    async def _fallback_rate_limit(*, reason: str) -> tuple[bool, Optional[int]]:
-        limiter = get_rate_limiter()
-        allowed, meta = await limiter.check_rate_limit_fallback(
-            identifier=rg_entity,
-            endpoint=f"auth:{policy_id}",
-            limit=fallback_limit,
-            window_minutes=fallback_window,
-            fail_open=fail_open,
-        )
-        if allowed:
-            if reason:
-                logger.debug(
-                    "Auth endpoint fallback limiter allowed request for policy={} reason={}",
-                    policy_id,
-                    reason,
-                )
-            return True, None
-        retry_after = 1
-        if isinstance(meta, dict):
-            try:
-                retry_after = max(1, int(meta.get("retry_after", 1) or 1))
-            except _AUTH_NONCRITICAL_EXCEPTIONS:
-                retry_after = 1
-        return False, retry_after
 
     governor = await _get_auth_endpoint_rg_governor(request)
     if governor is None:
-        return await _fallback_rate_limit(reason="governor_unavailable")
+        _log_auth_rg_diagnostics_only_shim(reason="governor_unavailable", policy_id=policy_id)
+        return True, None
 
     if not _auth_rg_policy_defined(request, policy_id, governor):
-        logger.debug("Auth endpoint RG policy missing; using fallback limiter for policy_id={}", policy_id)
-        return await _fallback_rate_limit(reason="policy_missing")
+        _log_auth_rg_diagnostics_only_shim(reason="policy_missing", policy_id=policy_id)
+        return True, None
 
     op_id = f"auth-rg-{policy_id}-{time.time_ns()}"
     metadata = {
@@ -511,8 +500,8 @@ async def _reserve_auth_rg_requests(
             return True, None
         return False, int(decision.retry_after or 1)
     except _AUTH_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Auth endpoint RG reserve failed for policy {}: {}", policy_id, exc)
-        return await _fallback_rate_limit(reason="rg_reserve_failed")
+        _log_auth_rg_diagnostics_only_shim(reason="rg_reserve_failed", policy_id=policy_id, exc=exc)
+        return True, None
 
 
 async def _ensure_mfa_cache_available(session_manager: SessionManager, settings: Settings) -> None:

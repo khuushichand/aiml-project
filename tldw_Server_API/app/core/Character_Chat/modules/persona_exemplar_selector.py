@@ -42,6 +42,16 @@ _NOVELTY_WEIGHT = {
     "pre_cutoff": 0.0,
 }
 
+_REQUEST_CATEGORY_KEYWORDS: dict[str, set[str]] = {
+    "violence": {"kill", "attack", "fight", "hurt", "weapon", "assault", "injure", "harm"},
+    "self_harm": {"suicide", "self-harm", "selfharm", "overdose", "cutting"},
+    "sexual": {"sex", "sexual", "explicit", "nude", "porn"},
+    "illegal": {"illegal", "crime", "steal", "fraud", "hack", "exploit", "bypass"},
+    "medical": {"diagnose", "diagnosis", "medication", "dose", "treatment"},
+    "financial": {"invest", "stocks", "options", "crypto", "tax", "trading"},
+    "political": {"election", "campaign", "vote", "policy", "government"},
+}
+
 EmbeddingScoreFn = Callable[[str, list[dict[str, Any]]], dict[str, float]]
 
 
@@ -138,6 +148,21 @@ def _normalize_rhetorical(value: Any) -> set[str]:
     return {str(value).strip().lower()} if str(value).strip() else set()
 
 
+def _normalize_string_tags(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, list):
+        raw_values = value
+    else:
+        raw_values = [value]
+    normalized: set[str] = set()
+    for item in raw_values:
+        token = str(item).strip().lower()
+        if token:
+            normalized.add(token)
+    return normalized
+
+
 def _length_tokens(exemplar: dict[str, Any]) -> int:
     try:
         parsed = int(exemplar.get("length_tokens") or 0)
@@ -175,6 +200,43 @@ def classify_user_turn(user_turn: str) -> PersonaTurnHeuristics:
         emotion=emotion,
         intent_terms=intent,
     )
+
+
+def _detect_request_categories(user_turn: str) -> set[str]:
+    """Infer coarse request categories used for safety-blocked exemplar gating."""
+    lowered = str(user_turn or "").strip().lower()
+    if not lowered:
+        return set()
+    tokens = _tokenize(lowered)
+    categories: set[str] = set()
+    for category, keywords in _REQUEST_CATEGORY_KEYWORDS.items():
+        if tokens.intersection(keywords):
+            categories.add(category)
+    return categories
+
+
+def _is_candidate_safety_blocked(
+    candidate: dict[str, Any],
+    *,
+    detected_categories: set[str],
+    user_turn: str,
+) -> bool:
+    blocked_values = _normalize_string_tags(candidate.get("safety_blocked"))
+    if not blocked_values:
+        return False
+
+    lowered_turn = str(user_turn or "").lower()
+    normalized_categories = {
+        category.replace("-", "_").replace(" ", "_")
+        for category in detected_categories
+    }
+    for blocked in blocked_values:
+        blocked_norm = blocked.replace("-", "_").replace(" ", "_")
+        if blocked_norm in normalized_categories:
+            return True
+        if blocked and blocked in lowered_turn:
+            return True
+    return False
 
 
 def _retrieve_candidates(
@@ -409,6 +471,25 @@ def select_character_exemplars(
         candidate_pool_size=config.candidate_pool_size,
     )
 
+    if not candidates:
+        return PersonaExemplarSelectionResult(
+            selected=[],
+            budget_tokens_used=0,
+            coverage={"openers": 0, "emphasis": 0, "enders": 0, "catchphrases_used": 0},
+            scores=[],
+        )
+
+    detected_categories = _detect_request_categories(turn_text)
+    gated_candidates = [
+        candidate
+        for candidate in candidates
+        if not _is_candidate_safety_blocked(
+            candidate,
+            detected_categories=detected_categories,
+            user_turn=turn_text,
+        )
+    ]
+    candidates = gated_candidates
     if not candidates:
         return PersonaExemplarSelectionResult(
             selected=[],

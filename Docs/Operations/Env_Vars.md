@@ -286,6 +286,7 @@ Config file support (optional):
 - `CHAT_SAVE_DEFAULT`: Persist new chats by default (`true|false`).
 - `DEFAULT_CHAT_SAVE`: Legacy alias; same as above.
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
+- `PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS`: Default persona exemplar budget for character chat when request override is omitted (default `600`, clamped to `1..20000`).
 
 ### Tokenizer (Chat Dictionaries & World Books)
 - `TOKEN_ESTIMATOR_MODE`: `whitespace` (default) or `char_approx`

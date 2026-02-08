@@ -176,3 +176,136 @@ def test_explicit_feedback_rejects_empty_query(feedback_setup):
         assert expected in messages
     else:
         assert detail == expected
+
+
+# ---------------------------------------------------------------------------
+# GET  /api/v1/feedback  – list feedback
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_list_feedback_returns_entries(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit feedback first
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": True,
+        "issues": ["not_relevant"],
+        "user_notes": "Test note",
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+
+    # List feedback
+    resp = client.get("/api/v1/feedback", params={"conversation_id": conversation_id})
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["ok"] is True
+    assert len(data["feedback"]) >= 1
+    entry = data["feedback"][0]
+    assert entry["conversation_id"] == conversation_id
+    assert entry["user_notes"] == "Test note"
+
+
+@pytest.mark.integration
+def test_list_feedback_not_found_for_missing_conversation(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.get("/api/v1/feedback", params={"conversation_id": "C_nonexistent"})
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# DELETE  /api/v1/feedback/{feedback_id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_delete_feedback_removes_record(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": False,
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+    assert feedback_id
+
+    # Delete
+    resp = client.delete(f"/api/v1/feedback/{feedback_id}")
+    assert resp.status_code == status.HTTP_200_OK
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["deleted"] is True
+
+    # Verify gone
+    cursor = db.execute_query(
+        "SELECT COUNT(*) AS count FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    record = _row_to_dict(row, cursor)
+    assert record["count"] == 0
+
+
+@pytest.mark.integration
+def test_delete_feedback_not_found(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.delete("/api/v1/feedback/fb_nonexistent")
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# PATCH  /api/v1/feedback/{feedback_id}
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_patch_feedback_updates_notes(feedback_setup):
+    client, db, conversation_id, message_id = feedback_setup
+
+    # Submit
+    payload = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "feedback_type": "helpful",
+        "helpful": True,
+        "user_notes": "Original",
+    }
+    resp = client.post("/api/v1/feedback/explicit", json=payload)
+    assert resp.status_code == status.HTTP_200_OK
+    feedback_id = resp.json()["feedback_id"]
+
+    # Patch
+    resp = client.patch(
+        f"/api/v1/feedback/{feedback_id}",
+        json={"user_notes": "Updated via PATCH"},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["feedback_id"] == feedback_id
+
+    # Verify
+    cursor = db.execute_query(
+        "SELECT user_notes FROM conversation_feedback WHERE id = ?",
+        (feedback_id,),
+    )
+    row = cursor.fetchone()
+    record = _row_to_dict(row, cursor)
+    assert record["user_notes"] == "Updated via PATCH"
+
+
+@pytest.mark.integration
+def test_patch_feedback_not_found(feedback_setup):
+    client, _db, _conversation_id, _message_id = feedback_setup
+
+    resp = client.patch(
+        "/api/v1/feedback/fb_nonexistent",
+        json={"user_notes": "Won't work"},
+    )
+    assert resp.status_code == status.HTTP_404_NOT_FOUND

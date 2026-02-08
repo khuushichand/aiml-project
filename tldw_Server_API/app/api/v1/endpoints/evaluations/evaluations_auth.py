@@ -34,6 +34,7 @@ from tldw_Server_API.app.core.exceptions import InactiveUserError
 from tldw_Server_API.app.core.testing import is_explicit_pytest_runtime
 
 security = HTTPBearer(auto_error=False)
+_EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED = False
 
 
 def _env_truthy(name: str, default: str = "") -> bool:
@@ -298,9 +299,11 @@ async def check_evaluation_rate_limit(
     request: Request,
     rate_limiter = Depends(get_rate_limiter_dep),
 ):
-    """Simple IP/path based limiter for high-level guarding (per-minute)."""
+    """Diagnostics-only shim; RG ingress is the sole enforcer."""
+    _ = rate_limiter
+
     # If ResourceGovernor ingress has already governed this route, avoid
-    # double-enforcement via legacy AuthNZ rate limiter.
+    # any additional per-operation limiter logic.
     try:
         policy_id = getattr(request.state, "rg_policy_id", None)
         if policy_id:
@@ -312,26 +315,16 @@ async def check_evaluation_rate_limit(
         # request.state may not exist in some test scenarios
         pass
 
-    client_ip = request.client.host if request.client else "unknown"
-    path = request.url.path
-    if "batch" in path:
-        limit = 5
-        endpoint_type = "eval_batch"
-    elif "/runs" in path:
-        limit = 10
-        endpoint_type = "eval_run"
-    else:
-        limit = 60
-        endpoint_type = "eval_standard"
-    allowed, metadata = await rate_limiter.check_rate_limit(client_ip, endpoint_type, limit=limit, window_minutes=1)
-    if not allowed:
-        retry_after = metadata.get("retry_after", 60)
-        logger.warning(f"Rate limit exceeded for {client_ip} on {endpoint_type}")
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded. Retry after {retry_after} seconds",
-            headers={"Retry-After": str(retry_after)},
+    global _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED
+    if not _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED:
+        _EVALS_LEGACY_RATE_LIMIT_SHIM_LOGGED = True
+        path = getattr(getattr(request, "url", None), "path", "unknown")
+        logger.warning(
+            "Evaluations legacy path rate limiter is retired; allowing request via diagnostics-only shim. "
+            "path={}",
+            path,
         )
+    return
 
 
 async def _apply_rate_limit_headers(limiter, user_id: str, response: Response, meta: Optional[dict[str, Any]] = None) -> None:

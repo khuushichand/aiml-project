@@ -1994,6 +1994,7 @@ async def execute_streaming_call(
     rg_refund_cb: Callable[..., Any] | None = None,
     on_success: Callable[[str], Awaitable[None]] | None = None,
     self_monitoring_service: Any | None = None,
+    on_stream_full_reply: Callable[[str], Awaitable[None] | None] | None = None,
 ) -> StreamingResponse:
     """Execute a streaming LLM call with queue, failover, moderation, and persistence.
 
@@ -2521,6 +2522,14 @@ async def execute_streaming_call(
                     full_reply_to_save = moderation.redact_text(full_reply, eff_policy)
         except _CHAT_NONCRITICAL_EXCEPTIONS:
             pass
+
+        if callable(on_stream_full_reply):
+            try:
+                maybe_result = on_stream_full_reply(str(full_reply or ""))
+                if hasattr(maybe_result, "__await__"):
+                    await maybe_result  # type: ignore[misc]
+            except _CHAT_NONCRITICAL_EXCEPTIONS as stream_callback_err:
+                logger.debug("on_stream_full_reply callback skipped due to error: {}", stream_callback_err)
 
         if not stream_metrics_recorded:
             try:

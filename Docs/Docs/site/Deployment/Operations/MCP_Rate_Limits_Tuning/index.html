@@ -7098,15 +7098,15 @@
 - A global rate limiter (RPM + burst) for all requests
 - Per-category limiters (e.g., <code>ingestion</code>, <code>read</code>) applied per tool
 - Config-driven tool→category mapping via JSON env or YAML file
-- Optional Redis backend for multi-node deployments</p>
+- Optional RG Redis backend for multi-node deployments</p>
 <h2 id="key-environment-variables">Key Environment Variables<a class="headerlink" href="#key-environment-variables" title="Permanent link">&para;</a></h2>
 <p>Global:
 - <code>MCP_RATE_LIMIT_ENABLED</code> - Enable/disable limiter (default on)
 - <code>MCP_RATE_LIMIT_RPM</code> - Global requests per minute
 - <code>MCP_RATE_LIMIT_BURST</code> - Allowed burst tokens</p>
 <p>Distributed (multi-node):
-- <code>MCP_RATE_LIMIT_USE_REDIS=1</code>
-- <code>MCP_REDIS_URL=redis://host:6379/0</code></p>
+- <code>RG_BACKEND=redis</code>
+- <code>REDIS_URL=redis://host:6379/0</code></p>
 <p>Category-specific (optional):
 - <code>MCP_RATE_LIMIT_RPM_INGESTION</code> / <code>MCP_RATE_LIMIT_BURST_INGESTION</code>
 - <code>MCP_RATE_LIMIT_RPM_READ</code> (burst falls back to global burst)</p>
@@ -7137,7 +7137,7 @@
 <li>Too many 429 responses</li>
 <li>Increase <code>MCP_RATE_LIMIT_RPM_INGESTION</code> or refine tool mapping to classify hot tools as <code>read</code> (if safe)</li>
 <li>Inconsistent rates across nodes</li>
-<li>Ensure <code>MCP_RATE_LIMIT_USE_REDIS=1</code> and a shared <code>MCP_REDIS_URL</code> are set for all instances</li>
+<li>Ensure <code>RG_BACKEND=redis</code> and a shared <code>REDIS_URL</code> are set for all instances</li>
 <li>Unexpected tool classification</li>
 <li>Confirm <code>MCP_TOOL_CATEGORY_MAP</code> or <code>MCP_TOOL_CATEGORY_MAP_FILE</code> entries and that the tool names match module definitions exactly</li>
 </ul>

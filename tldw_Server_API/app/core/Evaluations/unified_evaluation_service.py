@@ -67,6 +67,9 @@ from tldw_Server_API.app.core.Evaluations.circuit_breaker import CircuitBreaker
 
 # Import support services
 from tldw_Server_API.app.core.Evaluations.metrics_advanced import advanced_metrics
+from tldw_Server_API.app.core.Evaluations.persona_telemetry_metrics import (
+    get_persona_telemetry_metrics_summary,
+)
 
 # Import evaluation engines
 from tldw_Server_API.app.core.Evaluations.rag_evaluator import RAGEvaluator
@@ -1453,9 +1456,16 @@ class UnifiedEvaluationService:
     async def get_metrics_summary(self) -> dict[str, Any]:
         """Get evaluation metrics summary"""
         try:
-            if advanced_metrics.enabled:
-                return advanced_metrics.get_summary()
-            return {"metrics_enabled": False}
+            summary: dict[str, Any]
+            if advanced_metrics.enabled and hasattr(advanced_metrics, "get_summary"):
+                advanced_summary = advanced_metrics.get_summary()
+                summary = dict(advanced_summary) if isinstance(advanced_summary, dict) else {}
+                summary.setdefault("metrics_enabled", True)
+            else:
+                summary = {"metrics_enabled": False}
+
+            summary["persona_telemetry"] = get_persona_telemetry_metrics_summary()
+            return summary
         except _UNIFIED_EVAL_NONCRITICAL_EXCEPTIONS as e:
             logger.error(f"Failed to get metrics summary: {e}")
             # Do not expose internal error details to external clients

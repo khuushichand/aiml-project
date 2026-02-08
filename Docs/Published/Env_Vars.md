@@ -109,6 +109,7 @@ Egress & Outbound Policy (global + Workflows)
 
 ## Chat
 - `CHAT_STREAM_INCLUDE_METADATA`: Include `tldw_*` IDs in chat SSE streaming chunks (`true|false`, default `true`). Set `false` for strict OpenAI streaming compatibility.
+- `PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS`: Default persona exemplar budget for character chat when request override is omitted (default `600`, clamped to `1..20000`).
 - `CHAT_COMMANDS_ENABLED`: Enable slash-command preprocessing (`true|false`, default `false`).
 - `CHAT_COMMAND_INJECTION_MODE`: Slash-command injection mode (`system|preface|replace`, default `system`).
 - `CHAT_COMMANDS_REQUIRE_PERMISSIONS`: Require per-command RBAC permission checks (`true|false`, default `false`).

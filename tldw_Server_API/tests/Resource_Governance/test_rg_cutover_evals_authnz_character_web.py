@@ -96,22 +96,16 @@ async def test_evaluations_rg_unavailable_uses_diagnostics_only_shim(monkeypatch
     async def _no_rg_decision(*args, **kwargs):  # noqa: ARG001
         return None
 
-    async def _deny_minute(*args, **kwargs):  # noqa: ARG001
-        return False, {"error": "legacy minute deny"}
-
-    async def _deny_daily(*args, **kwargs):  # noqa: ARG001
-        return False, {"error": "legacy daily deny"}
-
-    async def _deny_cost(*args, **kwargs):  # noqa: ARG001
-        return False, {"error": "legacy cost deny"}
+    async def _legacy_check_should_not_run(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("legacy evaluations checks must not run in diagnostics-only mode")
 
     async def _record_should_not_run(*args, **kwargs):  # noqa: ARG001
         raise AssertionError("legacy counter writes must not run in diagnostics-only mode")
 
     monkeypatch.setattr(evals_rl, "_maybe_enforce_with_rg_evaluations", _no_rg_decision)
-    monkeypatch.setattr(limiter, "_check_minute_limit", _deny_minute)
-    monkeypatch.setattr(limiter, "_check_daily_limits", _deny_daily)
-    monkeypatch.setattr(limiter, "_check_cost_limits", _deny_cost)
+    monkeypatch.setattr(limiter, "_check_minute_limit", _legacy_check_should_not_run)
+    monkeypatch.setattr(limiter, "_check_daily_limits", _legacy_check_should_not_run)
+    monkeypatch.setattr(limiter, "_check_cost_limits", _legacy_check_should_not_run)
     monkeypatch.setattr(limiter, "_record_request", _record_should_not_run)
 
     allowed, meta = await limiter.check_rate_limit(
@@ -124,13 +118,9 @@ async def test_evaluations_rg_unavailable_uses_diagnostics_only_shim(monkeypatch
     assert allowed is True
     assert meta.get("policy_id") == "evals.free"
     assert meta.get("rate_limit_source") == "resource_governor"
-    assert meta.get("legacy_fallback_mode") == "diagnostic_only"
-    assert meta.get("legacy_would_deny") is True
-    reasons = meta.get("legacy_diagnostic_reasons")
-    assert isinstance(reasons, list)
-    assert "legacy minute deny" in reasons
-    assert "legacy daily deny" in reasons
-    assert "legacy cost deny" in reasons
+    assert "legacy_fallback_mode" not in meta
+    assert "legacy_would_deny" not in meta
+    assert "legacy_diagnostic_reasons" not in meta
 
 
 @pytest.mark.asyncio

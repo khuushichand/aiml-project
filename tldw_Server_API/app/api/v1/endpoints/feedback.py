@@ -12,8 +12,13 @@ from loguru import logger
 from tldw_Server_API.app.api.v1.API_Deps.auth_deps import check_rate_limit
 from tldw_Server_API.app.api.v1.API_Deps.ChaCha_Notes_DB_Deps import get_chacha_db_for_user
 from tldw_Server_API.app.api.v1.schemas.feedback_schemas import (
+    ErrorDetail,
     ExplicitFeedbackRequest,
     ExplicitFeedbackResponse,
+    FeedbackDeleteResponse,
+    FeedbackListResponse,
+    FeedbackRecord,
+    FeedbackUpdateRequest,
 )
 from tldw_Server_API.app.core.AuthNZ.User_DB_Handling import User, get_request_user
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import CharactersRAGDB, CharactersRAGDBError
@@ -190,6 +195,12 @@ def _ensure_conversation_owner(conversation: dict, current_user: User) -> None:
     response_model=ExplicitFeedbackResponse,
     summary="Submit explicit feedback (chat + RAG)",
     dependencies=[Depends(check_rate_limit)],
+    responses={
+        400: {"model": ErrorDetail, "description": "Bad request (empty query, mismatched message)"},
+        403: {"model": ErrorDetail, "description": "Forbidden – not the conversation/message owner"},
+        404: {"model": ErrorDetail, "description": "Conversation or message not found"},
+        422: {"model": ErrorDetail, "description": "Validation error (missing required fields)"},
+    },
 )
 async def submit_explicit_feedback(
     payload: ExplicitFeedbackRequest,
@@ -309,4 +320,118 @@ async def submit_explicit_feedback(
 
     await _finalize_idempotency_record(dedupe_key, feedback_id, issues, payload.user_notes)
 
+    return ExplicitFeedbackResponse(ok=True, feedback_id=feedback_id)
+
+
+# ---------------------------------------------------------------------------
+# GET  /feedback  – list feedback for a conversation
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "",
+    response_model=FeedbackListResponse,
+    summary="List feedback for a conversation",
+    dependencies=[Depends(check_rate_limit)],
+    responses={
+        403: {"model": ErrorDetail, "description": "Forbidden – not the conversation owner"},
+        404: {"model": ErrorDetail, "description": "Conversation not found"},
+    },
+)
+async def list_feedback(
+    conversation_id: str,
+    current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> FeedbackListResponse:
+    conversation = db.get_conversation_by_id(conversation_id)
+    if not conversation or conversation.get("deleted"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    _ensure_conversation_owner(conversation, current_user)
+
+    store = UnifiedFeedbackSystem(chacha_db=db)
+    if not store.user_feedback:
+        return FeedbackListResponse(ok=True, feedback=[])
+
+    rows = await store.user_feedback.get_conversation_feedback(conversation_id)
+    records = [FeedbackRecord(**row) for row in rows]
+    return FeedbackListResponse(ok=True, feedback=records)
+
+
+# ---------------------------------------------------------------------------
+# DELETE  /feedback/{feedback_id}  – retract a feedback entry
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/{feedback_id}",
+    response_model=FeedbackDeleteResponse,
+    summary="Delete a feedback entry",
+    dependencies=[Depends(check_rate_limit)],
+    responses={
+        403: {"model": ErrorDetail, "description": "Forbidden – not the conversation owner"},
+        404: {"model": ErrorDetail, "description": "Feedback record not found"},
+    },
+)
+async def delete_feedback(
+    feedback_id: str,
+    current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> FeedbackDeleteResponse:
+    store = UnifiedFeedbackSystem(chacha_db=db)
+    if not store.user_feedback:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+
+    record = await store.user_feedback.get_feedback_by_id(feedback_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+
+    # Validate ownership via conversation
+    conv_id = record.get("conversation_id")
+    if conv_id:
+        conversation = db.get_conversation_by_id(conv_id)
+        if conversation:
+            _ensure_conversation_owner(conversation, current_user)
+
+    deleted = await store.user_feedback.delete_feedback(feedback_id)
+    return FeedbackDeleteResponse(ok=True, deleted=deleted)
+
+
+# ---------------------------------------------------------------------------
+# PATCH  /feedback/{feedback_id}  – update issues / user_notes
+# ---------------------------------------------------------------------------
+
+@router.patch(
+    "/{feedback_id}",
+    response_model=ExplicitFeedbackResponse,
+    summary="Update a feedback entry (issues / user_notes)",
+    dependencies=[Depends(check_rate_limit)],
+    responses={
+        403: {"model": ErrorDetail, "description": "Forbidden – not the conversation owner"},
+        404: {"model": ErrorDetail, "description": "Feedback record not found"},
+    },
+)
+async def update_feedback(
+    feedback_id: str,
+    payload: FeedbackUpdateRequest,
+    current_user: User = Depends(get_request_user),
+    db: CharactersRAGDB = Depends(get_chacha_db_for_user),
+) -> ExplicitFeedbackResponse:
+    store = UnifiedFeedbackSystem(chacha_db=db)
+    if not store.user_feedback:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+
+    record = await store.user_feedback.get_feedback_by_id(feedback_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feedback record not found")
+
+    # Validate ownership via conversation
+    conv_id = record.get("conversation_id")
+    if conv_id:
+        conversation = db.get_conversation_by_id(conv_id)
+        if conversation:
+            _ensure_conversation_owner(conversation, current_user)
+
+    await store.user_feedback.merge_feedback_update(
+        feedback_id,
+        issues=payload.issues,
+        user_notes=payload.user_notes,
+    )
     return ExplicitFeedbackResponse(ok=True, feedback_id=feedback_id)

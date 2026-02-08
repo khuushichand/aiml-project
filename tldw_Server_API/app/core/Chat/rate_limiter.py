@@ -296,66 +296,6 @@ class ConversationRateLimiter:
 
         return True, None
 
-    @staticmethod
-    def _bucket_has_capacity(
-        bucket: TokenBucket,
-        *,
-        units: int,
-        now_ts: float,
-    ) -> bool:
-        """Best-effort non-mutating capacity check for diagnostics-only paths."""
-        if units <= 0:
-            return True
-        try:
-            capacity = float(bucket.capacity)
-            tokens = float(bucket.tokens)
-            refill_rate = float(bucket.refill_rate)
-            last_refill = float(bucket.last_refill)
-        except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS:
-            return True
-
-        elapsed = max(0.0, now_ts - last_refill)
-        available = min(capacity, tokens + (elapsed * refill_rate))
-        return available >= float(units)
-
-    async def _peek_legacy_rate_limit(
-        self,
-        *,
-        user_id: str,
-        conversation_id: Optional[str],
-        estimated_tokens: int,
-    ) -> tuple[bool, Optional[str]]:
-        """
-        Non-mutating legacy check used only for diagnostics when RG is enabled.
-
-        This helper never creates buckets, consumes tokens, or updates usage
-        counters. It reports what legacy enforcement *would* have done.
-        """
-        now_ts = time.time()
-
-        if not self._bucket_has_capacity(self.global_bucket, units=1, now_ts=now_ts):
-            return False, "Global rate limit exceeded"
-
-        user_bucket = self.user_buckets.get(user_id)
-        if user_bucket is not None and not self._bucket_has_capacity(user_bucket, units=1, now_ts=now_ts):
-            return False, f"User rate limit exceeded for {user_id}"
-
-        if conversation_id:
-            conv_bucket = self.conversation_buckets.get(conversation_id)
-            if conv_bucket is not None and not self._bucket_has_capacity(conv_bucket, units=1, now_ts=now_ts):
-                return False, f"Conversation rate limit exceeded for {conversation_id}"
-
-        if estimated_tokens > 0:
-            token_bucket = self.user_token_buckets.get(user_id)
-            if token_bucket is not None and not self._bucket_has_capacity(
-                token_bucket,
-                units=max(0, int(estimated_tokens)),
-                now_ts=now_ts,
-            ):
-                return False, f"Token limit exceeded for user {user_id}"
-
-        return True, None
-
     async def check_rate_limit(
         self,
         user_id: str,
@@ -397,16 +337,6 @@ class ConversationRateLimiter:
         if rg_decision is None:
             # RG unavailable: keep legacy path as diagnostics-only (no counters).
             _log_rg_chat_fallback("rg_decision_unavailable")
-            legacy_allowed, legacy_error = await self._peek_legacy_rate_limit(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                estimated_tokens=estimated_tokens,
-            )
-            _log_rg_chat_legacy_diagnostic(
-                reason="rg_decision_unavailable",
-                legacy_allowed=legacy_allowed,
-                legacy_error=legacy_error,
-            )
             return True, None
 
         if not rg_decision.get("allowed", False):
@@ -645,7 +575,6 @@ _rg_chat_lock = asyncio.Lock()
 _rg_chat_init_error: Optional[str] = None
 _rg_chat_init_error_logged = False
 _rg_chat_fallback_logged = False
-_rg_chat_legacy_diag_logged = False
 
 
 def _rg_chat_context() -> dict[str, str]:
@@ -700,25 +629,6 @@ def _log_rg_chat_fallback(reason: str) -> None:
         **ctx,
     )
 
-
-def _log_rg_chat_legacy_diagnostic(
-    *,
-    reason: str,
-    legacy_allowed: bool,
-    legacy_error: Optional[str],
-) -> None:
-    """Log one-shot diagnostic-only legacy decision details."""
-    global _rg_chat_legacy_diag_logged
-    if _rg_chat_legacy_diag_logged:
-        return
-    _rg_chat_legacy_diag_logged = True
-    logger.warning(
-        "Chat legacy limiter diagnostics-only shim active; enforcement bypassed. "
-        "reason={} legacy_allowed={} legacy_error={}",
-        reason,
-        legacy_allowed,
-        legacy_error,
-    )
 
 try:  # pragma: no cover - RG is optional
     from tldw_Server_API.app.core.config import rg_enabled  # type: ignore
@@ -870,5 +780,5 @@ async def _maybe_enforce_with_rg_chat(
             "policy_id": policy_id,
         }
     except _RATE_LIMITER_NONCRITICAL_EXCEPTIONS as exc:
-        logger.debug("Chat RG reserve failed; falling back to legacy limiter: {}", exc)
+        logger.debug("Chat RG reserve failed; using diagnostics-only shim path: {}", exc)
         return None

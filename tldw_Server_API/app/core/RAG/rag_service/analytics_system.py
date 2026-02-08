@@ -582,6 +582,43 @@ class UserFeedbackStore:
             return feedback
         return []
 
+    async def get_feedback_by_id(self, feedback_id: str) -> Optional[dict[str, Any]]:
+        """Get a single feedback record by its id."""
+        select_sql = "SELECT * FROM conversation_feedback WHERE id = %s"
+        if self.db.backend_type == BackendType.SQLITE:
+            select_sql = select_sql.replace('%s', '?')
+
+        try:
+            cursor = self.db.execute_query(select_sql, (feedback_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            fb = dict(row)
+            fb["document_ids"] = json.loads(fb["document_ids"]) if fb.get("document_ids") else []
+            fb["chunk_ids"] = json.loads(fb["chunk_ids"]) if fb.get("chunk_ids") else []
+            fb["issues"] = json.loads(fb["issues"]) if fb.get("issues") else []
+            helpful_value = fb.get("helpful")
+            fb["helpful"] = None if helpful_value is None else bool(helpful_value)
+            return fb
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.error(f"Failed to get feedback by id: {exc}")
+            return None
+
+    async def delete_feedback(self, feedback_id: str) -> bool:
+        """Delete a feedback record by id. Returns True if a row was deleted."""
+        delete_sql = "DELETE FROM conversation_feedback WHERE id = %s"
+        if self.db.backend_type == BackendType.SQLITE:
+            delete_sql = delete_sql.replace('%s', '?')
+
+        try:
+            with self.db.transaction() as conn:
+                cursor = conn.execute(delete_sql, (feedback_id,))
+                deleted = getattr(cursor, "rowcount", 0) or 0
+                return deleted > 0
+        except (BackendDatabaseError, CharactersRAGDBError, AttributeError, OSError, RuntimeError, TypeError, ValueError) as exc:
+            logger.error(f"Failed to delete feedback {feedback_id}: {exc}")
+            raise
+
 
 class UnifiedFeedbackSystem:
     """

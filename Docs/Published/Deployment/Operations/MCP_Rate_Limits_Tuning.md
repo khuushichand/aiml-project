@@ -8,7 +8,7 @@ MCP provides:
 - A global rate limiter (RPM + burst) for all requests
 - Per-category limiters (e.g., `ingestion`, `read`) applied per tool
 - Config-driven tool→category mapping via JSON env or YAML file
-- Optional Redis backend for multi-node deployments
+- Optional RG Redis backend for multi-node deployments
 
 ## Key Environment Variables
 
@@ -18,8 +18,8 @@ Global:
 - `MCP_RATE_LIMIT_BURST` - Allowed burst tokens
 
 Distributed (multi-node):
-- `MCP_RATE_LIMIT_USE_REDIS=1`
-- `MCP_REDIS_URL=redis://host:6379/0`
+- `RG_BACKEND=redis`
+- `REDIS_URL=redis://host:6379/0`
 
 Category-specific (optional):
 - `MCP_RATE_LIMIT_RPM_INGESTION` / `MCP_RATE_LIMIT_BURST_INGESTION`
@@ -54,7 +54,7 @@ Sample YAML (checked in):
 - Too many 429 responses
   - Increase `MCP_RATE_LIMIT_RPM_INGESTION` or refine tool mapping to classify hot tools as `read` (if safe)
 - Inconsistent rates across nodes
-  - Ensure `MCP_RATE_LIMIT_USE_REDIS=1` and a shared `MCP_REDIS_URL` are set for all instances
+  - Ensure `RG_BACKEND=redis` and a shared `REDIS_URL` are set for all instances
 - Unexpected tool classification
   - Confirm `MCP_TOOL_CATEGORY_MAP` or `MCP_TOOL_CATEGORY_MAP_FILE` entries and that the tool names match module definitions exactly
 

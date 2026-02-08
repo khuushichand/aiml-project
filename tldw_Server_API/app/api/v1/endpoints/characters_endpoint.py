@@ -172,6 +172,8 @@ from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_selector i
 )
 from tldw_Server_API.app.core.Character_Chat.modules.persona_exemplar_embeddings import (
     score_exemplars_with_embeddings,
+    upsert_character_exemplar_embeddings,
+    delete_character_exemplar_embeddings,
 )
 from tldw_Server_API.app.core.Character_Chat.world_book_manager import WorldBookService
 from tldw_Server_API.app.core.DB_Management.ChaChaNotes_DB import (
@@ -205,6 +207,11 @@ _CHARACTERS_NONCRITICAL_EXCEPTIONS = (
 
 # --- Router ---
 router = APIRouter()
+
+_EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP = 200
+_EXEMPLAR_SEARCH_HYBRID_MIN_POOL = 40
+_EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT = 0.55
+_EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT = 0.45
 
 
 # --- Helper Functions (Keep _convert_db_char_to_response_model as is) ---
@@ -364,6 +371,198 @@ def _convert_db_exemplar_to_response_model(exemplar_dict_from_db: dict[str, Any]
     }
 
     return CharacterExemplarResponse.model_validate(response_data)
+
+
+def _resolve_exemplar_embedding_user_id(db: CharactersRAGDB) -> str | None:
+    user_id = str(getattr(db, "client_id", "") or "").strip()
+    return user_id or None
+
+
+def _sync_exemplar_embeddings_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    exemplars: list[dict[str, Any]],
+) -> None:
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id or not exemplars:
+        return
+    try:
+        upsert_character_exemplar_embeddings(
+            user_id=user_id,
+            character_id=character_id,
+            exemplars=exemplars,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to sync exemplar embeddings for character {} user {}: {}",
+            character_id,
+            user_id,
+            exc,
+        )
+
+
+def _delete_exemplar_embeddings_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    exemplar_ids: list[str],
+) -> None:
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id or not exemplar_ids:
+        return
+    try:
+        delete_character_exemplar_embeddings(
+            user_id=user_id,
+            character_id=character_id,
+            exemplar_ids=exemplar_ids,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning(
+            "Failed to delete exemplar embeddings for character {} user {}: {}",
+            character_id,
+            user_id,
+            exc,
+        )
+
+
+def _build_lexical_rank_scores(exemplars: list[dict[str, Any]]) -> dict[str, float]:
+    """Build deterministic lexical rank scores in [0, 1] for hybrid re-ranking."""
+    if not exemplars:
+        return {}
+
+    denom = max(1, len(exemplars) - 1)
+    scores: dict[str, float] = {}
+    for idx, item in enumerate(exemplars):
+        exemplar_id = str(item.get("id") or "").strip()
+        if not exemplar_id:
+            continue
+        scores[exemplar_id] = round(1.0 - (idx / denom), 6)
+    return scores
+
+
+def _as_sortable_timestamp(value: Any) -> str:
+    """Normalize DB timestamp-ish values for stable descending sort keys."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _search_character_exemplars_hybrid_best_effort(
+    *,
+    db: CharactersRAGDB,
+    character_id: int,
+    search_request: CharacterExemplarSearchRequest,
+) -> tuple[list[dict[str, Any]], int]:
+    """Run best-effort lexical+embedding hybrid search with safe lexical fallback."""
+    normalized_query = str(search_request.query or "").strip()
+    if not normalized_query or not search_request.use_embedding_scores:
+        return db.search_character_exemplars(
+            character_id,
+            query=search_request.query,
+            emotion=search_request.filter.emotion,
+            scenario=search_request.filter.scenario,
+            rhetorical=search_request.filter.rhetorical,
+            limit=search_request.limit,
+            offset=search_request.offset,
+        )
+
+    base_window = max(1, int(search_request.limit) + int(search_request.offset))
+    candidate_pool_size = min(
+        _EXEMPLAR_SEARCH_HYBRID_CANDIDATE_CAP,
+        max(_EXEMPLAR_SEARCH_HYBRID_MIN_POOL, base_window * 4),
+    )
+
+    lexical_candidates, _ = db.search_character_exemplars(
+        character_id,
+        query=normalized_query,
+        emotion=search_request.filter.emotion,
+        scenario=search_request.filter.scenario,
+        rhetorical=search_request.filter.rhetorical,
+        limit=candidate_pool_size,
+        offset=0,
+    )
+    lexical_scores = _build_lexical_rank_scores(lexical_candidates)
+
+    candidate_map: dict[str, dict[str, Any]] = {}
+    for item in lexical_candidates:
+        exemplar_id = str(item.get("id") or "").strip()
+        if exemplar_id:
+            candidate_map[exemplar_id] = item
+
+    if len(candidate_map) < candidate_pool_size:
+        try:
+            listed = db.list_character_exemplars(character_id, limit=candidate_pool_size, offset=0)
+            for item in listed:
+                exemplar_id = str(item.get("id") or "").strip()
+                if exemplar_id and exemplar_id not in candidate_map:
+                    candidate_map[exemplar_id] = item
+                if len(candidate_map) >= candidate_pool_size:
+                    break
+        except CharactersRAGDBError as exc:
+            logger.warning("Hybrid exemplar search list backfill failed for character {}: {}", character_id, exc)
+
+    all_candidates = list(candidate_map.values())
+    if not all_candidates:
+        return [], 0
+
+    user_id = _resolve_exemplar_embedding_user_id(db)
+    if not user_id:
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+
+    try:
+        embedding_scores = score_exemplars_with_embeddings(
+            normalized_query,
+            all_candidates,
+            user_id=user_id,
+            character_id=character_id,
+            model_id_override=search_request.embedding_model_id,
+        )
+    except _CHARACTERS_NONCRITICAL_EXCEPTIONS as exc:
+        logger.warning("Hybrid exemplar search embedding scoring failed for character {}: {}", character_id, exc)
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+    if not embedding_scores:
+        total = len(lexical_candidates)
+        return lexical_candidates[search_request.offset:search_request.offset + search_request.limit], total
+
+    ranked: list[dict[str, Any]] = []
+    for item in all_candidates:
+        exemplar_id = str(item.get("id") or "").strip()
+        if not exemplar_id:
+            continue
+        lexical_score = float(lexical_scores.get(exemplar_id, 0.0))
+        vector_score = float(embedding_scores.get(exemplar_id, 0.0))
+        if lexical_score <= 0.0 and vector_score <= 0.0:
+            continue
+        hybrid_score = (
+            _EXEMPLAR_SEARCH_HYBRID_VECTOR_WEIGHT * vector_score
+            + _EXEMPLAR_SEARCH_HYBRID_LEXICAL_WEIGHT * lexical_score
+        )
+        ranked.append(
+            {
+                "item": item,
+                "hybrid_score": round(hybrid_score, 6),
+                "vector_score": round(vector_score, 6),
+                "lexical_score": round(lexical_score, 6),
+                "updated_at": _as_sortable_timestamp(item.get("updated_at") or item.get("created_at")),
+            }
+        )
+
+    ranked.sort(
+        key=lambda entry: (
+            entry["hybrid_score"],
+            entry["vector_score"],
+            entry["lexical_score"],
+            entry["updated_at"],
+        ),
+        reverse=True,
+    )
+
+    sorted_items = [entry["item"] for entry in ranked]
+    total = len(sorted_items)
+    return sorted_items[search_request.offset:search_request.offset + search_request.limit], total
 
 
 # --- API Endpoints ---
@@ -693,14 +892,26 @@ async def create_character_exemplars_endpoint(
                     detail="Exemplar payload list cannot be empty.",
                 )
             created_items: list[CharacterExemplarResponse] = []
+            created_rows_for_sync: list[dict[str, Any]] = []
             for exemplar in exemplar_payload:
                 flattened = _flatten_character_exemplar_payload(exemplar.model_dump(exclude_none=False))
                 created = db.add_character_exemplar(character_id, flattened)
                 created_items.append(_convert_db_exemplar_to_response_model(created))
+                created_rows_for_sync.append(created)
+            _sync_exemplar_embeddings_best_effort(
+                db=db,
+                character_id=character_id,
+                exemplars=created_rows_for_sync,
+            )
             return created_items
 
         flattened = _flatten_character_exemplar_payload(exemplar_payload.model_dump(exclude_none=False))
         created = db.add_character_exemplar(character_id, flattened)
+        _sync_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplars=[created],
+        )
         return _convert_db_exemplar_to_response_model(created)
     except (InputError, ConflictError) as e:
         status_code = status.HTTP_400_BAD_REQUEST if isinstance(e, InputError) else status.HTTP_409_CONFLICT
@@ -780,6 +991,11 @@ async def update_character_exemplar_endpoint(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Exemplar '{exemplar_id}' not found for character {character_id}.",
             )
+        _sync_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplars=[updated],
+        )
         return _convert_db_exemplar_to_response_model(updated)
     except InputError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
@@ -825,6 +1041,11 @@ async def delete_character_exemplar_endpoint(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to delete exemplar '{exemplar_id}'.",
             )
+        _delete_exemplar_embeddings_best_effort(
+            db=db,
+            character_id=character_id,
+            exemplar_ids=[exemplar_id],
+        )
 
         return CharacterExemplarDeletionResponse(
             message=f"Exemplar '{exemplar_id}' soft-deleted for character {character_id}.",
@@ -866,14 +1087,10 @@ async def search_character_exemplars_endpoint(
                 detail=f"Character with ID {character_id} not found.",
             )
 
-        results, total = db.search_character_exemplars(
-            character_id,
-            query=search_request.query,
-            emotion=search_request.filter.emotion,
-            scenario=search_request.filter.scenario,
-            rhetorical=search_request.filter.rhetorical,
-            limit=search_request.limit,
-            offset=search_request.offset,
+        results, total = _search_character_exemplars_hybrid_best_effort(
+            db=db,
+            character_id=character_id,
+            search_request=search_request,
         )
         return CharacterExemplarSearchResponse(
             items=[_convert_db_exemplar_to_response_model(item) for item in results],
@@ -922,11 +1139,14 @@ async def select_character_exemplars_debug_endpoint(
         embedding_callback = None
         if selection_config.use_embedding_scores:
             embedding_model_id = selection_config.embedding_model_id
+            embedding_user_id = _resolve_exemplar_embedding_user_id(db)
 
             def _embedding_callback(user_turn: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
                 return score_exemplars_with_embeddings(
                     user_turn,
                     candidates,
+                    user_id=embedding_user_id,
+                    character_id=character_id,
                     model_id_override=embedding_model_id,
                 )
 

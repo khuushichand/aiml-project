@@ -238,6 +238,8 @@ class TestCharacterExemplarEndpoints:
         def _fake_embedding_scores(user_turn: str, candidates: list[dict], **kwargs):
             assert user_turn
             observed["model_id_override"] = str(kwargs.get("model_id_override"))
+            observed["user_id"] = str(kwargs.get("user_id"))
+            observed["character_id"] = str(kwargs.get("character_id"))
             candidate_ids = {str(item.get("id")) for item in candidates}
             assert lexical_id in candidate_ids
             assert semantic_id in candidate_ids
@@ -272,6 +274,8 @@ class TestCharacterExemplarEndpoints:
         assert payload["selected"]
         assert payload["selected"][0]["id"] == semantic_id
         assert observed["model_id_override"] == "stub:embedding-model"
+        assert observed["user_id"]
+        assert observed["character_id"] == str(char_id)
 
     def test_character_exemplar_debug_selection_embedding_failure_falls_back(
         self,
@@ -321,3 +325,143 @@ class TestCharacterExemplarEndpoints:
         assert debug_response.status_code == 200
         payload = debug_response.json()
         assert payload["selected"]
+
+    def test_character_exemplar_search_can_use_hybrid_embedding_rerank(
+        self,
+        test_client,
+        auth_headers,
+        monkeypatch,
+    ):
+        char_id = self._create_character(test_client, auth_headers, "Exemplar API Character Hybrid Search")
+
+        lexical_create = test_client.post(
+            f"/api/v1/characters/{char_id}/exemplars",
+            json={
+                "text": "board meeting strategy budget plan",
+                "labels": {
+                    "emotion": "neutral",
+                    "scenario": "boardroom",
+                    "rhetorical": ["opener"],
+                },
+            },
+            headers=auth_headers,
+        )
+        assert lexical_create.status_code == 201
+        lexical_id = lexical_create.json()["id"]
+
+        semantic_create = test_client.post(
+            f"/api/v1/characters/{char_id}/exemplars",
+            json={
+                "text": "generic reply with sparse lexical overlap",
+                "labels": {
+                    "emotion": "neutral",
+                    "scenario": "boardroom",
+                    "rhetorical": ["emphasis"],
+                },
+            },
+            headers=auth_headers,
+        )
+        assert semantic_create.status_code == 201
+        semantic_id = semantic_create.json()["id"]
+
+        observed: dict[str, str] = {}
+
+        def _fake_embedding_scores(user_turn: str, candidates: list[dict], **kwargs):
+            assert user_turn
+            observed["model_id_override"] = str(kwargs.get("model_id_override"))
+            observed["user_id"] = str(kwargs.get("user_id"))
+            observed["character_id"] = str(kwargs.get("character_id"))
+            candidate_ids = {str(item.get("id")) for item in candidates}
+            assert lexical_id in candidate_ids
+            assert semantic_id in candidate_ids
+            return {
+                lexical_id: 0.0,
+                semantic_id: 1.0,
+            }
+
+        monkeypatch.setattr(
+            characters_endpoint_module,
+            "score_exemplars_with_embeddings",
+            _fake_embedding_scores,
+        )
+
+        search_response = test_client.post(
+            f"/api/v1/characters/{char_id}/exemplars/search",
+            json={
+                "query": "board meeting strategy budget plan",
+                "use_embedding_scores": True,
+                "embedding_model_id": "stub:hybrid-search",
+                "limit": 10,
+                "offset": 0,
+            },
+            headers=auth_headers,
+        )
+
+        assert search_response.status_code == 200
+        payload = search_response.json()
+        assert payload["items"]
+        assert payload["items"][0]["id"] == semantic_id
+        assert observed["model_id_override"] == "stub:hybrid-search"
+        assert observed["user_id"]
+        assert observed["character_id"] == str(char_id)
+
+    def test_character_exemplar_crud_triggers_embedding_sync_hooks(
+        self,
+        test_client,
+        auth_headers,
+        monkeypatch,
+    ):
+        char_id = self._create_character(test_client, auth_headers, "Exemplar API Character Embedding Sync")
+
+        observed: dict[str, list] = {"upserts": [], "deletes": []}
+
+        def _fake_upsert(**kwargs):
+            observed["upserts"].append(kwargs)
+            return len(kwargs.get("exemplars") or [])
+
+        def _fake_delete(**kwargs):
+            observed["deletes"].append(kwargs)
+            return len(kwargs.get("exemplar_ids") or [])
+
+        monkeypatch.setattr(
+            characters_endpoint_module,
+            "upsert_character_exemplar_embeddings",
+            _fake_upsert,
+        )
+        monkeypatch.setattr(
+            characters_endpoint_module,
+            "delete_character_exemplar_embeddings",
+            _fake_delete,
+        )
+
+        create_response = test_client.post(
+            f"/api/v1/characters/{char_id}/exemplars",
+            json={
+                "text": "Embedding sync create exemplar.",
+                "labels": {"emotion": "neutral", "scenario": "press_challenge", "rhetorical": ["opener"]},
+            },
+            headers=auth_headers,
+        )
+        assert create_response.status_code == 201
+        exemplar_id = str(create_response.json()["id"])
+
+        update_response = test_client.put(
+            f"/api/v1/characters/{char_id}/exemplars/{exemplar_id}",
+            json={
+                "text": "Embedding sync update exemplar.",
+                "labels": {"emotion": "happy", "scenario": "fan_banter", "rhetorical": ["emphasis"]},
+            },
+            headers=auth_headers,
+        )
+        assert update_response.status_code == 200
+
+        delete_response = test_client.delete(
+            f"/api/v1/characters/{char_id}/exemplars/{exemplar_id}",
+            headers=auth_headers,
+        )
+        assert delete_response.status_code == 200
+
+        assert len(observed["upserts"]) >= 2
+        assert len(observed["deletes"]) == 1
+        assert observed["deletes"][0]["character_id"] == char_id
+        assert observed["deletes"][0]["exemplar_ids"] == [exemplar_id]

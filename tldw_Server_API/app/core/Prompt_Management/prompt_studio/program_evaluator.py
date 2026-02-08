@@ -135,7 +135,11 @@ class ProgramEvaluator:
             return EvalResult(
                 success=False,
                 reward=-1.0,
-                metrics={},
+                metrics={
+                    "mode": "sandbox",
+                    "timeout_sec": timeout_sec,
+                    "memory_mb": memory_mb,
+                },
                 return_code=2,
                 error="No code detected in output",
             )
@@ -146,7 +150,12 @@ class ProgramEvaluator:
             return EvalResult(
                 success=False,
                 reward=-1.0,
-                metrics={"policy_violation": violation},
+                metrics={
+                    "mode": "sandbox",
+                    "policy_violation": violation,
+                    "timeout_sec": timeout_sec,
+                    "memory_mb": memory_mb,
+                },
                 return_code=3,
                 error=violation,
             )
@@ -160,10 +169,16 @@ class ProgramEvaluator:
         out = self._truncate_text(exec_out)
         err = self._truncate_text(exec_err)
         if not success:
+            failure_kind = "timeout" if int(return_code) == 124 else "execution_error"
             return EvalResult(
                 success=False,
                 reward=-1.0,
-                metrics={},
+                metrics={
+                    "mode": "sandbox",
+                    "failure_kind": failure_kind,
+                    "timeout_sec": timeout_sec,
+                    "memory_mb": memory_mb,
+                },
                 return_code=return_code,
                 stdout=out,
                 stderr=err,
@@ -171,6 +186,8 @@ class ProgramEvaluator:
             )
 
         reward, metrics = self._score_from_outputs(exec_out, globals_dump, spec or {})
+        metrics.setdefault("timeout_sec", timeout_sec)
+        metrics.setdefault("memory_mb", memory_mb)
         return EvalResult(
             success=True,
             reward=reward,
@@ -187,12 +204,14 @@ class ProgramEvaluator:
         """Extract python code from fenced blocks or heuristics."""
         if not text:
             return None
-        # Prefer fenced blocks
-        m = re.findall(r"```(?:python)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-        if m:
-            # Pick the largest block and normalize indentation
-            block = max(m, key=lambda s: len(s))
-            return textwrap.dedent(block).strip()
+        # Prefer python-fenced blocks while preserving indentation in code body.
+        python_blocks = re.findall(r"```python[ \t]*\r?\n(.*?)```", text, re.DOTALL | re.IGNORECASE)
+        generic_blocks = re.findall(r"```[ \t]*\r?\n(.*?)```", text, re.DOTALL | re.IGNORECASE)
+        blocks = python_blocks or generic_blocks
+        if blocks:
+            normalized = [textwrap.dedent(block).strip() for block in blocks if str(block).strip()]
+            if normalized:
+                return max(normalized, key=len)
         # Heuristic: find regions with many code-like lines
         lines = text.splitlines()
         buf: list[str] = []
@@ -235,7 +254,7 @@ class ProgramEvaluator:
 
     def _extract_import_roots(self, code: str) -> set[str]:
         roots: set[str] = set()
-        for match in re.finditer(r"^\s*import\s+([A-Za-z0-9_.,\s]+)", code, re.MULTILINE):
+        for match in re.finditer(r"^\s*import\s+([^\n#]+)", code, re.MULTILINE):
             names = match.group(1).split(",")
             for name in names:
                 base = name.strip().split(" as ")[0].split(".")[0].strip()
@@ -280,7 +299,7 @@ class ProgramEvaluator:
         allowed_json = json.dumps(sorted(allowed_imports))
         code_json = json.dumps(code)
         wrapper_lines = [
-            "import sys, json, builtins",
+            "import sys, json, builtins, textwrap",
             "# Try to set resource limits (best-effort)",
             "try:",
             "    import resource",
@@ -315,8 +334,8 @@ class ProgramEvaluator:
             "    # First try to execute as-is",
             "    exec(compile(__user_code, '<sandbox>', 'exec'), __code_globals, __code_locals)",
             "except IndentationError:",
-            "    # Fallback: normalize leading indentation per line and retry",
-            "    __user_code_fixed = '\\n'.join(line.lstrip() for line in __user_code.splitlines())",
+            "    # Fallback: dedent markdown-indented snippets and retry",
+            "    __user_code_fixed = textwrap.dedent(__user_code)",
             "    try:",
             "        exec(compile(__user_code_fixed, '<sandbox>', 'exec'), __code_globals, __code_locals)",
             "    except Exception as e2:",

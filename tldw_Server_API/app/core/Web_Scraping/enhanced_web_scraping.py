@@ -228,28 +228,6 @@ class RateLimiter:
         while self._request_times and self._request_times[0] < cutoff_hour:
             self._request_times.popleft()
 
-    def _legacy_wait_reason(self, now: float) -> tuple[str, float] | None:
-        """Return the legacy wait reason and delay without mutating counters."""
-        if len(self._request_times) >= self.max_rph:
-            wait_time = 3600 - (now - self._request_times[0])
-            if wait_time > 0:
-                return "hourly", wait_time
-
-        minute_ago = now - 60
-        recent_times = [t for t in self._request_times if t > minute_ago]
-        if len(recent_times) >= self.max_rpm:
-            oldest_recent = min(recent_times) if recent_times else now
-            wait_time = 60 - (now - oldest_recent)
-            if wait_time > 0:
-                return "minute", wait_time
-
-        if self._request_times and (now - self._request_times[-1]) < (1.0 / self.max_rps):
-            wait_time = (1.0 / self.max_rps) - (now - self._request_times[-1])
-            if wait_time > 0:
-                return "second", wait_time
-
-        return None
-
     async def acquire(self):
         """Acquire permission to make a request"""
         async with self._lock:
@@ -266,13 +244,6 @@ class RateLimiter:
                     )
                     # For scraping, we model RG denials as backoff rather than hard 429s.
                     await asyncio.sleep(retry_after)
-
-                now = time.time()
-                self._prune_old_request_times(now)
-                legacy_wait = self._legacy_wait_reason(now)
-                if legacy_wait is not None:
-                    reason, wait_time = legacy_wait
-                    _log_rg_web_legacy_diagnostic(reason=reason, wait_time=wait_time)
                 return
 
             now = time.time()
@@ -309,7 +280,6 @@ _rg_web_governor = None
 _rg_web_loader = None
 _rg_web_lock = asyncio.Lock()
 _rg_web_fallback_logged = False
-_rg_web_legacy_diag_logged = False
 
 
 def _log_rg_web_fallback(reason: str) -> None:
@@ -321,19 +291,6 @@ def _log_rg_web_fallback(reason: str) -> None:
         "Web scraping ResourceGovernor unavailable; using diagnostics-only legacy shim (no sleeps/counters). "
         "reason={}",
         reason,
-    )
-
-
-def _log_rg_web_legacy_diagnostic(*, reason: str, wait_time: float) -> None:
-    global _rg_web_legacy_diag_logged
-    if _rg_web_legacy_diag_logged:
-        return
-    _rg_web_legacy_diag_logged = True
-    logger.warning(
-        "Web scraping legacy limiter would throttle while RG path is active; allowed by diagnostics-only shim. "
-        "reason={} wait_time={:.3f}",
-        reason,
-        wait_time,
     )
 
 

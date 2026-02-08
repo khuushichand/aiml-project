@@ -752,6 +752,13 @@ class ChatCompletionRequest(BaseModel):
 
     # --- Optional Character Chat Parameters ---
     character_id: Optional[str] = Field(None, description="Optional ID of the character to use for context.")
+    persona_id: Optional[str] = Field(
+        None,
+        description=(
+            "[Compatibility] Optional persona alias. Accepted only when it can be deterministically resolved to "
+            "a character ID."
+        ),
+    )
     conversation_id: Optional[str] = Field(None, description="Optional ID of the conversation to use for context.")
     persona_exemplar_budget_tokens: Optional[int] = Field(
         None,

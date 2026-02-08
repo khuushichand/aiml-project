@@ -94,3 +94,64 @@ def test_program_evaluator_import_whitelist_env(monkeypatch):
     blocked_res = pe.evaluate(project_id=None, db=None, llm_output=blocked_code, spec={"metric_var": "val"})
     assert blocked_res.success is False
     assert blocked_res.return_code == 3
+
+
+@pytest.mark.parametrize(
+    "snippet",
+    [
+        "open('/tmp/x', 'w')",
+        "import socket\nsocket.socket()",
+        "__import__('os').system('echo nope')",
+    ],
+)
+def test_program_evaluator_blocks_unsafe_calls(monkeypatch, snippet):
+    pe = ProgramEvaluator()
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
+    code = f"""
+    ```python
+    {snippet}
+    ```
+    """
+    res = pe.evaluate(project_id=None, db=None, llm_output=code, spec={})
+    assert res.success is False
+    assert res.return_code == 3
+    assert "policy_violation" in (res.metrics or {})
+
+
+def test_extract_code_handles_markdown_indentation():
+    pe = ProgramEvaluator()
+    raw = """
+    ```python
+        x = 0
+        while x < 2:
+            x += 1
+    ```
+    """
+    code = pe._extract_code(raw)
+    assert code is not None
+    assert "while x < 2:" in code
+    # Ensure nested indentation is preserved after extraction.
+    assert "    x += 1" in code
+
+
+def test_program_evaluator_memory_limit_env_is_applied(monkeypatch):
+    pe = ProgramEvaluator()
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_CODE_EVAL", "true")
+    monkeypatch.setenv("PROMPT_STUDIO_CODE_EVAL_MEM_MB", "64")
+
+    seen = {}
+
+    def _fake_execute(code: str, *, timeout_sec: float, memory_mb: int, import_whitelist: set[str]):
+        seen["memory_mb"] = int(memory_mb)
+        return True, 0, "ok", "", {"val": 1.0}
+
+    monkeypatch.setattr(pe, "_execute_in_sandbox", _fake_execute, raising=True)
+    res = pe.evaluate(
+        project_id=None,
+        db=None,
+        llm_output="""```python\nval = 1.0\n```""",
+        spec={"metric_var": "val", "objective": "maximize"},
+    )
+    assert res.success is True
+    assert seen["memory_mb"] == 64
+    assert float((res.metrics or {}).get("memory_mb", 0)) == 64.0

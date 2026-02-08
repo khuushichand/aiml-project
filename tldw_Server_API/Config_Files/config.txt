@@ -168,6 +168,10 @@ rate_limit_tokens_per_minute = 100000
 history_messages_limit = 20
 # Ordering for loaded history: asc (oldest first) or desc (newest first). Default: desc.
 history_messages_order = desc
+# Default persona exemplar budget tokens for character chat augmentation
+# when request-level override is omitted.
+# Env override: PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS
+persona_exemplar_default_budget_tokens = 600
 
 # Server-side tool auto-execution (Phase 2; default remains off)
 # Env: CHAT_AUTO_EXECUTE_TOOLS=true|false

@@ -45,6 +45,7 @@ Genetic:
 ```
 
 MCTS (canary): see `Docs/Guides/Prompt_Studio_MCTS_Guide.md`.
+Concrete payload/event examples: `Docs/Examples/PromptStudio/mcts/`.
 
 ## Metrics to collect
 

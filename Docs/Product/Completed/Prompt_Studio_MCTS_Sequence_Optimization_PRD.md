@@ -31,13 +31,12 @@ Completed (MVP + MCTS core):
 - Feature gating: MCTS strategy is disabled by default; enabled in development via canary or explicitly with `PROMPT_STUDIO_ENABLE_MCTS=true`. Debug decision dumps controlled by `PROMPT_STUDIO_MCTS_DEBUG_DECISIONS=true`.
 - Docs & Guides: See `Docs/Guides/Prompt_Studio_MCTS_Guide.md`, `Docs/Guides/Prompt_Studio_Program_Evaluator.md`, and `Docs/Guides/Prompt_Studio_Ablations.md`.
 - Quality/Decomposition helpers: heuristic `PromptQualityScorer` (0..10) and `PromptDecomposer` (naive segment split); pruning via `min_quality` strategy param.
-- Program Evaluator (Phase 2 groundwork): feature-flagged `ProgramEvaluator` stub (no code exec) wired into `TestRunner` for runner="python" cases; maps heuristic reward to aggregate score when enabled.
+- Program Evaluator (Phase 2): feature-gated `ProgramEvaluator` executes extracted Python in an isolated subprocess with import whitelist and best-effort CPU/memory/time bounds; wired into `TestRunner` for `runner="python"` with safe-failure normalization.
 - OpenAPI example: added an `mcts` example payload to `/optimizations/create` for discoverability.
 
 In Progress / Planned next:
-- ProgramEvaluator sandbox (actual execution) behind flag; per-project controls and resource limits.
 - Docs: examples, UI notes, and ablation scripts; README WS payload samples and advanced usage.
- - Tests: expand unit/integration/perf coverage; throttle WS for large n_sims.
+- Tests: expand unit/integration/perf coverage; throttle WS for large n_sims.
 
 ## Goals
 
@@ -103,7 +102,7 @@ Decomposition & context:
 
 - Emit metrics: `sims_total`, `best_reward`, `avg_branching`, `nodes_expanded`, `token_spend`.
 - WS events include current best reward, simulation index, and optional short trace summary.
-  - Implemented: WS progress broadcasts per simulation (current and best scores; pruned events). Metrics pending.
+  - Implemented: WS progress broadcasts per simulation (current and best scores), throttled persistence parity, and MCTS summary/error metrics.
 
 ## Non-Functional Requirements
 
@@ -126,7 +125,7 @@ Implemented so far:
 - v2 (optional): ProgramEvaluator behind feature flag
   - Sandboxed execution (timeout, memory, no network/files); whitelist imports; capture stdout/stderr; scrub logs.
   - Never log user secrets; redact inputs in traces.
-- MVP: non-executing `ProgramEvaluator` stub wired under flag - no code runs; returns heuristic reward only when enabled.
+- ProgramEvaluator executes only when enabled via global/project controls; when disabled, `TestRunner` keeps heuristic fallback behavior.
 - Rate limiting:
   - Reuse existing Prompt Studio limits in endpoint deps.
 
@@ -155,7 +154,7 @@ Implemented so far:
 - `MctsOptimizer` (MVP iterative best-of-N search, early stop, WS broadcasts)
 - `PromptQualityScorer` (heuristic)
 - `PromptDecomposer` (heuristic)
-- `ProgramEvaluator` (non-executing stub, feature-flagged) + `TestRunner` wiring
+- `ProgramEvaluator` sandbox execution + `TestRunner` wiring (feature-gated)
 
 Integration points:
 
@@ -224,7 +223,7 @@ Validation:
 - Current status: `MctsOptimizer` MVP, heuristic scorer/decomposer, WS progress, validation and docs completed.
 - Phase 2 (Optional):
   - Add `ProgramEvaluator` with secure sandbox; feature flag + config; basic code tasks.
-- Current status: non-executing `ProgramEvaluator` stub and wiring added; sandbox execution pending.
+- Current status: sandboxed `ProgramEvaluator` and controls are implemented behind feature flags.
 - Phase 3:
   - UI polish (use existing WS payloads), docs/examples, ablation scripts.
 
@@ -237,7 +236,7 @@ Validation:
 - Input validation rejects invalid strategy params with clear errors.
 - No breaking changes to other strategies or endpoints.
 - Metrics exposed without errors; logs do not include secrets.
-  - Current: WS progress is live; metrics to be added.
+  - Current: WS progress + metrics are live.
 
 ## Test Plan
 
@@ -274,7 +273,7 @@ Validation:
 
 - This PRD (Docs/Design/Prompt_Studio_MCTS_Sequence_Optimization_PRD.md).
 - API docs: extend Prompt Studio Optimization section with mcts strategy params and examples.
-- Add examples under `Docs/Examples/PromptStudio/mcts/` (follow-up task).
+- Examples under `Docs/Examples/PromptStudio/mcts/`.
 
 ## Milestones
 

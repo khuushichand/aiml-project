@@ -264,6 +264,87 @@ async def test_endpoint_created_mcts_job_executes_via_worker_path_and_persists_t
 
 
 @pytest.mark.asyncio
+async def test_history_endpoint_returns_progress_and_timeline_after_worker_run(
+    prompt_studio_dual_backend_db,
+    monkeypatch,
+):
+    monkeypatch.setenv("PROMPT_STUDIO_ENABLE_MCTS", "true")
+
+    async def allow_project_write_access(*args, **kwargs):
+        return None
+
+    async def allow_project_access(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        ps_opt_endpoints,
+        "require_project_write_access",
+        allow_project_write_access,
+        raising=True,
+    )
+    monkeypatch.setattr(
+        ps_opt_endpoints,
+        "require_project_access",
+        allow_project_access,
+        raising=True,
+    )
+
+    _label, db = prompt_studio_dual_backend_db
+    project, prompt, case = _seed_prompt_and_case(db)
+
+    async def fake_run_single_test(self, *, prompt_id: int, test_case_id: int, model_config, metrics=None):
+        row = self.db.get_prompt(prompt_id) or {}
+        sys_text = row.get("system_prompt") or ""
+        score = 0.9 if "Ensure outputs strictly follow" in sys_text else 0.2
+        return {"success": True, "scores": {"aggregate_score": score}}
+
+    async def fake_rephrase_segment(self, system_text: str, segment_text: str):
+        return None
+
+    monkeypatch.setattr(TestRunner, "run_single_test", fake_run_single_test, raising=True)
+    monkeypatch.setattr(MCTSOptimizer, "_rephrase_segment", fake_rephrase_segment, raising=True)
+    monkeypatch.setattr(jobs_worker, "_get_processor", lambda _user_id: JobProcessor(db), raising=True)
+
+    optimization_id, job_id, _body = await _create_optimization_via_endpoint(
+        db,
+        {
+            "project_id": project["id"],
+            "initial_prompt_id": prompt["id"],
+            "optimization_config": {
+                "optimizer_type": "mcts",
+                "max_iterations": 6,
+                "target_metric": "accuracy",
+                "strategy_params": {
+                    "mcts_simulations": 4,
+                    "mcts_max_depth": 2,
+                    "prompt_candidates_per_node": 1,
+                    "token_budget": 1000,
+                },
+            },
+            "test_case_ids": [case["id"]],
+            "name": "MCTS History Worker",
+        },
+    )
+
+    _result = await jobs_worker._handle_job(_get_job_by_id(job_id))
+
+    history_response = await ps_opt_endpoints.get_optimization_history(
+        optimization_id=optimization_id,
+        db=db,
+        user_context={"user_id": "test-user-123", "is_admin": True, "permissions": ["all"]},
+    )
+    body = history_response.model_dump()
+    assert body.get("success") is True
+    data = body.get("data") or {}
+    progress = data.get("progress") or {}
+    timeline = data.get("timeline") or []
+
+    assert str(progress.get("status")).lower() == "completed"
+    assert int(progress.get("iterations_completed") or 0) >= 1
+    assert isinstance(timeline, list) and len(timeline) >= 1
+
+
+@pytest.mark.asyncio
 async def test_endpoint_created_non_mcts_job_uses_worker_legacy_fallback_path(
     prompt_studio_dual_backend_db,
     monkeypatch,

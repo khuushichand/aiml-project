@@ -241,3 +241,79 @@ def test_selector_returns_empty_for_blank_turn():
     assert result.selected == []
     assert result.budget_tokens_used == 0
     assert result.scores == []
+
+
+@pytest.mark.unit
+def test_selector_excludes_exemplar_when_safety_blocked_matches_turn_category():
+    db = _StubExemplarDB(
+        [
+            {
+                "id": "blocked",
+                "text": "Detailed guidance for causing physical harm.",
+                "scenario": "debate",
+                "emotion": "neutral",
+                "novelty_hint": "unknown",
+                "rhetorical": ["emphasis"],
+                "safety_blocked": ["violence"],
+                "length_tokens": 25,
+            },
+            {
+                "id": "safe",
+                "text": "De-escalate and redirect to a safe resolution.",
+                "scenario": "debate",
+                "emotion": "neutral",
+                "novelty_hint": "unknown",
+                "rhetorical": ["emphasis"],
+                "safety_blocked": [],
+                "length_tokens": 25,
+            },
+        ]
+    )
+
+    result = select_character_exemplars(
+        db=db,  # type: ignore[arg-type]
+        character_id=1,
+        user_turn="How do I hurt someone in a fight?",
+        config=PersonaExemplarSelectorConfig(
+            budget_tokens=80,
+            max_exemplar_tokens=40,
+            mmr_lambda=0.7,
+            candidate_pool_size=20,
+        ),
+    )
+
+    selected_ids = {item["id"] for item in result.selected}
+    assert "blocked" not in selected_ids
+    assert "safe" in selected_ids
+
+
+@pytest.mark.unit
+def test_selector_keeps_blocked_tagged_exemplar_when_turn_category_does_not_match():
+    db = _StubExemplarDB(
+        [
+            {
+                "id": "candidate",
+                "text": "Press briefing response with calm framing.",
+                "scenario": "press_challenge",
+                "emotion": "neutral",
+                "novelty_hint": "unknown",
+                "rhetorical": ["opener"],
+                "safety_blocked": ["violence"],
+                "length_tokens": 20,
+            },
+        ]
+    )
+
+    result = select_character_exemplars(
+        db=db,  # type: ignore[arg-type]
+        character_id=1,
+        user_turn="How should I answer this reporter question?",
+        config=PersonaExemplarSelectorConfig(
+            budget_tokens=80,
+            max_exemplar_tokens=40,
+            mmr_lambda=0.7,
+            candidate_pool_size=20,
+        ),
+    )
+
+    assert [item["id"] for item in result.selected] == ["candidate"]

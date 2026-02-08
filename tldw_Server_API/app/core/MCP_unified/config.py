@@ -200,7 +200,6 @@ class MCPConfig(BaseSettings):
     rate_limit_enabled: bool = Field(default=True, validation_alias="MCP_RATE_LIMIT_ENABLED")
     rate_limit_requests_per_minute: int = Field(default=60, validation_alias="MCP_RATE_LIMIT_RPM")
     rate_limit_burst_size: int = Field(default=10, validation_alias="MCP_RATE_LIMIT_BURST")
-    rate_limit_use_redis: bool = Field(default=False, validation_alias="MCP_RATE_LIMIT_USE_REDIS")
 
     # WebSocket Configuration
     ws_max_connections: int = Field(default=1000, validation_alias="MCP_WS_MAX_CONNECTIONS")

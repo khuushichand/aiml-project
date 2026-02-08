@@ -42,7 +42,7 @@ Project metadata takes precedence when set to a boolean; otherwise global flag c
 - `return_code`
 - `stdout` (truncated)
 - `stderr` (truncated)
-- `metrics`
+- `metrics` (includes `mode`, `timeout_sec`, `memory_mb`, and failure details such as `failure_kind` when execution fails)
 - `reward`
 - `error` (optional)
 

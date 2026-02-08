@@ -247,7 +247,7 @@ async def create_evaluation(
             conn = db.get_connection()
             cursor = conn.cursor()
             model_configs = json.dumps(configs_list)
-            started_ts = datetime.now().isoformat()
+            started_ts = datetime.utcnow()
             cursor.execute(
                 """
                 INSERT INTO prompt_studio_evaluations (
@@ -602,7 +602,7 @@ async def delete_evaluation(
                 SET deleted = 1, deleted_at = ?
                 WHERE id = ?
                 """,
-                (datetime.now().isoformat(), evaluation_id),
+                (datetime.utcnow(), evaluation_id),
             )
         else:
             cursor.execute(
@@ -714,7 +714,7 @@ async def run_evaluation_async(
                 SET status = 'running', started_at = ?
                 WHERE id = ?
                 """,
-                (datetime.now().isoformat(), evaluation_id),
+                (datetime.utcnow(), evaluation_id),
             )
             conn.commit()
 

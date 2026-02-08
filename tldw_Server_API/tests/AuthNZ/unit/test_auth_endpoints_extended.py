@@ -124,21 +124,10 @@ async def test_forgot_password_rate_limited_returns_generic_message(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_reserve_auth_rg_requests_uses_fallback_when_governor_missing(monkeypatch):
+async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_governor_missing(monkeypatch):
     reset_settings()
     import tldw_Server_API.app.api.v1.endpoints.auth as auth
     monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
-
-    class _Limiter:
-        def __init__(self):
-            self.calls = []
-
-        async def check_rate_limit_fallback(self, **kwargs):
-            self.calls.append(kwargs)
-            return False, {"retry_after": 9}
-
-    limiter = _Limiter()
-    monkeypatch.setattr(auth, "get_rate_limiter", lambda: limiter)
 
     async def _no_governor(_request):
         return None
@@ -164,13 +153,87 @@ async def test_reserve_auth_rg_requests_uses_fallback_when_governor_missing(monk
         policy_id="authnz.magic_link.request",
         entity="ip:203.0.113.21",
     )
-    assert allowed is False
-    assert retry_after == 9
-    assert len(limiter.calls) == 1
-    call = limiter.calls[0]
-    assert call["endpoint"] == "auth:authnz.magic_link.request"
-    assert call["limit"] == 10
-    assert call["window_minutes"] == 1
+    assert allowed is True
+    assert retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_policy_missing(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
+
+    class _StubGovernor:
+        async def reserve(self, *_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("reserve should not run when RG policy is missing")
+
+    async def _governor(_request):
+        return _StubGovernor()
+
+    monkeypatch.setattr(auth, "_get_auth_endpoint_rg_governor", _governor)
+    monkeypatch.setattr(auth, "_auth_rg_policy_defined", lambda *_args, **_kwargs: False)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/magic-link/request",
+        "headers": [],
+        "client": ("203.0.113.22", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "state": {},
+        "app": SimpleNamespace(state=SimpleNamespace()),
+    }
+    request = Request(scope)
+
+    allowed, retry_after = await auth._reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.request",
+        entity="ip:203.0.113.22",
+    )
+
+    assert allowed is True
+    assert retry_after is None
+
+
+@pytest.mark.asyncio
+async def test_reserve_auth_rg_requests_uses_diagnostics_only_shim_when_rg_reserve_fails(monkeypatch):
+    reset_settings()
+    import tldw_Server_API.app.api.v1.endpoints.auth as auth
+    monkeypatch.setattr(auth, "_auth_rg_rate_limits_enabled", lambda: True)
+
+    class _BrokenGovernor:
+        async def reserve(self, *_args, **_kwargs):
+            raise RuntimeError("reserve failed")
+
+    async def _governor(_request):
+        return _BrokenGovernor()
+
+    monkeypatch.setattr(auth, "_get_auth_endpoint_rg_governor", _governor)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/v1/auth/magic-link/request",
+        "headers": [],
+        "client": ("203.0.113.23", 1234),
+        "scheme": "http",
+        "query_string": b"",
+        "server": ("testserver", 80),
+        "state": {},
+        "app": SimpleNamespace(state=SimpleNamespace()),
+    }
+    request = Request(scope)
+
+    allowed, retry_after = await auth._reserve_auth_rg_requests(
+        request,
+        policy_id="authnz.magic_link.request",
+        entity="ip:203.0.113.23",
+    )
+
+    assert allowed is True
+    assert retry_after is None
 
 
 @pytest.mark.asyncio

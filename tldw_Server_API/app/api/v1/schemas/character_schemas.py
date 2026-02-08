@@ -225,6 +225,14 @@ class CharacterExemplarSearchRequest(BaseModel):
     filter: CharacterExemplarSearchFilter = Field(default_factory=CharacterExemplarSearchFilter)
     limit: int = Field(default=20, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
+    use_embedding_scores: bool = Field(
+        default=False,
+        description="Enable embedding-backed hybrid ranking for search results.",
+    )
+    embedding_model_id: Optional[str] = Field(
+        default=None,
+        description="Optional embedding model override when hybrid ranking is enabled.",
+    )
 
 
 class CharacterExemplarSearchResponse(BaseModel):

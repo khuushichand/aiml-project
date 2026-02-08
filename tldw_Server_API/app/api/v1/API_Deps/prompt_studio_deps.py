@@ -67,6 +67,8 @@ _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS = (
     TimeoutError,
 )
 
+_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = False
+
 ########################################################################################################################
 # Helper Functions
 
@@ -486,6 +488,8 @@ async def check_rate_limit(
     Raises:
         HTTPException: If rate limit exceeded
     """
+    global _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED
+
     # Bypass in tests or when globally disabled
     if is_test_mode():
         return True
@@ -513,7 +517,7 @@ async def check_rate_limit(
 
     limit = int(limits.get(operation, limits["default"]))
 
-    # Prefer shared limiter (Redis-backed when REDIS_URL configured)
+    # Prefer shared limiter; legacy local limiter fallback has been retired.
     if _authnz_check_rate_limit is not None:
         try:
             allowed, meta = await _authnz_check_rate_limit(
@@ -530,25 +534,22 @@ async def check_rate_limit(
         except HTTPException:
             raise
         except _PROMPT_STUDIO_RATE_LIMIT_EXCEPTIONS as e:
-            logger.warning(f"Shared rate limiter unavailable, falling back to local limiter: {e}")
-
-    # Fallback: simple in-memory limiter (process-local)
-    import time as _time
-    key = f"ps_local:{user_id}:{operation}"
-    now = _time.time()
-    window_seconds = 60
-    if not hasattr(check_rate_limit, "_local_requests"):
-        check_rate_limit._local_requests = {}
-    store = check_rate_limit._local_requests
-    bucket = store.get(key, [])
-    bucket = [t for t in bucket if now - t < window_seconds]
-    if len(bucket) >= limit:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Rate limit exceeded for operation: {operation}",
-        )
-    bucket.append(now)
-    store[key] = bucket
+            if not _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED:
+                _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = True
+                logger.warning(
+                    "Prompt Studio shared rate limiter unavailable; local fallback limiter is retired. "
+                    "Allowing request via diagnostics-only shim. operation={} error={}",
+                    operation,
+                    e,
+                )
+    else:
+        if not _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED:
+            _PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED = True
+            logger.warning(
+                "Prompt Studio shared rate limiter not available; local fallback limiter is retired. "
+                "Allowing request via diagnostics-only shim. operation={}",
+                operation,
+            )
     return True
 
 ########################################################################################################################

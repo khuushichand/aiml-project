@@ -693,7 +693,8 @@ def _log_rg_emb_server_init_failure(exc: Exception) -> None:
         _rg_emb_server_init_error_logged = True
     ctx = _rg_emb_server_context()
     logger.exception(
-        "Embeddings server ResourceGovernor init failed; falling back to legacy limiter. "
+        "Embeddings server ResourceGovernor init failed; legacy token-bucket fallback is retired. "
+        "RG-enabled paths may fail closed until configuration is fixed. "
         "backend={} policy_path={} policy_path_resolved={} policy_store={} "
         "reload_enabled={} reload_interval={} cwd={}",
         ctx["backend"],
@@ -714,7 +715,8 @@ def _log_rg_emb_server_fallback(reason: str) -> None:
         _rg_emb_server_fallback_logged = True
     ctx = _rg_emb_server_context()
     logger.error(
-        "Embeddings server ResourceGovernor unavailable; falling back to legacy limiter. "
+        "Embeddings server ResourceGovernor unavailable; legacy token-bucket fallback is retired. "
+        "RG-enabled paths fail closed. "
         "reason={} init_error={} backend={} policy_path={} policy_path_resolved={} "
         "policy_store={} reload_enabled={} reload_interval={} cwd={}",
         reason,

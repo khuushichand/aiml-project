@@ -97,3 +97,25 @@ async def test_prompt_studio_rate_limit_bypass_accepts_single_letter_y(monkeypat
     )
 
     assert allowed is True
+
+
+@pytest.mark.asyncio
+async def test_prompt_studio_rate_limit_shared_limiter_failure_uses_diagnostics_only_shim(monkeypatch):
+    if hasattr(deps.check_rate_limit, "_local_requests"):
+        delattr(deps.check_rate_limit, "_local_requests")
+
+    async def _raise_shared_limiter(*_args, **_kwargs):
+        raise RuntimeError("shared limiter unavailable")
+
+    monkeypatch.setattr(deps, "_authnz_check_rate_limit", _raise_shared_limiter, raising=True)
+    monkeypatch.setattr(deps, "_PROMPT_STUDIO_RATE_LIMIT_SHIM_LOGGED", False, raising=True)
+
+    sec = deps.get_security_config()
+    ctx = {"user_id": "u1"}
+
+    allowed_1 = await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+    allowed_2 = await deps.check_rate_limit(operation="optimize", user_context=ctx, security_config=sec)
+
+    assert allowed_1 is True
+    assert allowed_2 is True
+    assert not hasattr(deps.check_rate_limit, "_local_requests")

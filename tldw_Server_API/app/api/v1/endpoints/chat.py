@@ -197,6 +197,7 @@ from tldw_Server_API.app.core.AuthNZ.rbac import user_has_permission
 from tldw_Server_API.app.core.Chat import command_router
 from tldw_Server_API.app.core.Chat.validate_dictionary import validate_dictionary as _validate_dictionary
 from tldw_Server_API.app.core.config import loaded_config_data
+from tldw_Server_API.app.core.Metrics.metrics_logger import log_counter, log_histogram
 from tldw_Server_API.app.core.Moderation.moderation_service import get_moderation_service
 from tldw_Server_API.app.core.Monitoring.topic_monitoring_service import get_topic_monitoring_service
 from tldw_Server_API.app.core.Resource_Governance.deps import derive_entity_key
@@ -288,6 +289,31 @@ def _cfg_float(key: str, fallback: float) -> float:
     except (TypeError, ValueError):
         return fallback
 
+
+def _resolve_persona_default_budget_tokens(chat_config: dict[str, Any]) -> int:
+    """Resolve default persona exemplar budget from env/config with safe bounds."""
+    fallback = 600
+    max_budget = 20_000
+
+    env_raw = os.getenv("PERSONA_EXEMPLAR_DEFAULT_BUDGET_TOKENS")
+    raw_value: Any = env_raw if isinstance(env_raw, str) and env_raw.strip() else chat_config.get(
+        "persona_exemplar_default_budget_tokens"
+    )
+
+    if raw_value is None:
+        return fallback
+    try:
+        parsed = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+    if parsed < 1:
+        return 1
+    if parsed > max_budget:
+        return max_budget
+    return parsed
+
+
 RECENCY_HALF_LIFE_DAYS: float = _cfg_float("half_life_days", 14.0)
 CHAT_BM25_WEIGHT: float = _cfg_float("w_bm25", 0.65)
 CHAT_RECENCY_WEIGHT: float = _cfg_float("w_recency", 0.35)
@@ -372,8 +398,17 @@ _active_request_counts: dict[str, int] = defaultdict(int)
 _active_request_locks: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = WeakKeyDictionary()
 _active_request_guard = threading.Lock()
 
-_PERSONA_EXEMPLAR_DEFAULT_BUDGET = 600
+_PERSONA_EXEMPLAR_DEFAULT_BUDGET = _resolve_persona_default_budget_tokens(_chat_config)
 _PERSONA_EXEMPLAR_MAX_CHARS_PER_EXEMPLAR = 280
+_PERSONA_IOO_ALERT_THRESHOLD = 0.30
+_PERSONA_IOR_LOW_ALERT_THRESHOLD = 0.10
+_PERSONA_IOR_HIGH_ALERT_THRESHOLD = 0.60
+_PERSONA_IOO_SUSTAIN_WINDOW = 8
+_PERSONA_IOO_SUSTAIN_MIN_HITS = 3
+_persona_ioo_windows: dict[str, deque[int]] = defaultdict(
+    lambda: deque(maxlen=_PERSONA_IOO_SUSTAIN_WINDOW)
+)
+_persona_alert_guard = threading.Lock()
 
 
 @dataclass
@@ -556,6 +591,29 @@ def _resolve_persona_strategy(raw_strategy: str | None) -> str:
     return normalized
 
 
+def _resolve_character_id_from_persona_alias(request_data: ChatCompletionRequest) -> None:
+    """Best-effort compatibility resolver from legacy persona_id to character_id."""
+    character_id = str(getattr(request_data, "character_id", "") or "").strip()
+    if character_id:
+        return
+
+    raw_persona_id = getattr(request_data, "persona_id", None)
+    if raw_persona_id is None:
+        return
+
+    persona_id = str(raw_persona_id).strip()
+    if not persona_id:
+        return
+
+    if not persona_id.isdigit():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="persona_id alias could not be resolved to character_id. Provide character_id explicitly.",
+        )
+
+    request_data.character_id = persona_id
+
+
 def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> str:
     """Extract first assistant message text from a non-stream completion payload."""
     choices = payload.get("choices")
@@ -568,6 +626,74 @@ def _extract_assistant_text_from_completion_payload(payload: dict[str, Any]) -> 
     if not isinstance(message_block, dict):
         return ""
     return _extract_text_from_message_content(message_block.get("content"))
+
+
+def _record_persona_telemetry_hooks(
+    *,
+    telemetry: dict[str, Any],
+    provider: str,
+    model: str,
+    user_id: str | None,
+    character_id: int | None,
+    debug_id: str | None,
+) -> None:
+    """Emit metric/log hooks for persona telemetry diagnostics."""
+    labels = {
+        "provider": str(provider or "unknown"),
+        "model": str(model or "unknown"),
+        "user_id": str(user_id or "unknown"),
+        "character_id": str(character_id or "none"),
+    }
+
+    try:
+        ioo = float(telemetry.get("ioo", 0.0))
+    except (TypeError, ValueError):
+        ioo = 0.0
+    try:
+        ior = float(telemetry.get("ior", 0.0))
+    except (TypeError, ValueError):
+        ior = 0.0
+    try:
+        lcs = float(telemetry.get("lcs", 0.0))
+    except (TypeError, ValueError):
+        lcs = 0.0
+
+    log_histogram("chat_persona_ioo_ratio", max(0.0, min(1.0, ioo)), labels=labels)
+    log_histogram("chat_persona_ior_ratio", max(0.0, min(1.0, ior)), labels=labels)
+    log_histogram("chat_persona_lcs_ratio", max(0.0, min(1.0, lcs)), labels=labels)
+
+    safety_flags = telemetry.get("safety_flags")
+    if isinstance(safety_flags, list):
+        for flag in safety_flags:
+            log_counter(
+                "chat_persona_safety_flag_total",
+                labels={**labels, "flag": str(flag)},
+            )
+
+    if ioo >= _PERSONA_IOO_ALERT_THRESHOLD:
+        log_counter("chat_persona_ioo_threshold_exceeded_total", labels=labels)
+        logger.warning(
+            "Persona telemetry IOO threshold exceeded debug_id={} ioo={} user_id={} character_id={}",
+            debug_id or "n/a",
+            ioo,
+            labels["user_id"],
+            labels["character_id"],
+        )
+
+    if ior < _PERSONA_IOR_LOW_ALERT_THRESHOLD:
+        log_counter("chat_persona_ior_out_of_band_total", labels={**labels, "band": "low"})
+    elif ior > _PERSONA_IOR_HIGH_ALERT_THRESHOLD:
+        log_counter("chat_persona_ior_out_of_band_total", labels={**labels, "band": "high"})
+
+    window_key = f"{labels['user_id']}:{labels['character_id']}"
+    with _persona_alert_guard:
+        window = _persona_ioo_windows[window_key]
+        window.append(1 if ioo >= _PERSONA_IOO_ALERT_THRESHOLD else 0)
+        if (
+            len(window) == window.maxlen
+            and sum(window) >= _PERSONA_IOO_SUSTAIN_MIN_HITS
+        ):
+            log_counter("chat_persona_ioo_sustained_alert_total", labels=labels)
 
 
 async def _increment_active_request(user_id: str) -> int:
@@ -2155,6 +2281,8 @@ async def create_chat_completion(
         if override_error:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=override_error)
 
+        _resolve_character_id_from_persona_alias(request_data)
+
         user_identifier_for_log = getattr(chat_db, 'client_id', 'unknown_client') # Example from original
         logger.info(
             f"Chat completion request. Provider={provider}, Model={request_data.model}, User={user_identifier_for_log}, "
@@ -2324,7 +2452,12 @@ async def create_chat_completion(
                     if persona_strategy in {"hybrid", "embeddings"}:
 
                         def _embedding_callback(turn_text: str, candidates: list[dict[str, Any]]) -> dict[str, float]:
-                            return score_exemplars_with_embeddings(turn_text, candidates)
+                            return score_exemplars_with_embeddings(
+                                turn_text,
+                                candidates,
+                                user_id=user_id,
+                                character_id=character_db_id_for_context,
+                            )
 
                         embedding_callback = _embedding_callback
 
@@ -2737,6 +2870,34 @@ async def create_chat_completion(
                 except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
                     return base
 
+            async def _on_stream_full_reply_for_persona_telemetry(full_reply: str) -> None:
+                if character_db_id_for_context is None:
+                    return
+                persona_telemetry = compute_persona_exemplar_telemetry(
+                    output_text=str(full_reply or ""),
+                    selected_exemplars=persona_selected_exemplars,
+                )
+                debug_id_for_logs = (
+                    str(persona_debug_meta.get("debug_id"))
+                    if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                    else None
+                )
+                logger.debug(
+                    "Persona streaming telemetry debug_id={} ioo={} ior={} lcs={}",
+                    debug_id_for_logs or "n/a",
+                    persona_telemetry.get("ioo"),
+                    persona_telemetry.get("ior"),
+                    persona_telemetry.get("lcs"),
+                )
+                _record_persona_telemetry_hooks(
+                    telemetry=persona_telemetry,
+                    provider=provider,
+                    model=model,
+                    user_id=user_id,
+                    character_id=character_db_id_for_context,
+                    debug_id=debug_id_for_logs,
+                )
+
             if request_data.stream:
                 stream_response = await execute_streaming_call(
                     current_loop=current_loop,
@@ -2764,6 +2925,7 @@ async def create_chat_completion(
                     refresh_provider_params=rebuild_call_params_for_provider,
                     moderation_getter=_get_moderation_with_guardian,
                     on_success=_touch_byok,
+                    on_stream_full_reply=_on_stream_full_reply_for_persona_telemetry,
                     rg_commit_cb=(
                         (lambda total: (request.app.state.rg_governor.commit(_rg_handle_id, actuals={"tokens": int(total)}) if getattr(request.app.state, "rg_governor", None) and _rg_handle_id else None))
                         if _rg_handle_id else None
@@ -2810,26 +2972,48 @@ async def create_chat_completion(
                     on_success=_touch_byok,
                     self_monitoring_service=_self_mon_service,
                 )
+                persona_telemetry: dict[str, Any] | None = None
+                if isinstance(encoded_payload, dict) and character_db_id_for_context is not None:
+                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
+                    persona_telemetry = compute_persona_exemplar_telemetry(
+                        output_text=assistant_text,
+                        selected_exemplars=persona_selected_exemplars,
+                    )
+                    debug_id_for_logs = (
+                        str(persona_debug_meta.get("debug_id"))
+                        if isinstance(persona_debug_meta, dict) and persona_debug_meta.get("debug_id")
+                        else None
+                    )
+                    try:
+                        logger.debug(
+                            "Persona telemetry debug_id={} ioo={} ior={} lcs={}",
+                            debug_id_for_logs or "n/a",
+                            persona_telemetry.get("ioo"),
+                            persona_telemetry.get("ior"),
+                            persona_telemetry.get("lcs"),
+                        )
+                        _record_persona_telemetry_hooks(
+                            telemetry=persona_telemetry,
+                            provider=provider,
+                            model=model,
+                            user_id=user_id,
+                            character_id=character_db_id_for_context,
+                            debug_id=debug_id_for_logs,
+                        )
+                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
+                        pass
+
                 if (
                     persona_debug_requested
                     and persona_debug_meta is not None
                     and isinstance(encoded_payload, dict)
                 ):
-                    assistant_text = _extract_assistant_text_from_completion_payload(encoded_payload)
-                    persona_debug_meta["telemetry"] = compute_persona_exemplar_telemetry(
-                        output_text=assistant_text,
-                        selected_exemplars=persona_selected_exemplars,
-                    )
-                    try:
-                        logger.debug(
-                            "Persona telemetry debug_id={} ioo={} ior={} lcs={}",
-                            persona_debug_meta.get("debug_id"),
-                            persona_debug_meta["telemetry"].get("ioo"),
-                            persona_debug_meta["telemetry"].get("ior"),
-                            persona_debug_meta["telemetry"].get("lcs"),
+                    if persona_telemetry is None:
+                        persona_telemetry = compute_persona_exemplar_telemetry(
+                            output_text="",
+                            selected_exemplars=persona_selected_exemplars,
                         )
-                    except _CHAT_ENDPOINT_NONCRITICAL_EXCEPTIONS:
-                        pass
+                    persona_debug_meta["telemetry"] = persona_telemetry
                     meta_payload = encoded_payload.get("meta")
                     if not isinstance(meta_payload, dict):
                         meta_payload = {}
