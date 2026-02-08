@@ -21,6 +21,15 @@ class AuthnzSessionsRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend routing should use pool state instead of inferring from
+        connection method availability.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     @staticmethod
     def _normalize_datetime_for_postgres(dt: datetime | None) -> datetime | None:
         """Strip timezone info for PostgreSQL TIMESTAMP columns (not TIMESTAMPTZ)."""
@@ -67,7 +76,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     exp = expires_at.replace(tzinfo=None) if getattr(expires_at, "tzinfo", None) else expires_at
                     ref = (
                         refresh_expires_at.replace(tzinfo=None)
@@ -357,7 +366,7 @@ class AuthnzSessionsRepo:
         """
         try:
             async with self.db_pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     primary_query = """
                         SELECT COUNT(*)
                         FROM sessions
@@ -566,7 +575,7 @@ class AuthnzSessionsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 # First check if the sessions table exists
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     table_exists = await conn.fetchval(
                         """
                         SELECT EXISTS (
@@ -590,7 +599,7 @@ class AuthnzSessionsRepo:
                     return 0
 
                 deleted = 0
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     rows = await conn.fetch(
                         """
                         DELETE FROM sessions

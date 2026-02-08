@@ -64,7 +64,7 @@ huggingface-cli download KevinAHM/pocket-tts-onnx \
 
 **What gets downloaded:**
 
-```
+```text
 models/pocket_tts_onnx/
   onnx/
     flow_lm_main_int8.onnx      # Main language model (INT8)

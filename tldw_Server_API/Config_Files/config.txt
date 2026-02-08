@@ -611,6 +611,66 @@ precomputed_spans_retention_days = 30
 # Env override: IMPLICIT_FEEDBACK_ENABLED=true|false (default true)
 implicit_feedback_enabled = true
 
+[Search-Agent]
+# Enable LLM-based query classification before search (routes queries intelligently)
+# Env override: SEARCH_QUERY_CLASSIFICATION=true|false (default false)
+search_query_classification = false
+
+# Default search depth mode: speed, balanced, quality
+# Env override: SEARCH_DEFAULT_MODE=speed|balanced|quality (default balanced)
+search_default_mode = balanced
+
+# Enable standalone query reformulation for chat follow-ups
+# Env override: SEARCH_QUERY_REFORMULATION=true|false (default true)
+search_query_reformulation = true
+
+# Enable iterative agentic research loop (for quality mode)
+# Env override: SEARCH_RESEARCH_LOOP=true|false (default false)
+search_research_loop = false
+
+# Enable discussion/forum search as a search source
+# Env override: SEARCH_DISCUSSIONS_ENABLED=true|false (default true)
+search_discussions_enabled = true
+
+# Discussion platforms to search (comma-separated)
+# Env override: SEARCH_DISCUSSION_PLATFORMS=reddit,stackoverflow,hackernews
+search_discussion_platforms = reddit,stackoverflow,hackernews
+
+# Enable research progress streaming events
+# Env override: SEARCH_PROGRESS_STREAMING=true|false (default true)
+search_progress_streaming = true
+
+# Enable URL scraping during research
+# Env override: SEARCH_URL_SCRAPING=true|false (default true)
+search_url_scraping = true
+
+# LLM provider/model for query classification (uses default chat provider if empty)
+# Env override: SEARCH_CLASSIFIER_PROVIDER, SEARCH_CLASSIFIER_MODEL
+search_classifier_provider =
+search_classifier_model =
+
+# Max research iterations per mode (0 = use defaults: speed=2, balanced=6, quality=25)
+# Env overrides: SEARCH_MAX_ITERATIONS_SPEED, SEARCH_MAX_ITERATIONS_BALANCED, SEARCH_MAX_ITERATIONS_QUALITY
+search_max_iterations_speed = 0
+search_max_iterations_balanced = 0
+search_max_iterations_quality = 0
+
+# Enable follow-up suggestion generation after RAG responses
+# Env override: SEARCH_SUGGESTIONS=true|false (default false)
+search_suggestions = false
+
+# Enable structured response writer with XML-tagged context and citation enforcement
+# Env override: SEARCH_STRUCTURED_RESPONSE=true|false (default false)
+search_structured_response = false
+
+# Enable image search as a research action
+# Env override: SEARCH_IMAGE_SEARCH=true|false (default false)
+search_image_search = false
+
+# Enable video search as a research action
+# Env override: SEARCH_VIDEO_SEARCH=true|false (default false)
+search_video_search = false
+
 [ResourceGovernor]
 # Global Resource Governor enable flag (env: RG_ENABLED)
 enabled = true

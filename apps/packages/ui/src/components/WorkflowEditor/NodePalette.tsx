@@ -5,7 +5,7 @@
  * Nodes can be dragged onto the canvas to add them.
  */
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Input, Collapse, Tooltip, Spin, Alert, Button } from "antd"
 import { Search, GripVertical } from "lucide-react"
 import type { WorkflowStepType } from "@/types/workflow-editor"
@@ -15,6 +15,83 @@ import { STEP_ICON_COMPONENTS, DEFAULT_STEP_ICON } from "./step-icons"
 
 // Icon mapping for the palette
 const STEP_ICONS = STEP_ICON_COMPONENTS
+
+const PALETTE_ACTIVE_KEYS_STORAGE_KEY =
+  "tldw:workflow-editor:palette:active-categories"
+const DEFAULT_ACTIVE_CATEGORY_KEYS = [
+  "ai",
+  "search",
+  "media",
+  "text",
+  "research",
+  "control"
+]
+
+const STEP_SEARCH_ALIASES: Record<string, string[]> = {
+  media_ingest: ["youtube", "yt", "download", "ingestion", "url"],
+  rag_search: ["retrieval", "knowledge base", "kb", "vector", "semantic search"],
+  web_search: ["internet", "google", "browser", "web lookup"],
+  tts: ["text to speech", "voice", "speak", "audio output"],
+  stt_transcribe: ["speech to text", "transcription", "voice to text", "whisper"],
+  embed: ["embedding", "vectorize", "vector"],
+  rerank: ["re-rank", "ranking", "sort relevance"],
+  webhook: ["http", "api", "request", "post", "callback"],
+  branch: ["if", "condition", "route", "decision"],
+  map: ["for each", "loop", "iterate", "fan out"],
+  llm: ["model", "chat", "completion", "generate text"],
+  summarize: ["summary", "tl;dr", "condense"],
+  image_gen: ["image generation", "picture", "art"],
+  subtitle_generate: ["captions", "srt", "subtitles"],
+  video_trim: ["cut video", "clip", "trim"]
+}
+
+const loadPaletteActiveKeys = (): string[] => {
+  try {
+    const raw = localStorage.getItem(PALETTE_ACTIVE_KEYS_STORAGE_KEY)
+    if (!raw) return [...DEFAULT_ACTIVE_CATEGORY_KEYS]
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return [...DEFAULT_ACTIVE_CATEGORY_KEYS]
+    return parsed
+      .filter((key): key is string => typeof key === "string")
+      .slice(0, 10)
+  } catch {
+    return [...DEFAULT_ACTIVE_CATEGORY_KEYS]
+  }
+}
+
+const persistPaletteActiveKeys = (keys: string[]) => {
+  try {
+    localStorage.setItem(PALETTE_ACTIVE_KEYS_STORAGE_KEY, JSON.stringify(keys))
+  } catch {
+    // Best-effort persistence only.
+  }
+}
+
+const normalizeActiveKeys = (
+  keys: string[],
+  categoryKeys: string[]
+): string[] => {
+  const unique = Array.from(new Set(keys))
+  const normalized = unique.filter((key) => categoryKeys.includes(key))
+  if (normalized.length > 0) return normalized
+  return categoryKeys.slice(0, Math.min(6, categoryKeys.length))
+}
+
+const buildStepSearchText = (
+  step: StepTypeMetadata,
+  categoryLabel: string
+): string => {
+  const aliases = STEP_SEARCH_ALIASES[step.type] || []
+  return [
+    step.label,
+    step.description,
+    step.type,
+    categoryLabel,
+    ...aliases
+  ]
+    .join(" ")
+    .toLowerCase()
+}
 
 // Category colors
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string }> = {
@@ -74,9 +151,15 @@ interface PaletteItemProps {
   step: StepTypeMetadata
   categoryColor: string
   onDragStart: (e: React.DragEvent, stepType: WorkflowStepType) => void
+  onAddStep: (stepType: WorkflowStepType) => void
 }
 
-const PaletteItem = ({ step, categoryColor, onDragStart }: PaletteItemProps) => {
+const PaletteItem = ({
+  step,
+  categoryColor,
+  onDragStart,
+  onAddStep
+}: PaletteItemProps) => {
   const Icon = STEP_ICONS[step.icon] || DEFAULT_STEP_ICON
   const colors = CATEGORY_COLORS[categoryColor] || CATEGORY_COLORS.gray
 
@@ -89,6 +172,16 @@ const PaletteItem = ({ step, categoryColor, onDragStart }: PaletteItemProps) => 
       <div
         draggable
         onDragStart={(e) => onDragStart(e, step.type)}
+        onClick={() => onAddStep(step.type)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault()
+            onAddStep(step.type)
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={`Add ${step.label}`}
         className={`
           flex items-center gap-2 p-2 rounded-md cursor-grab
           border ${colors.border}
@@ -118,31 +211,56 @@ interface NodePaletteProps {
 
 export const NodePalette = ({ className = "" }: NodePaletteProps) => {
   const [searchQuery, setSearchQuery] = useState("")
-  const [activeKeys, setActiveKeys] = useState<string[]>(["ai", "search", "media", "control"])
+  const [activeKeys, setActiveKeys] = useState<string[]>(() =>
+    loadPaletteActiveKeys()
+  )
 
   const stepRegistry = useWorkflowEditorStore((s) => s.stepRegistry)
   const stepTypesStatus = useWorkflowEditorStore((s) => s.stepTypesStatus)
   const stepTypesError = useWorkflowEditorStore((s) => s.stepTypesError)
   const loadStepTypes = useWorkflowEditorStore((s) => s.loadStepTypes)
+  const addNode = useWorkflowEditorStore((s) => s.addNode)
+  const nodes = useWorkflowEditorStore((s) => s.nodes)
+  const zoom = useWorkflowEditorStore((s) => s.zoom)
+  const panPosition = useWorkflowEditorStore((s) => s.panPosition)
 
   const categories = useMemo(
     () => getCategorizedSteps(stepRegistry),
     [stepRegistry]
   )
 
+  const categoryKeys = useMemo(
+    () => categories.map((cat) => cat.category),
+    [categories]
+  )
+
+  useEffect(() => {
+    setActiveKeys((current) => normalizeActiveKeys(current, categoryKeys))
+  }, [categoryKeys])
+
+  useEffect(() => {
+    if (activeKeys.length === 0) return
+    persistPaletteActiveKeys(activeKeys)
+  }, [activeKeys])
+
   // Filter steps by search query
   const filteredCategories = useMemo(() => {
     if (!searchQuery.trim()) return categories
 
-    const query = searchQuery.toLowerCase()
+    const queryTokens = searchQuery
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+
     return categories
       .map((cat) => ({
         ...cat,
         steps: cat.steps.filter(
-          (step) =>
-            step.label.toLowerCase().includes(query) ||
-            step.description.toLowerCase().includes(query) ||
-            step.type.toLowerCase().includes(query)
+          (step) => {
+            const searchable = buildStepSearchText(step, cat.label)
+            return queryTokens.every((token) => searchable.includes(token))
+          }
         )
       }))
       .filter((cat) => cat.steps.length > 0)
@@ -155,6 +273,37 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
 
   const handleRetryStepTypes = () => {
     void loadStepTypes(true)
+  }
+
+  const getPaletteAddPosition = () => {
+    const offsetIndex = nodes.length % 8
+    const offsetX = offsetIndex * 28
+    const offsetY = offsetIndex * 18
+    const safeZoom = Math.max(zoom || 1, 0.001)
+    const flowRoot = document.querySelector(".react-flow")
+
+    if (flowRoot instanceof HTMLElement) {
+      const rect = flowRoot.getBoundingClientRect()
+      const centerClientX = rect.left + rect.width / 2
+      const centerClientY = rect.top + rect.height / 2
+      return {
+        x: (centerClientX - rect.left - panPosition.x) / safeZoom + offsetX,
+        y: (centerClientY - rect.top - panPosition.y) / safeZoom + offsetY
+      }
+    }
+
+    // Fallback when canvas bounds are unavailable (tests or early mount)
+    return {
+      x: 260 + offsetX,
+      y: 220 + offsetY
+    }
+  }
+
+  const handleAddStep = (stepType: WorkflowStepType) => {
+    addNode({
+      type: stepType,
+      position: getPaletteAddPosition()
+    })
   }
 
   const collapseItems = filteredCategories.map((cat) => ({
@@ -177,11 +326,16 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
             step={step}
             categoryColor={cat.color}
             onDragStart={handleDragStart}
+            onAddStep={handleAddStep}
           />
         ))}
       </div>
     )
   }))
+
+  const effectiveActiveKeys = searchQuery.trim()
+    ? filteredCategories.map((cat) => cat.category)
+    : activeKeys
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
@@ -246,8 +400,15 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
           </div>
         ) : (
           <Collapse
-            activeKey={activeKeys}
-            onChange={(keys) => setActiveKeys(keys as string[])}
+            activeKey={effectiveActiveKeys}
+            onChange={(keys) => {
+              const nextKeys = Array.isArray(keys)
+                ? (keys as string[])
+                : keys
+                ? [keys as string]
+                : []
+              setActiveKeys(normalizeActiveKeys(nextKeys, categoryKeys))
+            }}
             ghost
             expandIconPosition="end"
             items={collapseItems}
@@ -259,7 +420,7 @@ export const NodePalette = ({ className = "" }: NodePaletteProps) => {
       {/* Help text */}
       <div className="p-3 border-t border-gray-200 dark:border-gray-700">
         <p className="text-xs text-gray-400 text-center">
-          Drag nodes onto the canvas to add them
+          Drag, click, or press Enter to add nodes
         </p>
       </div>
     </div>

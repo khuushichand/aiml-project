@@ -95,7 +95,7 @@ This page serves as documentation regarding the web search functionality within 
 ### Web Search API
 - TBD
 ```
-def perform_websearch(search_engine
+def perform_websearch(search_engine,
                       search_query,
                       content_country,
                       search_lang,

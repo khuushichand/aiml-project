@@ -24,7 +24,6 @@ PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
-# Avoid pre-auth chroot in heavily capability-dropped containers.
 PermitUserEnvironment yes
 AllowUsers ${USER_NAME}
 Subsystem sftp /usr/lib/openssh/sftp-server
@@ -94,7 +93,6 @@ mkdir -p "${USER_HOME}/.tldw-agent"
 cat "${tmp_cfg}" > "${USER_HOME}/.tldw-agent/config.yaml"
 rm -f "${tmp_cfg}"
 trap - EXIT
-chmod 600 "${USER_HOME}/.tldw-agent/config.yaml"
 chown "${USER_NAME}" "${USER_HOME}/.tldw-agent" "${USER_HOME}/.tldw-agent/config.yaml"
 chmod 600 "${USER_HOME}/.tldw-agent/config.yaml"
 

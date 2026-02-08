@@ -23,6 +23,15 @@ class AuthnzApiKeysRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend routing should rely on pool state rather than probing
+        connection method presence at runtime.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     async def ensure_tables(self) -> None:
         """
         Ensure api_keys + api_key_audit_log schema exists.
@@ -287,7 +296,7 @@ class AuthnzApiKeysRepo:
         """
         async with self.db_pool.transaction() as conn:
             try:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     # PostgreSQL: upsert on key_hash
                     await conn.execute(
                         """
@@ -419,7 +428,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     expires_at_param = expires_at
                     if (
                         isinstance(expires_at_param, datetime)
@@ -525,7 +534,7 @@ class AuthnzApiKeysRepo:
             scope_value = str(scope).strip().lower() if scope else "read"
 
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     _endpoints = (
                         json.dumps(allowed_endpoints)
                         if allowed_endpoints is not None
@@ -786,7 +795,7 @@ class AuthnzApiKeysRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchval"):
+                if self._is_postgres_backend():
                     # PostgreSQL path
                     expires_at_param = new_expires_at
                     if (

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react"
-import { Collapse, Form, Input, InputNumber, Modal, Select, Switch, message } from "antd"
+import { Button, Collapse, Form, Input, InputNumber, Modal, Select, Switch, message } from "antd"
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistJob,
@@ -31,6 +31,8 @@ interface FormValues {
 }
 
 type EmailBodyFormat = "auto" | "text" | "html"
+type OutputFormat = "md" | "html"
+type OutputPresetId = "briefing_md" | "newsletter_html" | "mece_md"
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -45,6 +47,38 @@ const cloneRecord = (value: Record<string, unknown>): Record<string, unknown> =>
 
 const isEmailBodyFormat = (value: unknown): value is EmailBodyFormat =>
   value === "auto" || value === "text" || value === "html"
+
+const isOutputFormat = (value: unknown): value is OutputFormat =>
+  value === "md" || value === "html"
+
+const OUTPUT_PRESETS: Record<
+  OutputPresetId,
+  {
+    templateName: string
+    format: OutputFormat
+    emailEnabled: boolean
+    emailBodyFormat: EmailBodyFormat
+  }
+> = {
+  briefing_md: {
+    templateName: "briefing_markdown",
+    format: "md",
+    emailEnabled: false,
+    emailBodyFormat: "auto",
+  },
+  newsletter_html: {
+    templateName: "newsletter_html",
+    format: "html",
+    emailEnabled: true,
+    emailBodyFormat: "html",
+  },
+  mece_md: {
+    templateName: "mece_markdown",
+    format: "md",
+    emailEnabled: false,
+    emailBodyFormat: "auto",
+  },
+}
 
 export const JobFormModal: React.FC<JobFormModalProps> = ({
   open,
@@ -64,10 +98,15 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const [schedule, setSchedule] = useState<string | null>(null)
   const [timezone, setTimezone] = useState("UTC")
   const [templateOptions, setTemplateOptions] = useState<Array<{ label: string; value: string }>>([])
+  const [outputPreset, setOutputPreset] = useState<OutputPresetId | undefined>(undefined)
   const [outputTemplateName, setOutputTemplateName] = useState<string | undefined>(undefined)
   const [outputTemplateVersion, setOutputTemplateVersion] = useState<number | null>(null)
+  const [outputTemplateFormat, setOutputTemplateFormat] = useState<OutputFormat | undefined>(undefined)
+  const [retentionDefaultSeconds, setRetentionDefaultSeconds] = useState<number | null>(null)
+  const [retentionTemporarySeconds, setRetentionTemporarySeconds] = useState<number | null>(null)
   const [deliveryEmailEnabled, setDeliveryEmailEnabled] = useState(false)
   const [deliveryEmailRecipients, setDeliveryEmailRecipients] = useState<string[]>([])
+  const [deliveryEmailSubject, setDeliveryEmailSubject] = useState("")
   const [deliveryEmailAttachFile, setDeliveryEmailAttachFile] = useState(true)
   const [deliveryEmailBodyFormat, setDeliveryEmailBodyFormat] = useState<EmailBodyFormat>("auto")
   const [deliveryChatbookEnabled, setDeliveryChatbookEnabled] = useState(false)
@@ -78,6 +117,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
   const applyOutputPrefsState = (prefs: JobOutputPrefs | null | undefined) => {
     const prefsRecord = isRecord(prefs) ? prefs : {}
     const templateRecord = isRecord(prefsRecord.template) ? prefsRecord.template : {}
+    const retentionRecord = isRecord(prefsRecord.retention) ? prefsRecord.retention : {}
     const deliveriesRecord = isRecord(prefsRecord.deliveries) ? prefsRecord.deliveries : {}
     const emailRecord = isRecord(deliveriesRecord.email) ? deliveriesRecord.email : null
     const chatbookRecord = isRecord(deliveriesRecord.chatbook) ? deliveriesRecord.chatbook : null
@@ -94,6 +134,21 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         ? Math.floor(parsedTemplateVersion)
         : null
     )
+    setOutputTemplateFormat(
+      isOutputFormat(templateRecord.default_format) ? templateRecord.default_format : undefined
+    )
+    const parsedDefaultRetention = Number(retentionRecord.default_seconds)
+    setRetentionDefaultSeconds(
+      Number.isFinite(parsedDefaultRetention) && parsedDefaultRetention >= 0
+        ? Math.floor(parsedDefaultRetention)
+        : null
+    )
+    const parsedTemporaryRetention = Number(retentionRecord.temporary_seconds)
+    setRetentionTemporarySeconds(
+      Number.isFinite(parsedTemporaryRetention) && parsedTemporaryRetention >= 0
+        ? Math.floor(parsedTemporaryRetention)
+        : null
+    )
 
     setDeliveryEmailEnabled(Boolean(emailRecord) && emailRecord.enabled !== false)
     setDeliveryEmailRecipients(
@@ -103,6 +158,9 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
           .map((entry) => entry.trim())
           .filter((entry) => entry.length > 0)
         : []
+    )
+    setDeliveryEmailSubject(
+      typeof emailRecord?.subject === "string" ? emailRecord.subject : ""
     )
     setDeliveryEmailAttachFile(
       emailRecord?.attach_file === undefined ? true : Boolean(emailRecord.attach_file)
@@ -147,15 +205,42 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     } else {
       delete templatePrefs.default_version
     }
+    if (isOutputFormat(outputTemplateFormat)) {
+      templatePrefs.default_format = outputTemplateFormat
+    } else {
+      delete templatePrefs.default_format
+    }
     if (Object.keys(templatePrefs).length > 0) {
       basePrefs.template = templatePrefs
     } else {
       delete basePrefs.template
     }
 
+    const retentionPrefs = isRecord(basePrefs.retention) ? { ...basePrefs.retention } : {}
+    if (typeof retentionDefaultSeconds === "number" && retentionDefaultSeconds >= 0) {
+      retentionPrefs.default_seconds = Math.floor(retentionDefaultSeconds)
+    } else {
+      delete retentionPrefs.default_seconds
+    }
+    if (typeof retentionTemporarySeconds === "number" && retentionTemporarySeconds >= 0) {
+      retentionPrefs.temporary_seconds = Math.floor(retentionTemporarySeconds)
+    } else {
+      delete retentionPrefs.temporary_seconds
+    }
+    if (Object.keys(retentionPrefs).length > 0) {
+      basePrefs.retention = retentionPrefs
+    } else {
+      delete basePrefs.retention
+    }
+
     const deliveriesPrefs = isRecord(basePrefs.deliveries) ? { ...basePrefs.deliveries } : {}
 
-    const shouldPersistEmail = deliveryEmailEnabled || deliveryEmailRecipients.length > 0
+    const normalizedEmailSubject = deliveryEmailSubject.trim()
+    const shouldPersistEmail = (
+      deliveryEmailEnabled ||
+      deliveryEmailRecipients.length > 0 ||
+      normalizedEmailSubject.length > 0
+    )
     if (shouldPersistEmail) {
       const emailPrefs = isRecord(deliveriesPrefs.email) ? { ...deliveriesPrefs.email } : {}
       emailPrefs.enabled = deliveryEmailEnabled
@@ -166,6 +251,11 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
       }
       emailPrefs.attach_file = deliveryEmailAttachFile
       emailPrefs.body_format = deliveryEmailBodyFormat
+      if (normalizedEmailSubject.length > 0) {
+        emailPrefs.subject = normalizedEmailSubject
+      } else {
+        delete emailPrefs.subject
+      }
       deliveriesPrefs.email = emailPrefs
     } else {
       delete deliveriesPrefs.email
@@ -215,6 +305,19 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
     return undefined
   }
 
+  const applyPreset = (presetId: OutputPresetId | undefined) => {
+    if (!presetId) return
+    const preset = OUTPUT_PRESETS[presetId]
+    if (!preset) return
+    setOutputTemplateName(preset.templateName)
+    setOutputTemplateVersion(null)
+    setOutputTemplateFormat(preset.format)
+    setDeliveryEmailEnabled(preset.emailEnabled)
+    setDeliveryEmailBodyFormat(preset.emailBodyFormat)
+    setOutputPreset(presetId)
+    message.success(t("watchlists:jobs.form.presetApplied", "Preset applied"))
+  }
+
   // Reset form when modal opens/closes or initialValues change
   useEffect(() => {
     if (open) {
@@ -228,6 +331,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         setFilters(initialValues.job_filters?.filters || [])
         setSchedule(initialValues.schedule_expr || null)
         setTimezone(initialValues.timezone || "UTC")
+        setOutputPreset(undefined)
         applyOutputPrefsState(initialValues.output_prefs)
       } else {
         form.resetFields()
@@ -240,6 +344,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         setFilters([])
         setSchedule(null)
         setTimezone("UTC")
+        setOutputPreset(undefined)
         applyOutputPrefsState(null)
       }
     }
@@ -377,9 +482,48 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
         <div className="space-y-4">
           <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
             <div className="mb-3 text-sm font-medium">
+              {t("watchlists:jobs.form.guidedPresets", "Guided presets")}
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+              <Select
+                value={outputPreset}
+                onChange={(value) => setOutputPreset(value as OutputPresetId)}
+                options={[
+                  {
+                    value: "briefing_md",
+                    label: t("watchlists:jobs.form.presetBriefingMd", "Daily briefing (Markdown)"),
+                  },
+                  {
+                    value: "newsletter_html",
+                    label: t("watchlists:jobs.form.presetNewsletterHtml", "Newsletter (HTML + email)"),
+                  },
+                  {
+                    value: "mece_md",
+                    label: t("watchlists:jobs.form.presetMeceMd", "MECE review (Markdown)"),
+                  },
+                ]}
+                placeholder={t("watchlists:jobs.form.presetPlaceholder", "Choose a preset")}
+              />
+              <Button
+                onClick={() => applyPreset(outputPreset)}
+                disabled={!outputPreset}
+              >
+                {t("watchlists:jobs.form.applyPreset", "Apply preset")}
+              </Button>
+            </div>
+            <div className="mt-2 text-xs text-zinc-500">
+              {t(
+                "watchlists:jobs.form.presetHint",
+                "Presets prefill template/delivery defaults. You can still customize fields below."
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+            <div className="mb-3 text-sm font-medium">
               {t("watchlists:jobs.form.defaultTemplate", "Default template")}
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <div className="mb-1 text-xs text-zinc-500">
                   {t("watchlists:jobs.form.defaultTemplateName", "Template name")}
@@ -417,6 +561,69 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   placeholder={t("watchlists:jobs.form.defaultTemplateVersionAuto", "Latest")}
                 />
               </div>
+              <div>
+                <div className="mb-1 text-xs text-zinc-500">
+                  {t("watchlists:jobs.form.defaultTemplateFormat", "Default output format")}
+                </div>
+                <Select
+                  allowClear
+                  value={outputTemplateFormat}
+                  onChange={(value) => setOutputTemplateFormat(value as OutputFormat | undefined)}
+                  placeholder={t("watchlists:jobs.form.defaultTemplateFormatAuto", "Template/default")}
+                  options={[
+                    { value: "md", label: "Markdown (md)" },
+                    { value: "html", label: "HTML" },
+                  ]}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+            <div className="mb-3 text-sm font-medium">
+              {t("watchlists:jobs.form.retentionDefaults", "Retention defaults")}
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div>
+                <div className="mb-1 text-xs text-zinc-500">
+                  {t("watchlists:jobs.form.retentionDefaultSeconds", "Default TTL (seconds)")}
+                </div>
+                <InputNumber
+                  min={0}
+                  precision={0}
+                  value={retentionDefaultSeconds}
+                  onChange={(value) =>
+                    setRetentionDefaultSeconds(
+                      typeof value === "number" && value >= 0 ? Math.floor(value) : null
+                    )
+                  }
+                  className="w-full"
+                  placeholder={t("watchlists:jobs.form.retentionDefaultSecondsPlaceholder", "Server default")}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs text-zinc-500">
+                  {t("watchlists:jobs.form.retentionTemporarySeconds", "Temporary TTL (seconds)")}
+                </div>
+                <InputNumber
+                  min={0}
+                  precision={0}
+                  value={retentionTemporarySeconds}
+                  onChange={(value) =>
+                    setRetentionTemporarySeconds(
+                      typeof value === "number" && value >= 0 ? Math.floor(value) : null
+                    )
+                  }
+                  className="w-full"
+                  placeholder={t("watchlists:jobs.form.retentionTemporarySecondsPlaceholder", "Server temporary default")}
+                />
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-zinc-500">
+              {t(
+                "watchlists:jobs.form.retentionHint",
+                "Set 0 for no expiry. Leave blank to use server defaults."
+              )}
             </div>
           </div>
 
@@ -427,7 +634,7 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
               </div>
               <Switch checked={deliveryEmailEnabled} onChange={setDeliveryEmailEnabled} />
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div>
                 <div className="mb-1 text-xs text-zinc-500">
                   {t("watchlists:jobs.form.emailRecipients", "Recipients")}
@@ -439,6 +646,19 @@ export const JobFormModal: React.FC<JobFormModalProps> = ({
                   placeholder={t("watchlists:jobs.form.emailRecipientsPlaceholder", "Enter email addresses")}
                   className="w-full"
                   tokenSeparators={[","]}
+                />
+              </div>
+              <div>
+                <div className="mb-1 text-xs text-zinc-500">
+                  {t("watchlists:jobs.form.emailSubject", "Default subject")}
+                </div>
+                <Input
+                  value={deliveryEmailSubject}
+                  onChange={(event) => setDeliveryEmailSubject(event.target.value)}
+                  placeholder={t(
+                    "watchlists:jobs.form.emailSubjectPlaceholder",
+                    "Defaults to output title"
+                  )}
                 />
               </div>
               <div>

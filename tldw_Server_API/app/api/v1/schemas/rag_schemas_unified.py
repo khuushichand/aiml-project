@@ -1250,6 +1250,145 @@ class UnifiedRAGRequest(BaseModel):
         example=False,
     )
 
+    # ========== SEARCH AGENT / RESEARCH ==========
+    search_depth_mode: Optional[Literal["speed", "balanced", "quality"]] = Field(
+        default=None,
+        description="Search depth mode that sets parameter presets. "
+                    "speed: fast with minimal processing, balanced: multi-step with moderate depth, "
+                    "quality: deep research with exhaustive coverage. "
+                    "Individual parameters override mode presets when explicitly set.",
+        example="balanced",
+    )
+    enable_query_classification: bool = Field(
+        default=False,
+        description="Enable LLM-based query classification to route queries intelligently. "
+                    "Determines whether search is needed, which sources to activate, "
+                    "and reformulates conversational follow-ups.",
+        example=False,
+    )
+    chat_history: Optional[list[dict[str, str]]] = Field(
+        default=None,
+        description="Conversation history for contextual query reformulation. "
+                    "Each entry: {\"role\": \"user\"|\"assistant\", \"content\": \"...\"}",
+        example=[
+            {"role": "user", "content": "Tell me about Python"},
+            {"role": "assistant", "content": "Python is a programming language..."},
+            {"role": "user", "content": "What are its main libraries?"},
+        ],
+    )
+    enable_query_reformulation: bool = Field(
+        default=True,
+        description="Enable standalone query reformulation when chat_history is provided. "
+                    "Rewrites conversational follow-ups into self-contained queries.",
+        example=True,
+    )
+    enable_research_loop: bool = Field(
+        default=False,
+        description="Enable iterative agentic research loop. The system iteratively searches, "
+                    "analyzes results, and refines queries until sufficient information is found. "
+                    "Requires enable_query_classification=true.",
+        example=False,
+    )
+    enable_discussion_search: bool = Field(
+        default=False,
+        description="Enable discussion/forum search (Reddit, StackOverflow, HackerNews) "
+                    "as a search source for community knowledge and opinions.",
+        example=False,
+    )
+    discussion_platforms: Optional[list[str]] = Field(
+        default=None,
+        description="Discussion platforms to search: reddit, stackoverflow, hackernews, quora",
+        example=["reddit", "stackoverflow"],
+    )
+    search_url_scraping: bool = Field(
+        default=True,
+        description="Enable URL scraping action during iterative research loops. "
+                    "When false, the scrape_url action is disabled.",
+        example=True,
+    )
+    enable_research_progress: bool = Field(
+        default=False,
+        description="Enable research progress events in streaming responses. "
+                    "Emits reasoning steps, search actions, and result counts.",
+        example=False,
+    )
+    research_max_iterations: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="Explicit max iteration override for research loop (takes precedence over mode-specific overrides).",
+        example=8,
+    )
+    research_max_iterations_speed: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description="Mode-specific max iterations for speed mode (0 = use defaults/config).",
+        example=2,
+    )
+    research_max_iterations_balanced: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description="Mode-specific max iterations for balanced mode (0 = use defaults/config).",
+        example=6,
+    )
+    research_max_iterations_quality: int = Field(
+        default=0,
+        ge=0,
+        le=300,
+        description="Mode-specific max iterations for quality mode (0 = use defaults/config).",
+        example=25,
+    )
+    classifier_provider: Optional[str] = Field(
+        default=None,
+        description="LLM provider for query classification (uses generation_provider if empty)",
+        example="openai",
+    )
+    classifier_model: Optional[str] = Field(
+        default=None,
+        description="LLM model for query classification (uses generation_model if empty)",
+        example="gpt-4o-mini",
+    )
+
+    # ========== FOLLOW-UP SUGGESTIONS ==========
+    enable_suggestions: bool = Field(
+        default=False,
+        description="Generate follow-up question suggestions after the main response. "
+                    "Returns 4-5 suggested next questions in the response metadata.",
+        example=False,
+    )
+    num_suggestions: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+        description="Number of follow-up suggestions to generate (default 5).",
+        example=5,
+    )
+
+    # ========== STRUCTURED RESPONSE WRITER ==========
+    enable_structured_response: bool = Field(
+        default=False,
+        description="Use structured response writer with XML-tagged context and citation enforcement. "
+                    "Formats retrieval results as indexed XML blocks and requires per-sentence [N] citations. "
+                    "In quality mode, enforces a comprehensive research report style (2000+ words).",
+        example=False,
+    )
+
+    # ========== MEDIA SEARCH ==========
+    enable_image_search: bool = Field(
+        default=False,
+        description="Enable image search as a research action. "
+                    "The LLM reformulates queries for optimal image search results.",
+        example=False,
+    )
+    enable_video_search: bool = Field(
+        default=False,
+        description="Enable video search (primarily YouTube) as a research action. "
+                    "The LLM reformulates queries for optimal video search results.",
+        example=False,
+    )
+
     # ========== GENERATION GUARDRAILS ==========
     enable_injection_filter: bool = Field(
         default=True,
@@ -1406,6 +1545,17 @@ class UnifiedRAGRequest(BaseModel):
                 raise ValueError(f"Invalid chunk types: {invalid}. Valid options: {valid_types}")
         return v
 
+    if model_validator is not None:
+        @model_validator(mode="after")
+        def _validate_research_loop_contract(self):  # type: ignore
+            if bool(getattr(self, "enable_research_loop", False)) and not bool(
+                getattr(self, "enable_query_classification", False)
+            ):
+                raise ValueError(
+                    "enable_research_loop=true requires enable_query_classification=true"
+                )
+            return self
+
 
 class UnifiedRAGResponse(BaseModel):
     """Unified response structure for RAG queries."""
@@ -1504,6 +1654,41 @@ class UnifiedRAGResponse(BaseModel):
         default=None,
         description="Faithfulness evaluation results (claim-level analysis, faithfulness score) "
                     "when enable_faithfulness_eval is true",
+    )
+
+    # ========== SEARCH AGENT / RESEARCH ==========
+    query_classification: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Query classification results (skip_search, search routing, detected intent) "
+                    "when enable_query_classification is true",
+    )
+    reformulated_query: Optional[str] = Field(
+        default=None,
+        description="Standalone reformulated query when chat_history was provided",
+    )
+    research_summary: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Research loop summary (iterations, steps, results) "
+                    "when enable_research_loop is true",
+    )
+
+    # ========== FOLLOW-UP SUGGESTIONS ==========
+    suggestions: Optional[list[str]] = Field(
+        default=None,
+        description="Follow-up question suggestions generated after the response "
+                    "when enable_suggestions is true",
+    )
+
+    # ========== MEDIA SEARCH ==========
+    images: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description="Image search results when enable_image_search is true. "
+                    "Each entry has: title, url, thumbnail_url, source, description.",
+    )
+    videos: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description="Video search results when enable_video_search is true. "
+                    "Each entry has: title, url, thumbnail_url, source, description.",
     )
 
     model_config = ConfigDict(frozen=True, json_schema_extra={

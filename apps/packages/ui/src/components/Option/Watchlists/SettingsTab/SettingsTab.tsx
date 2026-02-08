@@ -262,6 +262,35 @@ export const SettingsTab: React.FC = () => {
             />
           </Card>
 
+          {/* Phase 3 Readiness */}
+          <Card
+            title={t("watchlists:settings.phase3.title", "Phase 3 Readiness")}
+          >
+            <Descriptions column={1} size="small">
+              <Descriptions.Item label={t("watchlists:settings.phase3.forumsEnabled", "Forums enabled")}>
+                {settings.forums_enabled ? t("common:yes", "Yes") : t("common:no", "No")}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:settings.phase3.forumsDefaultTopN", "Forum default top N")}>
+                {typeof settings.forum_default_top_n === "number" ? settings.forum_default_top_n : 20}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:settings.phase3.sharingMode", "Sharing mode")}>
+                {settings.sharing_mode || t("watchlists:settings.phase3.adminCrossUser", "admin_cross_user")}
+              </Descriptions.Item>
+              <Descriptions.Item label={t("watchlists:settings.phase3.backend", "Watchlists backend")}>
+                {settings.watchlists_backend || "sqlite"}
+              </Descriptions.Item>
+            </Descriptions>
+            <Alert
+              className="mt-4"
+              type="info"
+              showIcon
+              message={t(
+                "watchlists:settings.phase3.note",
+                "Phase-3 execution focuses on forum productionization, sharing model rollout, and Postgres parity."
+              )}
+            />
+          </Card>
+
           {/* Claim Clusters */}
           <Card
             title={t("watchlists:settings.clusters.title", "Claim Clusters")}

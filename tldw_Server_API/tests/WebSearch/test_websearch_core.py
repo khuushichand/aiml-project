@@ -395,3 +395,43 @@ def test_generate_and_search_propagates_include_domains_alias(monkeypatch: pytes
     assert "web_search_results_dict" in result
     assert captured.get("site_whitelist") == ["allowed.example"]
     assert result["web_search_results_dict"].get("site_whitelist") == ["allowed.example"]
+
+
+@pytest.mark.asyncio
+async def test_search_discussions_uses_preprocessed_results_without_reprocessing(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Dict[str, Any] = {"to_thread_calls": 0}
+
+    def fake_perform_websearch(**kwargs: Any) -> Dict[str, Any]:
+        captured["search_query"] = kwargs.get("search_query")
+        return {
+            "results": [
+                {
+                    "title": "Discussion thread",
+                    "url": "https://reddit.com/r/test/comments/1",
+                    "content": "Community feedback",
+                }
+            ]
+        }
+
+    def fail_process_results(*_args: Any, **_kwargs: Any) -> Dict[str, Any]:
+        raise AssertionError("process_web_search_results should not be called for normalized payloads")
+
+    async def fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        captured["to_thread_calls"] += 1
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(web_search, "perform_websearch", fake_perform_websearch)
+    monkeypatch.setattr(web_search, "process_web_search_results", fail_process_results)
+    monkeypatch.setattr(web_search.asyncio, "to_thread", fake_to_thread)
+
+    docs = await web_search.search_discussions(
+        query="rag feedback",
+        platforms=["reddit"],
+        max_results=1,
+    )
+
+    assert captured["to_thread_calls"] == 1
+    assert "site:reddit.com" in str(captured.get("search_query", ""))
+    assert len(docs) == 1
+    assert docs[0]["source"] == "discussion"
+    assert docs[0]["platform"] == "reddit"

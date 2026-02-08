@@ -51,6 +51,8 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
   // Store state
   const workflowName = useWorkflowEditorStore((s) => s.workflowName)
   const isDirty = useWorkflowEditorStore((s) => s.isDirty)
+  const nodes = useWorkflowEditorStore((s) => s.nodes)
+  const edges = useWorkflowEditorStore((s) => s.edges)
   const isMiniMapVisible = useWorkflowEditorStore((s) => s.isMiniMapVisible)
   const isGridVisible = useWorkflowEditorStore((s) => s.isGridVisible)
   const sidebarPanel = useWorkflowEditorStore((s) => s.sidebarPanel)
@@ -92,10 +94,13 @@ export const WorkflowEditor = ({ className = "" }: WorkflowEditorProps) => {
     }
   }, [stepTypesStatus, loadStepTypes])
 
-  // Validate on changes
+  // Validate on graph/config changes with a short debounce for typing comfort
   useEffect(() => {
-    validate()
-  }, [validate])
+    const timeoutId = window.setTimeout(() => {
+      validate()
+    }, 120)
+    return () => window.clearTimeout(timeoutId)
+  }, [nodes, edges, validate])
 
   const handleSave = useCallback(() => {
     const workflow = saveWorkflow()

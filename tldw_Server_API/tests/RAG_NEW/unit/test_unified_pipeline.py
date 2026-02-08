@@ -94,6 +94,266 @@ class TestUnifiedPipeline:
             mock_semantic_cache.get.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_skip_search_classification_bypasses_retrieval(self):
+        """Classification skip_search should bypass retrieval and still allow generation."""
+        from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
+
+        classification = QueryClassification(
+            skip_search=True,
+            search_local_db=False,
+            search_web=False,
+            search_academic=False,
+            search_discussions=False,
+            standalone_query="hello",
+            detected_intent="conversational",
+            confidence=0.95,
+            reasoning="Greeting",
+        )
+
+        with patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.classify_and_reformulate',
+            AsyncMock(return_value=classification),
+        ):
+            with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_generator:
+                    mock_generator_instance = MagicMock()
+                    mock_generator_instance.generate = AsyncMock(return_value={"answer": "Hello there"})
+                    mock_generator.return_value = mock_generator_instance
+
+                    result = await unified_rag_pipeline(
+                        query="hello",
+                        enable_query_classification=True,
+                        enable_cache=False,
+                        enable_reranking=False,
+                        enable_generation=True,
+                    )
+
+                    mock_retriever.assert_not_called()
+                    answer = (
+                        getattr(result, 'generated_answer', None)
+                        if not isinstance(result, dict)
+                        else result.get('generated_answer') or result.get('answer')
+                    )
+                    metadata = (
+                        getattr(result, 'metadata', None)
+                        if not isinstance(result, dict)
+                        else result.get('metadata', {})
+                    ) or {}
+                    assert answer == "Hello there"
+                    assert metadata.get("classification_skip_search") is True
+                    assert metadata.get("retrieval_bypassed", {}).get("reason") == "classification_skip_search"
+
+    @pytest.mark.asyncio
+    async def test_research_loop_documents_are_not_overwritten_by_retrieval(self):
+        """Successful research-loop output should bypass standard retrieval."""
+        from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
+        from tldw_Server_API.app.core.RAG.rag_service.research_agent import ResearchOutput
+
+        classification = QueryClassification(
+            skip_search=False,
+            search_local_db=True,
+            search_web=True,
+            search_academic=False,
+            search_discussions=False,
+            standalone_query="latest python release notes",
+            detected_intent="factual",
+            confidence=0.8,
+            reasoning="Needs search",
+        )
+        research_output = ResearchOutput(
+            query="latest python release notes",
+            standalone_query="latest python release notes",
+            all_results=[
+                {
+                    "id": "research-doc-1",
+                    "title": "Python Release Notes",
+                    "url": "https://example.com/python-release-notes",
+                    "content": "Python 3.x includes important changes.",
+                    "source": "web",
+                    "score": 0.92,
+                }
+            ],
+            total_iterations=1,
+            total_results=1,
+            total_duration_sec=0.12,
+            final_reasoning="Sufficient evidence collected",
+            completed=True,
+        )
+
+        with patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.classify_and_reformulate',
+            AsyncMock(return_value=classification),
+        ):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.research_loop',
+                AsyncMock(return_value=research_output),
+            ) as mock_research_loop:
+                with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                    with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.AnswerGenerator') as mock_generator:
+                        mock_generator_instance = MagicMock()
+                        mock_generator_instance.generate = AsyncMock(return_value={"answer": "Research-backed answer"})
+                        mock_generator.return_value = mock_generator_instance
+
+                        result = await unified_rag_pipeline(
+                            query="latest python release notes",
+                            enable_query_classification=True,
+                            enable_research_loop=True,
+                            search_depth_mode="balanced",
+                            enable_cache=False,
+                            enable_reranking=False,
+                            enable_generation=True,
+                        )
+
+                        mock_research_loop.assert_called_once()
+                        mock_retriever.assert_not_called()
+                        docs = (
+                            getattr(result, 'documents', None)
+                            if not isinstance(result, dict)
+                            else result.get('documents', [])
+                        ) or []
+                        metadata = (
+                            getattr(result, 'metadata', None)
+                            if not isinstance(result, dict)
+                            else result.get('metadata', {})
+                        ) or {}
+                        assert docs
+                        assert docs[0].get("id") == "research-doc-1"
+                        assert metadata.get("retrieval_bypassed", {}).get("reason") == "research_loop"
+                        assert metadata.get("research", {}).get("total_results") == 1
+
+    @pytest.mark.asyncio
+    async def test_classification_local_disabled_prefetches_web_and_bypasses_retriever(self):
+        """When local DB route is disabled, classifier can trigger external prefetch without local retrieval."""
+        from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
+
+        classification = QueryClassification(
+            skip_search=False,
+            search_local_db=False,
+            search_web=True,
+            search_academic=False,
+            search_discussions=False,
+            standalone_query="latest python release notes",
+            detected_intent="factual",
+            confidence=0.8,
+            reasoning="Need web route only",
+        )
+
+        fake_processed = {
+            "results": [
+                {
+                    "title": "Python release notes",
+                    "url": "https://example.com/python-release-notes",
+                    "content": "Release notes content",
+                }
+            ]
+        }
+
+        with patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.classify_and_reformulate',
+            AsyncMock(return_value=classification),
+        ):
+            with patch(
+                'tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.perform_websearch',
+                Mock(return_value={"results": []}),
+            ):
+                with patch(
+                    'tldw_Server_API.app.core.Web_Scraping.WebSearch_APIs.process_web_search_results',
+                    Mock(return_value=fake_processed),
+                ):
+                    with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.MultiDatabaseRetriever') as mock_retriever:
+                        result = await unified_rag_pipeline(
+                            query="latest python release notes",
+                            enable_query_classification=True,
+                            enable_generation=False,
+                            enable_cache=False,
+                            enable_reranking=False,
+                            search_mode="hybrid",
+                            top_k=5,
+                        )
+
+                        mock_retriever.assert_not_called()
+                        docs = (
+                            getattr(result, 'documents', None)
+                            if not isinstance(result, dict)
+                            else result.get('documents', [])
+                        ) or []
+                        metadata = (
+                            getattr(result, 'metadata', None)
+                            if not isinstance(result, dict)
+                            else result.get('metadata', {})
+                        ) or {}
+                        assert len(docs) == 1
+                        assert docs[0].get("id") == "https://example.com/python-release-notes"
+                        assert metadata.get("retrieval_bypassed", {}).get("reason") == "classification_external_prefetch"
+                        assert metadata.get("classification_external_prefetch", {}).get("document_count") == 1
+
+    @pytest.mark.asyncio
+    async def test_research_loop_override_passes_iteration_and_registry_controls(self):
+        """Research loop should receive iteration override and registry controls from request params."""
+        from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
+        from tldw_Server_API.app.core.RAG.rag_service.research_agent import ResearchOutput
+
+        classification = QueryClassification(
+            skip_search=False,
+            search_local_db=True,
+            search_web=True,
+            search_academic=True,
+            search_discussions=True,
+            standalone_query="compare retrieval strategies",
+            detected_intent="comparative",
+            confidence=0.8,
+            reasoning="Needs broad research",
+        )
+        research_output = ResearchOutput(
+            query="compare retrieval strategies",
+            standalone_query="compare retrieval strategies",
+            all_results=[],
+            total_iterations=1,
+            total_results=0,
+            total_duration_sec=0.01,
+            final_reasoning="Done",
+            completed=True,
+        )
+
+        with patch(
+            'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.classify_and_reformulate',
+            AsyncMock(return_value=classification),
+        ):
+            with patch(
+                'tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.research_loop',
+                AsyncMock(return_value=research_output),
+            ) as mock_research_loop:
+                result = await unified_rag_pipeline(
+                    query="compare retrieval strategies",
+                    enable_query_classification=True,
+                    enable_research_loop=True,
+                    search_depth_mode="balanced",
+                    research_max_iterations_balanced=3,
+                    discussion_platforms=["reddit"],
+                    search_url_scraping=False,
+                    enable_generation=False,
+                    enable_cache=False,
+                    enable_reranking=False,
+                )
+
+                kwargs = mock_research_loop.call_args.kwargs
+                assert kwargs["max_iterations"] == 3
+                assert kwargs["discussion_platforms"] == ["reddit"]
+                assert kwargs["enable_url_scraping"] is False
+                registry = kwargs.get("registry")
+                assert registry is not None
+                assert registry.get("discussion_search") is not None
+                assert registry.get("scrape_url") is None
+
+                metadata = (
+                    getattr(result, 'metadata', None)
+                    if not isinstance(result, dict)
+                    else result.get('metadata', {})
+                ) or {}
+                assert metadata.get("research", {}).get("max_iterations_requested") == 3
+                assert metadata.get("research", {}).get("url_scraping_enabled") is False
+
+    @pytest.mark.asyncio
     async def test_unified_pipeline_with_expansion(self):
         """Test unified pipeline with query expansion."""
         with patch('tldw_Server_API.app.core.RAG.rag_service.unified_pipeline.multi_strategy_expansion') as mock_expand:

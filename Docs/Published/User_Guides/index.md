@@ -60,6 +60,7 @@ python -m uvicorn tldw_Server_API.app.main:app --reload
 
 ## Audio & TTS
 
+- [Voice Agent Setup Guide](Voice_Agent_Setup_Guide.md) - Set up and test `/api/v1/voice` REST + WebSocket flows
 - [TTS Getting Started](TTS_Getting_Started.md) - Text-to-speech setup and usage
 
 ## Organizations & Admin

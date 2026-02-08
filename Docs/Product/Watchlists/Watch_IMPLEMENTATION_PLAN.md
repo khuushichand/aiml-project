@@ -87,7 +87,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Optional: TTS brief generated and attached when item count below threshold.
   - tldw_Server_API/tests/Watchlists/test_tts_brief_optional.py
 
-**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; optional small-run TTS brief auto-generation is covered by integration tests)
+**Status**: Completed (template version history + version-aware rendering landed; regenerate supports template version selection; delivery status is surfaced in outputs UI; job-level default email subject controls are wired in the Jobs form; optional small-run TTS brief auto-generation and delivery-default subject behavior are covered by integration tests)
 
 ---
 
@@ -109,7 +109,7 @@ This plan tracks the remaining work to wrap Watchlists v1 per the Bridge PRD. Ea
 - Rate-limit headers deterministic under non-test mode with configured backend.
   - tldw_Server_API/tests/Watchlists/test_rate_limit_headers_strict.py
 
-**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed)
+**Status**: Complete (dedup/seen inspect-reset API + DB support shipped; scheduler controls and broader scale validation tests added; operational limits boundary tests + admin UI surfacing for dedup/seen completed; verification rerun on 2026-02-08: Stage-5 backend slice `40 passed`, SourceSeenDrawer UI tests `14 passed`)
 
 Stage 5 scale target matrix is tracked in:
 - `Docs/Plans/IMPLEMENTATION_PLAN_watchlists_scale_validation_dedup_ui.md` (all 5 stages complete)

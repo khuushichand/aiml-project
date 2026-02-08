@@ -190,6 +190,24 @@ def test_find_reference_section_stops_before_appendix_heading():
     assert "A.1 Prompts" not in section
 
 
+def test_find_reference_section_fallback_detects_dense_numbered_tail_without_heading():
+    content = (
+        "Introduction\n"
+        "Body text without explicit references heading.\n\n"
+        "Some trailing section text.\n\n"
+        "[41] First Author. 2021. Paper One.\n"
+        "[42] Second Author. 2022. Paper Two.\n"
+        "[43] Third Author. 2023. Paper Three.\n"
+        "[44] Fourth Author. 2024. Paper Four.\n"
+        "[45] Fifth Author. 2025. Paper Five.\n"
+        "[46] Sixth Author. 2026. Paper Six.\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "[41] First Author." in section
+    assert "[46] Sixth Author." in section
+
+
 def test_split_references_filters_appendix_like_noise():
     refs_text = (
         "Akari Asai et al. 2020. Learning to retrieve reasoning paths.\n\n"
@@ -214,6 +232,139 @@ def test_split_references_filters_figure_noise_blocks():
     assert any("Qwen technical report" in r for r in refs)
     assert all("Figure 3" not in r for r in refs)
     assert all("Table 2" not in r for r in refs)
+
+
+def test_split_references_supports_bracket_code_labels():
+    refs_text = (
+        "[BBI [+] 21] Patrick Bajari, Brian Burdick, Guido W. Imbens, Lorenzo Masoero, "
+        "James McQueen, Thomas Richardson, and Ido M. Rosen. Multiple randomization designs, 2021.\n\n"
+        "[BP98] Sergey Brin and Lawrence Page. The anatomy of a large-scale hypertextual "
+        "Web search engine. Computer Networks and ISDN Systems, 30(1):107-117, 1998.\n\n"
+        "13\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Multiple randomization designs" in r for r in refs)
+    assert any("hypertextual Web search engine" in r for r in refs)
+    assert all("13" != r.strip() for r in refs)
+
+
+def test_split_references_supports_double_bracket_number_labels():
+    refs_text = (
+        "[[68] T. Jia, Y. Sang, and X. Zhang, Phys. Rev. D 111, 083531 (2025).]\n\n"
+        "[69] D. G. Figueroa, A. Florio, F. Torrenti, and W. Valkenburg. 2021. JCAP.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("T. Jia, Y. Sang, and X. Zhang" in r for r in refs)
+    assert any("D. G. Figueroa" in r for r in refs)
+
+
+def test_split_references_supports_non_comma_author_names():
+    refs_text = (
+        "[1] Samuel A Alexander. Infinite graphs in systematic biology, with an application "
+        "to the species problem. Acta biotheoretica, 61:181-201, 2013.\n\n"
+        "[2] Samuel A Alexander. Self-referential theories. The Journal of Symbolic Logic, "
+        "85(4):1687-1716, 2020.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Infinite graphs in systematic biology" in r for r in refs)
+    assert any("Self-referential theories" in r for r in refs)
+
+
+def test_split_references_ignores_markdown_link_fragments_without_authors():
+    refs_text = (
+        "Abazajian K. N., Adelman-McCarthy J. K., Ageros M. A., et al.\n"
+        "[2009, ApJS, 182, 543](http://dx.doi.org/10.1088/0067-0049/182/2/543)\n"
+        "[Abazajian K., Addison G., Adshead P., et al., 2022, arXiv e-prints, p. arXiv:2203.08024]"
+        "(http://dx.doi.org/10.48550/arXiv.2203.08024)\n\n"
+        "Brunner H., Liu T., Lamer G., Georgakakis A., Merloni A., et al.\n"
+        "[2022, A&A, 661, A1](http://dx.doi.org/10.1051/0004-6361/202141266)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Abazajian K." in r for r in refs)
+    assert any("Brunner H." in r for r in refs)
+    assert all("[2009, ApJS, 182, 543]" not in r.strip() for r in refs)
+
+
+def test_split_references_merges_continuation_lines_in_numbered_mode():
+    refs_text = (
+        "[5] L. Kofman, A. D. Linde, and A. A. Starobinsky, Phys.\n"
+        "Rev. Lett. 73, 3195 (1994), arXiv:hep-th/9405187.\n\n"
+        "[6] L. Kofman, A. D. Linde, and A. A. Starobinsky, Phys.\n"
+        "Rev. D 56, 3258 (1997), arXiv:hep-ph/9704452.\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) == 2
+    assert any("Rev. Lett. 73, 3195 (1994)" in r for r in refs)
+    assert any("Rev. D 56, 3258 (1997)" in r for r in refs)
+
+
+def test_split_references_keeps_structured_split_when_line_model_over_merges():
+    refs_text = (
+        "[R1] 2020. First survey result in compact format. https://doi.org/10.1000/r1\n"
+        "[R2] 2021. Second survey result in compact format. https://doi.org/10.1000/r2\n"
+        "[R3] 2022. Third survey result in compact format. https://doi.org/10.1000/r3\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) == 3
+    assert any("First survey result" in r for r in refs)
+    assert any("Second survey result" in r for r in refs)
+    assert any("Third survey result" in r for r in refs)
+
+
+def test_split_references_keeps_standalone_year_markdown_entries():
+    refs_text = (
+        "[2019, ApJS, 182, 543](http://dx.doi.org/10.1088/0067-0049/182/2/543)\n\n"
+        "[2021, Phys. Rev. D, 103, 123456](http://dx.doi.org/10.1103/PhysRevD.103.123456)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("ApJS, 182, 543" in r for r in refs)
+    assert any("Phys. Rev. D, 103, 123456" in r for r in refs)
+
+
+def test_split_references_supports_unicode_author_surnames_for_new_entries():
+    refs_text = (
+        "Ebrahimian E., Krishnan C., Mondol R., Sheikh-Jabbari M. M.\n"
+        "[2024, Journal of Cosmology and Astroparticle Physics, 2024, 036]"
+        "(http://dx.doi.org/10.1088/1475-7516/2024/01/036)\n"
+        "[Gaztañaga E., Sravan Kumar K., 2024, J. Cosmol. Astropart.]"
+        "(http://dx.doi.org/10.1088/1475-7516/2024/06/001)\n"
+        "[Phys., 2024, 001](http://dx.doi.org/10.1088/1475-7516/2024/06/001)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Ebrahimian E." in r for r in refs)
+    assert any("Gaztañaga E." in r for r in refs)
+
+
+def test_split_references_merges_split_journal_fragment_markdown_continuation():
+    refs_text = (
+        "Constantin A., Harvey T. R., von Hausegger S., Lukas A., 2023,\n"
+        "[Classical and Quantum Gravity, 40, 245015](http://dx.doi.org/10.1088/1361-6382/ad0b36)\n\n"
+        "[Gelman A., Rubin D. B., 1992, Stat. Sci., 7, 457](http://dx.doi.org/10.1214/ss/1177011136)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Constantin A." in r and "Classical and Quantum Gravity" in r for r in refs)
+    assert any("Gelman A." in r for r in refs)
+
+
+def test_split_references_merges_split_arxiv_e_prints_fragment():
+    refs_text = (
+        "[Desmond H., Stiskalek R., Najera J. A., Banik I., 2025, arXiv e-]"
+        "(http://dx.doi.org/10.48550/arXiv.2511.03394)\n"
+        "[prints, p. arXiv:2511.03394](http://dx.doi.org/10.48550/arXiv.2511.03394)\n\n"
+        "[Hoekstra H., 2013, Space Science Reviews, 177, 247]"
+        "(http://dx.doi.org/10.1007/s11214-013-9994-5)\n"
+    )
+    refs = refs_mod._split_references(refs_text)
+    assert len(refs) >= 2
+    assert any("Desmond H." in r and "prints, p. arXiv:2511.03394" in r for r in refs)
+    assert any("Hoekstra H." in r for r in refs)
 
 
 @pytest.mark.asyncio

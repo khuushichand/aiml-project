@@ -89,6 +89,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: BookOpen,
         labelKey: "option:header.modeWorldBooks",
         labelDefault: "World Books"
+      },
+      {
+        id: "workspace-playground",
+        to: "/workspace-playground",
+        icon: GitCompare,
+        labelKey: "option:header.modelPlayground",
+        labelDefault: "Research Studio"
       }
     ]
   },
@@ -173,6 +180,13 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: Microscope,
         labelKey: "option:header.evaluations",
         labelDefault: "Evaluations"
+      },
+      {
+        id: "chunking-playground",
+        to: "/chunking-playground",
+        icon: Scissors,
+        labelKey: "settings:chunkingPlayground.nav",
+        labelDefault: "Chunking Playground"
       }
     ]
   },
@@ -250,20 +264,6 @@ export const HEADER_SHORTCUT_GROUPS: HeaderShortcutGroup[] = [
         icon: FlaskConical,
         labelKey: "option:header.workspacePlayground",
         labelDefault: "Model Playground"
-      },
-      {
-        id: "workspace-playground",
-        to: "/workspace-playground",
-        icon: GitCompare,
-        labelKey: "option:header.modelPlayground",
-        labelDefault: "Workspace Playground"
-      },
-      {
-        id: "chunking-playground",
-        to: "/chunking-playground",
-        icon: Scissors,
-        labelKey: "settings:chunkingPlayground.nav",
-        labelDefault: "Chunking Playground"
       },
       {
         id: "data-tables",

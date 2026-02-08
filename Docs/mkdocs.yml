@@ -258,6 +258,7 @@ nav:
           - Prompt Engineering Notes: User_Guides/Prompt_Engineering_Notes.md
           - Context MCP Search: User_Guides/context_mcp_search.md
       - Audio & TTS:
+          - Voice Agent Setup Guide: User_Guides/Voice_Agent_Setup_Guide.md
           - TTS Getting Started: User_Guides/TTS_Getting_Started.md
       - Organizations & Admin:
           - Organizations and Sharing: User_Guides/Organizations_and_Sharing.md

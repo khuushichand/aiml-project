@@ -210,13 +210,12 @@ Example Requests
 - Media add (persist)
   - `POST /api/v1/media/add` as multipart form.
   - Minimum fields for URL ingest:
-    - `media_type=document|video|audio|pdf|ebook`
+    - `media_type=document|video|audio|pdf|ebook|email|code`
     - `urls=https://example.com/article` (repeat `urls` for multiple items)
-  - Note: request `media_type` (`document|video|audio|pdf|ebook`) expresses client intent, while stored/returned `media_type` may be normalized (for example, input `document` can persist/return as `site`), so validate against the request enum when sending and accept normalized response values like `site`.
   - Example:
     - `curl -X POST "$SERVER/api/v1/media/add" -H "X-API-KEY: $KEY" -F "media_type=document" -F "urls=https://example.com/article"`
   - Expected response (shape):
-    - `{ "results": [ { "status": "Success", "input_ref": "https://...", "media_type": "site", "db_id": 456, "message": "Media added to database.", "summary": "..." } ] }`
+    - `{ "results": [ { "status": "Success", "input_ref": "https://...", "media_type": "document", "db_id": 456, "db_message": "Media added to database.", "summary": "..." } ] }`
 - Media ingest jobs (async; preferred for browser URL ingest)
   - Submit: `POST /api/v1/media/ingest/jobs` (multipart form, same `media_type` + `urls` fields as `/media/add`)
   - Poll: `GET /api/v1/media/ingest/jobs/{job_id}`

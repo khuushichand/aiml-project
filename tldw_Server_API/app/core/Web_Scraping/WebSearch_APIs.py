@@ -1084,6 +1084,119 @@ def aggregate_results(
 
 #######################################################################################################################
 #
+# Discussion / Forum Search
+
+# Platform → domain mapping for site-restricted searches
+_DISCUSSION_PLATFORM_DOMAINS: dict[str, str] = {
+    "reddit": "reddit.com",
+    "stackoverflow": "stackoverflow.com",
+    "hackernews": "news.ycombinator.com",
+    "hn": "news.ycombinator.com",
+    "stackexchange": "stackexchange.com",
+    "quora": "quora.com",
+    "4chan": "boards.4chan.org",
+    "4channel": "boards.4channel.org",
+}
+
+
+async def search_discussions(
+    query: str,
+    platforms: list[str] | None = None,
+    max_results: int = 10,
+    search_engine: str = "duckduckgo",
+) -> list[dict[str, Any]]:
+    """Search discussion platforms for community knowledge and opinions.
+
+    Appends ``site:<domain>`` filters to the query and dispatches to
+    the existing ``perform_websearch`` / ``process_web_search_results``
+    infrastructure.
+
+    Args:
+        query: The search query.
+        platforms: Platform names to search (default: reddit, stackoverflow, hackernews).
+        max_results: Maximum total results to return.
+        search_engine: Web search engine to use (default: duckduckgo).
+
+    Returns:
+        List of result dicts with keys: title, url, content, source, platform.
+    """
+    if platforms is None:
+        platforms = ["reddit", "stackoverflow", "hackernews"]
+
+    # Build site: filter string
+    site_filters: list[str] = []
+    for platform in platforms:
+        domain = _DISCUSSION_PLATFORM_DOMAINS.get(platform.lower())
+        if domain:
+            site_filters.append(f"site:{domain}")
+
+    if not site_filters:
+        return []
+
+    # Combine into a single OR-joined filter
+    site_clause = " OR ".join(site_filters)
+    augmented_query = f"{query} ({site_clause})"
+
+    # Dispatch to existing web search (sync function, run in thread)
+    try:
+        raw_results = await asyncio.to_thread(
+            perform_websearch,
+            search_engine=search_engine,
+            search_query=augmented_query,
+            content_country="US",
+            search_lang="en",
+            output_lang="en",
+            result_count=max_results,
+        )
+
+        results_list: list[dict[str, Any]] = []
+        if isinstance(raw_results, dict):
+            existing_results = raw_results.get("results")
+            if isinstance(existing_results, list):
+                normalized_results = [item for item in existing_results if isinstance(item, dict)]
+                if normalized_results and any(
+                    ("url" in item) or ("content" in item) or ("snippet" in item)
+                    for item in normalized_results
+                ):
+                    results_list = normalized_results
+
+        if not results_list:
+            processed = process_web_search_results(raw_results, search_engine)
+            results_list = processed.get("results", [])
+
+        docs: list[dict[str, Any]] = []
+        for r in results_list[:max_results]:
+            url = r.get("url", "")
+            # Detect which platform the result came from
+            detected_platform = "unknown"
+            url_lower = url.lower()
+            for plat, domain in _DISCUSSION_PLATFORM_DOMAINS.items():
+                if domain in url_lower:
+                    detected_platform = plat
+                    break
+
+            docs.append({
+                "title": r.get("title", ""),
+                "url": url,
+                "content": str(r.get("content", r.get("snippet", "")))[:500],
+                "source": "discussion",
+                "platform": detected_platform,
+            })
+
+        return docs
+
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+        logging.warning(f"Discussion search failed: {exc}")
+        return []
+
+
+#
+# End of Discussion / Forum Search
+#######################################################################################################################
+
+
+#######################################################################################################################
+#
 # Search Engine Functions
 
 # FIXME
@@ -1225,6 +1338,13 @@ def perform_websearch(search_engine, search_query, content_country, search_lang,
                 result_count=result_count,
                 content_country=content_country,
                 date_range=date_range,
+            )
+
+        elif search_engine.lower() == "4chan":
+            web_search_results = search_web_4chan(
+                search_query=search_query,
+                result_count=result_count,
+                search_params=search_params,
             )
 
         elif search_engine.lower() == "searx":
@@ -1448,6 +1568,8 @@ def process_web_search_results(search_results: dict, search_engine: str) -> dict
             parse_exa_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "firecrawl":
             parse_firecrawl_results(search_results, web_search_results_dict)
+        elif search_engine.lower() == "4chan":
+            parse_4chan_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "searx":
             parse_searx_results(search_results, web_search_results_dict)
         elif search_engine.lower() == "yandex":
@@ -2886,6 +3008,232 @@ def parse_firecrawl_results(firecrawl_search_results, web_search_results_dict):
 
 def test_parse_firecrawl_results():
     pass
+
+
+######################### 4chan Search #########################
+#
+# https://github.com/4chan/4chan-API
+def _normalize_4chan_boards(value: Any) -> list[str]:
+    tokens: list[str] = []
+    if isinstance(value, str):
+        tokens = [part.strip().lower() for part in re.split(r"[,\s]+", value) if part.strip()]
+    elif isinstance(value, list):
+        tokens = [str(part).strip().lower() for part in value if str(part).strip()]
+    else:
+        return []
+
+    board_pattern = re.compile(r"^[a-z0-9]{1,12}$")
+    out: list[str] = []
+    for token in tokens:
+        if board_pattern.match(token) and token not in out:
+            out.append(token)
+    return out
+
+
+def _clean_4chan_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = unescape(str(value))
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _score_4chan_match(query_terms: list[str], haystack: str, full_query: str) -> float:
+    text = haystack.lower()
+    score = 0.0
+    if not text:
+        return score
+
+    if full_query and full_query in text:
+        score += 3.0
+
+    for term in query_terms:
+        if term in text:
+            score += 1.0
+            repeats = max(0, text.count(term) - 1)
+            score += min(1.0, repeats * 0.2)
+
+    return score
+
+
+def search_web_4chan(
+    search_query: str,
+    result_count: int = 10,
+    search_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    query_text = str(search_query or "").strip().lower()
+    if not query_text:
+        raise ValueError("search_query is required")
+
+    cfg = get_loaded_config().get("search_engines", {})
+    boards_raw = (
+        (search_params or {}).get("boards")
+        or cfg.get("4chan_boards")
+        or cfg.get("fourchan_boards")
+        or os.getenv("FOURCHAN_BOARDS")
+        or os.getenv("FOURCHAN_DEFAULT_BOARDS")
+        or ["g", "tv", "pol"]
+    )
+    boards = _normalize_4chan_boards(boards_raw)
+    if not boards:
+        boards = ["g", "tv", "pol"]
+
+    max_threads_raw = (
+        (search_params or {}).get("max_threads_per_board")
+        or cfg.get("4chan_max_threads_per_board")
+        or cfg.get("fourchan_max_threads_per_board")
+        or 250
+    )
+    try:
+        max_threads_per_board = int(max_threads_raw)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        max_threads_per_board = 250
+    max_threads_per_board = max(1, min(max_threads_per_board, 1000))
+
+    try:
+        limit = int(result_count)
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+        limit = 10
+    limit = max(1, min(limit, 50))
+
+    query_terms = [t for t in re.findall(r"[a-z0-9]{2,}", query_text) if t]
+    if not query_terms and query_text:
+        query_terms = [query_text]
+
+    headers = _websearch_browser_headers(accept_lang="en-US,en;q=0.5")
+    from tldw_Server_API.app.core.http_client import fetch_json
+
+    candidates: list[dict[str, Any]] = []
+
+    for board in boards:
+        catalog_url = f"https://a.4cdn.org/{board}/catalog.json"
+
+        try:
+            from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+            pol = evaluate_url_policy(catalog_url)
+            if not getattr(pol, "allowed", False):
+                raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+            raise ValueError(f"Egress policy evaluation failed: {exc}") from exc
+
+        catalog_payload = fetch_json(method="GET", url=catalog_url, headers=headers, timeout=15.0)
+        pages = catalog_payload if isinstance(catalog_payload, list) else []
+        scanned_threads = 0
+
+        for page in pages:
+            if scanned_threads >= max_threads_per_board:
+                break
+            if not isinstance(page, dict):
+                continue
+            threads = page.get("threads", [])
+            if not isinstance(threads, list):
+                continue
+
+            for thread in threads:
+                if scanned_threads >= max_threads_per_board:
+                    break
+                scanned_threads += 1
+
+                if not isinstance(thread, dict):
+                    continue
+
+                thread_no = thread.get("no")
+                if thread_no is None:
+                    continue
+
+                subject = _clean_4chan_text(thread.get("sub"))
+                comment = _clean_4chan_text(thread.get("com"))
+                semantic = _clean_4chan_text(thread.get("semantic_url"))
+                haystack = " ".join(part for part in [subject, semantic, comment] if part)
+                score = _score_4chan_match(query_terms, haystack, query_text)
+                if query_terms and score <= 0:
+                    continue
+
+                published_epoch = thread.get("time")
+                published_date = None
+                if isinstance(published_epoch, (int, float)):
+                    try:
+                        published_date = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(published_epoch)))
+                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                        published_date = None
+
+                thread_url = f"https://boards.4chan.org/{board}/thread/{thread_no}"
+                snippet = _truncate_text(comment or semantic or subject)
+                title = subject or f"/{board}/ Thread {thread_no}"
+
+                candidates.append(
+                    {
+                        "title": title,
+                        "url": thread_url,
+                        "content": snippet,
+                        "publishedDate": published_date,
+                        "author": _clean_4chan_text(thread.get("name")) or None,
+                        "source": "4chan",
+                        "board": board,
+                        "thread_no": thread_no,
+                        "replies": thread.get("replies"),
+                        "images": thread.get("images"),
+                        "score": round(score, 4),
+                        "time_epoch": int(published_epoch) if isinstance(published_epoch, (int, float)) else 0,
+                    }
+                )
+
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("score") or 0.0),
+            int(item.get("time_epoch") or 0),
+        ),
+        reverse=True,
+    )
+
+    return {
+        "results": candidates[:limit],
+        "total_results_found": len(candidates),
+        "boards": boards,
+        "query": search_query,
+    }
+
+
+def parse_4chan_results(fourchan_search_results, web_search_results_dict):
+    try:
+        if "results" not in web_search_results_dict:
+            web_search_results_dict["results"] = []
+
+        items = fourchan_search_results.get("results", []) if isinstance(fourchan_search_results, dict) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            title = item.get("title", "")
+            url = item.get("url", "")
+            content = item.get("content") or item.get("snippet") or ""
+            published = item.get("publishedDate") or item.get("published") or item.get("date")
+
+            processed = {
+                "title": title,
+                "url": url,
+                "content": content,
+                "metadata": {
+                    "date_published": published,
+                    "author": item.get("author"),
+                    "source": item.get("source") or (extract_domain(url) if url else "4chan"),
+                    "language": item.get("language"),
+                    "relevance_score": item.get("score"),
+                    "snippet": content,
+                    "board": item.get("board"),
+                    "thread_no": item.get("thread_no"),
+                    "replies": item.get("replies"),
+                    "images": item.get("images"),
+                },
+            }
+            web_search_results_dict["results"].append(processed)
+
+        web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
+    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:
+        web_search_results_dict["processing_error"] = f"Error processing 4chan results: {e}"
 
 
 

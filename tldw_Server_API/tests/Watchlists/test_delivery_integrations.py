@@ -110,3 +110,96 @@ def test_output_deliveries_email_and_chatbook(client_with_user: TestClient):
         assert stored_meta.get("run_id") == run_id
         assert stored_meta.get("origin") == "test"
 
+
+def test_output_delivery_uses_job_default_email_subject_when_not_overridden(
+    client_with_user: TestClient,
+    monkeypatch,
+):
+    c = client_with_user
+
+    source = c.post(
+        "/api/v1/watchlists/sources",
+        json={
+            "name": "Delivery Subject Feed",
+            "url": "https://example.com/feed-delivery-subject.xml",
+            "source_type": "rss",
+            "tags": ["delivery-subject"],
+        },
+    )
+    assert source.status_code == 200, source.text
+
+    job = c.post(
+        "/api/v1/watchlists/jobs",
+        json={
+            "name": "Delivery Subject Digest",
+            "scope": {"tags": ["delivery-subject"]},
+            "output_prefs": {
+                "deliveries": {
+                    "email": {
+                        "enabled": True,
+                        "recipients": ["subject-default@example.com"],
+                        "subject": "Watchlists Subject Default",
+                        "attach_file": False,
+                    }
+                }
+            },
+        },
+    )
+    assert job.status_code == 200, job.text
+    job_id = job.json()["id"]
+
+    run = c.post(f"/api/v1/watchlists/jobs/{job_id}/run")
+    assert run.status_code == 200, run.text
+    run_id = run.json()["id"]
+
+    captured: dict[str, str] = {}
+
+    class _FakeNotificationsService:
+        def __init__(self, *, user_id: int, user_email: str | None = None) -> None:
+            self.user_id = user_id
+            self.user_email = user_email
+
+        async def deliver_email(
+            self,
+            *,
+            subject: str,
+            html_body: str,  # noqa: ARG002
+            text_body: str | None = None,  # noqa: ARG002
+            recipients: list[str] | None = None,  # noqa: ARG002
+            attachments: list[dict[str, object]] | None = None,  # noqa: ARG002
+            fallback_to_user_email: bool = True,  # noqa: ARG002
+        ):
+            captured["subject"] = subject
+            return type(
+                "_Result",
+                (),
+                {"channel": "email", "status": "sent", "details": {"provider": "fake"}},
+            )()
+
+        def deliver_chatbook(self, *args, **kwargs):  # noqa: ANN001, D401
+            return type(
+                "_Result",
+                (),
+                {"channel": "chatbook", "status": "skipped", "details": {"reason": "disabled"}},
+            )()
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.api.v1.endpoints.watchlists.NotificationsService",
+        _FakeNotificationsService,
+    )
+
+    output = c.post(
+        "/api/v1/watchlists/outputs",
+        json={
+            "run_id": run_id,
+            "title": "Digest Without Override Subject",
+        },
+    )
+    assert output.status_code == 200, output.text
+    payload = output.json()
+
+    assert captured.get("subject") == "Watchlists Subject Default"
+    deliveries = payload.get("metadata", {}).get("deliveries", [])
+    assert len(deliveries) == 1
+    assert deliveries[0].get("channel") == "email"
+    assert deliveries[0].get("status") == "sent"

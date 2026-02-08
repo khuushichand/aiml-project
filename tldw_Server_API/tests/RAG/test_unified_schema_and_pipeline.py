@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 
 def test_unified_schema_alias_min_relevance_score():
@@ -56,6 +57,28 @@ def test_unified_batch_schema_query_decomposition_fields():
     assert req.subquery_time_budget_sec == pytest.approx(1.5)
     assert req.subquery_doc_budget == 4
     assert req.subquery_max_concurrency == 2
+
+
+def test_unified_schema_research_loop_requires_query_classification():
+    from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGRequest
+
+    with pytest.raises(ValidationError):
+        UnifiedRAGRequest(
+            query="research loop contract",
+            enable_research_loop=True,
+        )
+
+
+def test_unified_schema_research_loop_valid_when_query_classification_enabled():
+    from tldw_Server_API.app.api.v1.schemas.rag_schemas_unified import UnifiedRAGRequest
+
+    req = UnifiedRAGRequest(
+        query="research loop contract",
+        enable_research_loop=True,
+        enable_query_classification=True,
+    )
+    assert req.enable_research_loop is True
+    assert req.enable_query_classification is True
 
 
 @pytest.mark.asyncio

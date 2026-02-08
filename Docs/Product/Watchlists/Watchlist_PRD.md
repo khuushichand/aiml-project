@@ -186,7 +186,11 @@ Outputs
 - `GET  /api/v1/watchlists/outputs/{id}/download` download rendered content (`text/markdown` or `text/html`)
 
 Settings
-- `GET /api/v1/watchlists/settings` returns default TTLs/environment info used by WebUI
+- `GET /api/v1/watchlists/settings` returns default TTLs/environment info used by WebUI, including:
+  - `forums_enabled`
+  - `forum_default_top_n` (from `WATCHLIST_FORUM_DEFAULT_TOP_N`, fallback `20`)
+  - `sharing_mode` (`admin_cross_user` default; supports `private_only` and `admin_same_org` via `WATCHLIST_SHARING_MODE`)
+  - `watchlists_backend` (`sqlite` | `postgres`)
 
 Remaining roadmap beyond current implementation: watchlist-level CRUD abstractions, richer Chatbook export enhancements, and audio output.
 

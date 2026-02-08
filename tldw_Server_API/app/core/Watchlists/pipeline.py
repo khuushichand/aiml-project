@@ -87,6 +87,16 @@ def _forums_enabled() -> bool:
     return env_flag_enabled("WATCHLIST_FORUMS_ENABLED")
 
 
+def _forum_default_top_n() -> int:
+    try:
+        parsed = int(os.getenv("WATCHLIST_FORUM_DEFAULT_TOP_N", "20") or 20)
+    except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
+        parsed = 20
+    if parsed <= 0:
+        return 20
+    return min(parsed, 200)
+
+
 def _forum_delay_seconds() -> float:
     try:
         delay_ms = int(os.getenv("WATCHLIST_FORUMS_DELAY_MS", "1500") or 1500)
@@ -1019,13 +1029,14 @@ async def run_watchlist_job(user_id: int, job_id: int) -> dict[str, Any]:
                         if not urls_to_fetch:
                             urls_to_fetch = [src.url]
                     else:
-                        top_n = 1
+                        default_top_n = _forum_default_top_n() if src_type == "forum" else 1
+                        top_n = default_top_n
                         try:
-                            top_n = int(settings.get("top_n", 1))
+                            top_n = int(settings.get("top_n", default_top_n))
                         except _WATCHLISTS_PIPELINE_NONCRITICAL_EXCEPTIONS:
-                            top_n = 1
+                            top_n = default_top_n
                         if top_n <= 0:
-                            top_n = 1
+                            top_n = default_top_n
                         discover_method = str(settings.get("discover_method", "auto")).lower()
                         if top_n > 1:
                             try:

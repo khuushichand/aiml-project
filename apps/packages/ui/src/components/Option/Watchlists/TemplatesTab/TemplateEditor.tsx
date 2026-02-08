@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from "react"
 import {
   Alert,
   Button,
+  Divider,
   Form,
   Input,
   Modal,
   Radio,
+  Select,
   Space,
   Tabs,
   message
@@ -15,9 +17,14 @@ import { marked } from "marked"
 import { useTranslation } from "react-i18next"
 import {
   createWatchlistTemplate,
-  getWatchlistTemplate
+  getWatchlistTemplate,
+  getWatchlistTemplateVersions
 } from "@/services/watchlists"
-import type { WatchlistTemplate, WatchlistTemplateCreate } from "@/types/watchlists"
+import type {
+  WatchlistTemplate,
+  WatchlistTemplateCreate,
+  WatchlistTemplateVersionSummary
+} from "@/types/watchlists"
 
 interface TemplateEditorProps {
   template: WatchlistTemplate | null
@@ -33,27 +40,60 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const { t } = useTranslation(["watchlists", "common"])
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  const [loadingVersion, setLoadingVersion] = useState(false)
   const [activeTab, setActiveTab] = useState<"editor" | "preview" | "docs">("editor")
+  const [templateVersions, setTemplateVersions] = useState<WatchlistTemplateVersionSummary[]>([])
+  const [selectedVersion, setSelectedVersion] = useState<number | undefined>(undefined)
+  const [loadedVersion, setLoadedVersion] = useState<number | null>(null)
+  const [loadedContentBaseline, setLoadedContentBaseline] = useState("")
 
   const isEditing = !!template
   const formatValue = Form.useWatch("format", form)
   const contentValue = Form.useWatch("content", form)
 
-  // Load template content when editing
+  const loadTemplate = async (templateName: string, version?: number) => {
+    setLoadingVersion(true)
+    try {
+      const result = await getWatchlistTemplate(templateName, version ? { version } : undefined)
+      form.setFieldsValue({
+        name: result.name,
+        description: result.description || "",
+        content: result.content || "",
+        format: result.format || "html"
+      })
+      setLoadedVersion(typeof result.version === "number" ? result.version : null)
+      setLoadedContentBaseline(result.content || "")
+    } finally {
+      setLoadingVersion(false)
+    }
+  }
+
+  // Load template content/version history when editing
   useEffect(() => {
     if (open && template) {
-      getWatchlistTemplate(template.name)
-        .then((result) => {
+      Promise.all([
+        getWatchlistTemplate(template.name),
+        getWatchlistTemplateVersions(template.name).catch(() => ({ items: [] }))
+      ])
+        .then(([result, versions]) => {
           form.setFieldsValue({
             name: result.name,
             description: result.description || "",
             content: result.content || "",
             format: result.format || "html"
           })
+          setLoadedVersion(typeof result.version === "number" ? result.version : null)
+          setLoadedContentBaseline(result.content || "")
+          setTemplateVersions(Array.isArray(versions.items) ? versions.items : [])
+          setSelectedVersion(undefined)
         })
         .catch((err) => {
           console.error("Failed to load template:", err)
           message.error(t("watchlists:templates.loadError", "Failed to load template"))
+          setTemplateVersions([])
+          setSelectedVersion(undefined)
+          setLoadedVersion(null)
+          setLoadedContentBaseline("")
         })
     } else if (open) {
       form.resetFields()
@@ -61,8 +101,39 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
         format: "html",
         content: DEFAULT_HTML_TEMPLATE
       })
+      setTemplateVersions([])
+      setSelectedVersion(undefined)
+      setLoadedVersion(null)
+      setLoadedContentBaseline(DEFAULT_HTML_TEMPLATE)
     }
   }, [open, template, form, t])
+
+  const handleLoadSelectedVersion = async () => {
+    if (!template || !selectedVersion) return
+    try {
+      await loadTemplate(template.name, selectedVersion)
+      message.success(
+        t("watchlists:templates.versionLoaded", "Loaded template version {{version}}", {
+          version: selectedVersion,
+        })
+      )
+    } catch (err) {
+      console.error("Failed to load template version:", err)
+      message.error(t("watchlists:templates.versionLoadError", "Failed to load template version"))
+    }
+  }
+
+  const handleLoadLatest = async () => {
+    if (!template) return
+    try {
+      await loadTemplate(template.name)
+      setSelectedVersion(undefined)
+      message.success(t("watchlists:templates.latestLoaded", "Loaded latest template version"))
+    } catch (err) {
+      console.error("Failed to load latest template version:", err)
+      message.error(t("watchlists:templates.latestLoadError", "Failed to load latest template"))
+    }
+  }
 
   // Handle save
   const handleSave = async () => {
@@ -116,23 +187,58 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
     return DOMPurify.sanitize(contentValue, { USE_PROFILES: { html: true } })
   }, [contentValue, formatValue])
 
+  const hasVersionDrift = useMemo(() => {
+    if (!isEditing || typeof loadedVersion !== "number") return false
+    return String(contentValue || "") !== loadedContentBaseline
+  }, [contentValue, isEditing, loadedContentBaseline, loadedVersion])
+
+  const insertSnippet = (snippet: string) => {
+    const current = String(form.getFieldValue("content") || "")
+    const needsSpacer = current.length > 0 && !current.endsWith("\n")
+    const nextValue = `${current}${needsSpacer ? "\n\n" : ""}${snippet}`
+    form.setFieldsValue({ content: nextValue })
+    setActiveTab("editor")
+  }
+
   const tabItems = [
     {
       key: "editor",
       label: t("watchlists:templates.editor.tab", "Editor"),
       children: (
-        <Form.Item
-          name="content"
-          rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
-          className="mb-0"
-        >
-          <Input.TextArea
-            rows={18}
-            placeholder={t("watchlists:templates.contentPlaceholder", "Enter Jinja2 template...")}
-            className="font-mono text-sm"
-            style={{ resize: "none" }}
-          />
-        </Form.Item>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+            <div className="mb-2 text-xs font-medium text-zinc-500">
+              {t("watchlists:templates.quickInsert", "Quick insert snippets")}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="small" onClick={() => insertSnippet("{% for item in items %}\n{{ item.title }}\n{% endfor %}")}>
+                {t("watchlists:templates.snippetLoop", "Items loop")}
+              </Button>
+              <Button size="small" onClick={() => insertSnippet("{% if filter_tallies %}\n{{ filter_tallies }}\n{% endif %}")}>
+                {t("watchlists:templates.snippetTallies", "Filter tallies")}
+              </Button>
+              <Button size="small" onClick={() => insertSnippet("{% if item.summary %}\n{{ item.summary }}\n{% endif %}")}>
+                {t("watchlists:templates.snippetSummary", "Summary block")}
+              </Button>
+              <Button size="small" onClick={() => insertSnippet("{{ generated_at }}")}>
+                {t("watchlists:templates.snippetGeneratedAt", "Generated timestamp")}
+              </Button>
+            </div>
+          </div>
+
+          <Form.Item
+            name="content"
+            rules={[{ required: true, message: t("watchlists:templates.contentRequired", "Template content is required") }]}
+            className="mb-0"
+          >
+            <Input.TextArea
+              rows={18}
+              placeholder={t("watchlists:templates.contentPlaceholder", "Enter Jinja2 template...")}
+              className="font-mono text-sm"
+              style={{ resize: "none" }}
+            />
+          </Form.Item>
+        </div>
       )
     },
     {
@@ -249,6 +355,64 @@ export const TemplateEditor: React.FC<TemplateEditorProps> = ({
             placeholder={t("watchlists:templates.descriptionPlaceholder", "Optional description...")}
           />
         </Form.Item>
+
+        {isEditing && (
+          <>
+            <Divider className="my-3" />
+            <div className="mb-4 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+              <div className="mb-2 text-sm font-medium">
+                {t("watchlists:templates.versionTools", "Version tools")}
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto_auto]">
+                <Select
+                  allowClear
+                  value={selectedVersion}
+                  onChange={(value) => setSelectedVersion(value)}
+                  placeholder={t("watchlists:templates.selectVersion", "Select a historical version")}
+                  options={templateVersions.map((entry) => ({
+                    value: entry.version,
+                    label: entry.is_current
+                      ? t("watchlists:templates.versionCurrent", "v{{version}} (current)", { version: entry.version })
+                      : t("watchlists:templates.versionLabel", "v{{version}}", { version: entry.version })
+                  }))}
+                />
+                <Button
+                  onClick={handleLoadSelectedVersion}
+                  disabled={!selectedVersion}
+                  loading={loadingVersion}
+                >
+                  {t("watchlists:templates.loadVersion", "Load version")}
+                </Button>
+                <Button
+                  onClick={handleLoadLatest}
+                  loading={loadingVersion}
+                >
+                  {t("watchlists:templates.loadLatest", "Load latest")}
+                </Button>
+              </div>
+              {typeof loadedVersion === "number" && (
+                <div className="mt-2 text-xs text-zinc-500">
+                  {t(
+                    "watchlists:templates.loadedVersionHint",
+                    "Currently loaded: v{{version}}. Saving restores this content as a new latest version.",
+                    { version: loadedVersion }
+                  )}
+                </div>
+              )}
+              {hasVersionDrift && (
+                <Alert
+                  className="mt-3"
+                  type="warning"
+                  showIcon
+                  message={t(
+                    "watchlists:templates.unsavedDrift",
+                    "Current editor content differs from the loaded version."
+                  )}
+                />
+              )}
+            </div>
+          </>
+        )}
 
         <Tabs
           activeKey={activeTab}

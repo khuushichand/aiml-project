@@ -1,6 +1,19 @@
 Release Notes
 =============
 
+2026-02-08
+
+- Watchlists sharing/read scope: admin `target_user_id` support expanded beyond dedup/seen to additional read APIs for sources, jobs, runs, run details/audio/tallies/CSV, and items.
+- Watchlists sharing modes now explicitly supported via `WATCHLIST_SHARING_MODE`:
+  - `admin_cross_user` (default),
+  - `admin_same_org` (requires org overlap),
+  - `private_only` (blocks cross-user reads).
+- Watchlists Jobs UI (Output & Delivery): per-job default email subject is now configurable and persisted in `output_prefs.deliveries.email.subject`.
+- Added integration coverage ensuring output delivery uses job default email subject when request-level subject is not provided.
+- Stage 5 reliability verification rerun completed:
+  - Backend slice (`scheduler_controls`, `dedup_seen_tools`, `perf_scenarios`, `rate_limit_headers_strict`, `watchlists_scale_load_api`, `operational_limits`): `40 passed`
+  - UI dedup/seen drawer tests: `14 passed`
+
 2026-02-07
 
 - Web scraping fallback hardening: responses now include `engine="legacy_fallback"` and `fallback_context` when enhanced scraping is unavailable.

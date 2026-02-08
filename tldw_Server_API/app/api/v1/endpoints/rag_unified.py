@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import inspect
 import json
+import os
 import time
 import types
 from typing import Any, Optional
@@ -55,6 +56,7 @@ from tldw_Server_API.app.core.RAG.rag_service.database_retrievers import (
 )
 from tldw_Server_API.app.core.RAG.rag_service.generation import generate_streaming_response
 from tldw_Server_API.app.core.RAG.rag_service.types import DataSource, Document
+from tldw_Server_API.app.core.config import get_config_value
 
 # Unified Pipeline
 from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
@@ -66,6 +68,128 @@ from tldw_Server_API.app.core.RAG.rag_service.unified_pipeline import (
 )
 
 
+_SEARCH_AGENT_BOOL_DEFAULTS: tuple[tuple[str, str, str], ...] = (
+    ("enable_query_classification", "SEARCH_QUERY_CLASSIFICATION", "search_query_classification"),
+    ("enable_query_reformulation", "SEARCH_QUERY_REFORMULATION", "search_query_reformulation"),
+    ("enable_research_loop", "SEARCH_RESEARCH_LOOP", "search_research_loop"),
+    ("enable_discussion_search", "SEARCH_DISCUSSIONS_ENABLED", "search_discussions_enabled"),
+    ("enable_research_progress", "SEARCH_PROGRESS_STREAMING", "search_progress_streaming"),
+    ("search_url_scraping", "SEARCH_URL_SCRAPING", "search_url_scraping"),
+)
+_SEARCH_AGENT_INT_DEFAULTS: tuple[tuple[str, str, str], ...] = (
+    ("research_max_iterations", "SEARCH_MAX_ITERATIONS", "search_max_iterations"),
+    ("research_max_iterations_speed", "SEARCH_MAX_ITERATIONS_SPEED", "search_max_iterations_speed"),
+    ("research_max_iterations_balanced", "SEARCH_MAX_ITERATIONS_BALANCED", "search_max_iterations_balanced"),
+    ("research_max_iterations_quality", "SEARCH_MAX_ITERATIONS_QUALITY", "search_max_iterations_quality"),
+)
+_SEARCH_AGENT_MODE_VALUES = {"speed", "balanced", "quality"}
+
+
+def _request_fields_set(request: UnifiedRAGRequest) -> set[str]:
+    """Return fields explicitly provided by the caller."""
+    raw_fields = getattr(request, "model_fields_set", None)
+    if raw_fields is None:
+        raw_fields = getattr(request, "__fields_set__", None)
+    if raw_fields is None:
+        return set()
+    try:
+        return {str(name) for name in raw_fields}
+    except (TypeError, ValueError):
+        return set()
+
+
+def _is_truthy_value(raw: Any) -> bool:
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _search_agent_setting(env_key: str, config_key: str) -> Optional[str]:
+    """Read Search-Agent setting with env-over-config precedence."""
+    env_value = os.getenv(env_key)
+    if env_value is not None:
+        return env_value
+    try:
+        return get_config_value("Search-Agent", config_key, default=None)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_csv_or_json_list(raw: Any) -> Optional[list[str]]:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                values = [str(item).strip() for item in parsed if str(item).strip()]
+                return values or None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    values = [item.strip() for item in text.split(",") if item.strip()]
+    return values or None
+
+
+def _parse_int_or_none(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_search_agent_defaults(request: UnifiedRAGRequest, payload: dict[str, Any]) -> None:
+    """Apply Search-Agent defaults for fields omitted by the caller."""
+    explicit_fields = _request_fields_set(request)
+
+    for field_name, env_key, cfg_key in _SEARCH_AGENT_BOOL_DEFAULTS:
+        if field_name in explicit_fields:
+            continue
+        raw_value = _search_agent_setting(env_key, cfg_key)
+        if raw_value is None:
+            continue
+        payload[field_name] = _is_truthy_value(raw_value)
+
+    if "search_depth_mode" not in explicit_fields:
+        raw_mode = _search_agent_setting("SEARCH_DEFAULT_MODE", "search_default_mode")
+        if raw_mode is not None:
+            mode = str(raw_mode).strip().lower()
+            if mode in _SEARCH_AGENT_MODE_VALUES:
+                payload["search_depth_mode"] = mode
+
+    if "discussion_platforms" not in explicit_fields:
+        raw_platforms = _search_agent_setting("SEARCH_DISCUSSION_PLATFORMS", "search_discussion_platforms")
+        parsed_platforms = _parse_csv_or_json_list(raw_platforms)
+        if parsed_platforms is not None:
+            payload["discussion_platforms"] = parsed_platforms
+
+    if "classifier_provider" not in explicit_fields:
+        raw_provider = _search_agent_setting("SEARCH_CLASSIFIER_PROVIDER", "search_classifier_provider")
+        if raw_provider is not None and str(raw_provider).strip():
+            payload["classifier_provider"] = str(raw_provider).strip()
+
+    if "classifier_model" not in explicit_fields:
+        raw_model = _search_agent_setting("SEARCH_CLASSIFIER_MODEL", "search_classifier_model")
+        if raw_model is not None and str(raw_model).strip():
+            payload["classifier_model"] = str(raw_model).strip()
+
+    for field_name, env_key, cfg_key in _SEARCH_AGENT_INT_DEFAULTS:
+        if field_name in explicit_fields:
+            continue
+        raw_value = _search_agent_setting(env_key, cfg_key)
+        parsed_value = _parse_int_or_none(raw_value)
+        if parsed_value is None:
+            continue
+        if field_name == "research_max_iterations":
+            if parsed_value > 0:
+                payload[field_name] = parsed_value
+            continue
+        if parsed_value >= 0:
+            payload[field_name] = parsed_value
+
+
 def _build_unified_pipeline_kwargs(
     request: UnifiedRAGRequest,
     db_paths: dict[str, Optional[str]],
@@ -74,6 +198,7 @@ def _build_unified_pipeline_kwargs(
     current_user: Optional[User],
 ) -> dict[str, Any]:
     payload = model_dump_compat(request)
+    _apply_search_agent_defaults(request, payload)
     payload["media_db_path"] = db_paths.get("media_db_path")
     payload["notes_db_path"] = db_paths.get("notes_db_path")
     payload["character_db_path"] = db_paths.get("character_db_path")
@@ -335,6 +460,15 @@ def convert_result_to_response(result: UnifiedSearchResult) -> UnifiedRAGRespons
         factuality=getattr(result, 'factuality', None),
         retrieval_metrics=_meta.get("retrieval_metrics"),
         faithfulness=_meta.get("faithfulness"),
+        # Search agent / research fields
+        query_classification=_meta.get("query_classification"),
+        reformulated_query=_meta.get("reformulated_query"),
+        research_summary=_meta.get("research"),
+        # Follow-up suggestions
+        suggestions=_meta.get("suggestions"),
+        # Media search results
+        images=_meta.get("images"),
+        videos=_meta.get("videos"),
     )
 
 
@@ -1656,6 +1790,17 @@ async def unified_search_stream_endpoint(
                 db_paths["kanban_db"] = kanban_db_path
 
             docs = []
+
+            # Research progress streaming callback for NDJSON events
+            _research_events: list[dict] = []
+
+            async def _stream_research_progress(event):
+                """Buffer research progress events for streaming."""
+                _research_events.append({
+                    "type": f"research_{event.event_type}" if not event.event_type.startswith("research_") else event.event_type,
+                    "data": event.data,
+                })
+
             try:
                 if db_paths:
                     _sync_retriever_overrides_to_pipeline()
@@ -1672,12 +1817,20 @@ async def unified_search_stream_endpoint(
                         current_user=current_user,
                     )
                     kwargs["enable_generation"] = False
+                    # Inject research progress callback for streaming
+                    if getattr(request, "enable_research_progress", False):
+                        kwargs["research_progress_callback"] = _stream_research_progress
+                        kwargs["enable_research_progress"] = True
                     retrieval_result = await unified_rag_pipeline(**kwargs)
                     docs = _normalize_documents_for_generation(
                         getattr(retrieval_result, "documents", []) or []
                     )
             except Exception:  # noqa: BLE001 - streaming prefetch should be best-effort
                 docs = []
+
+            # Emit buffered research progress events
+            for evt in _research_events:
+                yield json.dumps(evt) + "\n"
 
             # If strategy=agentic, assemble ephemeral chunk and emit plan + spans first
             if getattr(request, 'strategy', 'standard') == 'agentic':

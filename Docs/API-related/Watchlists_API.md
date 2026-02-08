@@ -55,6 +55,7 @@ Runs:
 - `GET /runs`
 - `GET /runs/{run_id}`
 - `GET /runs/{run_id}/details`
+- `GET /runs/{run_id}/audio`
 - `GET /runs/{run_id}/tallies.csv`
 - `GET /runs/export.csv`
 - `WS /runs/{run_id}/stream`
@@ -116,7 +117,15 @@ Create a job:
   "scope": {"sources": [123]},
   "schedule_expr": "0 */6 * * *",
   "timezone": "UTC",
-  "ingest_prefs": {"persist_to_media_db": true}
+  "ingest_prefs": {"persist_to_media_db": true},
+  "output_prefs": {
+    "deliveries": {
+      "email": {
+        "enabled": true,
+        "subject": "Daily Watchlist Digest"
+      }
+    }
+  }
 }
 ```
 
@@ -216,6 +225,26 @@ curl -X DELETE "$BASE/api/v1/watchlists/sources/123/seen?clear_backoff=true" \
 Admin-only inspect/reset for another user:
 - Add `target_user_id=<user_id>` query param.
 - Non-admin calls with `target_user_id` return `403` (`watchlists_admin_required_for_target_user`).
+
+Cross-user read support (`target_user_id`) is also available for admin users on:
+- `GET /sources`
+- `GET /sources/{source_id}`
+- `GET /jobs`
+- `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/runs`
+- `GET /runs`
+- `GET /runs/export.csv`
+- `GET /runs/{run_id}`
+- `GET /runs/{run_id}/details`
+- `GET /runs/{run_id}/audio`
+- `GET /runs/{run_id}/tallies.csv`
+- `GET /items`
+- `GET /items/{item_id}`
+
+Sharing policy is controlled by `WATCHLIST_SHARING_MODE`:
+- `admin_cross_user` (default): admin can read cross-user watchlists data
+- `admin_same_org`: admin cross-user reads require overlapping org membership
+- `private_only`: cross-user reads blocked
 
 ## Ingestion and persistence
 

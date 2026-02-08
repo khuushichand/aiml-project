@@ -346,15 +346,63 @@ def _enforce_runs_admin_if_configured(current_user: User) -> None:
     raise HTTPException(status_code=403, detail="watchlists_runs_admin_required")
 
 
-def _resolve_target_watchlists_user_id(current_user: User, target_user_id: int | None) -> int:
+def _watchlists_sharing_mode() -> str:
+    """Resolve sharing policy for cross-user watchlists access.
+
+    Supported values:
+    - private_only: disallow cross-user access
+    - admin_same_org: allow admin cross-user access only for users that share an org
+    - admin_cross_user (default): allow admin-only cross-user access
+    """
+    raw = str(os.getenv("WATCHLIST_SHARING_MODE", "admin_cross_user") or "").strip().lower()
+    normalized = raw.replace("-", "_")
+    if normalized in {"private", "private_only", "none", "disabled"}:
+        return "private_only"
+    if normalized in {"admin_same_org", "admin_same_tenant", "org_scoped"}:
+        return "admin_same_org"
+    if normalized in {"admin", "admin_only", "admin_cross_user"}:
+        return "admin_cross_user"
+    return "admin_cross_user"
+
+
+async def _resolve_user_org_ids(user_id: int) -> set[int]:
+    """Resolve org membership IDs for a user (best-effort)."""
+    try:
+        from tldw_Server_API.app.core.AuthNZ.orgs_teams import list_org_memberships_for_user
+
+        memberships = await list_org_memberships_for_user(int(user_id))
+    except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+        return set()
+
+    out: set[int] = set()
+    for entry in memberships or []:
+        try:
+            org_id = int((entry or {}).get("org_id"))
+        except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
+            continue
+        if org_id > 0:
+            out.add(org_id)
+    return out
+
+
+async def _resolve_target_watchlists_user_id(current_user: User, target_user_id: int | None) -> int:
     current_user_id = _safe_int(getattr(current_user, "id", None), -1)
     if current_user_id <= 0:
         raise HTTPException(status_code=500, detail="watchlists_invalid_user")
     if target_user_id is None or int(target_user_id) == current_user_id:
         return current_user_id
+    sharing_mode = _watchlists_sharing_mode()
+    if sharing_mode == "private_only":
+        raise HTTPException(status_code=403, detail="watchlists_private_only_mode")
     if not _is_runs_admin_user(current_user):
         raise HTTPException(status_code=403, detail="watchlists_admin_required_for_target_user")
-    return int(target_user_id)
+    resolved_target = int(target_user_id)
+    if sharing_mode == "admin_same_org":
+        actor_org_ids = await _resolve_user_org_ids(current_user_id)
+        target_org_ids = await _resolve_user_org_ids(resolved_target)
+        if not actor_org_ids or not target_org_ids or actor_org_ids.isdisjoint(target_org_ids):
+            raise HTTPException(status_code=403, detail="watchlists_admin_same_org_required")
+    return resolved_target
 
 
 def _resolve_watchlists_db_for_target_user(
@@ -372,6 +420,17 @@ def _resolve_watchlists_db_for_target_user(
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS as exc:
         logger.error(f"watchlists.resolve_target_db failed for user={target_user_id}: {exc}")
         raise HTTPException(status_code=500, detail="watchlists_db_unavailable") from exc
+
+
+async def _resolve_target_watchlists_context(
+    *,
+    current_user: User,
+    current_db: WatchlistsDatabase,
+    target_user_id: int | None,
+) -> tuple[int, WatchlistsDatabase]:
+    resolved_user_id = await _resolve_target_watchlists_user_id(current_user, target_user_id)
+    target_db = _resolve_watchlists_db_for_target_user(current_user, current_db, resolved_user_id)
+    return resolved_user_id, target_db
 
 
 def _build_email_bodies(content: str | None, fmt: str, title: str, preferred: str = "auto") -> tuple[str, str]:
@@ -783,6 +842,15 @@ def _forums_enabled() -> bool:
     return _is_truthy(os.getenv("WATCHLIST_FORUMS_ENABLED", ""))
 
 
+def _forum_default_top_n() -> int:
+    """Default number of forum links to probe when no explicit top_n is set."""
+    parsed = _safe_int(os.getenv("WATCHLIST_FORUM_DEFAULT_TOP_N"), 20)
+    if parsed <= 0:
+        return 20
+    # Keep this aligned with preview/source test limits.
+    return min(parsed, 200)
+
+
 def _raise_if_forum_disabled(source_type: str) -> None:
     if str(source_type).lower() == "forum" and not _forums_enabled():
         raise HTTPException(status_code=400, detail="forum_sources_disabled")
@@ -1050,18 +1118,28 @@ async def list_sources(
     q: str | None = Query(None),
     tags: list[str] | None = Query(None, description="Filter by tag names (AND semantics)"),
     groups: list[int] | None = Query(None, description="Filter by group IDs (OR semantics)"),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list sources for another user ID.",
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_sources(q=q, tag_names=tags, limit=limit, offset=offset, group_ids=groups)
+    rows, total = target_db.list_sources(q=q, tag_names=tags, limit=limit, offset=offset, group_ids=groups)
     # Batch-fetch group IDs to avoid N+1
     source_ids = [int(r.id) for r in rows]
     try:
-        groups_map = db.get_source_group_ids_batch(source_ids) if source_ids else {}
+        groups_map = target_db.get_source_group_ids_batch(source_ids) if source_ids else {}
     except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
         groups_map = {}
     items: list[Source] = []
@@ -1091,13 +1169,23 @@ async def export_sources_opml(
     tag: list[str] | None = Query(None, description="Filter by tag(s)"),
     group: list[int] | None = Query(None, description="Filter by group id(s) (OR semantics)"),
     type: str | None = Query(None, description="Filter by source_type (rss/site/forum)"),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: export sources for another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     # Base selection
     if group:
         try:
-            rows = db.list_sources_by_group_ids([int(g) for g in group])
+            rows = target_db.list_sources_by_group_ids([int(g) for g in group])
         except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
             rows = []
         # Apply tag filter manually (AND semantics)
@@ -1108,7 +1196,7 @@ async def export_sources_opml(
                 return all(n in src_tags for n in needed)
             rows = [r for r in rows if _has_all_tags(r)]
     else:
-        rows, _ = db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
+        rows, _ = target_db.list_sources(q=None, tag_names=tag, limit=10000, offset=0)
     # Build OPML items (rss sources only)
     items: list[dict[str, Any]] = []
     for r in rows:
@@ -1176,11 +1264,21 @@ async def import_sources_opml(
 @router.get("/sources/{source_id}", response_model=Source, summary="Get source")
 async def get_source(
     source_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch a source from another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        r = db.get_source(source_id)
+        r = target_db.get_source(source_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="source_not_found") from None
     return Source(
@@ -1190,7 +1288,7 @@ async def get_source(
         source_type=r.source_type,  # type: ignore[assignment]
         active=bool(r.active),
         tags=r.tags,
-        group_ids=_get_group_ids(db, r.id),
+        group_ids=_get_group_ids(target_db, r.id),
         settings=(json.loads(r.settings_json) if r.settings_json else None),
         last_scraped_at=r.last_scraped_at,
         status=r.status,
@@ -1220,7 +1318,7 @@ async def get_source_seen_stats(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    resolved_user_id = _resolve_target_watchlists_user_id(current_user, target_user_id)
+    resolved_user_id = await _resolve_target_watchlists_user_id(current_user, target_user_id)
     target_db = _resolve_watchlists_db_for_target_user(current_user, db, resolved_user_id)
     try:
         src = target_db.get_source(source_id)
@@ -1260,7 +1358,7 @@ async def clear_source_seen_state(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
-    resolved_user_id = _resolve_target_watchlists_user_id(current_user, target_user_id)
+    resolved_user_id = await _resolve_target_watchlists_user_id(current_user, target_user_id)
     target_db = _resolve_watchlists_db_for_target_user(current_user, db, resolved_user_id)
     try:
         target_db.get_source(source_id)
@@ -1337,7 +1435,8 @@ async def test_source(
             try:
                 from tldw_Server_API.app.core.Watchlists.fetchers import fetch_site_top_links
 
-                top_n = int(settings.get("top_n", 1) or 1)
+                default_top_n = _forum_default_top_n() if source_type.lower() == "forum" else 1
+                top_n = int(settings.get("top_n", default_top_n) or default_top_n)
                 discover_method = str(settings.get("discover_method", "auto")).lower()
                 urls = await fetch_site_top_links(str(src.url), top_n=top_n, method=discover_method)
             except _WATCHLISTS_NONCRITICAL_EXCEPTIONS:
@@ -1722,10 +1821,20 @@ async def delete_group(
 @router.get("/settings", summary="Get watchlists defaults")
 async def get_watchlist_settings(
     current_user: User = Depends(get_request_user),
+    db = Depends(get_watchlists_db_for_user),
 ):
+    backend_label = "sqlite"
+    backend_type = getattr(getattr(db, "backend", None), "backend_type", None)
+    backend_name = str(getattr(backend_type, "name", "") or "").lower()
+    if "postgres" in backend_name:
+        backend_label = "postgres"
     return {
         "default_output_ttl_seconds": DEFAULT_OUTPUT_TTL_SECONDS,
         "temporary_output_ttl_seconds": TEMP_OUTPUT_TTL_SECONDS,
+        "forums_enabled": _forums_enabled(),
+        "forum_default_top_n": _forum_default_top_n(),
+        "sharing_mode": _watchlists_sharing_mode(),
+        "watchlists_backend": backend_label,
     }
 
 
@@ -2033,14 +2142,24 @@ async def preview_job(
 @router.get("/jobs", response_model=JobsListResponse, summary="List jobs")
 async def list_jobs(
     q: str | None = Query(None),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list jobs for another user ID.",
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_jobs(q=q, limit=limit, offset=offset)
+    rows, total = target_db.list_jobs(q=q, limit=limit, offset=offset)
     items: list[Job] = []
     for r in rows:
         output_prefs = _normalize_output_prefs(getattr(r, "output_prefs_json", None))
@@ -2073,11 +2192,21 @@ async def list_jobs(
 async def get_job(
     job_id: int = Path(..., ge=1),
     include_internal: bool = Query(False, description="Admin-only: include scheduler linkage fields"),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch a job from another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        r = db.get_job(job_id)
+        r = target_db.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="job_not_found") from None
     is_admin = bool(getattr(current_user, "is_admin", False))
@@ -2383,15 +2512,25 @@ async def trigger_run(
 @router.get("/jobs/{job_id}/runs", response_model=RunsListResponse, summary="List runs for a job")
 async def list_runs_for_job(
     job_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list runs for another user ID.",
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
     _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
+    rows, total = target_db.list_runs_for_job(job_id, limit=limit, offset=offset)
     items = [Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg) for r in rows]
     has_more = (offset + len(items)) < int(total or 0)
     return RunsListResponse(items=items, total=total, has_more=has_more)
@@ -2400,15 +2539,25 @@ async def list_runs_for_job(
 @router.get("/runs", response_model=RunsListResponse, summary="List runs across all jobs")
 async def list_runs_global(
     q: str | None = Query(None, description="Filter by job name/description, run status, or run id (text)"),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list runs for another user ID.",
+    ),
     page: int = Query(1, ge=1),
     size: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
     _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_runs(q=q, limit=limit, offset=offset)
+    rows, total = target_db.list_runs(q=q, limit=limit, offset=offset)
     items = [
         Run(
             id=r.id,
@@ -2429,6 +2578,11 @@ async def list_runs_global(
 async def export_runs_csv(
     scope: str = Query("global", pattern="^(global|job)$"),
     job_id: int | None = Query(None, ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: export runs for another user ID.",
+    ),
     q: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(200, ge=1, le=1000),
@@ -2441,6 +2595,11 @@ async def export_runs_csv(
     db = Depends(get_watchlists_db_for_user),
 ):
     _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     """Return a CSV export of runs with basic counters.
 
     Columns: id,job_id,status,started_at,finished_at,items_found,items_ingested,filters_include,filters_exclude,filters_flag
@@ -2478,7 +2637,7 @@ async def export_runs_csv(
         scan_offset = 0
         scan_limit = 1000
         while True:
-            scan_rows, _scan_total = db.list_runs(q=q, limit=scan_limit, offset=scan_offset)
+            scan_rows, _scan_total = target_db.list_runs(q=q, limit=scan_limit, offset=scan_offset)
             if not scan_rows:
                 break
             for row in scan_rows:
@@ -2508,9 +2667,9 @@ async def export_runs_csv(
     if scope == "job":
         if not job_id:
             raise HTTPException(status_code=400, detail="job_id_required")
-        rows, total = db.list_runs_for_job(job_id, limit=limit, offset=offset)
+        rows, total = target_db.list_runs_for_job(job_id, limit=limit, offset=offset)
     else:
-        rows, total = db.list_runs(q=q, limit=limit, offset=offset)
+        rows, total = target_db.list_runs(q=q, limit=limit, offset=offset)
     headers = [
         "id",
         "job_id",
@@ -2566,12 +2725,22 @@ async def export_runs_csv(
 @router.get("/runs/{run_id}", response_model=Run, summary="Get a run")
 async def get_run(
     run_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch a run from another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
     _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        r = db.get_run(run_id)
+        r = target_db.get_run(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found") from None
     return Run(id=r.id, job_id=r.job_id, status=r.status, started_at=r.started_at, finished_at=r.finished_at, stats=(json.loads(r.stats_json or "{}") if r.stats_json else None), error_msg=r.error_msg)
@@ -2582,11 +2751,21 @@ async def get_run_details(
     run_id: int = Path(..., ge=1),
     include_tallies: bool = Query(False, description="When true, include filter_tallies in the response"),
     filtered_sample_max: int = Query(5, ge=0, le=50, description="Optional number of filtered items to include as a sample"),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch run details for another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
     response: Response = None,  # type: ignore[assignment]
 ):
     _enforce_runs_admin_if_configured(current_user)
+    resolved_user_id, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     """Return a summarized view of run stats and logs.
 
     Note: Per-filter tallies are retained in the raw run stats (GET /watchlists/runs/{run_id})
@@ -2594,7 +2773,7 @@ async def get_run_details(
     flattened totals (filters_include/exclude/flag) for quick inspection.
     """
     try:
-        r = db.get_run(run_id)
+        r = target_db.get_run(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found") from None
     # Stats defaulting
@@ -2612,7 +2791,7 @@ async def get_run_details(
     truncated = False
     if r.log_path:
         try:
-            p = _resolve_watchlist_log_path(user_id=int(current_user.id), log_path=r.log_path)
+            p = _resolve_watchlist_log_path(user_id=int(resolved_user_id), log_path=r.log_path)
             if p and p.exists():
                 content = p.read_text(encoding="utf-8", errors="replace")
                 max_len = 65536
@@ -2658,7 +2837,7 @@ async def get_run_details(
     filtered_sample = None
     if filtered_sample_max and filtered_sample_max > 0:
         try:
-            rows, _ = db.list_items(run_id=run_id, status="filtered", limit=int(filtered_sample_max), offset=0)
+            rows, _ = target_db.list_items(run_id=run_id, status="filtered", limit=int(filtered_sample_max), offset=0)
             filtered_sample = [
                 {
                     "id": it.id,
@@ -2833,6 +3012,11 @@ async def stream_run(
 )
 async def get_run_audio(
     run_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch run audio info for another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db=Depends(get_watchlists_db_for_user),
 ):
@@ -2842,8 +3026,13 @@ async def get_run_audio(
     (via metadata) and returns the audio artifact info including download URL.
     """
     _enforce_runs_admin_if_configured(current_user)
+    resolved_user_id, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        r = db.get_run(run_id)
+        r = target_db.get_run(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found") from None
 
@@ -2862,8 +3051,7 @@ async def get_run_audio(
     try:
         from tldw_Server_API.app.core.DB_Management.Workflows_DB import WorkflowsDatabase
 
-        user_id = resolve_user_id_for_request(current_user)
-        user_dir = DatabasePaths.get_user_base_directory(user_id)
+        user_dir = DatabasePaths.get_user_base_directory(int(resolved_user_id))
         wf_db_path = os.path.join(str(user_dir), "workflows", "workflows.db")
         if not os.path.exists(wf_db_path):
             raise HTTPException(status_code=404, detail="no_workflow_db")
@@ -2945,12 +3133,22 @@ async def get_run_audio(
 @router.get("/runs/{run_id}/tallies.csv", response_class=PlainTextResponse, summary="Export filter tallies for a run as CSV")
 async def export_run_tallies_csv(
     run_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: export run tallies for another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
     _enforce_runs_admin_if_configured(current_user)
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        r = db.get_run(run_id)
+        r = target_db.get_run(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="run_not_found") from None
     try:
@@ -2980,6 +3178,11 @@ async def list_scraped_items(
     source_id: int | None = Query(None),
     status: str | None = Query(None),
     reviewed: bool | None = Query(None),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: list items for another user ID.",
+    ),
     q: str | None = Query(None, description="Search by title/summary substring"),
     since: str | None = Query(None, description="ISO date filter (created_at >= since)"),
     until: str | None = Query(None, description="ISO date filter (created_at <= until)"),
@@ -2988,9 +3191,14 @@ async def list_scraped_items(
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     limit = size
     offset = (page - 1) * limit
-    rows, total = db.list_items(
+    rows, total = target_db.list_items(
         run_id=run_id,
         job_id=job_id,
         source_id=source_id,
@@ -3008,11 +3216,21 @@ async def list_scraped_items(
 @router.get("/items/{item_id}", response_model=ScrapedItem, summary="Get a scraped item")
 async def get_scraped_item(
     item_id: int = Path(..., ge=1),
+    target_user_id: int | None = Query(
+        None,
+        ge=1,
+        description="Admin-only: fetch an item from another user ID.",
+    ),
     current_user: User = Depends(get_request_user),
     db = Depends(get_watchlists_db_for_user),
 ):
+    _, target_db = await _resolve_target_watchlists_context(
+        current_user=current_user,
+        current_db=db,
+        target_user_id=target_user_id,
+    )
     try:
-        row = db.get_item(item_id)
+        row = target_db.get_item(item_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="item_not_found") from None
     return _row_to_scraped_item(row)

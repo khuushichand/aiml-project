@@ -1882,6 +1882,61 @@ def load_comprehensive_config():
                 'IMPLICIT_FEEDBACK_ENABLED',
                 str(implicit_feedback_enabled(default=True, config_parser=config_parser)).lower()
             )
+
+        # Search-Agent defaults used by unified RAG endpoint/router.
+        if hasattr(config_parser, 'has_section') and config_parser.has_section('Search-Agent'):
+            _env_default(
+                'SEARCH_QUERY_CLASSIFICATION',
+                config_parser.get('Search-Agent', 'search_query_classification', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DEFAULT_MODE',
+                config_parser.get('Search-Agent', 'search_default_mode', fallback='balanced')
+            )
+            _env_default(
+                'SEARCH_QUERY_REFORMULATION',
+                config_parser.get('Search-Agent', 'search_query_reformulation', fallback='true')
+            )
+            _env_default(
+                'SEARCH_RESEARCH_LOOP',
+                config_parser.get('Search-Agent', 'search_research_loop', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DISCUSSIONS_ENABLED',
+                config_parser.get('Search-Agent', 'search_discussions_enabled', fallback='false')
+            )
+            _env_default(
+                'SEARCH_DISCUSSION_PLATFORMS',
+                config_parser.get('Search-Agent', 'search_discussion_platforms', fallback='reddit,stackoverflow,hackernews')
+            )
+            _env_default(
+                'SEARCH_PROGRESS_STREAMING',
+                config_parser.get('Search-Agent', 'search_progress_streaming', fallback='false')
+            )
+            _env_default(
+                'SEARCH_URL_SCRAPING',
+                config_parser.get('Search-Agent', 'search_url_scraping', fallback='true')
+            )
+            _env_default(
+                'SEARCH_CLASSIFIER_PROVIDER',
+                config_parser.get('Search-Agent', 'search_classifier_provider', fallback=None)
+            )
+            _env_default(
+                'SEARCH_CLASSIFIER_MODEL',
+                config_parser.get('Search-Agent', 'search_classifier_model', fallback=None)
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_SPEED',
+                config_parser.get('Search-Agent', 'search_max_iterations_speed', fallback='0')
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_BALANCED',
+                config_parser.get('Search-Agent', 'search_max_iterations_balanced', fallback='0')
+            )
+            _env_default(
+                'SEARCH_MAX_ITERATIONS_QUALITY',
+                config_parser.get('Search-Agent', 'search_max_iterations_quality', fallback='0')
+            )
     except _CONFIG_NONCRITICAL_EXCEPTIONS as _rag_env_err:
         _log_debug(f"RAG env propagation skipped: {_rag_env_err}")
 

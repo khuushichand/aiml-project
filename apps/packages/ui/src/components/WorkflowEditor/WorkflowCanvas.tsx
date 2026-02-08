@@ -13,6 +13,7 @@ import {
   MiniMap,
   ReactFlowProvider,
   useReactFlow,
+  type Connection,
   type OnConnect,
   type OnNodesChange,
   type OnEdgesChange,
@@ -23,12 +24,14 @@ import {
   type Node
 } from "@xyflow/react"
 import "@xyflow/react/dist/style.css"
+import { message } from "antd"
 
 import type { WorkflowStepType, WorkflowNode, WorkflowNodeData } from "@/types/workflow-editor"
 import { useWorkflowEditorStore } from "@/store/workflow-editor"
 import { buildWorkflowNodeTypes } from "./nodes/WorkflowNode"
 import { getStepMetadata } from "./step-registry"
 import { isEditableEventTarget } from "./keyboard-shortcuts"
+import { validateWorkflowConnection } from "./connection-validation"
 
 interface WorkflowCanvasProps {
   className?: string
@@ -95,6 +98,26 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
       addNode({ type: stepType, position })
     },
     [screenToFlowPosition, addNode]
+  )
+
+  const isValidConnection = useCallback(
+    (connection: Connection) =>
+      validateWorkflowConnection(connection, nodes, stepRegistry).valid,
+    [nodes, stepRegistry]
+  )
+
+  const handleConnect: OnConnect = useCallback(
+    (connection) => {
+      const validation = validateWorkflowConnection(connection, nodes, stepRegistry)
+      if (!validation.valid) {
+        message.warning(
+          validation.reason || "Invalid connection. Check source and target ports."
+        )
+        return
+      }
+      onConnect(connection)
+    },
+    [nodes, stepRegistry, onConnect]
   )
 
   // Handle keyboard shortcuts
@@ -190,7 +213,8 @@ const WorkflowCanvasInner = ({ className = "" }: WorkflowCanvasProps) => {
         edges={edges}
         onNodesChange={onNodesChange as OnNodesChange<WorkflowNode>}
         onEdgesChange={onEdgesChange as OnEdgesChange}
-        onConnect={onConnect as OnConnect}
+        onConnect={handleConnect}
+        isValidConnection={isValidConnection}
         onSelectionChange={handleSelectionChange}
         onDragOver={handleDragOver}
         onDrop={handleDrop}

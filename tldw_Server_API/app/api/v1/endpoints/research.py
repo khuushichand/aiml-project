@@ -314,6 +314,8 @@ async def websearch_endpoint(
             "searx_url": payload.searx_url,
             "searx_json_mode": payload.searx_json_mode,
             "google_domain": payload.google_domain,
+            "boards": payload.boards,
+            "max_threads_per_board": payload.max_threads_per_board,
             "subquery_generation": payload.subquery_generation,
             "subquery_generation_llm": payload.subquery_generation_llm,
             "user_review": payload.user_review,

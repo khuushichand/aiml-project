@@ -50,6 +50,9 @@ This active plan tracks unfinished work split from:
 **Tests**:
 - Keep `tests/Resource_Governance/*`, `tests/AuthNZ_Unit/test_auth_principal_*`, `tests/AuthNZ_Unit/*permissions*_claims.py`, `tests/AuthNZ/integration/test_single_user_claims_permissions.py`, and AuthNZ repo tests passing across SQLite/Postgres backends.
 **Status**: In Progress
+**Progress Notes**:
+- 2026-02-08: Removed residual backend detection-by-`hasattr(conn, "fetchval")` in `app/core/AuthNZ/repos/quotas_repo.py`; backend path now keys off `DatabasePool` backend state. Added unit coverage in `tests/AuthNZ/unit/test_authnz_quotas_repo_backend_selection.py` to lock SQLite/Postgres path selection behavior.
+- 2026-02-08: Removed remaining `hasattr(conn, "fetchval")` backend branching in `app/core/AuthNZ/repos/api_keys_repo.py` and `app/core/AuthNZ/repos/sessions_repo.py`; these paths now also key off `DatabasePool` backend state. Verified with focused AuthNZ repo tests under the venv (`10 passed, 5 skipped` across SQLite + unit repo suites).
 
 ## Stage 5: RG v1.1 Legacy Limiter Retirement
 **Goal**: Safely retire remaining legacy limiters/shims once RG parity is verified, leaving ResourceGovernor as the sole enforcer.

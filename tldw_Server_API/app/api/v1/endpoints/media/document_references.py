@@ -64,6 +64,8 @@ REFERENCE_SECTION_END_CORE_PATTERN = re.compile(
     r"data\s+availability|code\s+availability)\b.*$"
 )
 
+REFERENCE_TAIL_NUMBERED_PATTERN = re.compile(r"^\s*(?:\[+\d{1,6}\]|\d+[\.\)])\s+")
+
 # DOI/arXiv extraction patterns
 DOI_PATTERN = r"(?:https?://(?:dx\.)?doi\.org/)?10\.\d{4,}/[^\s\]\)>\"']+"
 ARXIV_PATTERN = r"(?:arXiv[:\s]*)?(\d{4}\.\d{4,5})(?:v\d+)?"
@@ -204,7 +206,39 @@ def _find_reference_section(content: str) -> str | None:
 
     candidate_line_indexes = [idx for idx, line in enumerate(lines) if _is_heading_candidate(line)]
     if not candidate_line_indexes:
-        return None
+        # Fallback: some extractions lose the "References" heading but keep a dense
+        # numbered bibliography in the tail (e.g. "[41] ...", "[42] ...").
+        if len(lines) < 8:
+            return None
+        tail_start_idx = max(min(int(len(lines) * 0.65), len(lines) - 1400), 0)
+        tail_lines = lines[tail_start_idx:]
+        numbered_hits: list[tuple[int, int]] = []
+        for idx, line in enumerate(tail_lines):
+            match = re.match(r"^\s*\[+(\d{1,6})\]", line)
+            if match:
+                try:
+                    numbered_hits.append((idx, int(match.group(1))))
+                except ValueError:
+                    continue
+                continue
+            if REFERENCE_TAIL_NUMBERED_PATTERN.match(line):
+                numbered_hits.append((idx, -1))
+        if len(numbered_hits) < 6:
+            return None
+
+        unique_numbered = {num for _, num in numbered_hits if num >= 0}
+        if len(unique_numbered) >= 4:
+            min_num = min(unique_numbered)
+            max_num = max(unique_numbered)
+            span_ok = (max_num - min_num) >= 4
+        else:
+            span_ok = False
+        if not span_ok and len(numbered_hits) < 8:
+            return None
+
+        start_line_idx = tail_start_idx + max(numbered_hits[0][0] - 2, 0)
+        refs = "\n".join(lines[start_line_idx:]).strip()
+        return refs or None
 
     # Use the last heading to avoid TOC/front-matter mentions.
     heading_line_idx = candidate_line_indexes[-1]
@@ -252,38 +286,145 @@ def _find_reference_section(content: str) -> str | None:
 def _split_references(refs_text: str) -> list[str]:
     """Split references section into individual references."""
     references: list[str] = []
-    # Fix common PDF hyphenation across line breaks
-    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
-    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n")
-    refs_text = refs_text.strip()
 
-    # Try numbered list format: [1], 1., 1), etc.
-    numbered_pattern = r"(?m)^\s*(?:\[\d+\]|\d+[\.\)])\s+"
-    if re.search(numbered_pattern, refs_text):
-        parts = re.split(numbered_pattern, refs_text)
-        references = [p.strip() for p in parts if p.strip() and len(p.strip()) > 20]
-    else:
-        # Try double newline as separator
-        parts = re.split(r"\n\s*\n", refs_text)
-        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+    # Fix common PDF hyphenation across line breaks and normalize newlines.
+    refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
+    refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not refs_text:
+        return []
+
+    # Remove known non-reference noise lines common in PDF text extraction.
+    cleaned_lines: list[str] = []
+    for raw_line in refs_text.split("\n"):
+        line = raw_line.strip()
+        if not line:
+            cleaned_lines.append("")
+            continue
+        if re.match(r"(?i)^(?:appendix|figure|table|algorithm)\b", line):
+            cleaned_lines.append("")
+            continue
+        # Standalone page numbers.
+        if re.fullmatch(r"\d{1,4}", line):
+            cleaned_lines.append("")
+            continue
+        # Footnote/link markers like: 5 [http...](http...)
+        if re.fullmatch(r"\d+\s+`?\[https?://[^\]]+\]\(https?://[^)]+\)`?", line):
+            continue
+        cleaned_lines.append(raw_line)
+    refs_text = "\n".join(cleaned_lines).strip()
+    if not refs_text:
+        return []
+
+    def _strip_leading_bracket_label(line: str) -> tuple[str, str] | None:
+        stripped = line.lstrip()
+        if not stripped.startswith("["):
+            return None
+        depth = 0
+        for idx, char in enumerate(stripped):
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    remainder = stripped[idx + 1 :]
+                    # Treat only "[label] text" as a label form; "[text](url)" is markdown-link form.
+                    if remainder[:1].isspace():
+                        return stripped[1:idx].strip(), remainder.strip()
+                    return None
+        return None
+
+    def _has_explicit_reference_label(line: str) -> bool:
+        stripped = line.lstrip()
+        if not stripped:
+            return False
+        if re.match(r"^(?:\[+\d+\]|\d+[\.\)])\s+", stripped):
+            return True
+        bracket_label = _strip_leading_bracket_label(stripped)
+        if bracket_label:
+            label = bracket_label[0]
+            if re.match(r"^\d{1,6}$", label):
+                return True
+            if re.search(r"[A-Za-z]", label):
+                return True
+        return False
+
+    def _extract_markdown_link_text(line: str) -> str | None:
+        match = re.match(r"^\s*\[([^\]]+)\]\((?:https?|mailto):[^)]+\)", line)
+        if match:
+            return match.group(1).strip()
+        return None
+
+    def _is_probable_authorish_start(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        first_char = candidate[0]
+        if not first_char.isalpha() or not first_char.isupper():
+            return False
+        if re.match(r"^\d{4}\b", candidate):
+            return False
+        if re.match(
+            r"(?i)^(?:rev\.|phys\.|journal|global|ecology|proceedings|trends|communications|advances|classical|science|nature)\b",
+            candidate,
+        ):
+            return False
+        if re.match(
+            r"(?i)^(?:in|proceedings|journal|vol(?:ume)?|pages?|pp\.|chapter|section)\b",
+            candidate,
+        ):
+            return False
+        # Unicode-aware surname token (supports diacritics like Gaztanaga).
+        surname_token = r"[^\W\d_][\w'’.\-]*"
+        # Surname + initials list: "Abazajian K. N., ..." / "Smith, J. ..."
+        if re.match(rf"^{surname_token}(?:\s+[A-Z]\.){{1,3}},", candidate):
+            return True
+        if re.match(rf"^{surname_token},\s*[^\W\d_]", candidate):
+            return True
+        # "Surname et al." style
+        return bool(re.match(rf"^{surname_token}(?:\s+et\s+al\.)\b", candidate))
 
     def _looks_like_new_reference(line: str) -> bool:
-        if re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", line):
+        if re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", line):
             return True
-        # Author list starting pattern: "Surname, A." or "First Last, ..."
-        if re.search(
-            r"^[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z]",
-            line,
-        ):
+
+        bracket_label = _strip_leading_bracket_label(line)
+        if bracket_label:
+            label, rest = bracket_label
+            if re.match(r"^\d{4}\b", label):
+                return False
+            return _is_probable_authorish_start(rest)
+
+        markdown_label = _extract_markdown_link_text(line)
+        if markdown_label:
+            if re.match(r"^\d{4}\b", markdown_label):
+                return False
+            return _is_probable_authorish_start(markdown_label)
+
+        return _is_probable_authorish_start(line)
+
+    def _looks_like_fragment_line(line: str) -> bool:
+        markdown_label = _extract_markdown_link_text(line)
+        if not markdown_label:
+            return False
+        if _is_probable_authorish_start(markdown_label):
+            return False
+        if re.match(r"^\d{1,4}(?:[\s,.;:/-]|$)", markdown_label):
             return True
-        # "Surname et al." pattern
-        return bool(re.search(r"^[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b", line))
+        return bool(
+            re.match(
+                r"(?i)^(?:phys\.|journal|classical|mon\.|not\.|conference|proceedings|vol\.|pages?)\b",
+                markdown_label,
+            )
+        )
 
     def _looks_like_reference(text: str) -> bool:
         if not text or len(text) < 30:
             return False
         lowered = text.lower().strip()
-        is_numbered = bool(re.match(r"^\s*(?:\[\d+\]|\d+[\.\)])\s+", text))
+        is_numbered = bool(re.match(r"^\s*(?:\[+\d+\]|\d+[\.\)])\s+", text))
+        is_labeled = _strip_leading_bracket_label(text) is not None
+        markdown_label = _extract_markdown_link_text(text)
+
         if lowered.startswith(
             (
                 "appendix",
@@ -303,86 +444,113 @@ def _split_references(refs_text: str) -> list[str]:
             re.search(ARXIV_OLD_PATTERN, text, re.IGNORECASE)
         )
         has_year = bool(re.search(YEAR_PATTERN, text))
+        has_url = bool(re.search(URL_PATTERN, text, re.IGNORECASE))
 
         if not (has_doi or has_arxiv or has_year):
             return False
-        if is_numbered and has_year:
+        if (is_numbered or is_labeled) and has_year:
             return True
-
-        has_authorish_start = bool(
-            re.match(
-                r"^\s*(?:\[\d+\]|\d+[\.\)])?\s*"
-                r"(?:[A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,3},\s*[A-Z]|"
-                r"[A-Z][A-Za-z'’.\-]+(?:\s+et\s+al\.)\b)",
-                text,
-            )
-        )
-        if has_authorish_start:
+        if _is_probable_authorish_start(text) and has_year:
             return True
-        # Keep DOI/arXiv-only references even when author parsing fails.
-        return has_doi or has_arxiv
+        if markdown_label and _is_probable_authorish_start(markdown_label) and has_year:
+            return True
+        if has_doi or has_arxiv:
+            return True
+        # Link-heavy astronomy/physics bibliographies often encode references as markdown links.
+        if has_year and has_url and len(text) > 45:
+            return True
+        return False
 
-    # If still no good split, try single newlines with heuristics
-    if len(references) < 5:
-        lines = [ln.strip() for ln in refs_text.split("\n")]
-        potential_refs = []
-        current_ref = ""
-        for line in lines:
-            if not line:
-                if current_ref and len(current_ref) > 30:
-                    potential_refs.append(current_ref.strip())
-                current_ref = ""
-            else:
-                # Check if this looks like a new reference (starts with author pattern)
-                if current_ref and _looks_like_new_reference(line):
-                    if len(current_ref) > 30:
-                        potential_refs.append(current_ref.strip())
-                    current_ref = line
-                else:
-                    current_ref = (current_ref + " " + line).strip() if current_ref else line
-        if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref.strip())
-        if len(potential_refs) > len(references):
-            references = potential_refs
-
-    # Additional pass: split on author-start lines when refs are still few
-    if len(references) < 5:
-        lines = [ln.strip() for ln in refs_text.split("\n") if ln.strip()]
-        potential_refs = []
-        current_ref = ""
-        for line in lines:
-            is_author_line = _looks_like_new_reference(line)
-            has_year = re.search(YEAR_PATTERN, current_ref) is not None
-            if current_ref and is_author_line and has_year:
-                potential_refs.append(current_ref.strip())
-                current_ref = line
-            else:
-                current_ref = (current_ref + " " + line).strip() if current_ref else line
-        if current_ref and len(current_ref) > 30:
-            potential_refs.append(current_ref.strip())
-        if len(potential_refs) > len(references):
-            references = potential_refs
-
-    # Final fallback: split on author-start patterns in fully normalized text
-    if len(references) < 5:
-        normalized = re.sub(r"\s+", " ", refs_text).strip()
-        author_start = re.compile(
-            r"(?:^|(?<=\.\s))([A-Z][A-Za-z'’.\-]+(?:\s+[A-Z][A-Za-z'’.\-]+){0,2},\s*[A-Z])"
+    def _looks_like_continuation_reference(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate:
+            return False
+        markdown_label = _extract_markdown_link_text(candidate)
+        has_year = bool(re.search(YEAR_PATTERN, candidate))
+        has_doi = bool(re.search(DOI_PATTERN, candidate, re.IGNORECASE))
+        has_arxiv = bool(
+            re.search(ARXIV_PATTERN, candidate, re.IGNORECASE) or
+            re.search(ARXIV_OLD_PATTERN, candidate, re.IGNORECASE)
         )
-        starts = [m.start(1) for m in author_start.finditer(normalized)]
-        if starts:
-            if starts[0] != 0:
-                starts = [0] + starts
-            segments: list[str] = []
-            for idx, start in enumerate(starts):
-                end = starts[idx + 1] if idx + 1 < len(starts) else len(normalized)
-                segment = normalized[start:end].strip(" ;,.")
-                if len(segment) > 30:
-                    segments.append(segment)
-            if len(segments) > len(references):
-                references = segments
+        has_url = bool(re.search(URL_PATTERN, candidate, re.IGNORECASE))
 
-    # Filter out lines that do not look like references, but keep a minimum set
+        if markdown_label:
+            label = markdown_label.strip()
+            if _is_probable_authorish_start(label):
+                return False
+            if re.match(
+                r"(?i)^(?:prints?,\s*p\.|phys\.|astropart|classical|journal|not\.\s*r|mon\.\s*not|a&a|apj|mnr|vol\.|pp\.|pages?)",
+                label,
+            ):
+                return True
+            if not has_year and (has_doi or has_arxiv or has_url):
+                return True
+            return False
+
+        # Non-markdown fragment: "prints, p. arXiv:..." or similar.
+        if re.match(r"(?i)^prints?,\s*p\.\s*arxiv:", candidate):
+            return True
+        return False
+
+    # Try explicit list formats first: [1], [TAG], 1., 1)
+    list_pattern = r"(?m)^\s*(?:\[+\d+\]|\[[^\n]{1,180}\]|\d+[\.\)])\s+"
+    if re.search(list_pattern, refs_text):
+        parts = re.split(list_pattern, refs_text)
+        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+    else:
+        # Fallback: paragraph blocks
+        parts = re.split(r"\n\s*\n", refs_text)
+        references = [p.strip().replace("\n", " ") for p in parts if p.strip() and len(p.strip()) > 20]
+
+    # Line model pass: handles compact/link-heavy bibliographies (e.g. markdown link lines).
+    lines = [ln.rstrip() for ln in refs_text.split("\n")]
+    modeled_refs: list[str] = []
+    current_ref = ""
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            if current_ref and len(current_ref) > 20:
+                modeled_refs.append(current_ref.strip())
+            current_ref = ""
+            continue
+        # Treat markdown-like fragment lines as continuation-only noise when a
+        # reference is already being built; keep them if they appear standalone.
+        if _looks_like_fragment_line(line) and current_ref:
+            continue
+        line_has_explicit_label = _has_explicit_reference_label(line)
+        if (
+            current_ref
+            and _has_explicit_reference_label(current_ref)
+            and not line_has_explicit_label
+        ):
+            current_ref = f"{current_ref} {line}".strip()
+            continue
+        if current_ref and _looks_like_new_reference(line):
+            if len(current_ref) > 20:
+                modeled_refs.append(current_ref.strip())
+            current_ref = line
+        else:
+            current_ref = (current_ref + " " + line).strip() if current_ref else line
+    if current_ref and len(current_ref) > 20:
+        modeled_refs.append(current_ref.strip())
+
+    if len(modeled_refs) > len(references):
+        references = modeled_refs
+    elif len(modeled_refs) >= 3 and (len(references) - len(modeled_refs)) <= 1:
+        # Prefer line model only when it is close to structured split count.
+        # This avoids collapsing multiple valid entries in compact one-line formats.
+        references = modeled_refs
+
+    # Merge fragment-only reference entries that are continuation tails.
+    merged_references: list[str] = []
+    for ref in references:
+        if merged_references and _looks_like_continuation_reference(ref):
+            merged_references[-1] = f"{merged_references[-1]} {ref}".strip()
+            continue
+        merged_references.append(ref)
+    references = merged_references
+
+    # Filter out lines that do not look like references, but keep a minimum set.
     filtered = [ref for ref in references if _looks_like_reference(ref)]
     if len(filtered) >= 3:
         references = filtered

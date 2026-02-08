@@ -217,3 +217,50 @@ def test_websearch_serper_engine(monkeypatch):
         data = resp.json()
         assert "web_search_results_dict" in data
         assert data["web_search_results_dict"]["results"]
+
+
+def test_websearch_4chan_engine(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+
+    captured: dict[str, object] = {}
+
+    def fake_perform_websearch(search_engine, search_query, *args, **kwargs):
+        assert search_engine == "4chan"
+        captured["search_params"] = kwargs.get("search_params")
+        return {
+            "results": [
+                {
+                    "title": "/g/ Thread 123",
+                    "url": "https://boards.4chan.org/g/thread/123",
+                    "content": "Thread snippet.",
+                    "metadata": {"date_published": "2026-02-08T00:00:00Z"},
+                }
+            ],
+            "total_results_found": 1,
+            "search_time": 0.02,
+        }
+
+    monkeypatch.setattr(ws, "perform_websearch", fake_perform_websearch)
+
+    app = _mini_app_with_user()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/research/websearch",
+            json={
+                "query": "rust memory safety",
+                "engine": "4chan",
+                "result_count": 2,
+                "boards": ["g", "tv"],
+                "max_threads_per_board": 120,
+                "aggregate": False,
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "web_search_results_dict" in data
+        assert data["web_search_results_dict"]["results"]
+
+    search_params = captured.get("search_params")
+    assert isinstance(search_params, dict)
+    assert search_params.get("boards") == ["g", "tv"]
+    assert search_params.get("max_threads_per_board") == 120

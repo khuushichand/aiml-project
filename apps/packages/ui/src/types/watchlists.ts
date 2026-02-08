@@ -356,6 +356,10 @@ export interface WatchlistSettingsStats {
 export interface WatchlistSettings {
   default_output_ttl_seconds?: number
   temporary_output_ttl_seconds?: number
+  forums_enabled?: boolean
+  forum_default_top_n?: number
+  sharing_mode?: string
+  watchlists_backend?: "sqlite" | "postgres" | string
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
