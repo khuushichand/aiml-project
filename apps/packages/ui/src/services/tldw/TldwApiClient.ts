@@ -1494,6 +1494,9 @@ export class TldwApiClient {
     options?: {
       enrich?: boolean
       referenceIndex?: number
+      offset?: number
+      limit?: number
+      parseCap?: number
       signal?: AbortSignal
     }
   ): Promise<{
@@ -1517,6 +1520,12 @@ export class TldwApiClient {
     enrichment_limited?: boolean
     total_detected?: number
     truncated?: boolean
+    offset?: number
+    limit?: number
+    returned_count?: number
+    total_available?: number
+    has_more?: boolean
+    next_offset?: number | null
   }> {
     const id = encodeURIComponent(String(mediaId))
     const enrich = options?.enrich !== false
@@ -1524,6 +1533,12 @@ export class TldwApiClient {
       typeof options?.referenceIndex === "number"
         ? `&reference_index=${options.referenceIndex}`
         : ""
+    const offset =
+      typeof options?.offset === "number" ? `&offset=${Math.max(0, options.offset)}` : ""
+    const limit =
+      typeof options?.limit === "number" ? `&limit=${Math.max(1, options.limit)}` : ""
+    const parseCap =
+      typeof options?.parseCap === "number" ? `&parse_cap=${Math.max(1, options.parseCap)}` : ""
     return await bgRequest<{
       media_id: number
       has_references: boolean
@@ -1545,8 +1560,14 @@ export class TldwApiClient {
       enrichment_limited?: boolean
       total_detected?: number
       truncated?: boolean
+      offset?: number
+      limit?: number
+      returned_count?: number
+      total_available?: number
+      has_more?: boolean
+      next_offset?: number | null
     }>({
-      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}`,
+      path: `/api/v1/media/${id}/references?enrich=${enrich}${referenceIndex}${offset}${limit}${parseCap}`,
       method: "GET",
       abortSignal: options?.signal,
       timeoutMs: 45000

@@ -19,7 +19,10 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import to_db_timestamp
+from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import (
+    resolve_limit_offset,
+    to_db_timestamp,
+)
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     ActivitiesListResponse,
     ActivityResponse,
@@ -134,8 +137,9 @@ async def reorder_lists(
     in the board must be included.
     """
     try:
-        db.reorder_lists(board_id=board_id, list_ids=reorder_in.ids)
-        logger.info(f"Reordered {len(reorder_in.ids)} lists in board {board_id}")
+        ids = reorder_in.ids or []
+        db.reorder_lists(board_id=board_id, list_ids=ids)
+        logger.info(f"Reordered {len(ids)} lists in board {board_id}")
         return ReorderResponse(success=True, message="Lists reordered successfully")
     except (NotFoundError, InputError, KanbanDBError) as e:
         raise _handle_error(e) from e
@@ -189,6 +193,7 @@ async def update_list(
         lst = db.update_list(
             list_id=list_id,
             name=list_in.name,
+            position=list_in.position,
             expected_version=x_expected_version
         )
         lst["card_count"] = db.get_card_count_for_list(list_id)
@@ -307,6 +312,8 @@ async def get_list_activities(
     entity_type: Optional[str] = Query(None, description="Filter by entity_type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum activities to return"),
     offset: int = Query(0, ge=0, description="Number of activities to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=200, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> ActivitiesListResponse:
     """Get activity log for a list."""
@@ -316,6 +323,7 @@ async def get_list_activities(
             detail="created_after must be less than or equal to created_before.",
         )
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         activities, total = db.get_list_activities(
             list_id=list_id,
             created_after=to_db_timestamp(created_after),

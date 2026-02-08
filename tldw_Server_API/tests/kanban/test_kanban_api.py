@@ -5,6 +5,7 @@ No mocking of internal functions; only dependency override to inject a temp DB.
 """
 
 import importlib
+import sqlite3
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -142,6 +143,25 @@ def test_board_list_counts(client_with_kanban_db):
     assert board_entry["card_count"] == 1
 
 
+def test_board_list_pagination_legacy_page_params(client_with_kanban_db):
+    """Legacy page/per_page should be translated to limit/offset."""
+    client, _db = client_with_kanban_db
+
+    for idx in range(5):
+        resp = client.post(
+            "/api/v1/kanban/boards",
+            json={"name": f"Paged Board {idx}", "client_id": f"board-page-{idx}"},
+        )
+        assert resp.status_code == 201
+
+    paged_resp = client.get("/api/v1/kanban/boards", params={"page": 2, "per_page": 2})
+    assert paged_resp.status_code == 200
+    payload = paged_resp.json()
+    assert payload["pagination"]["limit"] == 2
+    assert payload["pagination"]["offset"] == 2
+    assert len(payload["boards"]) <= 2
+
+
 # =============================================================================
 # List CRUD Tests
 # =============================================================================
@@ -198,6 +218,53 @@ def test_list_crud(client_with_kanban_db):
     # Delete and restore
     client.delete(f"/api/v1/kanban/lists/{list_id}")
     client.post(f"/api/v1/kanban/lists/{list_id}/restore")
+
+
+def test_list_update_position_and_reorder_legacy_payload(client_with_kanban_db):
+    """List position patch + list_positions reorder payload should both work."""
+    client, _db = client_with_kanban_db
+
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "List Compat Board", "client_id": "board-list-compat-1"},
+    ).json()
+
+    list_a = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "A", "client_id": "list-compat-a"},
+    ).json()
+    list_b = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "B", "client_id": "list-compat-b"},
+    ).json()
+    list_c = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "C", "client_id": "list-compat-c"},
+    ).json()
+
+    move_resp = client.patch(
+        f"/api/v1/kanban/lists/{list_c['id']}",
+        json={"position": 0},
+    )
+    assert move_resp.status_code == 200, move_resp.text
+
+    ordered = client.get(f"/api/v1/kanban/boards/{board['id']}/lists").json()["lists"]
+    assert ordered[0]["id"] == list_c["id"]
+
+    reorder_resp = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists/reorder",
+        json={
+            "list_positions": [
+                {"list_id": list_a["id"], "position": 2},
+                {"list_id": list_b["id"], "position": 0},
+                {"list_id": list_c["id"], "position": 1},
+            ]
+        },
+    )
+    assert reorder_resp.status_code == 200, reorder_resp.text
+
+    reordered = client.get(f"/api/v1/kanban/boards/{board['id']}/lists").json()["lists"]
+    assert [l["id"] for l in reordered] == [list_b["id"], list_c["id"], list_a["id"]]
 
 
 # =============================================================================
@@ -282,6 +349,92 @@ def test_card_crud(client_with_kanban_db):
     # Delete and restore
     client.delete(f"/api/v1/kanban/cards/{card_id}")
     client.post(f"/api/v1/kanban/cards/{card_id}/restore")
+
+
+def test_card_create_accepts_label_ids_and_reorder_legacy_payload(client_with_kanban_db):
+    """Card create label_ids + card_positions reorder payload should work."""
+    client, _db = client_with_kanban_db
+
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Card Compat Board", "client_id": "board-card-compat-1"},
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Compat List", "client_id": "list-card-compat-1"},
+    ).json()
+
+    label_bug = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/labels",
+        json={"name": "Bug", "color": "red"},
+    ).json()
+    label_feat = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/labels",
+        json={"name": "Feature", "color": "green"},
+    ).json()
+
+    card1 = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={
+            "title": "Card one",
+            "client_id": "card-compat-1",
+            "label_ids": [label_bug["id"], label_feat["id"]],
+        },
+    ).json()
+    card2 = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Card two", "client_id": "card-compat-2"},
+    ).json()
+
+    labels_resp = client.get(f"/api/v1/kanban/cards/{card1['id']}/labels")
+    assert labels_resp.status_code == 200
+    label_ids = {l["id"] for l in labels_resp.json()["labels"]}
+    assert label_bug["id"] in label_ids
+    assert label_feat["id"] in label_ids
+
+    reorder_resp = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards/reorder",
+        json={
+            "card_positions": [
+                {"card_id": card1["id"], "position": 1},
+                {"card_id": card2["id"], "position": 0},
+            ]
+        },
+    )
+    assert reorder_resp.status_code == 200, reorder_resp.text
+
+    cards = client.get(f"/api/v1/kanban/lists/{lst['id']}/cards").json()["cards"]
+    assert [c["id"] for c in cards] == [card2["id"], card1["id"]]
+
+
+def test_search_supports_legacy_page_params(client_with_kanban_db):
+    """Search endpoint should accept page/per_page compatibility params."""
+    client, _db = client_with_kanban_db
+
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Search Compat Board", "client_id": "board-search-compat-1"},
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Search Compat List", "client_id": "list-search-compat-1"},
+    ).json()
+
+    for idx in range(5):
+        client.post(
+            f"/api/v1/kanban/lists/{lst['id']}/cards",
+            json={"title": f"compat token {idx}", "client_id": f"search-compat-card-{idx}"},
+        )
+
+    resp = client.get(
+        "/api/v1/kanban/search",
+        params={"q": "compat", "page": 2, "per_page": 2},
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["pagination"]["limit"] == 2
+    assert payload["pagination"]["offset"] == 2
+    assert len(payload["results"]) <= 2
 
 
 # =============================================================================
@@ -1991,3 +2144,85 @@ def test_bidirectional_lookup_no_cards(client_with_kanban_db):
     assert result["linked_type"] == "media"
     assert result["linked_id"] == "nonexistent-media"
     assert len(result["cards"]) == 0
+
+
+def test_card_link_target_validation_when_content_db_available(client_with_kanban_db):
+    """
+    Link target validation should be strict only when Media/notes tables exist.
+
+    This test provisions minimal Media and notes tables in the same user database
+    directory and verifies valid links succeed while missing targets are rejected.
+    """
+    client, db = client_with_kanban_db
+
+    board = client.post(
+        "/api/v1/kanban/boards",
+        json={"name": "Link Validation Board", "client_id": "board-link-validation-1"},
+    ).json()
+    lst = client.post(
+        f"/api/v1/kanban/boards/{board['id']}/lists",
+        json={"name": "Link Validation List", "client_id": "list-link-validation-1"},
+    ).json()
+    card = client.post(
+        f"/api/v1/kanban/lists/{lst['id']}/cards",
+        json={"title": "Link Validation Card", "client_id": "card-link-validation-1"},
+    ).json()
+
+    media_db_path = DatabasePaths.get_media_db_path(db.user_id)
+    with sqlite3.connect(str(media_db_path)) as media_conn:
+        media_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS Media (
+                id INTEGER PRIMARY KEY,
+                uuid TEXT UNIQUE,
+                client_id TEXT,
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        media_conn.execute(
+            "INSERT INTO Media (id, uuid, client_id, deleted) VALUES (?, ?, ?, 0)",
+            (101, "media-uuid-101", "media-client-101"),
+        )
+        media_conn.commit()
+
+    notes_db_path = DatabasePaths.get_chacha_db_path(db.user_id)
+    with sqlite3.connect(str(notes_db_path)) as notes_conn:
+        notes_conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notes (
+                id TEXT PRIMARY KEY,
+                client_id TEXT NOT NULL DEFAULT 'unknown',
+                deleted INTEGER DEFAULT 0
+            )
+            """
+        )
+        notes_conn.execute(
+            "INSERT INTO notes (id, client_id, deleted) VALUES (?, ?, 0)",
+            ("note-abc", "note-client-abc"),
+        )
+        notes_conn.commit()
+
+    ok_media = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "media", "linked_id": "101"},
+    )
+    assert ok_media.status_code == 201, ok_media.text
+
+    missing_media = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "media", "linked_id": "999999"},
+    )
+    assert missing_media.status_code == 404
+
+    ok_note = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "note", "linked_id": "note-abc"},
+    )
+    assert ok_note.status_code == 201, ok_note.text
+
+    missing_note = client.post(
+        f"/api/v1/kanban/cards/{card['id']}/links",
+        json={"linked_type": "note", "linked_id": "note-missing"},
+    )
+    assert missing_note.status_code == 404

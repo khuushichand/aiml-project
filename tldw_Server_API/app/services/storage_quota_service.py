@@ -474,7 +474,7 @@ class StorageQuotaService:
             await self.initialize()
 
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, 'fetch'):
+            if self._is_postgres_backend():
                 # PostgreSQL
                 users = await conn.fetch(
                     """

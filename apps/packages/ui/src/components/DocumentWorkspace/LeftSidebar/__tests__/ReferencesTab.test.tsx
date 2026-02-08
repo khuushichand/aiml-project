@@ -148,6 +148,9 @@ describe("ReferencesTab", () => {
       expect(getDocumentReferencesSpy).toHaveBeenCalledWith(1, {
         enrich: true,
         referenceIndex: 0,
+        offset: 0,
+        limit: 50,
+        parseCap: undefined,
       })
     })
   })

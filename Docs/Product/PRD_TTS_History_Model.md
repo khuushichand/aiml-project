@@ -2,7 +2,7 @@
 
 Owner:
 Date: 2026-02-04
-Status: Draft
+Status: Draft (implementation largely complete; gap closure in progress)
 Target Release:
 Document Version: v2.0
 
@@ -310,7 +310,19 @@ Logs:
 
 ---
 
-## 14) Design Doc (Implementation Plan)
+## 14) Known Gaps (As Of 2026-02-08)
+
+- Job-based history rows do not yet populate `artifact_ids` on successful writes.
+- History insert failure logs do not consistently include request/job correlation IDs.
+- TTS history cleanup reads retention config from env directly; align with shared settings resolution.
+- Explicit tests still needed for:
+  - segment truncation policy behavior at/over 64KB,
+  - `voice_id` / `voice_name` history filters,
+  - end-to-end `speech/jobs` -> artifact -> history linkage.
+
+---
+
+## 15) Design Doc (Implementation Plan)
 
 ### Stage 1: Schema, Settings, and Migrations
 **Goal**: Add `tts_history` storage with indexes and config flags across SQLite and Postgres paths.
@@ -321,7 +333,7 @@ Logs:
 **Tests**:
 - Unit: schema creation/migration verification.
 - Unit: normalization + HMAC output consistency.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 2: Write Path Integration
 **Goal**: Persist history rows for non‑job and job‑based TTS runs.
@@ -332,7 +344,7 @@ Logs:
 **Tests**:
 - Unit: history insert with/without text storage.
 - Integration: streaming failure produces `failed` row with `error_message`.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 3: Read Path and API Endpoints
 **Goal**: Implement list/detail/favorite/delete endpoints with filtering and pagination.
@@ -345,7 +357,7 @@ Logs:
 **Tests**:
 - Unit: list filters + favorite toggle + delete behavior.
 - Unit: `q` rejected when `STORE_TEXT=false`; `text_exact` matches hash.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 4: Retention and Artifact Purge Integration
 **Goal**: Add automated cleanup and artifact reference handling.
@@ -354,7 +366,7 @@ Logs:
 - Artifact deletion clears references and sets `artifact_deleted_at`.
 **Tests**:
 - Integration: artifact purge updates history references.
-**Status**: Not Started
+**Status**: Complete
 
 ### Stage 5: Observability and Performance
 **Goal**: Ensure metrics, logging, and performance targets are met.
@@ -364,4 +376,4 @@ Logs:
 - Query p95 < 200ms for 10k rows (cursor pagination recommended).
 **Tests**:
 - Integration: basic performance sanity (non‑blocking).
-**Status**: Not Started
+**Status**: Complete

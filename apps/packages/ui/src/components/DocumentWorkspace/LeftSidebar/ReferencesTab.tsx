@@ -1,6 +1,6 @@
 import React from "react"
 import { useTranslation } from "react-i18next"
-import { Empty, Skeleton, Tag, Tooltip, Input, message, Button } from "antd"
+import { Empty, Skeleton, Tag, Tooltip, Input, message, Button, Select } from "antd"
 import {
   BookOpen,
   ExternalLink,
@@ -425,6 +425,9 @@ export const ReferencesTab: React.FC = () => {
   const activeDocumentId = useDocumentWorkspaceStore((s) => s.activeDocumentId)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [enrich, setEnrich] = React.useState(false)
+  const [offset, setOffset] = React.useState(0)
+  const [pageSize, setPageSize] = React.useState(50)
+  const [parseCap, setParseCap] = React.useState<number | undefined>(undefined)
   const isConnected = useConnectionStore((s) => s.state.isConnected)
   const mode = useConnectionStore((s) => s.state.mode)
   const isServerAvailable = isConnected && mode !== "demo"
@@ -435,19 +438,27 @@ export const ReferencesTab: React.FC = () => {
     setEnrich(false)
     setEnrichingRefs({})
     setSearchQuery("")
+    setOffset(0)
+    setPageSize(50)
+    setParseCap(undefined)
   }, [activeDocumentId])
 
   // Fetch references with enrichment enabled
   const { data, isLoading, error, isFetching } = useDocumentReferences(
     activeDocumentId,
-    enrich
+    {
+      enrich,
+      offset,
+      limit: pageSize,
+      parseCap,
+    }
   )
 
   const references = data?.references ?? []
   const query = searchQuery.trim().toLowerCase()
   const filteredReferences = React.useMemo(() => {
     return references
-      .map((ref, index) => ({ ref, index }))
+      .map((ref, index) => ({ ref, index, globalIndex: offset + index }))
       .filter(({ ref }) => {
         if (!query) return true
         const haystack = [
@@ -464,7 +475,7 @@ export const ReferencesTab: React.FC = () => {
           .toLowerCase()
         return haystack.includes(query)
       })
-  }, [query, references])
+  }, [offset, query, references])
 
   // No document selected
   if (!activeDocumentId) {
@@ -487,32 +498,52 @@ export const ReferencesTab: React.FC = () => {
   }
 
   // No references found
-  if (!data?.has_references || data.references.length === 0) {
+  if (!data?.has_references || (data.total_available ?? data.references.length) === 0) {
     return <NoReferencesState />
   }
 
-  const totalCount = references.length
-  const detectedCount = data.total_detected ?? totalCount
+  const totalCount = data.returned_count ?? references.length
+  const totalAvailable = data.total_available ?? totalCount
+  const detectedCount = data.total_detected ?? totalAvailable
   const arxivCount = references.filter((ref) => ref.arxiv_id).length
   const s2Count = references.filter((ref) => ref.semantic_scholar_id).length
   const enrichedCount = data.enriched_count ?? 0
   const enrichmentLimited = Boolean(data.enrichment_limited)
-  const isTruncated = Boolean(data.truncated && detectedCount > totalCount)
+  const isTruncated = Boolean(data.truncated && detectedCount > totalAvailable)
+  const currentPage = totalAvailable > 0 ? Math.floor(offset / pageSize) + 1 : 1
+  const totalPages = Math.max(1, Math.ceil(Math.max(1, totalAvailable) / pageSize))
+  const hasPrevPage = offset > 0
+  const hasNextPage = Boolean(data.has_more)
+  const pageStart = totalCount > 0 ? offset + 1 : 0
+  const pageEnd = offset + totalCount
 
-  const handleEnrichReference = async (index: number, key: string) => {
+  const currentQueryKey = [
+    "document-references",
+    activeDocumentId,
+    enrich,
+    offset,
+    pageSize,
+    parseCap ?? null,
+  ] as const
+
+  const handleEnrichReference = async (globalIndex: number, key: string) => {
     if (!activeDocumentId) return
     setEnrichingRefs((prev) => ({ ...prev, [key]: true }))
     try {
       const response = await tldwClient.getDocumentReferences(activeDocumentId, {
         enrich: true,
-        referenceIndex: index,
+        referenceIndex: globalIndex,
+        offset,
+        limit: pageSize,
+        parseCap,
       })
+      queryClient.setQueryData(currentQueryKey, response)
       queryClient.setQueryData(
-        ["document-references", activeDocumentId, false],
+        ["document-references", activeDocumentId, true, offset, pageSize, parseCap ?? null],
         response
       )
       queryClient.setQueryData(
-        ["document-references", activeDocumentId, true],
+        ["document-references", activeDocumentId, false, offset, pageSize, parseCap ?? null],
         response
       )
     } catch (err) {
@@ -538,16 +569,32 @@ export const ReferencesTab: React.FC = () => {
               {t("option:documentWorkspace.references", "References")}
             </span>
             <Tag className="m-0 rounded-full px-2 py-0.5 text-xs">
-              {totalCount}
+              {totalAvailable}
             </Tag>
           </div>
           <div className="flex items-center gap-2">
+            <Select
+              size="small"
+              value={parseCap === undefined ? "all" : String(parseCap)}
+              options={[
+                { value: "all", label: t("option:documentWorkspace.referencesCapAll", "All") },
+                { value: "100", label: "100" },
+                { value: "250", label: "250" },
+                { value: "500", label: "500" },
+                { value: "1000", label: "1000" },
+              ]}
+              onChange={(value) => {
+                setParseCap(value === "all" ? undefined : Number(value))
+                setOffset(0)
+              }}
+              className="w-20"
+            />
             {isTruncated && (
               <Tooltip
                 title={t(
                   "option:documentWorkspace.referencesTruncatedHint",
-                  "Showing first {{shown}} of {{detected}} detected references",
-                  { shown: totalCount, detected: detectedCount }
+                  "Showing first {{shown}} of {{detected}} detected references after cap",
+                  { shown: totalAvailable, detected: detectedCount }
                 )}
               >
                 <Tag className="m-0 text-xs" color="gold">
@@ -630,12 +677,19 @@ export const ReferencesTab: React.FC = () => {
             {isTruncated
               ? t(
                   "option:documentWorkspace.referencesCountTruncated",
-                  "{{shown}} / {{detected}} references",
-                  { shown: totalCount, detected: detectedCount }
+                  "{{shown}} / {{detected}} references (cap applied)",
+                  { shown: totalAvailable, detected: detectedCount }
                 )
               : t("option:documentWorkspace.referencesCount", "{{count}} references", {
-                  count: totalCount,
+                  count: totalAvailable,
                 })}
+          </span>
+          <span>
+            {t(
+              "option:documentWorkspace.referencesPageWindow",
+              "Showing {{start}}-{{end}}",
+              { start: pageStart, end: pageEnd }
+            )}
           </span>
           {arxivCount > 0 && (
             <span>
@@ -649,21 +703,63 @@ export const ReferencesTab: React.FC = () => {
             </span>
           )}
         </div>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="text-xs text-text-muted">
+            {t(
+              "option:documentWorkspace.referencesPageIndicator",
+              "Page {{current}} / {{total}}",
+              { current: currentPage, total: totalPages }
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Select
+              size="small"
+              value={String(pageSize)}
+              options={[
+                { value: "25", label: "25" },
+                { value: "50", label: "50" },
+                { value: "100", label: "100" },
+                { value: "200", label: "200" },
+              ]}
+              onChange={(value) => {
+                setPageSize(Number(value))
+                setOffset(0)
+              }}
+              className="w-20"
+            />
+            <Button
+              size="small"
+              onClick={() => setOffset((prev) => Math.max(0, prev - pageSize))}
+              disabled={!hasPrevPage || isFetching}
+            >
+              {t("common:previous", "Previous")}
+            </Button>
+            <Button
+              size="small"
+              onClick={() =>
+                setOffset((data?.next_offset ?? offset + pageSize))
+              }
+              disabled={!hasNextPage || isFetching}
+            >
+              {t("common:next", "Next")}
+            </Button>
+          </div>
+        </div>
 
         {/* References list */}
         {filteredReferences.length === 0 ? (
           <NoFilteredReferencesState />
         ) : (
           <div className="space-y-2">
-            {filteredReferences.map(({ ref, index }) => {
-              const key = getReferenceKey(ref, index)
+            {filteredReferences.map(({ ref, index, globalIndex }) => {
+              const key = getReferenceKey(ref, globalIndex)
               return (
                 <ReferenceCard
                   key={key}
                   reference={ref}
-                  index={index}
+                  index={globalIndex}
                   isEnriching={Boolean(enrichingRefs[key])}
-                  onEnrich={() => handleEnrichReference(index, key)}
+                  onEnrich={() => handleEnrichReference(globalIndex, key)}
                 />
               )
             })}

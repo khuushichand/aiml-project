@@ -1510,6 +1510,7 @@ END;
         self,
         list_id: int,
         name: str | None = None,
+        position: int | None = None,
         expected_version: int | None = None
     ) -> dict[str, Any]:
         """Update a list."""
@@ -1543,6 +1544,48 @@ END;
                     updates.append("name = ?")
                     params.append(name)
 
+                if position is not None:
+                    if position < 0:
+                        raise InputError("List position must be >= 0")  # noqa: TRY003
+
+                    # Clamp to valid range (end if larger than current list count - 1).
+                    cur = conn.execute(
+                        "SELECT COUNT(*) as cnt FROM kanban_lists WHERE board_id = ? AND deleted = 0",
+                        (lst["board_id"],),
+                    )
+                    max_position = max(0, int(cur.fetchone()["cnt"]) - 1)
+                    target_position = min(int(position), max_position)
+
+                    if target_position != lst["position"]:
+                        if target_position > lst["position"]:
+                            conn.execute(
+                                """
+                                UPDATE kanban_lists
+                                SET position = position - 1, updated_at = ?, version = version + 1
+                                WHERE board_id = ?
+                                  AND deleted = 0
+                                  AND position > ?
+                                  AND position <= ?
+                                  AND id != ?
+                                """,
+                                (_utcnow_iso(), lst["board_id"], lst["position"], target_position, list_id),
+                            )
+                        else:
+                            conn.execute(
+                                """
+                                UPDATE kanban_lists
+                                SET position = position + 1, updated_at = ?, version = version + 1
+                                WHERE board_id = ?
+                                  AND deleted = 0
+                                  AND position >= ?
+                                  AND position < ?
+                                  AND id != ?
+                                """,
+                                (_utcnow_iso(), lst["board_id"], target_position, lst["position"], list_id),
+                            )
+                        updates.append("position = ?")
+                        params.append(target_position)
+
                 if not updates:
                     return lst
 
@@ -1558,6 +1601,8 @@ END;
                 updated_fields = []
                 if name is not None:
                     updated_fields.append("name")
+                if position is not None:
+                    updated_fields.append("position")
                 self._log_activity_internal(
                     conn, lst["board_id"], "list_updated", "list", entity_id=list_id,
                     list_id=list_id, details={"updated_fields": updated_fields}
@@ -6302,6 +6347,92 @@ END;
     # Card Links Methods (Phase 5: Content Integration)
     # ==========================================================================
 
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        """Return True when table_name exists in the target SQLite DB."""
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _check_link_target_exists(self, linked_type: str, linked_id: str) -> bool | None:
+        """
+        Check whether a linked target exists.
+
+        Returns:
+            True: target exists
+            False: target definitively does not exist
+            None: target could not be validated (DB/table unavailable, fallback mode)
+        """
+        linked_id = str(linked_id).strip()
+        if not linked_id:
+            return False
+
+        if linked_type == "media":
+            db_path = DatabasePaths.get_media_db_path(self.user_id)
+            table_name = "Media"
+            sql = (
+                "SELECT 1 FROM Media "
+                "WHERE COALESCE(deleted, 0) = 0 "
+                "AND (CAST(id AS TEXT) = ? OR uuid = ? OR client_id = ?) "
+                "LIMIT 1"
+            )
+            params = (linked_id, linked_id, linked_id)
+        elif linked_type == "note":
+            db_path = DatabasePaths.get_chacha_db_path(self.user_id)
+            table_name = "notes"
+            sql = (
+                "SELECT 1 FROM notes "
+                "WHERE COALESCE(deleted, 0) = 0 "
+                "AND (id = ? OR client_id = ?) "
+                "LIMIT 1"
+            )
+            params = (linked_id, linked_id)
+        else:
+            return False
+
+        if not db_path.exists():
+            logger.debug(
+                f"Skipping link target validation for {linked_type}:{linked_id} - "
+                f"database file not found at {db_path}"
+            )
+            return None
+
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            try:
+                if not self._table_exists(conn, table_name):
+                    logger.debug(
+                        f"Skipping link target validation for {linked_type}:{linked_id} - "
+                        f"table {table_name} not found in {db_path}"
+                    )
+                    return None
+                row = conn.execute(sql, params).fetchone()
+                return row is not None
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.warning(
+                f"Link target validation unavailable for {linked_type}:{linked_id}: {e}"
+            )
+            return None
+
+    def _validate_link_target_or_raise(self, linked_type: str, linked_id: str) -> None:
+        """
+        Validate linked media/note target when possible.
+
+        Validation is strict only when the target content DB/table is available.
+        If unavailable, validation gracefully falls back to permissive mode.
+        """
+        exists = self._check_link_target_exists(linked_type=linked_type, linked_id=linked_id)
+        if exists is False:
+            raise NotFoundError(
+                f"Linked {linked_type} target not found: {linked_id}",
+                entity=linked_type,
+                entity_id=linked_id,
+            )
+
     def add_card_link(
         self,
         card_id: int,
@@ -6334,6 +6465,8 @@ END;
                 card = self._get_card_by_id(conn, card_id)
                 if not card:
                     raise NotFoundError(f"Card {card_id} not found", entity="card", entity_id=card_id)  # noqa: TRY003
+
+                self._validate_link_target_or_raise(linked_type=linked_type, linked_id=linked_id)
 
                 link_uuid = _generate_uuid()
                 now = _utcnow_iso()
@@ -6644,6 +6777,8 @@ END;
                     link_uuid = _generate_uuid()
                     linked_type = link["linked_type"]
                     linked_id = link["linked_id"]
+
+                    self._validate_link_target_or_raise(linked_type=linked_type, linked_id=linked_id)
 
                     try:
                         cur = conn.execute(

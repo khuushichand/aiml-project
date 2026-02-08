@@ -59,6 +59,116 @@ async def test_references_endpoint_extracts_basic(mock_user, mock_db):
 
 
 @pytest.mark.asyncio
+async def test_references_endpoint_applies_pagination_window(mock_user, mock_db):
+    content = (
+        "Intro text\\n"
+        "References\\n"
+        "[1] Smith, J. (2020). Example 1.\\n"
+        "[2] Smith, J. (2020). Example 2.\\n"
+        "[3] Smith, J. (2020). Example 3.\\n"
+        "[4] Smith, J. (2020). Example 4.\\n"
+        "[5] Smith, J. (2020). Example 5.\\n"
+        "[6] Smith, J. (2020). Example 6.\\n"
+    )
+    mock_db.get_media_by_id = MagicMock(return_value={"id": 1, "content": content})
+
+    app.dependency_overrides[get_request_user] = lambda: mock_user
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_db
+
+    with patch.object(refs_mod, "get_cached_response", return_value=None):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/media/1/references?enrich=false&offset=2&limit=2"
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["returned_count"] == 2
+    assert data["total_available"] == 6
+    assert data["has_more"] is True
+    assert data["next_offset"] == 4
+    assert "Example 3" in data["references"][0]["raw_text"]
+    assert "Example 4" in data["references"][1]["raw_text"]
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_references_endpoint_parse_cap_limits_available_refs(mock_user, mock_db):
+    content = (
+        "Intro text\\n"
+        "References\\n"
+        "[1] Smith, J. (2020). Example 1.\\n"
+        "[2] Smith, J. (2020). Example 2.\\n"
+        "[3] Smith, J. (2020). Example 3.\\n"
+        "[4] Smith, J. (2020). Example 4.\\n"
+        "[5] Smith, J. (2020). Example 5.\\n"
+        "[6] Smith, J. (2020). Example 6.\\n"
+    )
+    mock_db.get_media_by_id = MagicMock(return_value={"id": 1, "content": content})
+
+    app.dependency_overrides[get_request_user] = lambda: mock_user
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_db
+
+    with patch.object(refs_mod, "get_cached_response", return_value=None):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/v1/media/1/references?enrich=false&parse_cap=3&limit=50"
+            )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_detected"] == 6
+    assert data["total_available"] == 3
+    assert data["truncated"] is True
+    assert len(data["references"]) == 3
+    assert data["has_more"] is False
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_references_endpoint_uses_parsed_reference_db_cache(mock_user, mock_db):
+    content = (
+        "Intro text\\n"
+        "References\\n"
+        "[1] This content should not be parsed when cache is present.\\n"
+    )
+    mock_db.get_media_by_id = MagicMock(return_value={"id": 1, "content": content})
+
+    app.dependency_overrides[get_request_user] = lambda: mock_user
+    app.dependency_overrides[get_media_db_for_user] = lambda: mock_db
+
+    cached_refs = [
+        "[1] Cached Author. 2020. Cached Example One.",
+        "[2] Cached Author. 2021. Cached Example Two.",
+    ]
+
+    with patch.object(refs_mod, "get_cached_response", return_value=None), \
+        patch.object(
+            refs_mod,
+            "_load_parsed_references_cache",
+            return_value=(cached_refs, 2),
+        ), \
+        patch.object(
+            refs_mod,
+            "_split_references_with_meta",
+            side_effect=AssertionError("Parser should not run on cache hit"),
+        ):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/v1/media/1/references?enrich=false")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_detected"] == 2
+    assert data["total_available"] == 2
+    assert len(data["references"]) == 2
+    assert "Cached Example One" in data["references"][0]["raw_text"]
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_references_endpoint_cache_hit(mock_user, mock_db):
     cached_payload = {
         "media_id": 1,
@@ -130,6 +240,9 @@ def test_build_references_cache_key_includes_scope(mock_db):
         enrich=True,
         user_id="42",
         db_scope=mock_db.db_path_str,
+        offset=0,
+        limit=50,
+        parse_cap=None,
     )
     assert "user:42" in key
     assert f"db:{mock_db.db_path_str}" in key
@@ -142,9 +255,13 @@ def test_build_references_cache_key_includes_reference_index(mock_db):
         enrich=True,
         user_id="42",
         db_scope=mock_db.db_path_str,
+        offset=10,
+        limit=25,
+        parse_cap=200,
         reference_index=3,
     )
     assert ":idx:3" in key
+    assert ":offset:10:limit:25:cap:200" in key
 
 
 def test_find_reference_section_rejects_inline_references_mentions():

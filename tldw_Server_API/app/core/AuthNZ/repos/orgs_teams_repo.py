@@ -31,14 +31,10 @@ class AuthnzOrgsTeamsRepo:
 
     def _is_postgres(self, conn: Any | None = None) -> bool:
         """
-        Detect whether the current backend/connection is Postgres.
-
-        When a connection object is available, prefer checking for asyncpg-style
-        methods; otherwise, fall back to the pool attribute on DatabasePool.
+        Detect whether the configured backend is PostgreSQL from pool state.
         """
-        if conn is not None:
-            return hasattr(conn, "fetchrow")
-        return getattr(self.db_pool, "pool", None) is not None
+        _ = conn  # Compatibility placeholder for legacy call sites.
+        return bool(getattr(self.db_pool, "pool", None))
 
     async def create_organization(
         self,
@@ -636,7 +632,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     await conn.execute(
                         """
                         INSERT INTO team_members (team_id, user_id, role)
@@ -745,7 +741,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     row = await conn.fetchrow(
                         """
                         UPDATE team_members
@@ -848,7 +844,7 @@ class AuthnzOrgsTeamsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 removed = False
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     row = await conn.fetchrow(
                         """
                         DELETE FROM team_members
@@ -894,7 +890,7 @@ class AuthnzOrgsTeamsRepo:
         create: bool = True,
     ) -> int | None:
         """Fetch (and optionally create) the Default-Base team for an organization."""
-        if hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             row = await conn.fetchrow(
                 """
                 SELECT id
@@ -962,7 +958,7 @@ class AuthnzOrgsTeamsRepo:
         team_id = await self._get_or_create_default_team_id(conn, org_id, create=True)
         if team_id is None:
             return
-        if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             await conn.execute(
                 """
                 INSERT INTO team_members (team_id, user_id, role)
@@ -992,7 +988,7 @@ class AuthnzOrgsTeamsRepo:
         team_id = await self._get_or_create_default_team_id(conn, org_id, create=False)
         if team_id is None:
             return
-        if hasattr(conn, "execute") and hasattr(conn, "fetchrow"):
+        if self._is_postgres():
             await conn.execute(
                 """
                 DELETE FROM team_members
@@ -1026,7 +1022,7 @@ class AuthnzOrgsTeamsRepo:
         """
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     await conn.execute(
                         """
                         INSERT INTO org_members (org_id, user_id, role)
@@ -1173,7 +1169,7 @@ class AuthnzOrgsTeamsRepo:
         try:
             async with self.db_pool.transaction() as conn:
                 removed = False
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     current_role = await conn.fetchval(
                         """
                         SELECT role
@@ -1289,7 +1285,7 @@ class AuthnzOrgsTeamsRepo:
         target_role = (role or "").lower()
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, "fetchrow"):
+                if self._is_postgres():
                     current_role = await conn.fetchval(
                         """
                         SELECT role

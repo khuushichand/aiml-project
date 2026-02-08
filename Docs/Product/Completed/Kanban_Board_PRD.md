@@ -3,7 +3,7 @@
 Version: 0.1
 Owner: Core Maintainers (Server/API)
 Status: Draft
-Updated: 2025-12-16
+Updated: 2026-02-08
 
 Related: Project_Guidelines.md, AGENTS.md, Content_Collections_PRD.md, Workflows_PRD.md
 
@@ -122,7 +122,8 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 
 ### Board Management
 - `GET /api/v1/kanban/boards` - List all boards with counts (excludes archived/deleted by default)
-  - Query params: `include_archived`, `include_deleted`
+  - Query params: `include_archived`, `include_deleted`, `limit`, `offset`
+  - Compatibility aliases: `page`, `per_page` (translated to `limit`/`offset`)
 - `POST /api/v1/kanban/boards` - Create new board
 - `GET /api/v1/kanban/boards/{id}` - Get board with all lists and cards (nested)
 - `PATCH /api/v1/kanban/boards/{id}` - Update board name/description/settings (including activity_retention_days)
@@ -141,11 +142,13 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 - `DELETE /api/v1/kanban/lists/{id}` - Soft delete list
 - `POST /api/v1/kanban/lists/{id}/restore` - Restore soft-deleted list
 - `POST /api/v1/kanban/boards/{board_id}/lists/reorder` - Batch reorder all lists in board
+  - Canonical payload: `{"ids": [..]}`
+  - Compatibility payload: `{"list_positions": [{"list_id": .., "position": ..}, ...]}`
 
 ### Card Management
 - `GET /api/v1/kanban/lists/{list_id}/cards` - Get cards in list (excludes archived/deleted by default)
   - Query params: `include_archived`, `include_deleted`
-- `POST /api/v1/kanban/lists/{list_id}/cards` - Create card
+- `POST /api/v1/kanban/lists/{list_id}/cards` - Create card (supports optional `label_ids`)
 - `GET /api/v1/kanban/cards/{id}` - Get card with all details
 - `PATCH /api/v1/kanban/cards/{id}` - Update card fields
 - `POST /api/v1/kanban/cards/{id}/archive` - Archive card
@@ -155,6 +158,8 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 - `POST /api/v1/kanban/cards/{id}/move` - Move to different list
 - `POST /api/v1/kanban/cards/{id}/copy` - Duplicate card (with checklists)
 - `POST /api/v1/kanban/lists/{list_id}/cards/reorder` - Batch reorder cards in list
+  - Canonical payload: `{"ids": [..]}`
+  - Compatibility payload: `{"card_positions": [{"card_id": .., "position": ..}, ...]}`
 
 ### Bulk Operations
 - `POST /api/v1/kanban/cards/bulk-move` - Move multiple cards to a list
@@ -186,6 +191,7 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 - `GET /api/v1/kanban/lists/{id}/activities` - Get activity log for list
 - `GET /api/v1/kanban/boards/{id}/activities` - Get board-level activities
   - Query params: `created_after`, `created_before`, `action_type`, `entity_type`, `list_id`, `card_id`
+  - Pagination: `limit`, `offset` (compatibility aliases: `page`, `per_page`)
 
 ### Labels
 - `GET /api/v1/kanban/boards/{id}/labels` - Get board labels
@@ -198,7 +204,13 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
 ### Content Links
 - `GET /api/v1/kanban/cards/{id}/links` - Get linked content
 - `POST /api/v1/kanban/cards/{id}/links` - Link media item or note
-- `DELETE /api/v1/kanban/cards/{id}/links/{link_id}` - Remove link
+- `GET /api/v1/kanban/cards/{id}/links/counts` - Link counts by type
+- `DELETE /api/v1/kanban/cards/{id}/links/{linked_type}/{linked_id}` - Remove link by target
+- `DELETE /api/v1/kanban/cards/{id}/links/{link_id}` - Remove link by card+link id
+- `DELETE /api/v1/kanban/links/{link_id}` - Remove link by id
+- `POST /api/v1/kanban/cards/{id}/links/bulk-add` - Bulk add links
+- `POST /api/v1/kanban/cards/{id}/links/bulk-remove` - Bulk remove links
+- `GET /api/v1/kanban/linked/{linked_type}/{linked_id}/cards` - Bidirectional lookup
 
 ### Search
 - `GET /api/v1/kanban/search?q=...` - Search across cards (FTS + vector)
@@ -286,8 +298,9 @@ Primary value: Visual task organization that integrates with tldw_server's knowl
   - Activities for deleted entities are pruned when entity is hard-deleted
 
 ### 8.9 Content Links
-- Fields: id, uuid, card_id, linked_type (media|note), linked_id, created_at
+- API response fields: id, card_id, linked_type (media|note), linked_id, created_at
 - Bidirectional lookup: cards by linked content, content by card
+- Target validation: when user Media/notes DB tables are available, missing targets are rejected with 404; when unavailable, link creation degrades gracefully to permissive mode.
 
 ### 8.10 Search & RAG Integration
 - FTS5 virtual table over card titles and descriptions
@@ -570,8 +583,8 @@ All responses follow existing tldw_server patterns:
 
 ### Pagination
 List endpoints support:
-- `page`: Page number (default 1)
-- `per_page`: Items per page (default 20, max 100)
+- Canonical: `limit` + `offset`
+- Compatibility aliases: `page` + `per_page` (translated to canonical pagination)
 - `include_archived`: Include archived items (default false)
 - `include_deleted`: Include soft-deleted items (default false)
 
@@ -909,7 +922,6 @@ Response (201 Created):
 ```json
 {
     "id": 1,
-    "uuid": "lnk1...",
     "card_id": 2,
     "linked_type": "media",
     "linked_id": "media_abc123",
@@ -926,6 +938,8 @@ Authorization: Bearer <token>
 Response (200 OK):
 ```json
 {
+    "query": "transformer",
+    "search_mode": "fts",
     "results": [
         {
             "id": 2,
@@ -938,19 +952,21 @@ Response (200 OK):
             "list_name": "In Progress",
             "due_date": "2025-12-25T00:00:00Z",
             "labels": [{"name": "Research", "color": "blue"}],
-            "score": 0.95,
-            "highlight": "Summarize <mark>transformer</mark> paper"
+            "relevance_score": 0.95
         }
     ],
-    "total": 1,
-    "page": 1,
-    "per_page": 20
+    "pagination": {
+        "total": 1,
+        "limit": 20,
+        "offset": 0,
+        "has_more": false
+    }
 }
 ```
 
 #### Get Card Activity
 ```http
-GET /api/v1/kanban/cards/2/activities?page=1&per_page=20
+GET /api/v1/kanban/cards/2/activities?limit=20&offset=0
 Authorization: Bearer <token>
 ```
 
@@ -1009,9 +1025,12 @@ Response (200 OK):
             "created_at": "2025-12-13T11:05:00Z"
         }
     ],
-    "total": 5,
-    "page": 1,
-    "per_page": 20
+    "pagination": {
+        "total": 5,
+        "limit": 20,
+        "offset": 0,
+        "has_more": false
+    }
 }
 ```
 
@@ -1022,12 +1041,7 @@ Content-Type: application/json
 Authorization: Bearer <token>
 
 {
-    "list_positions": [
-        {"list_id": 1, "position": 0},
-        {"list_id": 4, "position": 1},
-        {"list_id": 2, "position": 2},
-        {"list_id": 3, "position": 3}
-    ]
+    "ids": [1, 4, 2, 3]
 }
 ```
 
@@ -1035,9 +1049,10 @@ Response (200 OK):
 ```json
 {
     "success": true,
-    "updated_count": 4
+    "message": "Lists reordered successfully"
 }
 ```
+Compatibility note: legacy payload form `list_positions` is also accepted.
 
 #### Bulk Move Cards
 ```http

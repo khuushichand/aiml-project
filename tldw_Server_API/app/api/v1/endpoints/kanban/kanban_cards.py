@@ -21,7 +21,10 @@ from tldw_Server_API.app.api.v1.API_Deps.kanban_deps import (
     handle_kanban_db_error,
     kanban_rate_limit,
 )
-from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import to_db_timestamp
+from tldw_Server_API.app.api.v1.endpoints.kanban._kanban_utils import (
+    resolve_limit_offset,
+    to_db_timestamp,
+)
 from tldw_Server_API.app.api.v1.schemas.kanban_schemas import (
     ActivitiesListResponse,
     ActivityResponse,
@@ -112,6 +115,11 @@ async def create_card(
             priority=card_in.priority,
             metadata=card_in.metadata
         )
+        if card_in.label_ids:
+            db.bulk_label_cards(
+                card_ids=[card["id"]],
+                add_label_ids=list(dict.fromkeys(card_in.label_ids)),
+            )
         logger.info(f"Created card {card['id']} in list {list_id}")
         return CardResponse(**card)
     except (NotFoundError, InputError, ConflictError, KanbanDBError) as e:
@@ -164,8 +172,9 @@ async def reorder_cards(
     in the list must be included.
     """
     try:
-        db.reorder_cards(list_id=list_id, card_ids=reorder_in.ids)
-        logger.info(f"Reordered {len(reorder_in.ids)} cards in list {list_id}")
+        ids = reorder_in.ids or []
+        db.reorder_cards(list_id=list_id, card_ids=ids)
+        logger.info(f"Reordered {len(ids)} cards in list {list_id}")
         return ReorderResponse(success=True, message="Cards reordered successfully")
     except (NotFoundError, InputError, KanbanDBError) as e:
         raise _handle_error(e) from e
@@ -402,10 +411,13 @@ async def get_card_activities(
     entity_type: Optional[str] = Query(None, description="Filter by entity_type"),
     limit: int = Query(50, ge=1, le=200, description="Maximum activities to return"),
     offset: int = Query(0, ge=0, description="Number of activities to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=200, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> ActivitiesListResponse:
     """Get activity log for a card."""
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         activities, total = db.get_card_activities(
             card_id=card_id,
             created_after=to_db_timestamp(created_after),
@@ -476,6 +488,8 @@ async def search_cards_get(
     board_id: Optional[int] = Query(None, description="Filter by board ID"),
     limit: int = Query(50, ge=1, le=200, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Results to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=200, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> CardSearchResponse:
     """
@@ -484,6 +498,7 @@ async def search_cards_get(
     Searches card titles and descriptions.
     """
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         cards, total = db.search_cards(
             query=q,
             board_id=board_id,
@@ -663,6 +678,8 @@ async def get_filtered_cards(
     include_deleted: bool = Query(False, description="Include soft-deleted cards"),
     limit: int = Query(50, ge=1, le=100, description="Maximum cards to return"),
     offset: int = Query(0, ge=0, description="Number of cards to skip"),
+    page: Optional[int] = Query(None, ge=1, description="Legacy page number (1-indexed)"),
+    per_page: Optional[int] = Query(None, ge=1, le=100, description="Legacy page size"),
     db: KanbanDB = Depends(get_kanban_db_for_user)
 ) -> FilteredCardsResponse:
     """
@@ -671,6 +688,7 @@ async def get_filtered_cards(
     Supports filtering by labels, priority, due dates, checklist status, and more.
     """
     try:
+        limit, offset = resolve_limit_offset(limit=limit, offset=offset, page=page, per_page=per_page)
         # Parse comma-separated label IDs
         parsed_label_ids = None
         if label_ids:

@@ -34,6 +34,9 @@ router = APIRouter(tags=["Document Workspace"])
 MAX_ENRICHMENT_REFS = 5
 # Maximum number of parsed references returned in a single response.
 MAX_PARSED_REFERENCES = 100
+DEFAULT_REFERENCES_PAGE_LIMIT = 50
+MAX_REFERENCES_PAGE_LIMIT = 200
+MAX_PARSED_REFERENCES_CAP = 5000
 # Delay between external API calls (to avoid rate limiting)
 SEMANTIC_SCHOLAR_DELAY = 0.35
 CROSSREF_DELAY = 0.1
@@ -67,6 +70,7 @@ REFERENCE_SECTION_END_CORE_PATTERN = re.compile(
 )
 
 REFERENCE_TAIL_NUMBERED_PATTERN = re.compile(r"^\s*(?:\[+\d{1,6}\]|\d+[\.\)])\s+")
+PARSED_REFERENCES_CACHE_TABLE = "document_parsed_references_cache"
 
 # DOI/arXiv extraction patterns
 DOI_PATTERN = r"(?:https?://(?:dx\.)?doi\.org/)?10\.\d{4,}/[^\s\]\)>\"']+"
@@ -90,14 +94,18 @@ def _build_references_cache_key(
     enrich: bool,
     user_id: str,
     db_scope: str,
+    offset: int,
+    limit: int,
+    parse_cap: int | None,
     reference_index: int | None = None,
 ) -> str:
     scope_str = f"user:{user_id}:db:{db_scope}"
     enrich_flag = "enrich" if enrich else "basic"
     index_flag = f":idx:{reference_index}" if reference_index is not None else ""
+    page_flag = f":offset:{offset}:limit:{limit}:cap:{parse_cap if parse_cap is not None else 'all'}"
     return (
         f"cache:/api/v1/media/{media_id}/references:"
-        f"{scope_str}:{enrich_flag}{index_flag}:v{REFERENCES_PARSER_VERSION}"
+        f"{scope_str}:{enrich_flag}{index_flag}{page_flag}:v{REFERENCES_PARSER_VERSION}"
     )
 
 
@@ -179,6 +187,137 @@ def _set_provider_cooldown(provider: str) -> None:
         cache.setex(key, EXTERNAL_ENRICHMENT_COOLDOWN, str(until_ts))
     except REFERENCE_ENRICH_EXCEPTIONS:
         return
+
+
+def _hash_reference_content(content: str) -> str:
+    """Build a stable hash for parsed-reference cache keys."""
+    return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _ensure_parsed_references_cache_table(db: MediaDatabase) -> None:
+    """Ensure persistent parsed-reference cache table exists."""
+    create_sql = f"""
+    CREATE TABLE IF NOT EXISTS {PARSED_REFERENCES_CACHE_TABLE} (
+        media_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL,
+        parser_version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        references_json TEXT NOT NULL,
+        total_detected INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (media_id, user_id, parser_version, content_hash)
+    )
+    """
+    lookup_index_sql = f"""
+    CREATE INDEX IF NOT EXISTS idx_doc_refs_cache_lookup
+    ON {PARSED_REFERENCES_CACHE_TABLE}(media_id, user_id, parser_version)
+    """
+    try:
+        with db.transaction() as conn:
+            db.execute_query(create_sql, connection=conn)
+            db.execute_query(lookup_index_sql, connection=conn)
+    except Exception as exc:
+        logger.warning("Could not ensure parsed references cache table: {}", exc)
+
+
+def _normalize_cached_reference_list(raw: Any) -> list[str]:
+    """Normalize cached reference payloads to a list of non-empty strings."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = str(item.get("raw_text", ""))
+        else:
+            text = str(item)
+        cleaned = text.strip()
+        if cleaned:
+            out.append(cleaned)
+    return out
+
+
+def _load_parsed_references_cache(
+    db: MediaDatabase,
+    *,
+    media_id: int,
+    user_id: str,
+    content_hash: str,
+) -> tuple[list[str], int] | None:
+    """Return cached parsed references for the current content hash, if available."""
+    query = f"""
+    SELECT references_json, total_detected
+    FROM {PARSED_REFERENCES_CACHE_TABLE}
+    WHERE media_id = ? AND user_id = ? AND parser_version = ? AND content_hash = ?
+    LIMIT 1
+    """
+    try:
+        cursor = db.execute_query(
+            query,
+            (media_id, user_id, REFERENCES_PARSER_VERSION, content_hash),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        row_dict = dict(row)
+        payload = row_dict.get("references_json")
+        if not isinstance(payload, str) or not payload:
+            return None
+        parsed_payload = json.loads(payload)
+        parsed_refs = _normalize_cached_reference_list(parsed_payload)
+        total_detected = int(row_dict.get("total_detected") or len(parsed_refs))
+        if not parsed_refs and total_detected <= 0:
+            return None
+        return parsed_refs, max(total_detected, len(parsed_refs))
+    except Exception as exc:
+        logger.debug("Failed loading parsed references cache: {}", exc)
+        return None
+
+
+def _save_parsed_references_cache(
+    db: MediaDatabase,
+    *,
+    media_id: int,
+    user_id: str,
+    content_hash: str,
+    references: list[str],
+    total_detected: int,
+) -> None:
+    """Persist parsed references in DB for fast future reads."""
+    delete_sql = f"""
+    DELETE FROM {PARSED_REFERENCES_CACHE_TABLE}
+    WHERE media_id = ? AND user_id = ? AND parser_version = ?
+    """
+    insert_sql = f"""
+    INSERT INTO {PARSED_REFERENCES_CACHE_TABLE}
+    (media_id, user_id, parser_version, content_hash, references_json, total_detected, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+    references_json = json.dumps(references, ensure_ascii=False)
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        with db.transaction() as conn:
+            db.execute_query(
+                delete_sql,
+                (media_id, user_id, REFERENCES_PARSER_VERSION),
+                connection=conn,
+            )
+            db.execute_query(
+                insert_sql,
+                (
+                    media_id,
+                    user_id,
+                    REFERENCES_PARSER_VERSION,
+                    content_hash,
+                    references_json,
+                    int(total_detected),
+                    updated_at,
+                ),
+                connection=conn,
+            )
+    except Exception as exc:
+        logger.debug("Failed saving parsed references cache: {}", exc)
 
 
 def _find_reference_section(content: str) -> str | None:
@@ -280,7 +419,11 @@ def _find_reference_section(content: str) -> str | None:
     return refs or None
 
 
-def _split_references_with_meta(refs_text: str) -> tuple[list[str], int, bool]:
+def _split_references_with_meta(
+    refs_text: str,
+    *,
+    max_references: int | None = MAX_PARSED_REFERENCES,
+) -> tuple[list[str], int, bool]:
     """Split references section into references and return truncation metadata."""
     references: list[str] = []
 
@@ -589,8 +732,11 @@ def _split_references_with_meta(refs_text: str) -> tuple[list[str], int, bool]:
         references = filtered
 
     total_detected = len(references)
-    truncated = total_detected > MAX_PARSED_REFERENCES
-    return references[:MAX_PARSED_REFERENCES], total_detected, truncated
+    if max_references is None:
+        return references, total_detected, False
+    effective_cap = max(1, int(max_references))
+    truncated = total_detected > effective_cap
+    return references[:effective_cap], total_detected, truncated
 
 
 def _split_references(refs_text: str) -> list[str]:
@@ -1139,6 +1285,26 @@ async def get_document_references(
         None,
         description="When provided, only enrich the reference at this index (0-based).",
     ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Pagination offset in the reference list after parse-cap is applied.",
+    ),
+    limit: int = Query(
+        DEFAULT_REFERENCES_PAGE_LIMIT,
+        ge=1,
+        le=MAX_REFERENCES_PAGE_LIMIT,
+        description="Maximum references to return in this page.",
+    ),
+    parse_cap: int | None = Query(
+        None,
+        ge=1,
+        le=MAX_PARSED_REFERENCES_CAP,
+        description=(
+            "Optional cap on parsed references before pagination. "
+            "Unset means no parser cap."
+        ),
+    ),
     db: MediaDatabase = Depends(get_media_db_for_user),
     current_user: User = Depends(get_request_user),
 ) -> DocumentReferencesResponse:
@@ -1175,7 +1341,8 @@ async def get_document_references(
     - Missing metadata (title, authors, year)
 
     Enrichment is best-effort and gracefully degrades if external APIs fail.
-    Enrichment is limited to the first 5 references to avoid long response times.
+    Enrichment is limited to the first 5 references on the returned page to avoid
+    long response times.
     """
     user_id = str(getattr(current_user, "id", "anonymous"))
     db_scope = _get_db_scope(db)
@@ -1184,6 +1351,9 @@ async def get_document_references(
         enrich=enrich,
         user_id=user_id,
         db_scope=db_scope,
+        offset=offset,
+        limit=limit,
+        parse_cap=parse_cap,
         reference_index=reference_index,
     )
     cached = get_cached_response(cache_key)
@@ -1242,6 +1412,12 @@ async def get_document_references(
             enrichment_limited=False,
             total_detected=0,
             truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
@@ -1259,13 +1435,43 @@ async def get_document_references(
             enrichment_limited=False,
             total_detected=0,
             truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
-    # 4. Parse individual references
-    raw_refs, total_detected, truncated = _split_references_with_meta(refs_section)
-    if not raw_refs:
+    # 4. Parse individual references (with DB-backed parsed-reference cache)
+    _ensure_parsed_references_cache_table(db)
+    refs_hash = _hash_reference_content(refs_section)
+    cached_parsed = _load_parsed_references_cache(
+        db,
+        media_id=media_id,
+        user_id=user_id,
+        content_hash=refs_hash,
+    )
+    if cached_parsed is not None:
+        raw_refs_all, total_detected = cached_parsed
+    else:
+        raw_refs_all, total_detected, _was_truncated = _split_references_with_meta(
+            refs_section,
+            max_references=None,
+        )
+        if raw_refs_all:
+            _save_parsed_references_cache(
+                db,
+                media_id=media_id,
+                user_id=user_id,
+                content_hash=refs_hash,
+                references=raw_refs_all,
+                total_detected=total_detected,
+            )
+
+    if not raw_refs_all:
         logger.debug("No individual references parsed from media_id={}", media_id)
         response = DocumentReferencesResponse(
             media_id=media_id,
@@ -1276,15 +1482,59 @@ async def get_document_references(
             enrichment_limited=False,
             total_detected=0,
             truncated=False,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=0,
+            has_more=False,
+            next_offset=None,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
-    # 5. Parse each reference
-    references = [_parse_reference_basic(ref) for ref in raw_refs]
-    logger.debug("Parsed {} references from media_id={}", len(references), media_id)
+    # 5. Apply parse cap and paginate raw references
+    if parse_cap is None:
+        capped_refs = raw_refs_all
+    else:
+        capped_refs = raw_refs_all[:parse_cap]
 
-    # 6. Enrich with external APIs if requested
+    total_available = len(capped_refs)
+    truncated = len(raw_refs_all) > total_available
+    page_start = min(offset, total_available)
+    page_end = min(page_start + limit, total_available)
+    page_raw_refs = capped_refs[page_start:page_end]
+
+    if not page_raw_refs:
+        response = DocumentReferencesResponse(
+            media_id=media_id,
+            has_references=total_available > 0,
+            references=[],
+            enrichment_source=None,
+            enriched_count=0,
+            enrichment_limited=False,
+            total_detected=total_detected,
+            truncated=truncated,
+            offset=offset,
+            limit=limit,
+            returned_count=0,
+            total_available=total_available,
+            has_more=False,
+            next_offset=None,
+        )
+        cache_response(cache_key, response.model_dump(), media_id=media_id)
+        return response
+
+    # 6. Parse each reference in current page
+    references = [_parse_reference_basic(ref) for ref in page_raw_refs]
+    logger.debug(
+        "Parsed page references media_id={} total_detected={} total_available={} page_size={}",
+        media_id,
+        total_detected,
+        total_available,
+        len(references),
+    )
+
+    # 7. Enrich with external APIs if requested
     enrichment_sources: set[str] = set()
     before_enrichment = [_enrichment_fingerprint(ref) for ref in references]
     enrichment_limited = bool(
@@ -1293,12 +1543,13 @@ async def get_document_references(
     if enrich and references:
         try:
             if reference_index is not None:
-                if reference_index < 0 or reference_index >= len(references):
+                if reference_index < 0 or reference_index >= total_available:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
                         detail="reference_index out of range",
                     )
-                target_ref = references[reference_index]
+                target_raw = capped_refs[reference_index]
+                target_ref = _parse_reference_basic(target_raw)
                 enriched_refs = [target_ref]
                 if not _is_provider_cooldown("semantic_scholar"):
                     enriched_refs, enriched = await _enrich_with_semantic_scholar(enriched_refs)
@@ -1312,7 +1563,8 @@ async def get_document_references(
                     enriched_refs, enriched = await _enrich_with_arxiv(enriched_refs)
                     if enriched:
                         enrichment_sources.add("arxiv")
-                references[reference_index] = enriched_refs[0]
+                if page_start <= reference_index < page_end:
+                    references[reference_index - page_start] = enriched_refs[0]
             else:
                 if not _is_provider_cooldown("semantic_scholar"):
                     references, enriched = await _enrich_with_semantic_scholar(references)
@@ -1351,15 +1603,23 @@ async def get_document_references(
         if idx < len(before_enrichment) and _enrichment_fingerprint(ref) != before_enrichment[idx]
     )
     enrichment_source = ",".join(sorted(enrichment_sources)) if enrichment_sources else None
+    returned_count = len(references)
+    has_more = page_end < total_available
     response = DocumentReferencesResponse(
         media_id=media_id,
-        has_references=len(references) > 0,
+        has_references=total_available > 0,
         references=references,
         enrichment_source=enrichment_source,
         enriched_count=enriched_count,
         enrichment_limited=enrichment_limited,
         total_detected=total_detected,
         truncated=truncated,
+        offset=offset,
+        limit=limit,
+        returned_count=returned_count,
+        total_available=total_available,
+        has_more=has_more,
+        next_offset=page_end if has_more else None,
     )
     cache_response(cache_key, response.model_dump(), media_id=media_id)
     return response

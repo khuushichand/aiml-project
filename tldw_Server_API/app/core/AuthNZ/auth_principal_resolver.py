@@ -121,6 +121,8 @@ def _peek_jwt_token_type(token: str) -> Optional[str]:
                 return str(raw_type)
     except _TOKEN_PEEK_EXCEPTIONS:
         return None
+    except Exception:  # noqa: BLE001 - malformed JWT segments should not block API-key fallback
+        return None
     return None
 
 

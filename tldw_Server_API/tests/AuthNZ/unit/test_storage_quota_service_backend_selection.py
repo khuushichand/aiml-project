@@ -36,11 +36,22 @@ class _PoolStub:
 
 
 class _CursorStub:
-    def __init__(self, *, row: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        row: Any = None,
+        rows: list[Any] | None = None,
+        description: list[tuple[Any, ...]] | None = None,
+    ) -> None:
         self._row = row
+        self._rows = rows if rows is not None else ([] if row is None else [row])
+        self.description = description
 
     async def fetchone(self) -> Any:
         return self._row
+
+    async def fetchall(self) -> list[Any]:
+        return list(self._rows)
 
 
 class _SQLiteUpdateConnWithFetchrowTrap:
@@ -90,6 +101,44 @@ class _SQLiteSumConnWithFetchvalTrap:
     async def execute(self, query: str, params: Any) -> _CursorStub:
         self.execute_calls.append((str(query), params))
         return _CursorStub(row=(self.bytes_value,))
+
+
+class _PostgresUsersConnWithExecuteTrap:
+    def __init__(self) -> None:
+        self.fetch_calls: list[str] = []
+
+    async def fetch(self, query: str) -> list[dict[str, Any]]:
+        self.fetch_calls.append(str(query))
+        return [
+            {"id": 1, "username": "alice", "storage_used_mb": 8.0, "storage_quota_mb": 10.0},
+            {"id": 2, "username": "bob", "storage_used_mb": 2.0, "storage_quota_mb": 10.0},
+        ]
+
+    async def execute(self, query: str, *params: Any):  # noqa: ARG002
+        raise AssertionError(f"Postgres backend path should not call conn.execute: {query!r}")
+
+
+class _SQLiteUsersConnWithFetchTrap:
+    def __init__(self) -> None:
+        self.execute_calls: list[str] = []
+
+    async def fetch(self, *args, **kwargs):  # noqa: ANN001, ANN002, ARG002
+        raise AssertionError("SQLite backend path should not call conn.fetch")
+
+    async def execute(self, query: str, params: Any | None = None) -> _CursorStub:  # noqa: ARG002
+        self.execute_calls.append(str(query))
+        return _CursorStub(
+            rows=[
+                (1, "alice", 8.0, 10.0),
+                (2, "bob", 2.0, 10.0),
+            ],
+            description=[
+                ("id",),
+                ("username",),
+                ("storage_used_mb",),
+                ("storage_quota_mb",),
+            ],
+        )
 
 
 class _QuotasRepoStub:
@@ -164,3 +213,27 @@ async def test_recalculate_team_usage_sqlite_backend_selection_ignores_conn_fetc
     assert conn.execute_calls, "expected SQLite execute path to be used"
     assert "where team_id = ?" in conn.execute_calls[0][0].lower()
     assert repo.team_updates and repo.team_updates[0][0] == 9
+
+
+@pytest.mark.asyncio
+async def test_get_all_users_storage_postgres_backend_selection_uses_fetch():
+    conn = _PostgresUsersConnWithExecuteTrap()
+    service = _make_service(_PoolStub(postgres=True, acquire_conn=conn))
+
+    result = await service.get_all_users_storage()
+
+    assert conn.fetch_calls, "expected Postgres fetch path to be used"
+    assert result[0]["user_id"] == 1
+    assert result[0]["usage_percentage"] == 80.0
+
+
+@pytest.mark.asyncio
+async def test_get_all_users_storage_sqlite_backend_selection_ignores_conn_fetch():
+    conn = _SQLiteUsersConnWithFetchTrap()
+    service = _make_service(_PoolStub(postgres=False, acquire_conn=conn))
+
+    result = await service.get_all_users_storage()
+
+    assert conn.execute_calls, "expected SQLite execute path to be used"
+    assert "where is_active = 1" in conn.execute_calls[0].lower()
+    assert [item["user_id"] for item in result] == [1, 2]

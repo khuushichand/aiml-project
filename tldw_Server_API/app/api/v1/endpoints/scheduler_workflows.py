@@ -20,6 +20,13 @@ from tldw_Server_API.app.services.workflows_scheduler import get_workflows_sched
 
 router = APIRouter(prefix="/api/v1/scheduler/workflows", tags=["scheduler", "workflows"])
 
+_ADMIN_RESCAN_SCOPE_DEP = require_token_scope(
+    "workflows",
+    require_if_present=True,
+    endpoint_id="scheduler.workflows.admin_rescan",
+)
+_ADMIN_RESCAN_PERMISSIONS_DEP = require_permissions(WORKFLOWS_ADMIN)
+
 
 class ScheduleCreateRequest(BaseModel):
     workflow_id: int | None = Field(None, description="Saved workflow ID; optional if definition snapshot is used")
@@ -120,14 +127,8 @@ async def create_schedule(
     response_model=dict[str, Any],
     status_code=200,
     dependencies=[
-        Depends(
-            require_token_scope(
-                "workflows",
-                require_if_present=True,
-                endpoint_id="scheduler.workflows.admin_rescan",
-            )
-        ),
-        Depends(require_permissions(WORKFLOWS_ADMIN)),
+        Depends(_ADMIN_RESCAN_SCOPE_DEP),
+        Depends(_ADMIN_RESCAN_PERMISSIONS_DEP),
     ],
 )
 async def admin_rescan(

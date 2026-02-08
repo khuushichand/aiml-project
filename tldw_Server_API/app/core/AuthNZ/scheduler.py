@@ -460,7 +460,7 @@ class AuthNZScheduler:
             purged_duplicates = 0
 
             async with db_pool.transaction() as conn:
-                is_postgres = hasattr(conn, "fetch")
+                is_postgres = bool(getattr(db_pool, "pool", None))
 
                 # Purge anything older than the weekly retention window
                 if weekly_cutoff is not None:

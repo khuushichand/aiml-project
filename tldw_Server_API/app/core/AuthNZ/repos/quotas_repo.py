@@ -25,8 +25,8 @@ class AuthnzQuotasRepo:
         Return True when the underlying DatabasePool is using PostgreSQL.
 
         Backend selection should be derived from DatabasePool state instead of
-        probing connection attributes (for example ``hasattr(conn, "fetchval")``),
-        which can misclassify shim/wrapper connections.
+        probing connection-method presence at runtime, which can misclassify
+        shim/wrapper connections.
         """
         return bool(getattr(self.db_pool, "pool", None))
 

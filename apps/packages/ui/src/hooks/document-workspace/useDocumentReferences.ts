@@ -32,6 +32,19 @@ export interface DocumentReferencesResponse {
   enrichment_limited?: boolean
   total_detected?: number
   truncated?: boolean
+  offset?: number
+  limit?: number
+  returned_count?: number
+  total_available?: number
+  has_more?: boolean
+  next_offset?: number | null
+}
+
+export interface UseDocumentReferencesOptions {
+  enrich?: boolean
+  offset?: number
+  limit?: number
+  parseCap?: number
 }
 
 /**
@@ -47,17 +60,32 @@ export interface DocumentReferencesResponse {
  */
 export function useDocumentReferences(
   mediaId: number | null,
-  enrich: boolean = false
+  options: UseDocumentReferencesOptions = {}
 ) {
   const isConnected = useConnectionStore((s) => s.state.isConnected)
   const mode = useConnectionStore((s) => s.state.mode)
   const isServerAvailable = isConnected && mode !== "demo"
+  const enrich = options.enrich ?? false
+  const offset = options.offset ?? 0
+  const limit = options.limit ?? 50
 
   return useQuery({
-    queryKey: ["document-references", mediaId, enrich],
+    queryKey: [
+      "document-references",
+      mediaId,
+      enrich,
+      offset,
+      limit,
+      options.parseCap ?? null,
+    ],
     queryFn: async (): Promise<DocumentReferencesResponse | null> => {
       if (mediaId === null) return null
-      return await tldwClient.getDocumentReferences(mediaId, { enrich })
+      return await tldwClient.getDocumentReferences(mediaId, {
+        enrich,
+        offset,
+        limit,
+        parseCap: options.parseCap,
+      })
     },
     enabled: mediaId !== null && isServerAvailable,
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes

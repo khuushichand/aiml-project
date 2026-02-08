@@ -43,16 +43,10 @@ def _build_app_with_overrides(principal: AuthPrincipal) -> FastAPI:
 
     app.dependency_overrides[sched_mod.get_request_user] = _fake_get_request_user
 
-    async def _fake_require_token_scope(*_args, **_kwargs):
+    async def _fake_require_token_scope():
         return None
 
-    app.dependency_overrides[
-        auth_deps.require_token_scope(
-            "workflows",
-            require_if_present=True,
-            endpoint_id="scheduler.workflows.admin_rescan",
-        )
-    ] = _fake_require_token_scope
+    app.dependency_overrides[sched_mod._ADMIN_RESCAN_SCOPE_DEP] = _fake_require_token_scope
 
     class _FakeScheduler:
         def __init__(self) -> None:

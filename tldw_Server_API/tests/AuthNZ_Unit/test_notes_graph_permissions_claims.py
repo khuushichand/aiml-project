@@ -70,6 +70,24 @@ def _build_app_with_overrides(
 
     app.dependency_overrides[notes_graph_mod.get_request_user] = _fake_get_request_user
 
+    async def _allow_non_authz_dep() -> None:
+        # Claim tests isolate require_permissions behavior and bypass unrelated
+        # per-route token-scope/rate-limit enforcement dependencies.
+        return None
+
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dep in getattr(dependant, "dependencies", []):
+            call = getattr(dep, "call", None)
+            if call is None:
+                continue
+            if getattr(call, "_tldw_token_scope", False):
+                app.dependency_overrides[call] = _allow_non_authz_dep
+            if getattr(call, "_tldw_rate_limit_resource", None) is not None:
+                app.dependency_overrides[call] = _allow_non_authz_dep
+
     class _StubChaChaDB:
         def create_manual_note_edge(
             self,
