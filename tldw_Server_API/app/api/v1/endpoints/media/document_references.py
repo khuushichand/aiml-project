@@ -32,6 +32,8 @@ router = APIRouter(tags=["Document Workspace"])
 
 # Maximum number of references to enrich (to avoid long response times)
 MAX_ENRICHMENT_REFS = 5
+# Maximum number of parsed references returned in a single response.
+MAX_PARSED_REFERENCES = 100
 # Delay between external API calls (to avoid rate limiting)
 SEMANTIC_SCHOLAR_DELAY = 0.35
 CROSSREF_DELAY = 0.1
@@ -50,7 +52,7 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "9"
+REFERENCES_PARSER_VERSION = "10"
 
 REFERENCE_HEADING_CORE_PATTERN = re.compile(
     r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
@@ -277,15 +279,15 @@ def _find_reference_section(content: str) -> str | None:
     return refs or None
 
 
-def _split_references(refs_text: str) -> list[str]:
-    """Split references section into individual references."""
+def _split_references_with_meta(refs_text: str) -> tuple[list[str], int, bool]:
+    """Split references section into references and return truncation metadata."""
     references: list[str] = []
 
     # Fix common PDF hyphenation across line breaks and normalize newlines.
     refs_text = re.sub(r"(\w)-\n(\w)", r"\1\2", refs_text)
     refs_text = refs_text.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not refs_text:
-        return []
+        return [], 0, False
 
     # Remove known non-reference noise lines common in PDF text extraction.
     cleaned_lines: list[str] = []
@@ -307,7 +309,7 @@ def _split_references(refs_text: str) -> list[str]:
         cleaned_lines.append(raw_line)
     refs_text = "\n".join(cleaned_lines).strip()
     if not refs_text:
-        return []
+        return [], 0, False
 
     def _strip_leading_bracket_label(line: str) -> tuple[str, str] | None:
         stripped = line.lstrip()
@@ -585,7 +587,15 @@ def _split_references(refs_text: str) -> list[str]:
     if len(filtered) >= 3:
         references = filtered
 
-    return references[:100]  # Limit to 100 references
+    total_detected = len(references)
+    truncated = total_detected > MAX_PARSED_REFERENCES
+    return references[:MAX_PARSED_REFERENCES], total_detected, truncated
+
+
+def _split_references(refs_text: str) -> list[str]:
+    """Compatibility wrapper returning only references."""
+    references, _total_detected, _truncated = _split_references_with_meta(refs_text)
+    return references
 
 
 def _extract_doi(text: str) -> str | None:
@@ -1211,6 +1221,8 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            total_detected=0,
+            truncated=False,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
@@ -1224,12 +1236,14 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            total_detected=0,
+            truncated=False,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
 
     # 4. Parse individual references
-    raw_refs = _split_references(refs_section)
+    raw_refs, total_detected, truncated = _split_references_with_meta(refs_section)
     if not raw_refs:
         logger.debug("No individual references parsed from media_id={}", media_id)
         response = DocumentReferencesResponse(
@@ -1237,6 +1251,8 @@ async def get_document_references(
             has_references=False,
             references=[],
             enrichment_source=None,
+            total_detected=0,
+            truncated=False,
         )
         cache_response(cache_key, response.model_dump(), media_id=media_id)
         return response
@@ -1309,6 +1325,8 @@ async def get_document_references(
         has_references=len(references) > 0,
         references=references,
         enrichment_source=enrichment_source,
+        total_detected=total_detected,
+        truncated=truncated,
     )
     cache_response(cache_key, response.model_dump(), media_id=media_id)
     return response

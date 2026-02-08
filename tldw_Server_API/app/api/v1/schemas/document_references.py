@@ -35,6 +35,15 @@ class DocumentReferencesResponse(BaseModel):
         None,
         description="External API used for enrichment (semantic_scholar, crossref, arxiv)",
     )
+    total_detected: int = Field(
+        0,
+        ge=0,
+        description="Total references detected before response limits are applied",
+    )
+    truncated: bool = Field(
+        False,
+        description="True when detected references exceeded the response cap",
+    )
 
 
 __all__ = ["ReferenceEntry", "DocumentReferencesResponse"]

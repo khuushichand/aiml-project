@@ -53,7 +53,7 @@ def test_convert_unified_result_maps_round2_search_agent_response_fields():
         generated_answer="Answer text",
     )
 
-    converted = rag_ep._convert_unified_result(result)
+    converted = rag_ep.convert_result_to_response(result)
 
     assert converted.research_summary == research_summary
     assert converted.suggestions == suggestions
@@ -68,7 +68,7 @@ def test_convert_unified_result_maps_round2_search_agent_response_fields():
 def test_convert_unified_result_sets_round2_fields_to_none_when_not_present():
     result = UnifiedSearchResult(documents=[], query="empty metadata case")
 
-    converted = rag_ep._convert_unified_result(result)
+    converted = rag_ep.convert_result_to_response(result)
 
     assert converted.research_summary is None
     assert converted.suggestions is None

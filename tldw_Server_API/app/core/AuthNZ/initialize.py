@@ -658,8 +658,10 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
         # Acquire a connection via pool/transaction abstraction
         from tldw_Server_API.app.core.AuthNZ.database import get_db_pool
         pool = await get_db_pool()
+        is_postgres_backend = bool(getattr(pool, "pool", None))
+
         # Postgres-only: ensure core AuthNZ tables (including RBAC) via bootstrap backstop.
-        if getattr(pool, "pool", None):
+        if is_postgres_backend:
             try:
                 from tldw_Server_API.app.core.AuthNZ.pg_migrations_extra import (
                     ensure_authnz_core_tables_pg,
@@ -672,264 +674,158 @@ async def ensure_single_user_rbac_seed_if_needed() -> None:
                     ensure_err,
                 )
 
-        # Postgres path
-        if getattr(pool, "pool", None):
-            async with pool.transaction() as conn:
-                single_user_id = settings.SINGLE_USER_FIXED_ID
-                # Ensure the single-user account row exists so FK relations succeed
-                await conn.execute(
-                    """
-                    INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
-                    VALUES ($1, $2, $3, $4, TRUE, TRUE, 'admin')
-                    ON CONFLICT (id) DO NOTHING
-                    """,
-                    single_user_id, 'single_user', 'single_user@example.local', '',
-                )
-                await conn.execute(
-                    "UPDATE users SET role='admin', is_active=TRUE, is_verified=TRUE WHERE id = $1",
-                    single_user_id,
-                )
-                from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
-
-                await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
-
-                # Ensure single-user is assigned the admin role
-                try:
-                    admin_role_id = await conn.fetchval("SELECT id FROM roles WHERE name = $1", "admin")
-                    if admin_role_id:
-                        await conn.execute(
-                            "INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-                            single_user_id, admin_role_id
-                        )
-
-                    # Ensure primary single-user API key exists so claim-first auth works
-                    # in single-user mode without requiring manual bootstrap.
-                    primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
-                    if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
-                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-
-                        api_manager = APIKeyManager(db_pool=pool)
-                        key_hash = api_manager.hash_api_key(primary_api_key)
-                        key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
-                        await conn.execute(
-                            """
-                            INSERT INTO api_keys (
-                                user_id, key_hash, key_prefix, name, description,
-                                scope, status, is_virtual
-                            )
-                            VALUES ($1, $2, $3, $4, $5, $6, 'active', FALSE)
-                            ON CONFLICT (key_hash) DO UPDATE SET
-                                user_id = EXCLUDED.user_id,
-                                key_prefix = EXCLUDED.key_prefix,
-                                scope = EXCLUDED.scope,
-                                status = EXCLUDED.status,
-                                is_virtual = EXCLUDED.is_virtual
-                            """,
-                            single_user_id,
-                            key_hash,
-                            key_prefix,
-                            "single-user primary key",
-                            "Primary API key for single-user profile",
-                            "admin",
-                        )
-
-                    # Seed deterministic API key for test contexts if missing
-                    test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-                    if test_mode and test_api_key:
-                        from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-
-                        api_manager = APIKeyManager(db_pool=pool)
-                        key_hash = api_manager.hash_api_key(test_api_key)
-                        key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
-                        await conn.execute(
-                            """
-                            INSERT INTO api_keys (user_id, key_hash, key_prefix, name, description, scope, status, is_virtual)
-                            VALUES ($1, $2, $3, $4, $5, $6, 'active', TRUE)
-                            ON CONFLICT (key_hash) DO NOTHING
-                            """,
-                            single_user_id,
-                            key_hash,
-                            key_prefix,
-                            "single-user test key",
-                            "Deterministic API key for test automation",
-                            "admin",
-                        )
-                except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
-                    # Log at warning level with context so repeated failures surface operationally
-                    logger.warning(
-                        "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
-                        "(AUTH_MODE={}, db_url={}): {}",
-                        settings.AUTH_MODE,
-                        _sanitize_db_url(settings.DATABASE_URL),
-                        role_assign_err,
-                    )
-            return
-
-        # SQLite path (pool adapters expose .execute returning cursor-like)
-        sqlite_fs_path = str(
-            getattr(pool, "_sqlite_fs_path", None)
-            or getattr(pool, "db_path", None)
-            or ""
-        )
-        sqlite_is_memory = sqlite_fs_path.strip() == ":memory:"
-        try:
-            db_path_str = str(getattr(pool, "db_path", "") or "")
-            if "mode=memory" in db_path_str.lower():
-                sqlite_is_memory = True
-        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
-            pass
-
-        async with pool.transaction() as conn:  # type: ignore[attr-defined]
-            # SQLite in-memory DBs cannot run file-based migrations; create minimal
-            # RBAC tables as a backstop so baseline seed can succeed.
-            if sqlite_is_memory:
-                try:
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS roles (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            name TEXT UNIQUE NOT NULL,
-                            description TEXT,
-                            is_system INTEGER DEFAULT 0
-                        )
-                        """
-                    )
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS permissions (
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            name TEXT UNIQUE NOT NULL,
-                            description TEXT,
-                            category TEXT
-                        )
-                        """
-                    )
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS role_permissions (
-                            role_id INTEGER NOT NULL,
-                            permission_id INTEGER NOT NULL,
-                            PRIMARY KEY (role_id, permission_id)
-                        )
-                        """
-                    )
-                    await conn.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS user_roles (
-                            user_id INTEGER NOT NULL,
-                            role_id INTEGER NOT NULL,
-                            granted_by INTEGER,
-                            expires_at TIMESTAMP,
-                            PRIMARY KEY (user_id, role_id)
-                        )
-                        """
-                    )
-                except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as table_err:
-                    logger.debug(
-                        "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
-                        table_err,
-                    )
-
-            single_user_id = settings.SINGLE_USER_FIXED_ID
-            await conn.execute(
-                """
-                INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
-                VALUES (?, ?, ?, ?, 1, 1, 'admin')
-                """,
-                (single_user_id, 'single_user', 'single_user@example.local', ''),
+        # SQLite in-memory DBs cannot run file-based migrations; create minimal
+        # RBAC tables as a backstop so baseline seed can succeed.
+        if not is_postgres_backend:
+            sqlite_fs_path = str(
+                getattr(pool, "_sqlite_fs_path", None)
+                or getattr(pool, "db_path", None)
+                or ""
             )
-            await conn.execute(
-                "UPDATE users SET role='admin', is_active=1, is_verified=1 WHERE id = ?",
-                (single_user_id,),
-            )
-            from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
-
-            await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+            sqlite_is_memory = sqlite_fs_path.strip() == ":memory:"
             try:
-                cur = await conn.execute("SELECT id FROM roles WHERE name = ?", ("admin",))
-                row = await cur.fetchone()
-                admin_role_id = row[0] if row else None
-                if admin_role_id is not None:
-                    await conn.execute(
-                        "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
-                        (single_user_id, admin_role_id),
-                    )
-
-                primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
-                if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
-                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-
-                    api_manager = APIKeyManager(db_pool=pool)
-                    key_hash = api_manager.hash_api_key(primary_api_key)
-                    key_prefix = (primary_api_key[:10] + "...") if len(primary_api_key) > 10 else primary_api_key
-                    await conn.execute(
-                        """
-                        INSERT OR REPLACE INTO api_keys (
-                            id, user_id, key_hash, key_prefix, name, description,
-                            scope, status, is_virtual
-                        )
-                        VALUES (
-                            COALESCE(
-                                (SELECT id FROM api_keys WHERE key_hash = ?),
-                                COALESCE((SELECT MAX(id) FROM api_keys), 0) + 1
-                            ),
-                            ?, ?, ?, ?, ?, ?, 'active', ?
-                        )
-                        """,
-                        (
-                            key_hash,
-                            single_user_id,
-                            key_hash,
-                            key_prefix,
-                            "single-user primary key",
-                            "Primary API key for single-user profile",
-                            "admin",
-                            0,
-                        ),
-                    )
-
-                test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
-                if test_mode and test_api_key:
-                    from tldw_Server_API.app.core.AuthNZ.api_key_manager import APIKeyManager
-
-                    api_manager = APIKeyManager(db_pool=pool)
-                    key_hash = api_manager.hash_api_key(test_api_key)
-                    key_prefix = (test_api_key[:10] + "...") if len(test_api_key) > 10 else test_api_key
-                    await conn.execute(
-                        """
-                        INSERT OR IGNORE INTO api_keys (
-                            user_id, key_hash, key_prefix, name, description,
-                            scope, status, is_virtual
-                        ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1)
-                        """,
-                        (
-                            single_user_id,
-                            key_hash,
-                            key_prefix,
-                            "single-user test key",
-                            "Deterministic API key for test automation",
-                            "admin",
-                        ),
-                    )
-            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
-                logger.debug(f"Single-user admin role assignment skipped: {role_assign_err}")
-            # Commit if adapter requires it
-            try:
-                await conn.commit()  # type: ignore[attr-defined]
-            except AttributeError:
-                # Adapter doesn't expose commit; nothing to do.
+                db_path_str = str(getattr(pool, "db_path", "") or "")
+                if "mode=memory" in db_path_str.lower():
+                    sqlite_is_memory = True
+            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS:
                 pass
-            except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as commit_err:
-                logger.debug("Commit skipped or failed: {}", commit_err)
-    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
-        # Non-fatal but important for observability: surface failures at warning level
-            logger.opt(exception=True).warning(
-                "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+
+            if sqlite_is_memory:
+                async with pool.transaction() as conn:  # type: ignore[attr-defined]
+                    try:
+                        await conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS roles (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                name TEXT UNIQUE NOT NULL,
+                                description TEXT,
+                                is_system INTEGER DEFAULT 0
+                            )
+                            """
+                        )
+                        await conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS permissions (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                name TEXT UNIQUE NOT NULL,
+                                description TEXT,
+                                category TEXT
+                            )
+                            """
+                        )
+                        await conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS role_permissions (
+                                role_id INTEGER NOT NULL,
+                                permission_id INTEGER NOT NULL,
+                                PRIMARY KEY (role_id, permission_id)
+                            )
+                            """
+                        )
+                        await conn.execute(
+                            """
+                            CREATE TABLE IF NOT EXISTS user_roles (
+                                user_id INTEGER NOT NULL,
+                                role_id INTEGER NOT NULL,
+                                granted_by INTEGER,
+                                expires_at TIMESTAMP,
+                                PRIMARY KEY (user_id, role_id)
+                            )
+                            """
+                        )
+                    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as table_err:
+                        logger.debug(
+                            "SQLite in-memory RBAC table creation skipped (tables may already exist): {}",
+                            table_err,
+                        )
+                    with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
+                        await conn.commit()  # type: ignore[attr-defined]
+
+        from tldw_Server_API.app.core.AuthNZ.rbac_seed import ensure_baseline_rbac_seed
+
+        async with pool.transaction() as conn:
+            await ensure_baseline_rbac_seed(conn, include_mcp_permissions=True)
+            if not is_postgres_backend:
+                with contextlib.suppress(_AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS):
+                    await conn.commit()  # type: ignore[attr-defined]
+
+        single_user_id = settings.SINGLE_USER_FIXED_ID
+        from tldw_Server_API.app.core.AuthNZ.repos.users_repo import AuthnzUsersRepo
+
+        users_repo = AuthnzUsersRepo(db_pool=pool)
+        await users_repo.ensure_single_user_admin_user(
+            user_id=single_user_id,
+            username="single_user",
+            email="single_user@example.local",
+            password_hash="",
+        )
+
+        # Ensure single-user role assignment + primary/test API keys.
+        try:
+            from tldw_Server_API.app.core.AuthNZ.repos.api_keys_repo import AuthnzApiKeysRepo
+
+            await users_repo.assign_role_if_missing(user_id=single_user_id, role_name="admin")
+
+            api_repo = AuthnzApiKeysRepo(pool)
+            api_manager: APIKeyManager | None = None
+
+            primary_api_key = (settings.SINGLE_USER_API_KEY or "").strip()
+            if primary_api_key and primary_api_key != "CHANGE_ME_TO_SECURE_API_KEY":
+                api_manager = APIKeyManager(db_pool=pool)
+                key_hash = api_manager.hash_api_key(primary_api_key)
+                key_prefix = (
+                    (primary_api_key[:10] + "...")
+                    if len(primary_api_key) > 10
+                    else primary_api_key
+                )
+                await api_repo.upsert_primary_key(
+                    user_id=single_user_id,
+                    key_hash=key_hash,
+                    key_identifier=None,
+                    key_prefix=key_prefix,
+                    name="single-user primary key",
+                    description="Primary API key for single-user profile",
+                    scope="admin",
+                    is_virtual=False,
+                )
+
+            test_api_key = os.getenv("SINGLE_USER_TEST_API_KEY")
+            if test_mode and test_api_key:
+                api_manager = api_manager or APIKeyManager(db_pool=pool)
+                test_key_hash = api_manager.hash_api_key(test_api_key)
+                test_key_prefix = (
+                    (test_api_key[:10] + "...")
+                    if len(test_api_key) > 10
+                    else test_api_key
+                )
+                await api_repo.upsert_primary_key(
+                    user_id=single_user_id,
+                    key_hash=test_key_hash,
+                    key_identifier=None,
+                    key_prefix=test_key_prefix,
+                    name="single-user test key",
+                    description="Deterministic API key for test automation",
+                    scope="admin",
+                    is_virtual=True,
+                )
+        except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as role_assign_err:
+            # Log at warning level with context so repeated failures surface operationally
+            logger.warning(
+                "Single-user admin role assignment skipped in ensure_single_user_rbac_seed_if_needed "
                 "(AUTH_MODE={}, db_url={}): {}",
                 settings.AUTH_MODE,
                 _sanitize_db_url(settings.DATABASE_URL),
-                e,
+                role_assign_err,
             )
+    except _AUTHNZ_INIT_NONCRITICAL_EXCEPTIONS as e:
+        # Non-fatal but important for observability: surface failures at warning level
+        logger.opt(exception=True).warning(
+            "Single-user RBAC seed ensure skipped or failed in ensure_single_user_rbac_seed_if_needed "
+            "(AUTH_MODE={}, db_url={}): {}",
+            settings.AUTH_MODE,
+            _sanitize_db_url(settings.DATABASE_URL),
+            e,
+        )
 
 
 def _coerce_row_int(row: object, key: str, index: int = 0) -> Optional[int]:

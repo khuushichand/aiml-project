@@ -47,6 +47,8 @@ async def test_structured_writer_quality_low_token_budget_marks_degraded_policy(
         result = await up.unified_rag_pipeline(
             query="Provide a deep research report",
             top_k=1,
+            enable_cache=False,
+            adaptive_cache=False,
             enable_generation=True,
             enable_structured_response=True,
             search_depth_mode="quality",
@@ -78,6 +80,8 @@ async def test_structured_writer_quality_high_token_budget_keeps_full_depth_poli
         result = await up.unified_rag_pipeline(
             query="Provide a deep research report",
             top_k=1,
+            enable_cache=False,
+            adaptive_cache=False,
             enable_generation=True,
             enable_structured_response=True,
             search_depth_mode="quality",

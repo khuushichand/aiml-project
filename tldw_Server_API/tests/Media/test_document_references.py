@@ -52,6 +52,8 @@ async def test_references_endpoint_extracts_basic(mock_user, mock_db):
     assert len(data["references"]) == 2
     assert data["references"][0]["doi"] == "10.1234/abcd"
     assert data["references"][1]["arxiv_id"] == "2101.12345"
+    assert data["total_detected"] == 2
+    assert data["truncated"] is False
 
     app.dependency_overrides.clear()
 
@@ -65,6 +67,8 @@ async def test_references_endpoint_cache_hit(mock_user, mock_db):
             {"raw_text": "Cached ref", "title": "Cached Title"}
         ],
         "enrichment_source": None,
+        "total_detected": 1,
+        "truncated": False,
     }
     mock_db.get_media_by_id = MagicMock(side_effect=AssertionError("DB should not be called"))
 
@@ -278,6 +282,17 @@ def test_split_references_supports_bracket_code_labels():
     assert any("Multiple randomization designs" in r for r in refs)
     assert any("hypertextual Web search engine" in r for r in refs)
     assert all("13" != r.strip() for r in refs)
+
+
+def test_split_references_with_meta_reports_truncation():
+    refs_text = "\n\n".join(
+        f"[{idx}] Author, A. {2000 + (idx % 20)}. Example reference {idx}."
+        for idx in range(1, 113)
+    )
+    refs, total_detected, truncated = refs_mod._split_references_with_meta(refs_text)
+    assert total_detected == 112
+    assert truncated is True
+    assert len(refs) == refs_mod.MAX_PARSED_REFERENCES
 
 
 def test_split_references_supports_double_bracket_number_labels():
