@@ -460,7 +460,7 @@ class UsersDB:
             user_id: Optional[int] = None
 
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchval'):
+                if self._using_postgres_backend():
                     # PostgreSQL
                     user_id = await conn.fetchval(
                         """
@@ -602,8 +602,8 @@ class UsersDB:
             field_names = list(updates.keys())
 
             async with self.db_pool.transaction() as conn:
-                # Determine backend explicitly: asyncpg connections expose fetchval()
-                is_postgres = hasattr(conn, 'fetchval')
+                # Determine backend from DatabasePool state (not conn capability probing).
+                is_postgres = self._using_postgres_backend()
 
                 if is_postgres:
                     # PostgreSQL - use $1..$n placeholders

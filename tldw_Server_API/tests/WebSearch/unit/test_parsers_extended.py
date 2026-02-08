@@ -231,6 +231,54 @@ def test_search_web_4chan_include_archived(monkeypatch):
     assert first["archived"] is True
 
 
+def test_search_web_4chan_excludes_archive_when_disabled(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    seen_urls: list[str] = []
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        seen_urls.append(url)
+        if url.endswith("/catalog.json"):
+            return [
+                {
+                    "threads": [
+                        {
+                            "no": 7001,
+                            "sub": "Rust memory safety",
+                            "com": "Catalog-only thread content",
+                            "time": 1700000000,
+                        }
+                    ]
+                }
+            ]
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=5,
+        search_params={
+            "boards": ["g"],
+            "include_archived": False,
+        },
+    )
+
+    assert result["include_archived"] is False
+    assert result["total_results_found"] == 1
+    assert all(not url.endswith("/archive.json") for url in seen_urls)
+    assert all("/thread/" not in url for url in seen_urls)
+
+
 def test_search_web_4chan_dedupes_catalog_and_archive_thread(monkeypatch):
     from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
     from tldw_Server_API.app.core.Security import egress as eg
@@ -360,3 +408,88 @@ def test_search_web_4chan_dedupe_merges_best_metadata(monkeypatch):
     assert first["time_epoch"] == 1700000300
     assert first["images"] == 2
     assert first["score"] >= 6.0
+
+
+def test_search_web_4chan_board_level_partial_failure(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        if "/g/catalog.json" in url:
+            raise TimeoutError("catalog timeout")
+        if "/tv/catalog.json" in url:
+            return [
+                {
+                    "threads": [
+                        {
+                            "no": 90210,
+                            "sub": "Rust memory safety",
+                            "com": "Thread from tv board",
+                            "time": 1700000500,
+                        }
+                    ]
+                }
+            ]
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=10,
+        search_params={
+            "boards": ["g", "tv"],
+            "include_archived": False,
+        },
+    )
+
+    assert result["total_results_found"] == 1
+    assert result["results"][0]["board"] == "tv"
+    assert "warnings" in result
+    assert any(
+        warning.get("board") == "g" and warning.get("phase") == "catalog"
+        for warning in result["warnings"]
+    )
+    assert "error" not in result
+
+
+def test_search_web_4chan_board_level_all_failures(monkeypatch):
+    from tldw_Server_API.app.core.Web_Scraping import WebSearch_APIs as ws
+    from tldw_Server_API.app.core.Security import egress as eg
+    from tldw_Server_API.app.core import http_client as hc
+
+    monkeypatch.setattr(ws, "get_loaded_config", lambda: {"search_engines": {}})
+    monkeypatch.setattr(
+        eg,
+        "evaluate_url_policy",
+        lambda url: type("Policy", (), {"allowed": True, "reason": None})(),
+    )
+
+    def fake_fetch_json(*, method: str, url: str, headers=None, timeout=15.0, **kwargs):
+        if url.endswith("/catalog.json"):
+            raise ConnectionError("catalog unavailable")
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(hc, "fetch_json", fake_fetch_json)
+
+    result = ws.search_web_4chan(
+        "rust memory safety",
+        result_count=10,
+        search_params={
+            "boards": ["g", "tv"],
+            "include_archived": False,
+        },
+    )
+
+    assert result["results"] == []
+    assert result["total_results_found"] == 0
+    assert len(result.get("warnings", [])) == 2
+    assert result.get("error") == "4chan search failed for all requested boards."

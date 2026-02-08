@@ -50,8 +50,8 @@ curl -X POST http://localhost:8000/api/v1/rag/search \
   -H "Content-Type: application/json" \
   -d '{
     "query": "machine learning concepts",
-    "limit": 5,
-    "databases": ["media_db"]
+    "top_k": 5,
+    "sources": ["media_db"]
   }'
 ```
 
@@ -87,6 +87,14 @@ interface UnifiedSearchRequest {
   keyword_filter?: string[];                  // Optional
   enable_generation?: boolean;                // Include model-generated answer
   enable_citations?: boolean;                 // Include citations
+  enable_query_classification?: boolean;      // Search-Agent router toggle
+  enable_research_loop?: boolean;             // Iterative research mode
+  search_depth_mode?: 'speed' | 'balanced' | 'quality';
+  enable_suggestions?: boolean;               // Follow-up suggestion generation
+  num_suggestions?: number;                   // 1-10, Default: 5
+  enable_structured_response?: boolean;       // XML context + citation-oriented writer
+  enable_image_search?: boolean;              // Media search action (images)
+  enable_video_search?: boolean;              // Media search action (videos)
 }
 ```
 
@@ -100,6 +108,10 @@ interface UnifiedSearchResponse {
   timings: Record<string, number>;
   generated_answer?: string;
   citations?: object[];
+  research_summary?: object;                  // Mirrors metadata.research when enabled
+  suggestions?: string[];                     // Mirrors metadata.suggestions when enabled
+  images?: object[];                          // Mirrors metadata.images when enabled
+  videos?: object[];                          // Mirrors metadata.videos when enabled
 }
 ```
 
@@ -113,15 +125,24 @@ const response = await fetch('http://localhost:8000/api/v1/rag/search', {
   },
   body: JSON.stringify({
     query: "deep learning tutorials",
-    search_type: "hybrid",
-    limit: 10,
-    databases: ["media_db", "notes"],
-    keywords: ["python", "tensorflow"]
+    search_mode: "hybrid",
+    top_k: 10,
+    sources: ["media_db", "notes"],
+    keyword_filter: ["python", "tensorflow"]
   })
 });
 
 const data = await response.json();
 ```
+
+Search-Agent defaults for omitted request fields:
+- The server applies `[Search-Agent]` defaults from `tldw_Server_API/Config_Files/config.txt`.
+- Environment variables override config values.
+- Round 2 toggles and defaults:
+  - `enable_suggestions` ← `SEARCH_SUGGESTIONS` / `search_suggestions` (default `false`)
+  - `enable_structured_response` ← `SEARCH_STRUCTURED_RESPONSE` / `search_structured_response` (default `false`)
+  - `enable_image_search` ← `SEARCH_IMAGE_SEARCH` / `search_image_search` (default `false`)
+  - `enable_video_search` ← `SEARCH_VIDEO_SEARCH` / `search_video_search` (default `false`)
 
 ### 1a. Batch Search - `POST /batch`
 

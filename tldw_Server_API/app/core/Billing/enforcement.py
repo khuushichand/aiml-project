@@ -127,6 +127,25 @@ class BillingEnforcer:
         # Use provided TTL, env var, or default to 60s
         self._cache_ttl = cache_ttl if cache_ttl is not None else BILLING_CACHE_TTL_SECONDS
 
+    @staticmethod
+    def _is_postgres_pool(pool: Any) -> bool:
+        """
+        Return True when the provided DatabasePool is backed by PostgreSQL.
+
+        Backend selection should derive from pool state, not connection
+        capabilities (for example ``hasattr(conn, "fetchval")``), because
+        wrapper/shim connections can expose methods that do not indicate the
+        active backend.
+        """
+        if pool is None:
+            return False
+        if getattr(pool, "pool", None):
+            return True
+        backend = getattr(pool, "backend", None)
+        if isinstance(backend, str):
+            return backend.strip().lower() in {"postgres", "postgresql", "pg"}
+        return False
+
     async def get_org_limits(self, org_id: int) -> dict[str, Any]:
         """Get subscription limits for an organization with caching."""
         now = time.time()
@@ -218,9 +237,10 @@ class BillingEnforcer:
 
             pool = await get_db_pool()
             today = datetime.now(timezone.utc).date().isoformat()
+            is_postgres = self._is_postgres_pool(pool)
 
             async with pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
+                if is_postgres:
                     # PostgreSQL: canonical column is `requests`; keep fallback for legacy schemas.
                     try:
                         result = await conn.fetchval(
@@ -285,9 +305,10 @@ class BillingEnforcer:
             pool = await get_db_pool()
             now = datetime.now(timezone.utc)
             month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            is_postgres = self._is_postgres_pool(pool)
 
             async with pool.acquire() as conn:
-                if hasattr(conn, "fetchval"):
+                if is_postgres:
                     # PostgreSQL: sum tokens for all org members and org-scoped API keys
                     result = await conn.fetchval(
                         """
@@ -467,6 +488,7 @@ class BillingEnforcer:
             total_mb = 0
             offset = 0
             batch_size = 500  # keep below SQLite's max parameter count
+            is_postgres = self._is_postgres_pool(pool)
 
             def _chunks(values: list[int], size: int) -> list[list[int]]:
                 return [values[i:i + size] for i in range(0, len(values), size)]
@@ -484,7 +506,7 @@ class BillingEnforcer:
                 if user_ids:
                     for chunk in _chunks(user_ids, batch_size):
                         async with pool.acquire() as conn:
-                            if hasattr(conn, "fetchval"):
+                            if is_postgres:
                                 # PostgreSQL
                                 result = await conn.fetchval(
                                     "SELECT COALESCE(SUM(storage_used_mb), 0) FROM users WHERE id = ANY($1)",

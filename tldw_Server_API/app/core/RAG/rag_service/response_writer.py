@@ -8,6 +8,7 @@ and appropriate depth. Inspired by Perplexica's writer prompt pattern.
 
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
 
@@ -28,10 +29,12 @@ def format_context_xml(chunks: list[dict[str, Any]]) -> str:
         return "<context>\n  (no results)\n</context>"
 
     parts = ["<context>"]
-    for i, chunk in enumerate(chunks, 1):
+    emitted = 0
+    for chunk in chunks:
         content = str(chunk.get("content", "")).strip()
         if not content:
             continue
+        emitted += 1
 
         title = chunk.get("title", "") or ""
         source = chunk.get("url", "") or chunk.get("source", "") or ""
@@ -41,16 +44,19 @@ def format_context_xml(chunks: list[dict[str, Any]]) -> str:
         if not source and isinstance(metadata, dict):
             source = metadata.get("source", "") or metadata.get("url", "")
 
-        attrs = f'index="{i}"'
+        attrs = f'index="{emitted}"'
         if title:
-            # Escape XML special chars in attributes
-            safe_title = str(title).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+            safe_title = escape(str(title), quote=True)
             attrs += f' title="{safe_title}"'
         if source:
-            safe_source = str(source).replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+            safe_source = escape(str(source), quote=True)
             attrs += f' source="{safe_source}"'
 
-        parts.append(f"  <result {attrs}>{content}</result>")
+        safe_content = escape(content, quote=False)
+        parts.append(f"  <result {attrs}>{safe_content}</result>")
+
+    if emitted == 0:
+        parts.append("  (no results)")
 
     parts.append("</context>")
     return "\n".join(parts)
@@ -115,15 +121,63 @@ _QUALITY_WRITER_PROMPT = _WRITER_BASE_RULES + """
 - Address potential counterarguments or alternative perspectives"""
 
 
+def get_writer_depth_policy(
+    mode: str = "balanced",
+    max_generation_tokens: int | None = None,
+) -> dict[str, Any]:
+    """Return depth policy metadata for the structured writer.
+
+    This helps callers reason about whether quality mode's 2000+ word target
+    is realistic for the configured output token budget.
+    """
+    normalized_mode = str(mode or "balanced").strip().lower()
+    token_budget = None
+    if isinstance(max_generation_tokens, int) and max_generation_tokens > 0:
+        token_budget = max_generation_tokens
+
+    # Approximation: ~0.75 words/token => ~2666 tokens for 2000 words.
+    quality_word_target = 2000
+    quality_required_tokens = 2666
+
+    degraded = False
+    target_word_min = 150
+    target_word_max = 400
+
+    if normalized_mode == "balanced":
+        target_word_min = 400
+        target_word_max = 1200
+    elif normalized_mode == "quality":
+        target_word_min = quality_word_target
+        target_word_max = 3000
+        if token_budget is not None and token_budget < quality_required_tokens:
+            degraded = True
+            # Keep lower bound practical while encouraging depth.
+            est_words = max(600, int(token_budget * 0.75))
+            target_word_min = est_words
+            target_word_max = max(est_words + 200, int(est_words * 1.25))
+
+    return {
+        "mode": normalized_mode,
+        "max_generation_tokens": token_budget,
+        "quality_word_target": quality_word_target,
+        "quality_required_tokens": quality_required_tokens,
+        "degraded_due_to_token_budget": degraded,
+        "target_word_range": [target_word_min, target_word_max],
+    }
+
+
 def build_writer_system_prompt(
     mode: str = "balanced",
     system_instructions: str = "",
+    max_generation_tokens: int | None = None,
 ) -> str:
     """Build structured response generation system prompt.
 
     Args:
         mode: Search depth mode (speed/balanced/quality).
         system_instructions: Optional additional instructions to prepend.
+        max_generation_tokens: Optional output token budget used to adapt
+            quality-mode depth expectations.
 
     Returns:
         Complete system prompt string for the response writer.
@@ -133,7 +187,36 @@ def build_writer_system_prompt(
         "balanced": _BALANCED_WRITER_PROMPT,
         "quality": _QUALITY_WRITER_PROMPT,
     }
-    base = prompt_map.get(mode, _BALANCED_WRITER_PROMPT)
+    normalized_mode = str(mode or "balanced").strip().lower()
+    base = prompt_map.get(normalized_mode, _BALANCED_WRITER_PROMPT)
+
+    budget_adaptation = ""
+    if normalized_mode == "quality":
+        policy = get_writer_depth_policy(
+            mode=normalized_mode,
+            max_generation_tokens=max_generation_tokens,
+        )
+        degraded = bool(policy.get("degraded_due_to_token_budget"))
+        token_budget = policy.get("max_generation_tokens")
+        target_range = policy.get("target_word_range", [2000, 3000])
+        if degraded:
+            budget_adaptation = f"""
+
+## Budget Adaptation
+- Available max generation tokens: {token_budget}
+- A strict 2000+ word minimum is likely not feasible under this cap
+- Produce the deepest possible report within budget, prioritizing high-signal analysis
+- Target approximately {target_range[0]}-{target_range[1]} words while preserving citations"""
+        else:
+            if token_budget is not None:
+                budget_adaptation = f"""
+
+## Budget Adaptation
+- Available max generation tokens: {token_budget}
+- Current token budget supports the 2000+ word target
+- Maintain full report depth with citations in every section"""
+
+    base = f"{base}{budget_adaptation}"
 
     if system_instructions:
         return f"{system_instructions}\n\n{base}"

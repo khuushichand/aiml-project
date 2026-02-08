@@ -63,6 +63,23 @@ class StorageQuotaService:
         self._initialized = True
         logger.info("StorageQuotaService initialized")
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend detection should key off DatabasePool state rather than probing
+        connection attributes (for example ``hasattr(conn, "fetchval")``),
+        which can be misleading with shimmed connections.
+        """
+        if not self.db_pool:
+            return False
+        if getattr(self.db_pool, "pool", None):
+            return True
+        backend = getattr(self.db_pool, "backend", None)
+        if isinstance(backend, str):
+            return backend.strip().lower() in {"postgres", "postgresql", "pg"}
+        return False
+
     async def calculate_user_storage(
         self,
         user_id: int,
@@ -107,7 +124,7 @@ class StorageQuotaService:
         # Update database if requested
         if update_database:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'execute'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     await conn.execute(
                         "UPDATE users SET storage_used_mb = $1 WHERE id = $2",
@@ -246,7 +263,7 @@ class StorageQuotaService:
 
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
+                if self._is_postgres_backend():
                     # PostgreSQL
                     result = await conn.fetchrow(
                         """
@@ -411,7 +428,7 @@ class StorageQuotaService:
             quota_mb = 100
         try:
             async with self.db_pool.transaction() as conn:
-                if hasattr(conn, 'fetchrow'):
+                if self._is_postgres_backend():
                     result = await conn.fetchrow(
                         """
                         UPDATE users
@@ -969,7 +986,7 @@ class StorageQuotaService:
 
         # Sum all non-deleted files for users in the org
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, "fetchval"):
+            if self._is_postgres_backend():
                 total_bytes = await conn.fetchval(
                     """
                     SELECT COALESCE(SUM(file_size_bytes), 0)
@@ -1005,7 +1022,7 @@ class StorageQuotaService:
 
         # Sum all non-deleted files for users in the team
         async with self.db_pool.acquire() as conn:
-            if hasattr(conn, "fetchval"):
+            if self._is_postgres_backend():
                 total_bytes = await conn.fetchval(
                     """
                     SELECT COALESCE(SUM(file_size_bytes), 0)

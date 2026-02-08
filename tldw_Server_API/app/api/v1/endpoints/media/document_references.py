@@ -50,7 +50,7 @@ REFERENCE_ENRICH_EXCEPTIONS = (
 )
 
 # Reference section detection patterns
-REFERENCES_PARSER_VERSION = "7"
+REFERENCES_PARSER_VERSION = "9"
 
 REFERENCE_HEADING_CORE_PATTERN = re.compile(
     r"(?i)^(?:\d+|[ivxlc]+)?(?:\.\d+)?\s*"
@@ -260,15 +260,9 @@ def _find_reference_section(content: str) -> str | None:
             return False
         if re.search(YEAR_PATTERN, normalized):
             return False
-        # Generic heading fallback for appendix-like trailing sections.
-        stripped = line.strip()
-        if len(normalized.split()) <= 10 and len(normalized) <= 100:
-            return bool(
-                re.match(
-                    r"^(?:[A-Z](?:\.\d+)*|\d+(?:\.\d+)*)?\s*[A-Z][A-Za-z0-9][A-Za-z0-9\s\-:/&]{1,80}$",
-                    stripped,
-                )
-            )
+        # Do not use a generic "title-case line" fallback here. Reference lines
+        # frequently wrap into title-case continuation lines without years (for
+        # example long paper titles), and the fallback causes premature truncation.
         return False
 
     end_line_idx = len(lines)

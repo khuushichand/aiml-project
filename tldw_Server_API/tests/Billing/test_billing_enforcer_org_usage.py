@@ -33,9 +33,40 @@ class _AcquireCtx:
 class _FakePoolPg:
     def __init__(self, conn: _FakeConnPg):
         self._conn = conn
+        self.pool = object()
 
     def acquire(self) -> _AcquireCtx:
 
+        return _AcquireCtx(self._conn)
+
+
+class _FakeCursor:
+    def __init__(self, row: tuple[Any, ...] | None = None):
+        self._row = row
+
+    async def fetchone(self):
+        return self._row
+
+
+class _FakeConnSqliteFetchvalTrap:
+    def __init__(self, row_value: int):
+        self.row_value = int(row_value)
+        self.calls: List[Tuple[str, Tuple[Any, ...]]] = []
+
+    async def fetchval(self, *args: Any, **kwargs: Any):  # noqa: ARG002
+        raise AssertionError("SQLite backend path should not call conn.fetchval")
+
+    async def execute(self, sql: str, params: tuple[Any, ...]) -> _FakeCursor:
+        self.calls.append((sql, tuple(params)))
+        return _FakeCursor((self.row_value,))
+
+
+class _FakePoolSqlite:
+    def __init__(self, conn: _FakeConnSqliteFetchvalTrap):
+        self._conn = conn
+        self.pool = None
+
+    def acquire(self) -> _AcquireCtx:
         return _AcquireCtx(self._conn)
 
 
@@ -166,3 +197,68 @@ async def test_get_team_member_count_paginates(monkeypatch):
     total = await enforcer._get_team_member_count(org_id=7)
 
     assert total == 2505
+
+
+@pytest.mark.asyncio
+async def test_get_api_calls_today_sqlite_backend_selection_uses_execute(monkeypatch):
+    """_get_api_calls_today should use SQLite execute path when pool is SQLite."""
+
+    fake_conn = _FakeConnSqliteFetchvalTrap(row_value=456)
+    fake_pool = _FakePoolSqlite(fake_conn)
+
+    async def _fake_get_db_pool():
+        return fake_pool
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.database.get_db_pool",
+        _fake_get_db_pool,
+        raising=False,
+    )
+
+    enforcer = BillingEnforcer()
+    calls = await enforcer._get_api_calls_today(org_id=42)
+
+    assert calls == 456
+    assert fake_conn.calls, "Expected SQLite path to call conn.execute"
+    assert "where org_id = ? and day = ?" in " ".join(fake_conn.calls[0][0].lower().split())
+
+
+class _FakeOrgRepoStorage:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def list_org_members(self, org_id: int, limit: int = 500, offset: int = 0, role=None, status=None):  # noqa: ARG002
+        assert org_id == 11
+        if offset == 0:
+            return [{"user_id": 1}, {"user_id": 2}]
+        return []
+
+
+@pytest.mark.asyncio
+async def test_get_storage_bytes_sqlite_backend_selection_uses_execute(monkeypatch):
+    """_get_storage_bytes should use SQLite execute path when pool is SQLite."""
+
+    fake_conn = _FakeConnSqliteFetchvalTrap(row_value=33)  # MB
+    fake_pool = _FakePoolSqlite(fake_conn)
+
+    async def _fake_get_db_pool():
+        return fake_pool
+
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.database.get_db_pool",
+        _fake_get_db_pool,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "tldw_Server_API.app.core.AuthNZ.repos.orgs_teams_repo.AuthnzOrgsTeamsRepo",
+        _FakeOrgRepoStorage,
+        raising=False,
+    )
+
+    enforcer = BillingEnforcer()
+    total_bytes = await enforcer._get_storage_bytes(org_id=11)
+
+    assert total_bytes == 33 * 1024 * 1024
+    assert fake_conn.calls, "Expected SQLite path to call conn.execute"
+    normalized_sql = " ".join(fake_conn.calls[0][0].lower().split())
+    assert "from users where id in (?,?)" in normalized_sql

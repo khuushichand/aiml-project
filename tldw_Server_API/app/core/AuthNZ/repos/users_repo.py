@@ -24,6 +24,15 @@ class AuthnzUsersRepo:
 
     db_pool: DatabasePool
 
+    def _is_postgres_backend(self) -> bool:
+        """
+        Return True when the underlying DatabasePool is using PostgreSQL.
+
+        Backend routing should rely on DatabasePool state rather than probing
+        connection method availability.
+        """
+        return bool(getattr(self.db_pool, "pool", None))
+
     @classmethod
     async def from_pool(cls) -> AuthnzUsersRepo:
         """Construct a repository bound to the global AuthNZ DatabasePool."""
@@ -281,4 +290,100 @@ class AuthnzUsersRepo:
             return users, int(total or 0)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"AuthnzUsersRepo.list_users failed: {exc}")
+            raise
+
+    async def ensure_single_user_admin_user(
+        self,
+        *,
+        user_id: int,
+        username: str = "single_user",
+        email: str = "single_user@example.local",
+        password_hash: str = "",
+    ) -> None:
+        """
+        Ensure the bootstrapped single-user admin row exists and is active.
+
+        This helper centralizes backend-specific upsert/update SQL used by
+        initialization and single-user seed paths.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres_backend():
+                    await conn.execute(
+                        """
+                        INSERT INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                        VALUES ($1, $2, $3, $4, TRUE, TRUE, 'admin')
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        int(user_id),
+                        str(username),
+                        str(email),
+                        str(password_hash),
+                    )
+                    await conn.execute(
+                        "UPDATE users SET role = 'admin', is_active = TRUE, is_verified = TRUE WHERE id = $1",
+                        int(user_id),
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT OR IGNORE INTO users (id, username, email, password_hash, is_active, is_verified, role)
+                        VALUES (?, ?, ?, ?, 1, 1, 'admin')
+                        """,
+                        (int(user_id), str(username), str(email), str(password_hash)),
+                    )
+                    await conn.execute(
+                        "UPDATE users SET role = 'admin', is_active = 1, is_verified = 1 WHERE id = ?",
+                        (int(user_id),),
+                    )
+                    # sqlite transaction shims may require explicit commit
+                    with contextlib.suppress(Exception):
+                        await conn.commit()
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsersRepo.ensure_single_user_admin_user failed: {exc}")
+            raise
+
+    async def assign_role_if_missing(
+        self,
+        *,
+        user_id: int,
+        role_name: str,
+    ) -> None:
+        """
+        Ensure the user has the specified role assignment in ``user_roles``.
+
+        No-op when the role does not exist.
+        """
+        try:
+            async with self.db_pool.transaction() as conn:
+                if self._is_postgres_backend():
+                    role_id = await conn.fetchval(
+                        "SELECT id FROM roles WHERE name = $1",
+                        str(role_name),
+                    )
+                    if role_id is None:
+                        return
+                    await conn.execute(
+                        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        int(user_id),
+                        int(role_id),
+                    )
+                    return
+
+                cursor = await conn.execute(
+                    "SELECT id FROM roles WHERE name = ?",
+                    (str(role_name),),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    return
+                role_id = int(row[0])
+                await conn.execute(
+                    "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
+                    (int(user_id), role_id),
+                )
+                with contextlib.suppress(Exception):
+                    await conn.commit()
+        except Exception as exc:  # pragma: no cover - surfaced via callers
+            logger.error(f"AuthnzUsersRepo.assign_role_if_missing failed: {exc}")
             raise

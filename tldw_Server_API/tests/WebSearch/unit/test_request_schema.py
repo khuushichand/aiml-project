@@ -32,3 +32,14 @@ def test_websearch_request_rejects_max_archived_threads_per_board_out_of_range()
             engine="4chan",
             max_archived_threads_per_board=501,
         )
+
+
+def test_websearch_request_defaults_max_archived_threads_per_board_to_none():
+    from tldw_Server_API.app.api.v1.schemas.websearch_schemas import WebSearchRequest
+
+    payload = WebSearchRequest(
+        query="rust memory safety",
+        engine="4chan",
+    )
+
+    assert payload.max_archived_threads_per_board is None

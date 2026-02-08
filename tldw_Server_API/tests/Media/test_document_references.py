@@ -190,6 +190,37 @@ def test_find_reference_section_stops_before_appendix_heading():
     assert "A.1 Prompts" not in section
 
 
+def test_find_reference_section_keeps_wrapped_reference_title_lines_without_year():
+    content = (
+        "References\n"
+        "[PMZ19] Georgia Papadogeorgou, Fabrizia Mealli, and Corwin M Zigler.\n"
+        "Causal inference with interfering units for cluster and population level\n"
+        "treatment allocation programs. Biometrics, 75(3):778-787, 2019.\n\n"
+        "A Appendix\n"
+        "Supplementary material.\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "Causal inference with interfering units" in section
+    assert "treatment allocation programs" in section
+    assert "A Appendix" not in section
+
+
+def test_find_reference_section_keeps_title_case_continuation_lines():
+    content = (
+        "References\n"
+        "[1] He Y., Migkas K., et al., 2025. Characterising Galaxy Cluster Scaling Relations as\n"
+        "Cosmic Isotropy Tracers Using the FLAMINGO Simulations\n"
+        "(arXiv:2504.01745).\n\n"
+        "Appendix\n"
+        "Extra derivations.\n"
+    )
+    section = refs_mod._find_reference_section(content)
+    assert section is not None
+    assert "Cosmic Isotropy Tracers Using the FLAMINGO Simulations" in section
+    assert "Appendix" not in section
+
+
 def test_find_reference_section_fallback_detects_dense_numbered_tail_without_heading():
     content = (
         "Introduction\n"

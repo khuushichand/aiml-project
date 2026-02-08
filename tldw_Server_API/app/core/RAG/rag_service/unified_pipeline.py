@@ -245,19 +245,23 @@ generate_suggestions = _generate_suggestions
 _format_context_xml: Any = None
 _build_writer_system_prompt: Any = None
 _build_writer_user_prompt: Any = None
+_get_writer_depth_policy: Any = None
 try:
     from .response_writer import (
         build_writer_system_prompt as _build_writer_system_prompt,
         build_writer_user_prompt as _build_writer_user_prompt,
         format_context_xml as _format_context_xml,
+        get_writer_depth_policy as _get_writer_depth_policy,
     )
 except ImportError:
     _format_context_xml = None
     _build_writer_system_prompt = None
     _build_writer_user_prompt = None
+    _get_writer_depth_policy = None
 format_context_xml = _format_context_xml
 build_writer_system_prompt = _build_writer_system_prompt
 build_writer_user_prompt = _build_writer_user_prompt
+get_writer_depth_policy = _get_writer_depth_policy
 
 # HyDE utilities
 try:
@@ -4525,7 +4529,17 @@ async def unified_rag_pipeline(
                             })
                         context = format_context_xml(_writer_chunks)
                         _writer_mode = search_depth_mode or "balanced"
-                        _writer_sys = build_writer_system_prompt(mode=_writer_mode)
+                        _writer_policy = None
+                        if get_writer_depth_policy is not None:
+                            with contextlib.suppress(TypeError, ValueError):
+                                _writer_policy = get_writer_depth_policy(
+                                    mode=_writer_mode,
+                                    max_generation_tokens=max_generation_tokens,
+                                )
+                        _writer_sys = build_writer_system_prompt(
+                            mode=_writer_mode,
+                            max_generation_tokens=max_generation_tokens,
+                        )
                         # Override generation_prompt with structured writer prompt
                         if not generation_prompt:
                             generation_prompt = _writer_sys
@@ -4533,6 +4547,15 @@ async def unified_rag_pipeline(
                             generation_prompt = f"{generation_prompt}\n\n{_writer_sys}"
                         if build_writer_user_prompt is not None:
                             context = build_writer_user_prompt(query=query, context_xml=context)
+                        result.metadata.setdefault("structured_writer", {})
+                        result.metadata["structured_writer"].update({
+                            "enabled": True,
+                            "mode": _writer_mode,
+                            "context_results": len(_writer_chunks),
+                            "max_generation_tokens": int(max_generation_tokens),
+                        })
+                        if isinstance(_writer_policy, dict):
+                            result.metadata["structured_writer"]["depth_policy"] = _writer_policy
                     else:
                         context = "\n\n".join([getattr(doc, 'content', str(doc)) for doc in context_docs])
 
@@ -4649,7 +4672,7 @@ async def unified_rag_pipeline(
                     if metrics:
                         metrics.generation_time = result.timings["answer_generation"]
 
-                    # Follow-up suggestions generation (non-blocking)
+                    # Follow-up suggestions generation (bounded-latency, best effort)
                     if enable_suggestions and generate_suggestions is not None and result.generated_answer:
                         try:
                             _suggestions_start = time.time()
@@ -4660,6 +4683,7 @@ async def unified_rag_pipeline(
                                 llm_provider=classifier_provider or generation_provider or "openai",
                                 llm_model=classifier_model or generation_model,
                                 num_suggestions=num_suggestions,
+                                llm_timeout_sec=3.0,
                             )
                             result.metadata["suggestions"] = _suggestions
                             result.timings["suggestions"] = time.time() - _suggestions_start

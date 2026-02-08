@@ -7,6 +7,12 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.rate_limit
 
 
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    """Exercise workflows daily-cap behavior under both RG backends."""
+    return str(request.param)
+
+
 def _reset_rg_state(app):
 
 
@@ -83,7 +89,7 @@ async def _init_authnz_sqlite(db_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path):
+async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path, rg_backend):
     # Ensure ledger is available for enforcement.
     db_path = tmp_path / "authnz_wf_e2e.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
@@ -121,7 +127,7 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
     # Minimal app + RG middleware.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
@@ -144,16 +150,17 @@ async def test_e2e_workflows_daily_cap_denies_with_headers(monkeypatch, tmp_path
     except Exception:
         pass
 
+    policy_id = f"workflows.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  workflows.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 100000, burst: 1.0 }\n"
         "    workflows_runs: { daily_cap: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    \"/api/v1/workflows/*\": workflows.small\n"
+        f"    \"/api/v1/workflows/*\": {policy_id}\n"
     )
     p = tmp_path / "rg_workflows.yaml"
     p.write_text(policy, encoding="utf-8")

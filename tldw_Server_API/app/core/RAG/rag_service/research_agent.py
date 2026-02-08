@@ -1058,10 +1058,25 @@ async def research_loop(
     # URL deduplication tracking
     seen_urls: dict[str, dict[str, Any]] = {}  # url -> merged result dict
     _dedup_merged = 0
+    _duplicate_fetches_skipped = 0
+
+    # Preamble enforcement tracking
+    _requires_reasoning_preamble = mode in {"balanced", "quality"}
+    _reasoning_preamble_completed = False
+    _preamble_auto_injected = 0
+    _preamble_manual_calls = 0
 
     # Get available actions description for the LLM
     actions_desc = registry.get_actions_description(classification)
     steps: list[ResearchStep] = []
+
+    def _extract_result_url(result_item: dict[str, Any]) -> str:
+        """Extract and normalize URL from a result item."""
+        raw_url = result_item.get("url", "") or result_item.get("link", "")
+        try:
+            return str(raw_url).strip()
+        except Exception:
+            return ""
 
     async def _emit(event_type: str, data: dict[str, Any]) -> None:
         if on_progress is not None:
@@ -1161,6 +1176,29 @@ async def research_loop(
             })
             break
 
+        # Balanced/quality enforcement: run reasoning preamble before first tool call.
+        if (
+            _requires_reasoning_preamble
+            and not _reasoning_preamble_completed
+            and action_name != "__reasoning_preamble"
+        ):
+            preamble_params = {
+                "reasoning": reasoning or (
+                    f"Planning required before using action '{action_name}'. "
+                    "Gather broad coverage first, then refine."
+                ),
+                "plan": f"Initial intended action: {action_name}",
+            }
+            preamble_output = await registry.execute("__reasoning_preamble", preamble_params)
+            if preamble_output.success:
+                _reasoning_preamble_completed = True
+            _preamble_auto_injected += 1
+            logger.debug(
+                "Auto-injected __reasoning_preamble before '{}' in {} mode",
+                action_name,
+                mode,
+            )
+
         # Inject DB context into local_db_search params
         if action_name == "local_db_search" and db_context:
             for key in ("media_db_path", "notes_db_path", "character_db_path",
@@ -1168,17 +1206,59 @@ async def research_loop(
                 if key in db_context and key not in action_params:
                     action_params[key] = db_context[key]
 
-        # Emit searching event
-        await _emit("research_searching", {
-            "step": iteration,
-            "action": action_name,
-            "queries": [action_params.get("query", query)],
-        })
+        # Skip duplicate URL fetch/scrape by reusing already seen result content.
+        url_reused = False
+        reused_url = ""
+        if action_name == "scrape_url":
+            candidate_url = str(action_params.get("url", "")).strip()
+            if candidate_url and candidate_url in seen_urls:
+                url_reused = True
+                reused_url = candidate_url
+                _duplicate_fetches_skipped += 1
+                await _emit("research_searching", {
+                    "step": iteration,
+                    "action": action_name,
+                    "queries": [candidate_url],
+                    "url_reused": True,
+                })
+                action_output = ActionOutput(
+                    action_name="scrape_url",
+                    success=True,
+                    results=[seen_urls[candidate_url]],
+                    result_count=1,
+                    metadata={
+                        "url_reused": True,
+                        "reused_url": candidate_url,
+                    },
+                )
+                step_duration = 0.0
+            else:
+                # Emit searching event
+                await _emit("research_searching", {
+                    "step": iteration,
+                    "action": action_name,
+                    "queries": [action_params.get("url") or action_params.get("query", query)],
+                })
+                # Execute the action
+                step_start = time.time()
+                action_output = await registry.execute(action_name, action_params)
+                step_duration = time.time() - step_start
+        else:
+            # Emit searching event
+            await _emit("research_searching", {
+                "step": iteration,
+                "action": action_name,
+                "queries": [action_params.get("query", query)],
+            })
 
-        # Execute the action
-        step_start = time.time()
-        action_output = await registry.execute(action_name, action_params)
-        step_duration = time.time() - step_start
+            # Execute the action
+            step_start = time.time()
+            action_output = await registry.execute(action_name, action_params)
+            step_duration = time.time() - step_start
+
+        if action_name == "__reasoning_preamble" and action_output.success:
+            _reasoning_preamble_completed = True
+            _preamble_manual_calls += 1
 
         step = ResearchStep(
             iteration=iteration,
@@ -1193,7 +1273,7 @@ async def research_loop(
         # Collect results with URL deduplication
         if action_output.success and action_output.results:
             for result_item in action_output.results:
-                url = result_item.get("url", "") or result_item.get("link", "")
+                url = _extract_result_url(result_item)
                 if url and url in seen_urls:
                     # Merge: append new content if different, update score if higher
                     existing = seen_urls[url]
@@ -1216,6 +1296,8 @@ async def research_loop(
             "action": action_name,
             "count": action_output.result_count,
             "success": action_output.success,
+            "url_reused": url_reused,
+            "reused_url": reused_url,
         })
 
     # Finalize output
@@ -1232,12 +1314,24 @@ async def research_loop(
             "reason": "iteration_limit",
         })
 
-    # Add dedup stats to output metadata
+    # Add preamble and dedup stats to output metadata
+    output.metadata["reasoning_preamble"] = {
+        "required": _requires_reasoning_preamble,
+        "completed": _reasoning_preamble_completed,
+        "manual_calls": _preamble_manual_calls,
+        "auto_injected": _preamble_auto_injected,
+    }
     output.metadata["url_dedup"] = {
         "urls_seen": len(seen_urls),
         "duplicates_merged": _dedup_merged,
+        "duplicate_fetches_skipped": _duplicate_fetches_skipped,
     }
-    if _dedup_merged > 0:
-        logger.debug(f"URL dedup: {len(seen_urls)} unique URLs, {_dedup_merged} duplicates merged")
+    if _dedup_merged > 0 or _duplicate_fetches_skipped > 0:
+        logger.debug(
+            "URL dedup: {} unique URLs, {} duplicates merged, {} duplicate fetches skipped",
+            len(seen_urls),
+            _dedup_merged,
+            _duplicate_fetches_skipped,
+        )
 
     return output

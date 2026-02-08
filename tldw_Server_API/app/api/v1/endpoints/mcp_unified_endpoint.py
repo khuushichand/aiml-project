@@ -509,6 +509,54 @@ def _attach_rg_ingress_metadata(metadata: dict[str, Any], http_request: Optional
         )
 
 
+def _resolve_auth_principal_from_request(request: Optional[Request]) -> Optional[AuthPrincipal]:
+    """Best-effort resolver for AuthPrincipal already attached to request state."""
+    if request is None:
+        return None
+    try:
+        principal = getattr(request.state, "auth", None)
+        if isinstance(principal, AuthPrincipal):
+            return principal
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        logger.debug(
+            "MCP unified: failed to resolve request.state.auth principal",
+            exc_info=True,
+        )
+    return None
+
+
+def _principal_has_admin_claims(principal: Optional[AuthPrincipal]) -> bool:
+    """Return True when principal carries admin-style claims."""
+    if principal is None:
+        return False
+    try:
+        if bool(getattr(principal, "is_admin", False)):
+            return True
+        roles = list(getattr(principal, "roles", []) or [])
+        if any(str(role).lower() == "admin" for role in roles):
+            return True
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        return False
+    return False
+
+
+def _is_catalog_admin_context(
+    request: Optional[Request],
+    user: Optional[TokenData],
+) -> bool:
+    """Claim-first admin check for MCP tool catalogs visibility."""
+    principal = _resolve_auth_principal_from_request(request)
+    if principal is not None:
+        return _principal_has_admin_claims(principal)
+
+    # Compatibility fallback when no principal is attached to request.state.
+    try:
+        roles = list(getattr(user, "roles", []) or [])
+    except _MCP_UNIFIED_NONCRITICAL_EXCEPTIONS:
+        return False
+    return any(str(role).lower() == "admin" for role in roles)
+
+
 async def require_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Security(security),
@@ -924,9 +972,7 @@ async def list_tool_catalogs(
     if user is None and not metadata:
         raise HTTPException(status_code=403, detail="Authentication required")
 
-    admin_all = False
-    if user and user.roles:
-        admin_all = any(str(r).lower() == "admin" for r in user.roles)
+    admin_all = _is_catalog_admin_context(http_request, user)
 
     org_ids: set[int] = set()
     team_ids: set[int] = set()

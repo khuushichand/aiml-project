@@ -7,6 +7,12 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.rate_limit
 
 
+@pytest.fixture(params=["memory", "redis"], ids=["rg-memory", "rg-redis"])
+def rg_backend(request) -> str:
+    """Exercise token daily-cap behavior under both RG backends."""
+    return str(request.param)
+
+
 def _reset_rg_state(app):
 
 
@@ -114,7 +120,7 @@ async def _create_user_and_key(*, username: str, email: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_e2e_chat_tokens_daily_cap_denies(monkeypatch, tmp_path):
+async def test_e2e_chat_tokens_daily_cap_denies(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_chat_tokens.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     api_key = await _create_user_and_key(username="chat-cap-user", email="chat-cap-user@example.com")
@@ -122,7 +128,7 @@ async def test_e2e_chat_tokens_daily_cap_denies(monkeypatch, tmp_path):
     # Minimal app + RG middleware.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
@@ -147,16 +153,17 @@ async def test_e2e_chat_tokens_daily_cap_denies(monkeypatch, tmp_path):
     completion_budget = int(getattr(req_model, "max_tokens", 0) or 0)
     reserve_units = max(1, int(est) + max(0, int(completion_budget)))
 
+    policy_id = f"chat.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  chat.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 100000, burst: 1.0 }\n"
         f"    tokens:   {{ per_min: 1000000, burst: 1.0, daily_cap: {reserve_units} }}\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    \"/api/v1/chat/*\": chat.small\n"
+        f"    \"/api/v1/chat/*\": {policy_id}\n"
     )
     p = tmp_path / "rg_chat_tokens.yaml"
     p.write_text(policy, encoding="utf-8")
@@ -216,7 +223,7 @@ async def test_e2e_chat_tokens_daily_cap_denies(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_e2e_embeddings_tokens_daily_cap_denies(monkeypatch, tmp_path):
+async def test_e2e_embeddings_tokens_daily_cap_denies(monkeypatch, tmp_path, rg_backend):
     db_path = tmp_path / "authnz_embeddings_tokens.db"
     await _init_authnz_sqlite(db_path, monkeypatch)
     api_key = await _create_user_and_key(username="emb-cap-user", email="emb-cap-user@example.com")
@@ -224,20 +231,21 @@ async def test_e2e_embeddings_tokens_daily_cap_denies(monkeypatch, tmp_path):
     # Minimal app + RG middleware.
     monkeypatch.setenv("MINIMAL_TEST_APP", "1")
     monkeypatch.setenv("RG_ENABLED", "1")
-    monkeypatch.setenv("RG_BACKEND", "memory")
+    monkeypatch.setenv("RG_BACKEND", rg_backend)
     monkeypatch.setenv("RG_POLICY_STORE", "file")
     monkeypatch.setenv("RG_POLICY_RELOAD_ENABLED", "false")
 
+    policy_id = f"embeddings.small.{rg_backend}.{tmp_path.name.replace('-', '_')}"
     policy = (
         "schema_version: 1\n"
         "policies:\n"
-        "  embeddings.small:\n"
+        f"  {policy_id}:\n"
         "    requests: { rpm: 100000, burst: 1.0 }\n"
         "    tokens:   { per_min: 1000000, burst: 1.0, daily_cap: 1 }\n"
         "    scopes: [user, api_key]\n"
         "route_map:\n"
         "  by_path:\n"
-        "    \"/api/v1/embeddings*\": embeddings.small\n"
+        f"    \"/api/v1/embeddings*\": {policy_id}\n"
     )
     p = tmp_path / "rg_embeddings_tokens.yaml"
     p.write_text(policy, encoding="utf-8")

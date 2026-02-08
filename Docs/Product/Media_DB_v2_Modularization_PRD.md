@@ -2,171 +2,227 @@
 
 - Title: Media_DB_v2 Modularization
 - Owner: DB and Backend Team
-- Status: Draft
+- Status: Execution Ready
 - Target Version: v0.2.x
 - Last Updated: 2026-02-08
 
 ## Summary
 
-`Media_DB_v2.py` remains a monolithic core data module with mixed responsibilities. This PRD defines a compatibility-safe extraction into the existing `MediaDB/` package while preserving the public `MediaDatabase` API and legacy import paths.
+`Media_DB_v2.py` is still a high-risk monolith. This PRD defines a staged modularization into `MediaDB/` while preserving the current public API surface (`MediaDatabase`, exceptions, and standalone helper exports) and all existing import paths.
 
-## Current State (Repo Evidence)
+## Repo Evidence (Current Baseline)
 
-- Monolith file: `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py` (~15931 lines).
-- Existing package target exists but is empty:
+- Monolith:
+  - `tldw_Server_API/app/core/DB_Management/Media_DB_v2.py` is 15,931 lines.
+- Target package currently empty:
   - `tldw_Server_API/app/core/DB_Management/MediaDB/`
-- Mixed concerns currently co-located:
-  - connection/backend handling
-  - schema initialization and migrations
-  - FTS setup/update/search helpers
-  - sync-log writes
-  - media CRUD and keyword maintenance
-  - claims/review/monitoring/analytics export
-  - chunking templates and unvectorized chunk processing
-  - standalone helper functions at file bottom
+- The module currently mixes:
+  - backend/connection/query execution and adapters
+  - schema bootstrapping and sqlite/postgres migrations
+  - sync-log write logic
+  - FTS maintenance and search
+  - media CRUD, file metadata, keywords
+  - claims (review, monitoring, cluster, analytics, notifications)
+  - data tables
+  - chunking templates and chunk helpers
+  - document versions/rollback
+  - many standalone module-level helpers
+- Blast radius:
+  - ~190 imports/usages across `tldw_Server_API/app` and `tldw_Server_API/tests`.
 
 ## Problem Statement
 
-The current file size and concern density increase merge conflicts, reduce readability, and make isolated testing difficult. Internal cohesion is low and module ownership boundaries are unclear.
+The module has low cohesion and very high change coupling. Small fixes in one area are difficult to review and test safely because unrelated concerns are in the same file. This creates frequent merge friction and increases regression risk.
 
 ## Goals
 
-- Keep `MediaDatabase` public behavior and import path stable.
-- Split internals into coherent modules under `MediaDB/`.
-- Preserve transactional behavior and backend abstraction semantics.
-- Enable smaller, focused unit/integration tests per concern area.
-- Allow staged extraction without a big-bang rewrite.
+- Keep public behavior and import paths stable.
+- Split internals into cohesive modules under `MediaDB/`.
+- Preserve transaction and backend semantics (SQLite/PostgreSQL).
+- Enable focused tests by concern area.
+- Complete migration incrementally without a big-bang rewrite.
 
 ## Non-Goals
 
-- No DB schema redesign.
-- No behavior changes for callers.
-- No migration away from existing backend abstraction in this project phase.
-- No endpoint contract changes tied to this effort.
+- No schema redesign.
+- No endpoint contract changes.
+- No backend abstraction rewrite.
+- No feature additions bundled into this refactor.
 
 ## Scope
 
 ### In Scope
 
-- Internal extraction of code currently inside `Media_DB_v2.py` into `MediaDB/` modules.
-- Compatibility facade in `Media_DB_v2.py` preserving:
-  - class name (`MediaDatabase`)
-  - function names
-  - import compatibility for existing callers/tests
+- Internal extraction from `Media_DB_v2.py` into `MediaDB/*`.
+- Compatibility facade in `Media_DB_v2.py` preserving existing symbols and behaviors.
 
 ### Out of Scope
 
-- New tables/features.
 - Refactor of unrelated DB modules.
+- Product behavior changes unrelated to modularization.
+
+## Compatibility Contract (Must Preserve)
+
+### Stable Import Path
+
+- `from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import ...`
+
+### Required Public Symbols
+
+- Class and exceptions:
+  - `MediaDatabase`
+  - `DatabaseError`
+  - `SchemaError`
+  - `InputError`
+  - `ConflictError`
+- Common standalone helpers that external code/tests import:
+  - `get_document_version`
+  - `get_latest_transcription`
+  - `upsert_transcript`
+  - `fetch_keywords_for_media`
+  - `fetch_keywords_for_media_batch`
+  - other currently exported module-level helpers
+
+### Behavioral Compatibility
+
+- Existing method signatures and return payload structures unchanged.
+- Sync-log semantics unchanged.
+- Soft-delete/version bump semantics unchanged.
+- Existing runtime compatibility patches remain effective (or are replaced by equivalent explicit definitions).
 
 ## Target Module Map
 
-Create modules under `tldw_Server_API/app/core/DB_Management/MediaDB/`:
+Create modules in `tldw_Server_API/app/core/DB_Management/MediaDB/`:
 
 - `connection.py`
-  - backend resolution
-  - connection/cursor adapters
+  - `_resolve_backend`
+  - query preparation/execution wrappers
+  - cursor adapters
   - transaction context helpers
 - `schema.py`
   - `_initialize_schema*`
+  - sqlite bootstrap path
+  - postgres migration chain (`_postgres_migrate_to_v*`)
   - schema version helpers
-  - migration orchestration
 - `fts.py`
-  - `_ensure_*fts` helpers
-  - `_update_fts_*` helpers
-  - FTS rebuild/search support functions
+  - `_ensure_fts_structures`
+  - chunk FTS maintenance (`ensure_chunk_fts`, `maybe_rebuild_chunk_fts_if_empty`)
+  - `_update_fts_media` / `_delete_fts_media`
+  - `_update_fts_keyword` / `_delete_fts_keyword`
+  - search helpers (`search_media_db`, `search_claims`)
 - `sync_log.py`
   - `_log_sync_event`
-  - sync log query/write helpers
+  - sync log read/write helpers
 - `media.py`
-  - primary media CRUD and related metadata operations
+  - media CRUD/read/list operations
+  - media files and visibility/share operations
 - `keywords.py`
-  - keyword CRUD + media-keyword linkage
+  - keyword CRUD and media-keyword linkage/update logic
 - `document_versions.py`
-  - document version creation, updates, rollback paths
-- `claims.py`
-  - claims CRUD, review queue, monitoring, clusters, exports
+  - `create_document_version`
+  - version retrieval helpers
+  - `rollback_to_version`
+- `claims/` (subpackage)
+  - `claims_core.py` (CRUD/search/review status basics)
+  - `claims_review.py`
+  - `claims_monitoring.py`
+  - `claims_clusters.py`
+  - `claims_notifications.py`
+  - `claims_exports.py`
+- `data_tables.py`
+  - `create_data_table`, `get_data_table`, `list_data_tables`, `update_data_table`, counts/sources helpers
 - `chunking.py`
-  - chunking templates and unvectorized chunk operations
+  - chunk CRUD/batch helpers
+  - chunking templates CRUD
 - `standalone.py`
-  - standalone utility functions currently at bottom of `Media_DB_v2.py`
+  - module-level helper functions currently at bottom of `Media_DB_v2.py`
 
-## Integration Pattern
+## Architecture Pattern
 
-Two compatible implementation options are allowed; start with the least risky:
+### Phase-Preferred Pattern: Facade + Delegation
 
-1. Facade + Delegation (preferred first)
-- Keep `MediaDatabase` in `Media_DB_v2.py`.
-- Delegate method implementations to extracted module functions.
+- Keep `MediaDatabase` defined in `Media_DB_v2.py`.
+- Delegate method bodies to extracted functions/modules.
+- Preserve module-level helper exports by re-exporting wrappers.
 
-2. Mixin Composition (later optimization)
-- Build `MediaDatabase` from mixins imported from `MediaDB/*`.
-- Preserve method names and signatures.
+### Optional Later Pattern: Mixin Composition
 
-## Compatibility Requirements
-
-- Existing imports remain valid:
-  - `from tldw_Server_API.app.core.DB_Management.Media_DB_v2 import MediaDatabase`
-- Existing function signatures and return structures stay unchanged.
-- Transactional side effects and sync-log behavior stay unchanged.
-- No change to caller-facing exceptions unless they are existing bug fixes documented separately.
+- Move delegated groups to mixins after stabilization.
+- Keep the same outward class API and import path.
 
 ## Migration Plan
 
-### Phase 1: Standalone and Pure Helper Extraction
+### Phase 1: Standalone Helper Extraction (Lowest Risk)
 
-- Move standalone bottom-of-file functions into `MediaDB/standalone.py`.
-- Re-export wrappers from `Media_DB_v2.py`.
+- Move bottom-of-file standalone functions to `MediaDB/standalone.py`.
+- Re-export wrappers in `Media_DB_v2.py`.
 
-### Phase 2: Low-Risk Core Infrastructure Extraction
+### Phase 2: Infrastructure Extraction
 
 - Extract `connection.py`, `schema.py`, `sync_log.py`, `fts.py`.
-- Keep method names and delegation wrappers in facade.
+- Preserve existing SQL and control flow; no behavior changes.
 
-### Phase 3: Domain Slice Extraction
+### Phase 3: Medium-Risk Domain Extraction
 
-- Extract `keywords.py`, `document_versions.py`, `chunking.py`.
-- Run targeted tests for these flows.
+- Extract `keywords.py`, `document_versions.py`, `chunking.py`, `data_tables.py`.
+- Keep same method signatures on `MediaDatabase`.
 
-### Phase 4: Claims and Remaining CRUD
+### Phase 4: Claims Subsystem Extraction
 
-- Extract `claims.py` and remaining heavy domain methods.
-- Keep compatibility wrappers until all tests stabilize.
+- Extract claims into `MediaDB/claims/*` modules.
+- Move in slices (core -> review -> monitoring -> clustering -> notifications/exports).
 
-### Phase 5: Facade Cleanup
+### Phase 5: Media Core and Final Facade Slimming
 
-- Minimize `Media_DB_v2.py` to imports, facade wiring, and compatibility re-exports.
+- Move remaining media CRUD and related methods to `media.py`.
+- Reduce `Media_DB_v2.py` to facade wiring + compatibility exports.
 
-## Testing Strategy
+## Test and Verification Plan
 
-- Preserve and run existing DB tests for media, claims, chunking, and sync.
-- Add module-focused tests per extracted area:
-  - schema init/migration behavior
-  - FTS update/search invariants
-  - sync-log correctness
-  - claims queue and monitoring flows
-  - chunking template CRUD and chunk persistence behavior
-- Add compatibility tests validating imports and selected method signatures from `Media_DB_v2.py`.
+### Core Regression Gates (Required)
+
+- `tldw_Server_API/tests/MediaDB2/test_sqlite_db.py`
+- `tldw_Server_API/tests/MediaDB2/test_media_db_postgres.py`
+- `tldw_Server_API/tests/DB_Management/test_media_db_v2_regressions.py`
+- `tldw_Server_API/tests/DB_Management/test_media_postgres_migrations.py`
+- `tldw_Server_API/tests/DB_Management/test_media_db_migration_missing_scripts_error.py`
+- `tldw_Server_API/tests/DB_Management/test_media_db_connection_cleanup.py`
+
+### Domain Regression Gates (Required)
+
+- `tldw_Server_API/tests/DB_Management/test_claims_schema.py`
+- `tldw_Server_API/tests/DB_Management/test_claims_fts_triggers.py`
+- `tldw_Server_API/tests/DB_Management/test_data_tables_crud.py`
+- `tldw_Server_API/tests/DB_Management/test_media_transcripts_upsert.py`
+- `tldw_Server_API/tests/Chunking/test_chunking_templates.py`
+
+### Compatibility Verification
+
+- Import smoke tests for class/exceptions/standalone helpers from `Media_DB_v2`.
+- Targeted checks for runtime monkeypatch points used by tests.
+- No endpoint-level behavior regressions for routes that depend on `MediaDatabase`.
 
 ## Risks and Mitigations
 
-- Risk: subtle transaction behavior drift.
-  - Mitigation: extract with wrapper delegation and no SQL changes in early phases.
-- Risk: circular imports across extracted modules.
-  - Mitigation: strict layering and shared utility module for common primitives.
-- Risk: widespread regressions due to very large surface area.
-  - Mitigation: phase extraction by concern, with incremental merges and tests per phase.
+- Risk: transaction and versioning drift.
+  - Mitigation: facade delegation first, no SQL changes during early phases.
+- Risk: import breakages due to very high fan-out.
+  - Mitigation: preserve `Media_DB_v2` import path and symbol exports throughout.
+- Risk: circular imports in claims/data-table extraction.
+  - Mitigation: strict module layering and minimal shared utility modules.
+- Risk: hidden behavior coupling in standalone helpers.
+  - Mitigation: extract standalone helpers first and verify parity before moving core methods.
 
 ## Success Metrics
 
-- `Media_DB_v2.py` reduced to a thin compatibility facade.
-- `MediaDB/` package contains cohesive modules with clear ownership boundaries.
-- Existing behavior and tests remain stable.
-- Change review size for DB updates is materially reduced.
+- `Media_DB_v2.py` reduced substantially and acts as a compatibility facade.
+- `MediaDB/` contains cohesive modules with clear ownership.
+- Required regression gates pass without endpoint contract changes.
+- DB-related PRs become smaller and easier to review.
 
 ## Acceptance Criteria
 
-- All existing call sites continue to work without import changes.
-- Extracted modules are in place and used by facade/delegation.
-- No behavior regressions in DB integration tests.
-- New module boundaries documented and maintainable.
+- Existing imports from `Media_DB_v2` remain valid.
+- `MediaDatabase` behavior/signatures are unchanged for callers.
+- Extracted modules are wired and used via delegation/facade.
+- Regression suites for MediaDB/claims/data-tables/chunking remain green.

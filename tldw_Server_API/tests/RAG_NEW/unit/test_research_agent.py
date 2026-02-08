@@ -1,6 +1,7 @@
 import pytest
 
 from tldw_Server_API.app.core.RAG.rag_service.query_classifier import QueryClassification
+from tldw_Server_API.app.core.RAG.rag_service import research_agent as ra
 from tldw_Server_API.app.core.RAG.rag_service.research_agent import create_default_registry
 
 
@@ -157,3 +158,62 @@ async def test_academic_search_action_processes_raw_results_once(monkeypatch):
     assert out.result_count == 1
     assert out.results[0]["url"] == "https://arxiv.org/abs/1234.5678"
     assert out.results[0]["source"] == "academic"
+
+
+@pytest.mark.asyncio
+async def test_research_loop_skips_duplicate_scrape_url_fetch(monkeypatch):
+    import tldw_Server_API.app.core.Chat.chat_service as chat_service
+    import tldw_Server_API.app.core.Web_Scraping.Article_Extractor_Lib as article_lib
+
+    url = "https://example.com/deep-dive"
+    llm_responses = iter([
+        f'{{"reasoning":"Need full text","action":"scrape_url","params":{{"url":"{url}"}}}}',
+        f'{{"reasoning":"Try scraping again","action":"scrape_url","params":{{"url":"{url}"}}}}',
+        '{"reasoning":"Enough evidence","action":"done","params":{"reason":"done"}}',
+    ])
+
+    async def _fake_chat_call_async(**_kwargs):  # noqa: ANN001
+        return next(llm_responses)
+
+    scrape_calls = {"count": 0}
+
+    async def _fake_scrape_article(target_url: str):  # noqa: ANN001
+        scrape_calls["count"] += 1
+        return {
+            "extraction_successful": True,
+            "url": target_url,
+            "title": "Deep Dive",
+            "content": "Detailed article content for the query.",
+            "author": "Analyst",
+            "date": "2026-01-01",
+        }
+
+    monkeypatch.setattr(chat_service, "perform_chat_api_call_async", _fake_chat_call_async)
+    monkeypatch.setattr(article_lib, "scrape_article", _fake_scrape_article)
+
+    classification = QueryClassification(
+        skip_search=False,
+        search_local_db=False,
+        search_web=False,
+        search_academic=False,
+        search_discussions=False,
+        standalone_query="scrape once and reuse duplicate url",
+        detected_intent="navigational",
+    )
+
+    output = await ra.research_loop(
+        query="scrape once and reuse duplicate url",
+        classification=classification,
+        mode="speed",
+        llm_provider="openai",
+        llm_model="gpt-4o-mini",
+        max_iterations=3,
+    )
+
+    assert output.completed is True
+    assert scrape_calls["count"] == 1
+    assert output.total_results == 1
+    assert output.all_results[0]["url"] == url
+    assert output.metadata["url_dedup"]["urls_seen"] == 1
+    assert output.metadata["url_dedup"]["duplicates_merged"] == 1
+    assert output.metadata["url_dedup"]["duplicate_fetches_skipped"] == 1

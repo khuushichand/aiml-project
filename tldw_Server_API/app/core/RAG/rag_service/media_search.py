@@ -151,7 +151,8 @@ async def search_images(
         )
 
         # Use web search with image-focused query
-        raw_results = perform_websearch(
+        raw_results = await asyncio.to_thread(
+            perform_websearch,
             search_engine=search_engine,
             search_query=f"{image_query} images",
             content_country="us",
@@ -222,7 +223,8 @@ async def search_videos(
         )
 
         # Search YouTube specifically
-        raw_results = perform_websearch(
+        raw_results = await asyncio.to_thread(
+            perform_websearch,
             search_engine=search_engine,
             search_query=f"site:youtube.com {video_query}",
             content_country="us",

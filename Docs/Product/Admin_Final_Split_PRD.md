@@ -1,153 +1,191 @@
-# PRD: Admin Endpoints Final Split (Remaining __init__.py)
+# PRD: Admin Endpoints Final Split (Remaining `admin/__init__.py`)
 
 - Title: Admin Endpoints Final Split
 - Owner: AuthNZ and Backend Team
-- Status: Draft
+- Status: Implemented (Ready for Final Review/Merge)
 - Target Version: v0.2.x
 - Last Updated: 2026-02-08
 
 ## Summary
 
-Admin endpoint splitting is mostly complete, but `endpoints/admin/__init__.py` is still a large mixed-responsibility module. This PRD defines the final extraction so `__init__.py` becomes an aggregator + compatibility shim while RBAC/data-ops/system routes move to focused modules.
+This PRD finalizes the admin endpoint split so `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` is an aggregator + compatibility shim, and high-churn route groups live in focused modules (`admin_rbac.py`, `admin_rate_limits.py`, `admin_data_ops.py`, `admin_ops.py`).
 
-## Current State (Repo Evidence)
+The objective is maintainability without API contract drift: keep all `/api/v1/admin/*` paths, auth behavior, test monkeypatch points, and response schemas stable.
 
-- Admin now uses package modules:
-  - `admin_user.py`, `admin_orgs.py`, `admin_byok.py`, `admin_tools.py`, `admin_usage.py`, etc.
-- Remaining monolith:
-  - `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` (~2044 lines).
-  - Contains ~50 route handlers (RBAC, overrides/rate-limits, backups/retention, maintenance/flags/incidents, cache reload hooks).
-- Important compatibility shims currently in `__init__.py`:
-  - `_is_postgres_backend`
-  - `_enforce_admin_user_scope`
-  - `_get_admin_org_ids`
-  - `_load_bulk_user_candidates`
-  - `emit_budget_audit_event`
-- Existing services that should be reused (not bypassed):
-  - `admin_roles_permissions_service.py`
-  - `admin_data_ops_service.py`
-  - `admin_system_ops_service.py`
-  - `admin_scope_service.py`
+## Repo Evidence and Current State
+
+- Current thin aggregator:
+  - `tldw_Server_API/app/api/v1/endpoints/admin/__init__.py` is now ~299 lines.
+  - It contains router includes and compatibility helpers, with no route decorators.
+- Extracted route modules:
+  - `tldw_Server_API/app/api/v1/endpoints/admin/admin_rbac.py` (~1106 lines)
+  - `tldw_Server_API/app/api/v1/endpoints/admin/admin_rate_limits.py` (~135 lines)
+  - `tldw_Server_API/app/api/v1/endpoints/admin/admin_data_ops.py` (~293 lines)
+  - `tldw_Server_API/app/api/v1/endpoints/admin/admin_ops.py` (~450 lines)
+- Existing admin services reused by extracted routes:
+  - `tldw_Server_API/app/services/admin_roles_permissions_service.py`
+  - `tldw_Server_API/app/services/admin_data_ops_service.py`
+  - `tldw_Server_API/app/services/admin_system_ops_service.py`
+  - `tldw_Server_API/app/services/admin_scope_service.py`
 
 ## Problem Statement
 
-`admin/__init__.py` still contains high-complexity direct endpoint logic mixed with helper shims and service orchestration. This creates inconsistency with already-split admin modules and increases maintenance risk for RBAC/system features.
+Before this split, `admin/__init__.py` combined route handlers, auth scope logic, audit emission, direct repo calls, and system operations. This reduced readability, increased regression risk, and made unit-level testing harder.
 
 ## Goals
 
-- Reduce `admin/__init__.py` to aggregator + compatibility shims.
-- Extract remaining route groups into dedicated endpoint modules.
-- Increase service-layer usage consistency.
-- Preserve all current route paths, auth behavior, and response contracts.
-- Preserve test shim import/patch stability.
+- Keep `admin/__init__.py` as:
+  - router aggregation
+  - compatibility/test shim exports
+  - minimal helper wrappers only
+- Move remaining endpoint groups into focused modules.
+- Enforce consistent endpoint -> service layering.
+- Preserve backward compatibility in:
+  - paths
+  - dependencies/decorators
+  - schema contracts
+  - import/monkeypatch test points
 
 ## Non-Goals
 
-- No route path changes.
-- No RBAC policy model redesign.
-- No AuthNZ schema changes.
-- No behavior changes to admin authorization semantics.
+- No admin feature additions.
+- No RBAC model redesign.
+- No AuthNZ schema migration.
+- No route renames or response contract changes.
 
-## Scope
+## Functional Scope
 
 ### In Scope
 
-- Extract remaining route handlers from `admin/__init__.py` into new endpoint modules.
-- Keep helper compatibility symbols available from `admin` package path.
+- Remaining route extraction from `admin/__init__.py` into:
+  - `admin_rbac.py`
+  - `admin_rate_limits.py`
+  - `admin_data_ops.py`
+  - `admin_ops.py`
+- Preservation of compatibility symbols in `admin/__init__.py`.
 
 ### Out of Scope
 
-- New admin product features.
-- Service architecture redesign beyond routing consistency and helper movement.
+- New admin UX/API capabilities.
+- Service-layer redesign beyond extraction boundaries.
 
-## Target Module Map
-
-Add modules under `tldw_Server_API/app/api/v1/endpoints/admin/` for what still lives in `__init__.py`:
+## Route Ownership Map (Final)
 
 - `admin_rbac.py`
-  - roles, permissions, matrix, effective permissions
-  - user role assignment/removal
-  - overrides
+  - `/kanban/fts/{action}`
+  - role CRUD and permission assignment
+  - tool permission CRUD/batch/prefix grant-revoke
+  - role matrix and categories
+  - user roles, overrides, effective permissions
 - `admin_rate_limits.py`
-  - role/user rate limit endpoints
+  - `/roles/{role_id}/rate-limits` (upsert/clear)
+  - `/users/{user_id}/rate-limits` (upsert)
 - `admin_data_ops.py`
-  - backups
-  - restore
-  - retention policies
+  - `/backups` list/create
+  - `/backups/{backup_id}/restore`
+  - `/retention-policies` list/update
 - `admin_ops.py`
-  - maintenance mode
-  - feature flags
-  - incidents
-  - pricing/model alias cache refresh endpoints
+  - `/maintenance` get/update
+  - `/feature-flags` list/upsert/delete
+  - `/incidents` list/create/update/add-event/delete
+  - `/llm-usage/pricing/reload`
+  - `/chat/model-aliases/reload`
 
-After extraction, `admin/__init__.py` should:
-- define root router and include all admin subrouters
-- retain compatibility helper exports only
-- avoid implementing large endpoint handlers directly
+## Compatibility Contract
 
-## Compatibility Requirements
+The following symbols must remain importable from `tldw_Server_API.app.api.v1.endpoints.admin`:
 
-- Preserve all current `/api/v1/admin/*` routes and payload contracts.
-- Preserve helper shim symbols for tests and imports:
-  - `_is_postgres_backend`
-  - `_enforce_admin_user_scope`
-  - `_get_admin_org_ids`
-  - `_load_bulk_user_candidates`
-  - `emit_budget_audit_event`
-- Maintain existing dependency configuration (`require_roles`, rate limits, principal resolution).
+- `_is_postgres_backend`
+- `_get_rbac_repo`
+- `_ensure_sqlite_authnz_ready_if_test_mode`
+- `_emit_admin_audit_event`
+- `emit_budget_audit_event`
+- `_enforce_admin_user_scope`
+- `_is_platform_admin`
+- `_require_platform_admin`
+- `_get_admin_org_ids`
+- `_load_bulk_user_candidates`
 
-## Migration Plan
+`admin/__init__.py` remains the stable import path for tests that monkeypatch these helpers.
 
-### Phase 1: RBAC Route Extraction
+## Architecture Decisions
 
-- Move RBAC and permission routes from `__init__.py` into `admin_rbac.py`.
-- Keep shared helper calls through `admin_scope_service` and existing admin services.
+- Keep endpoint modules thin-to-moderate and reuse existing service modules instead of duplicating business logic.
+- Permit local wrapper helpers in extracted modules where needed for scope/audit behavior but forward shared behavior through:
+  - `admin_scope_service`
+  - root admin shim (`_emit_admin_audit_event`)
+- Keep router inclusion centralized in `admin/__init__.py` to avoid route registration drift.
 
-### Phase 2: Rate-Limit Route Extraction
+## Migration Plan and Status
 
-- Move user/role rate limit routes into `admin_rate_limits.py`.
-- Keep request/response models unchanged.
+### Phase 1: RBAC Extraction
+
+- Status: Complete
+- Result:
+  - RBAC, tool permissions, user-role assignments, overrides, effective permission routes moved to `admin_rbac.py`.
+
+### Phase 2: Rate-Limit Extraction
+
+- Status: Complete
+- Result:
+  - Role/user rate-limit routes moved to `admin_rate_limits.py`.
 
 ### Phase 3: Data Ops Extraction
 
-- Move backup/restore/retention routes into `admin_data_ops.py`.
-- Keep service layer call sites (`admin_data_ops_service`).
+- Status: Complete
+- Result:
+  - Backup/restore/retention routes moved to `admin_data_ops.py`.
 
 ### Phase 4: System Ops Extraction
 
-- Move maintenance/flags/incidents/cache refresh routes into `admin_ops.py`.
-- Keep `admin_system_ops_service` as the primary business logic layer.
+- Status: Complete
+- Result:
+  - Maintenance/feature-flags/incidents/cache reload routes moved to `admin_ops.py`.
 
 ### Phase 5: Final Shim Slimming
 
-- Leave `__init__.py` as include-router glue + compatibility exports.
-- Remove duplicated endpoint logic from `__init__.py`.
+- Status: Complete
+- Result:
+  - `admin/__init__.py` reduced to aggregation + compatibility shims.
 
-## Testing Strategy
+## Testing and Verification
 
-- Run existing admin endpoint test suites unchanged.
-- Add focused tests for each new module file where coverage is thin.
-- Add compatibility tests for shim symbols imported from admin package root.
-- Validate no path-level route regressions via OpenAPI route checks.
+### Static/Lint
+
+- `ruff` on all affected admin endpoint modules must pass.
+
+### Targeted Tests
+
+- Admin smoke and role/permission matrix tests.
+- Data ops and system ops tests.
+- User profile admin scope/audit tests.
+- AuthNZ integration RBAC admin endpoint tests.
+
+### Compatibility Checks
+
+- Validate old helper imports from `admin` module still resolve.
+- Validate monkeypatch-based tests still pass without import path changes.
+- Confirm OpenAPI route coverage for all `/api/v1/admin/*` endpoints remains intact.
 
 ## Risks and Mitigations
 
-- Risk: route registration/order conflicts during extraction.
-  - Mitigation: migrate one route group at a time and verify OpenAPI diff.
-- Risk: test failures due to shim movement.
-  - Mitigation: preserve shim names in `admin/__init__.py` until all tests are stable.
-- Risk: accidental auth behavior drift.
-  - Mitigation: keep dependency decorators and service calls unchanged during route moves.
-
-## Success Metrics
-
-- `admin/__init__.py` reduced from ~2044 lines to a thin aggregator/shim.
-- Remaining admin concerns are split into cohesive files.
-- Existing admin tests and API contracts remain stable.
+- Risk: Route-level auth/scope drift.
+  - Mitigation: preserve decorator/dependency patterns as-is during extraction.
+- Risk: Test breakage from symbol movement.
+  - Mitigation: keep stable shim exports in `admin/__init__.py`.
+- Risk: Circular imports when wrappers call root helpers.
+  - Mitigation: use lazy imports inside helper wrappers where required.
 
 ## Acceptance Criteria
 
-- All current admin routes still available and behaviorally unchanged.
-- Compatibility shim symbols remain importable from admin package root.
-- `admin/__init__.py` no longer holds large endpoint bodies.
-- Service layer usage is consistent and explicit in extracted modules.
+- `admin/__init__.py` contains no endpoint route handlers.
+- All extracted admin routes are reachable with unchanged paths and schemas.
+- Compatibility/test shim symbols remain importable from admin package root.
+- Existing admin/AuthNZ tests for these routes pass.
+- Service-layer usage remains explicit and consistent in extracted modules.
+
+## Definition of Done
+
+- Extraction complete for RBAC, rate-limits, data-ops, and ops modules.
+- Lint and targeted test suites pass.
+- PRD updated to implemented state (this document).

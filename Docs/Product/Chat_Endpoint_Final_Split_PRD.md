@@ -1,149 +1,215 @@
-# PRD: Chat Endpoint Final Split (chat.py)
+# PRD: Chat Endpoint Final Split (`chat.py`)
 
 - Title: Chat Endpoint Final Split
 - Owner: Server API Team
-- Status: Draft
+- Status: Execution Ready
 - Target Version: v0.2.x
 - Last Updated: 2026-02-08
 
 ## Summary
 
-`chat.py` remains a large mixed-concern module despite prior extractions (`chat_dictionaries.py`, `chat_documents.py`). This PRD defines the final split plan so completion orchestration, persistence helpers, command injection, audit handling, and analytics/conversation routes are separated with stable compatibility shims.
+`chat.py` is still a large mixed-concern endpoint module. This PRD defines the final split so completion orchestration, persistence, queue helpers, conversation/analytics endpoints, and RAG-context endpoints are extracted into focused modules while preserving all current routes and compatibility symbols used by app startup and tests.
 
-## Current State (Repo Evidence)
+## Repo Evidence (Current Baseline)
 
-- Main file: `tldw_Server_API/app/api/v1/endpoints/chat.py` (~3967 lines).
-- Existing helper modules already split:
+- Main module:
+  - `tldw_Server_API/app/api/v1/endpoints/chat.py` is 3967 lines.
+- Existing split modules already included by `chat.py`:
   - `tldw_Server_API/app/api/v1/endpoints/chat_dictionaries.py`
   - `tldw_Server_API/app/api/v1/endpoints/chat_documents.py`
-- Large endpoint remains:
-  - `create_chat_completion` starts around line ~1290 and spans most of the file.
-- Persistence helpers still in endpoint module:
-  - `_process_content_for_db_sync`
-  - `_save_message_turn_to_db`
-- Compatibility shim still required by tests:
-  - `is_authentication_required()` in `chat.py`
+- Route concentration in `chat.py`:
+  - `/commands`
+  - `/dictionaries/validate`
+  - `/completions`
+  - `/queue/status`
+  - `/queue/activity`
+  - `/knowledge/save`
+  - `/conversations` (+ alias router variants)
+  - `/conversations/{conversation_id}/tree` (+ alias)
+  - `/analytics`
+  - `/messages/{message_id}/rag-context`
+  - `/conversations/{conversation_id}/messages-with-context`
+  - `/conversations/{conversation_id}/citations`
+- Large endpoint and helpers still co-located:
+  - `create_chat_completion` starts around line 1290.
+  - `_process_content_for_db_sync` and `_save_message_turn_to_db` remain in endpoint layer.
+- Existing core modules available for reuse:
+  - `tldw_Server_API/app/core/Chat/chat_service.py`
+  - `tldw_Server_API/app/core/Chat/chat_orchestrator.py`
+  - `tldw_Server_API/app/core/Chat/command_router.py`
+  - `tldw_Server_API/app/core/Chat/chat_metrics.py`
+  - `tldw_Server_API/app/core/Chat/chat_helpers.py`
+- Compatibility blast radius:
+  - `chat.py` symbols are imported/monkeypatched directly by app startup and many tests (API keys, auth shim, persistence helpers, queue helper functions, alias router).
 
 ## Problem Statement
 
-`chat.py` currently mixes HTTP routing, request validation, moderation, slash-command parsing/injection, queueing logic, provider selection, audit logging, DB sync/persistence, and analytics routes. This concentration makes behavior hard to change safely and difficult to unit test in isolation.
+`chat.py` combines route wiring, request parsing/validation, moderation, provider resolution, queue behavior, persistence, and analytics/query logic. This increases regression risk and makes isolated testing of behavior difficult.
 
 ## Goals
 
-- Keep all current Chat API paths and response shapes unchanged.
-- Extract completion orchestration into dedicated service modules.
-- Move persistence and content normalization out of endpoint file.
-- Isolate slash-command parsing/injection and moderation side-effects.
-- Preserve stable test patch points, including `is_authentication_required`.
+- Preserve all current `/api/v1/chat/*` and `/api/v1/chats/*` (alias) behavior.
+- Reduce `chat.py` to router aggregation + compatibility exports.
+- Extract completion orchestration and persistence internals to core modules.
+- Split endpoint groups into focused files without contract drift.
+- Preserve symbol-level monkeypatch compatibility required by existing tests.
 
 ## Non-Goals
 
-- No API contract changes.
-- No provider behavior redesign.
+- No API path or response schema changes.
+- No provider architecture redesign.
 - No new chat features.
-- No schema/database migrations as part of this refactor.
+- No DB schema changes.
 
 ## Scope
 
 ### In Scope
 
-- Internal refactor of:
+- Refactor:
   - `tldw_Server_API/app/api/v1/endpoints/chat.py`
-  - `tldw_Server_API/app/core/Chat/*`
-- Route module reorganization for chat completions vs conversation/analytics endpoints.
+  - new split endpoint modules in `tldw_Server_API/app/api/v1/endpoints/`
+  - targeted helper extraction in `tldw_Server_API/app/core/Chat/`
 
 ### Out of Scope
 
-- `chat_dictionaries.py` and `chat_documents.py` feature changes.
-- Non-chat endpoints.
+- Feature changes for `chat_dictionaries.py` and `chat_documents.py`.
+- Non-chat endpoint behavior.
 
-## Target Architecture
+## Compatibility Contract (Must Preserve)
 
-### Endpoint Layout (Target)
+### Stable Public Imports
 
-- Keep `chat.py` as compatibility shim + router aggregator.
-- Introduce split endpoint modules under `endpoints/chat/` (or equivalent package):
+- `from tldw_Server_API.app.api.v1.endpoints.chat import router`
+- `from tldw_Server_API.app.api.v1.endpoints.chat import conversations_alias_router`
+
+### Required Symbols for Existing Tests/App
+
+- `is_authentication_required`
+- `API_KEYS`
+- `DEFAULT_SAVE_TO_DB`
+- `_process_content_for_db_sync`
+- `_save_message_turn_to_db`
+- `_sanitize_json_for_rate_limit`
+- `_estimate_tokens_for_queue`
+
+These symbols remain importable from `chat.py` through wrappers/re-exports even after extraction.
+
+## Target Module Map
+
+### Endpoint Modules (New/Expanded)
+
+- Keep `chat.py` as compatibility facade + router include point.
+- Add sibling endpoint modules:
   - `chat_completions.py`
-  - `chat_conversations.py`
-  - `chat_analytics.py`
-  - `chat_rag_context.py`
+    - `/completions`
+  - `chat_commands.py`
+    - `/commands`
+    - `/dictionaries/validate`
   - `chat_queue.py`
+    - `/queue/status`
+    - `/queue/activity`
+    - queue token estimate helpers
+  - `chat_knowledge.py`
+    - `/knowledge/save`
+  - `chat_conversations.py`
+    - `/conversations`
+    - `/conversations/{conversation_id}`
+    - `/conversations/{conversation_id}/tree`
+    - alias router endpoints
+  - `chat_analytics.py`
+    - `/analytics`
+  - `chat_rag_context.py`
+    - rag-context and citation endpoints for messages/conversations
 
-### Core Chat Services (Target)
+Keep existing split modules unchanged:
+- `chat_dictionaries.py`
+- `chat_documents.py`
 
-- `core/Chat/completion_service.py`
-  - provider/model resolution orchestration
-  - queue integration
-  - streaming/non-streaming execution dispatch
+### Core Chat Modules (New)
+
 - `core/Chat/persistence.py`
-  - `_process_content_for_db_sync`
-  - `_save_message_turn_to_db`
-  - related message metadata normalization helpers
-- `core/Chat/commands.py`
-  - slash command parse/dispatch
-  - command injection modes (`system`, `preface`, `replace`)
+  - content normalization and message save helpers currently in endpoint layer.
+- `core/Chat/completion_service.py`
+  - orchestration wrapper around existing `chat_service`/`chat_orchestrator` functionality.
 - `core/Chat/audit.py`
-  - chat audit event composition and dispatch wrappers
-
-## Compatibility Requirements
-
-- Preserve all existing routes under `/api/v1/chat/*`.
-- Preserve all response fields and status codes.
-- Preserve compatibility shim:
-  - `is_authentication_required` remains importable and monkeypatchable from `chat.py`.
-- Maintain existing dependency patterns (AuthNZ, rate limits, permissions).
+  - endpoint-independent audit helper wrappers currently embedded in request flow.
+- `core/Chat/queue_estimation.py` (optional if needed)
+  - `_sanitize_json_for_rate_limit` and `_estimate_tokens_for_queue` logic with endpoint-level wrappers preserved.
 
 ## Migration Plan
 
-### Phase 1: Extract Persistence Helpers
+### Phase 1: Persistence Helper Extraction
 
-- Move content processing and message save helpers from endpoint to `core/Chat/persistence.py`.
-- Keep wrappers in `chat.py` that delegate to extracted functions.
+- Move `_process_content_for_db_sync` and `_save_message_turn_to_db` implementations to `core/Chat/persistence.py`.
+- Keep endpoint-level wrappers in `chat.py`.
 
-### Phase 2: Extract Command and Moderation Injection Flow
+### Phase 2: Completion Orchestration Extraction
 
-- Move slash-command parsing/injection logic into `core/Chat/commands.py`.
-- Keep endpoint orchestration call signatures unchanged.
+- Move major orchestration blocks from `create_chat_completion` to `core/Chat/completion_service.py`.
+- Keep endpoint signature/dependencies unchanged.
 
-### Phase 3: Extract Completion Orchestration
+### Phase 3: Route Group Extraction
 
-- Move core completion flow from `create_chat_completion` into `core/Chat/completion_service.py`.
-- `create_chat_completion` becomes a thin translation layer (request -> service -> response).
+- Split queue, knowledge, conversations, analytics, and rag-context routes into dedicated endpoint modules.
+- Include all subrouters from `chat.py` facade.
 
-### Phase 4: Route Module Split
+### Phase 4: Commands and Validation Extraction
 
-- Move non-completion routes (conversations, analytics, rag context, queue status) into dedicated endpoint modules.
-- Keep `chat.py` as compatibility entrypoint that includes subrouters and re-exports required shims.
+- Move `/commands` and `/dictionaries/validate` handlers to `chat_commands.py`.
+- Continue including `chat_dictionaries` and `chat_documents` unchanged.
 
-## Testing Strategy
+### Phase 5: Final Facade Slimming
 
-- Keep all current chat endpoint tests passing.
-- Add targeted unit tests for extracted services:
-  - persistence normalization
-  - command injection modes and moderation outcomes
-  - completion orchestration branches (streaming and non-streaming)
-- Add shim compatibility tests for imports patched in legacy tests.
-- Ensure queue and audit behaviors remain unchanged in integration tests.
+- Keep `chat.py` focused on:
+  - router aggregation
+  - compatibility exports/wrappers
+  - constants needed for tests (`API_KEYS`, `DEFAULT_SAVE_TO_DB`, etc.)
+
+## Testing and Verification Plan
+
+### Required Regression Gates
+
+- `tldw_Server_API/tests/Chat/integration/test_chat_endpoint.py`
+- `tldw_Server_API/tests/Chat/integration/test_chat_fixes_integration.py`
+- `tldw_Server_API/tests/Chat/unit/test_chat_persistence_content.py`
+- `tldw_Server_API/tests/Chat/unit/test_chat_conversations_api.py`
+- `tldw_Server_API/tests/Chat/unit/test_chat_knowledge_save.py`
+- `tldw_Server_API/tests/Chat/unit/test_chat_endpoint_helpers.py`
+- `tldw_Server_API/tests/Chat_NEW/unit/test_tool_message_persistence.py`
+- `tldw_Server_API/tests/Chat_NEW/unit/test_sender_metadata_persistence.py`
+- `tldw_Server_API/tests/Chat_NEW/unit/test_chat_history_dedup.py`
+- `tldw_Server_API/tests/Resource_Governance/test_e2e_tokens_daily_cap.py`
+
+### Compatibility Checks
+
+- App startup still imports:
+  - `router`
+  - `conversations_alias_router`
+- Monkeypatch-based tests for:
+  - `API_KEYS`
+  - `is_authentication_required`
+  - persistence helpers
+  remain green.
 
 ## Risks and Mitigations
 
-- Risk: completion flow regressions due to intertwined side effects.
-  - Mitigation: extract in small vertical slices with parity tests after each slice.
-- Risk: test breakage from moved helper symbols.
-  - Mitigation: retain wrapper functions in `chat.py` until all tests are migrated.
-- Risk: hidden coupling with core chat modules.
-  - Mitigation: define explicit service interfaces and avoid back-imports from endpoint layer.
+- Risk: completion behavior drift from refactor.
+  - Mitigation: extract via wrapper boundaries and run parity-focused integration tests each phase.
+- Risk: import/monkeypatch breakage.
+  - Mitigation: preserve `chat.py` compatibility symbols and delegate internally.
+- Risk: alias router regressions (`/api/v1/chats/*`).
+  - Mitigation: keep alias router object in `chat.py` and include extracted routes on both routers.
 
 ## Success Metrics
 
-- `chat.py` reduced from ~3967 lines to a thin compatibility layer.
-- Completion orchestration moved into testable core services.
-- Existing chat tests stay green.
-- No observed response/protocol regressions for chat clients.
+- `chat.py` reduced significantly from 3967 lines.
+- Completion/persistence logic moved into testable core modules.
+- All route behaviors unchanged for clients.
+- Existing chat and compatibility regression gates stay green.
 
 ## Acceptance Criteria
 
-- `create_chat_completion` endpoint behavior is unchanged for clients.
-- Persistence helpers are no longer implemented inline in `chat.py`.
-- Slash command and audit logic are extracted to dedicated modules/services.
-- Compatibility shim symbols remain stable during and after migration.
+- `chat.py` no longer contains most endpoint/business logic bodies.
+- All existing chat routes and alias routes remain available and behaviorally stable.
+- Compatibility symbols remain importable from `chat.py`.
+- Regression suites pass for chat endpoints, persistence helpers, and queue estimation behavior.

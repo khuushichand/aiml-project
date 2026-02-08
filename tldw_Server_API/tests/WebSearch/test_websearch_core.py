@@ -397,6 +397,110 @@ def test_generate_and_search_propagates_include_domains_alias(monkeypatch: pytes
     assert result["web_search_results_dict"].get("site_whitelist") == ["allowed.example"]
 
 
+def test_generate_and_search_propagates_provider_warnings_and_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_perform_websearch(**_: Any) -> Dict[str, Any]:
+        return {
+            "results": [],
+            "total_results_found": 0,
+            "search_time": 0.0,
+            "warnings": [{"board": "g", "phase": "catalog", "message": "timeout"}],
+            "error": "4chan search failed for all requested boards.",
+            "processing_error": None,
+        }
+
+    monkeypatch.setattr(web_search, "perform_websearch", fake_perform_websearch)
+
+    result = web_search.generate_and_search(
+        "rust memory safety",
+        {
+            "engine": "4chan",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 5,
+        },
+    )
+
+    payload = result["web_search_results_dict"]
+    assert payload["results"] == []
+    assert payload.get("error") == "4chan search failed for all requested boards."
+    assert isinstance(payload.get("warnings"), list)
+    assert any(
+        warning.get("board") == "g" and warning.get("phase") == "catalog"
+        for warning in payload["warnings"]
+        if isinstance(warning, dict)
+    )
+
+
+def test_generate_and_search_surfaces_provider_error_as_warning_when_results_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_analyze_question(_question: str, _api_endpoint: str) -> Dict[str, Any]:
+        return {
+            "main_goal": "rust memory safety",
+            "sub_questions": ["rust ownership basics"],
+            "search_queries": [],
+            "analysis_prompt": None,
+        }
+
+    def fake_sleep(_seconds: float) -> None:
+        return None
+
+    def fake_perform_websearch(**kwargs: Any) -> Dict[str, Any]:
+        search_query = kwargs.get("search_query")
+        if search_query == "rust memory safety":
+            return {
+                "results": [],
+                "total_results_found": 0,
+                "search_time": 0.01,
+                "error": "4chan search failed for all requested boards.",
+                "processing_error": None,
+            }
+        if search_query == "rust ownership basics":
+            return {
+                "results": [
+                    {
+                        "title": "Rust ownership overview",
+                        "url": "https://boards.4chan.org/g/thread/123",
+                        "content": "Ownership explains borrowing and moves.",
+                    }
+                ],
+                "total_results_found": 1,
+                "search_time": 0.02,
+                "processing_error": None,
+            }
+        raise AssertionError(f"Unexpected query: {search_query}")
+
+    monkeypatch.setattr(web_search, "analyze_question", fake_analyze_question)
+    monkeypatch.setattr(web_search, "perform_websearch", fake_perform_websearch)
+    monkeypatch.setattr(web_search.time, "sleep", fake_sleep)
+
+    result = web_search.generate_and_search(
+        "rust memory safety",
+        {
+            "engine": "4chan",
+            "content_country": "US",
+            "search_lang": "en",
+            "output_lang": "en",
+            "result_count": 5,
+            "subquery_generation": True,
+            "subquery_generation_llm": "openai",
+        },
+    )
+
+    payload = result["web_search_results_dict"]
+    assert len(payload["results"]) == 1
+    assert payload.get("error") is None
+    assert isinstance(payload.get("warnings"), list)
+    assert any(
+        warning.get("phase") == "provider"
+        and warning.get("query") == "rust memory safety"
+        and warning.get("message") == "4chan search failed for all requested boards."
+        for warning in payload["warnings"]
+        if isinstance(warning, dict)
+    )
+
+
 @pytest.mark.asyncio
 async def test_search_discussions_uses_preprocessed_results_without_reprocessing(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: Dict[str, Any] = {"to_thread_calls": 0}

@@ -58,6 +58,10 @@ _GENERIC_TEMPLATES = [
     "What are common mistakes when working with {topic}?",
     "What are the latest developments in {topic}?",
     "How do I get started with {topic}?",
+    "Which metrics matter most when evaluating {topic}?",
+    "What tools are best for working with {topic}?",
+    "What are the biggest risks with {topic}?",
+    "What would an implementation plan for {topic} look like?",
 ]
 
 
@@ -78,11 +82,52 @@ def _extract_topic(query: str) -> str:
 
 def _heuristic_suggestions(query: str, num: int = 5) -> list[str]:
     """Generate generic follow-up suggestions without an LLM."""
-    topic = _extract_topic(query)
-    suggestions = []
-    for template in _GENERIC_TEMPLATES[:num]:
-        suggestions.append(template.format(topic=topic))
-    return suggestions
+    topic = _extract_topic(query) or "this topic"
+    target = max(1, int(num))
+    suggestions: list[str] = []
+    idx = 0
+    while len(suggestions) < target:
+        if idx < len(_GENERIC_TEMPLATES):
+            suggestion = _GENERIC_TEMPLATES[idx].format(topic=topic)
+        else:
+            suggestion = f"What else should I know next about {topic} ({idx + 1})?"
+        if suggestion not in suggestions:
+            suggestions.append(suggestion)
+        idx += 1
+    return suggestions[:target]
+
+
+def _finalize_suggestions(candidates: list[str], query: str, expected: int) -> list[str]:
+    """Normalize, dedupe, and pad suggestions to an exact expected count."""
+    target = max(1, int(expected))
+    finalized: list[str] = []
+    seen: set[str] = set()
+
+    for raw in candidates:
+        try:
+            cleaned = str(raw).strip()
+        except Exception:
+            continue
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        finalized.append(cleaned)
+        if len(finalized) >= target:
+            return finalized[:target]
+
+    for fallback in _heuristic_suggestions(query, target * 2):
+        key = fallback.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        finalized.append(fallback)
+        if len(finalized) >= target:
+            break
+
+    return finalized[:target]
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +141,7 @@ async def generate_suggestions(
     llm_provider: str = "openai",
     llm_model: str | None = None,
     num_suggestions: int = 5,
+    llm_timeout_sec: float = 3.0,
 ) -> list[str]:
     """Generate follow-up question suggestions based on query and response.
 
@@ -106,6 +152,8 @@ async def generate_suggestions(
         llm_provider: LLM provider for generation.
         llm_model: Optional model override.
         num_suggestions: Number of suggestions to generate (default 5).
+        llm_timeout_sec: Max time to wait for suggestion LLM before deterministic
+            fallback suggestions are returned.
 
     Returns:
         List of follow-up question strings. Falls back to heuristic
@@ -154,7 +202,7 @@ async def generate_suggestions(
 
         raw_response = await asyncio.wait_for(
             perform_chat_api_call_async(**call_kwargs),
-            timeout=15.0,
+            timeout=max(0.1, float(llm_timeout_sec)),
         )
 
         # Extract text from response
@@ -176,13 +224,13 @@ async def generate_suggestions(
         # Parse JSON array from response
         suggestions = _parse_suggestions(response_content, num_suggestions)
         if suggestions:
-            return suggestions[:num_suggestions]
+            return _finalize_suggestions(suggestions, query, num_suggestions)
 
     except Exception as exc:
         logger.debug(f"Suggestion generation LLM call failed: {exc!r}")
 
     # Fallback to heuristic suggestions
-    return _heuristic_suggestions(query, num_suggestions)
+    return _finalize_suggestions([], query, num_suggestions)
 
 
 def _parse_suggestions(text: str, expected: int) -> list[str]:

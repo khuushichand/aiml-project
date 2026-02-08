@@ -315,6 +315,7 @@ def initialize_web_search_results_dict(search_params: dict) -> dict:
         "total_results_found": 0,
         "search_time": 0.0,
         "error": None,
+        "warnings": [],
         "processing_error": None
     }
 
@@ -370,6 +371,8 @@ def generate_and_search(question: str, search_params: dict) -> dict:
     # 2. Initialize a single web_search_results_dict
     web_search_results_dict = initialize_web_search_results_dict(search_params)
     web_search_results_dict["search_query"] = question
+    observed_provider_errors: list[str] = []
+    deferred_provider_error_warnings: list[dict[str, str]] = []
 
     # 3. Perform searches and accumulate all raw results
     for idx, q in enumerate(all_queries):
@@ -407,13 +410,46 @@ def generate_and_search(question: str, search_params: dict) -> dict:
             logging.error(f"Error or invalid data returned for query '{q}': {raw_results}")
             continue
 
-        logging.info(f"Search results found for query '{q}': {len(raw_results.get('results', []))}")
+        raw_warnings = raw_results.get("warnings")
+        if isinstance(raw_warnings, list) and raw_warnings:
+            web_search_results_dict["warnings"].extend(raw_warnings)
+        elif raw_warnings is not None:
+            web_search_results_dict["warnings"].append(raw_warnings)
+
+        raw_error = raw_results.get("error")
+        if raw_error is not None:
+            error_text = str(raw_error).strip()
+            if error_text:
+                observed_provider_errors.append(error_text)
+                deferred_provider_error_warnings.append(
+                    {
+                        "query": q,
+                        "phase": "provider",
+                        "message": error_text,
+                    }
+                )
+
+        raw_results_list = raw_results.get("results", [])
+        if not isinstance(raw_results_list, list):
+            raw_results_list = []
+
+        logging.info(f"Search results found for query '{q}': {len(raw_results_list)}")
 
         # Append results to the single web_search_results_dict
-        web_search_results_dict["results"].extend(raw_results["results"])
+        web_search_results_dict["results"].extend(raw_results_list)
         web_search_results_dict["total_results_found"] += raw_results.get("total_results_found", 0)
         web_search_results_dict["search_time"] += raw_results.get("search_time", 0.0)
         logging.info(f"Total results found so far: {len(web_search_results_dict['results'])}")
+
+    if web_search_results_dict["results"]:
+        if deferred_provider_error_warnings:
+            web_search_results_dict["warnings"].extend(deferred_provider_error_warnings)
+        web_search_results_dict["error"] = None
+    elif observed_provider_errors:
+        web_search_results_dict["error"] = observed_provider_errors[0]
+
+    if not web_search_results_dict["warnings"]:
+        web_search_results_dict.pop("warnings", None)
 
     return {
         "web_search_results_dict": web_search_results_dict,
@@ -3364,6 +3400,19 @@ def search_web_4chan(
     from tldw_Server_API.app.core.http_client import fetch_json
 
     candidates: list[dict[str, Any]] = []
+    board_warnings: list[dict[str, str]] = []
+    successful_boards: set[str] = set()
+
+    def _record_board_warning(board_name: str, phase: str, exc: Any) -> None:
+        message = _truncate_text(str(exc), max_len=240)
+        board_warnings.append(
+            {
+                "board": board_name,
+                "phase": phase,
+                "message": message,
+            }
+        )
+        logging.warning(f"4chan board '{board_name}' {phase} failed: {message}")
 
     for board in boards:
         catalog_url = f"https://a.4cdn.org/{board}/catalog.json"
@@ -3373,38 +3422,38 @@ def search_web_4chan(
             pol = evaluate_url_policy(catalog_url)
             if not getattr(pol, "allowed", False):
                 raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
-            raise ValueError(f"Egress policy evaluation failed: {exc}") from exc
+            catalog_payload = fetch_json(method="GET", url=catalog_url, headers=headers, timeout=15.0)
+            pages = catalog_payload if isinstance(catalog_payload, list) else []
+            successful_boards.add(board)
+            scanned_threads = 0
 
-        catalog_payload = fetch_json(method="GET", url=catalog_url, headers=headers, timeout=15.0)
-        pages = catalog_payload if isinstance(catalog_payload, list) else []
-        scanned_threads = 0
-
-        for page in pages:
-            if scanned_threads >= max_threads_per_board:
-                break
-            if not isinstance(page, dict):
-                continue
-            threads = page.get("threads", [])
-            if not isinstance(threads, list):
-                continue
-
-            for thread in threads:
+            for page in pages:
                 if scanned_threads >= max_threads_per_board:
                     break
-                scanned_threads += 1
-
-                if not isinstance(thread, dict):
+                if not isinstance(page, dict):
+                    continue
+                threads = page.get("threads", [])
+                if not isinstance(threads, list):
                     continue
 
-                _append_4chan_candidate(
-                    candidates=candidates,
-                    board=board,
-                    thread=thread,
-                    query_terms=query_terms,
-                    query_text=query_text,
-                    archived=False,
-                )
+                for thread in threads:
+                    if scanned_threads >= max_threads_per_board:
+                        break
+                    scanned_threads += 1
+
+                    if not isinstance(thread, dict):
+                        continue
+
+                    _append_4chan_candidate(
+                        candidates=candidates,
+                        board=board,
+                        thread=thread,
+                        query_terms=query_terms,
+                        query_text=query_text,
+                        archived=False,
+                    )
+        except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+            _record_board_warning(board, "catalog", exc)
 
         if include_archived:
             archive_url = f"https://a.4cdn.org/{board}/archive.json"
@@ -3413,59 +3462,59 @@ def search_web_4chan(
                 pol = evaluate_url_policy(archive_url)
                 if not getattr(pol, "allowed", False):
                     raise ValueError(f"Egress denied: {getattr(pol, 'reason', 'blocked')}")
-            except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
-                raise ValueError(f"Egress policy evaluation failed: {exc}") from exc
+                archive_payload = fetch_json(method="GET", url=archive_url, headers=headers, timeout=15.0)
+                archive_ids = archive_payload if isinstance(archive_payload, list) else []
+                successful_boards.add(board)
+                archived_thread_ids = list(reversed(archive_ids))[:max_archived_threads_per_board]
 
-            archive_payload = fetch_json(method="GET", url=archive_url, headers=headers, timeout=15.0)
-            archive_ids = archive_payload if isinstance(archive_payload, list) else []
-            archived_thread_ids = list(reversed(archive_ids))[:max_archived_threads_per_board]
-
-            for archived_thread_id in archived_thread_ids:
-                thread_id = str(archived_thread_id).strip()
-                if not thread_id.isdigit():
-                    continue
-
-                thread_api_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
-                try:
-                    from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
-                    pol = evaluate_url_policy(thread_api_url)
-                    if not getattr(pol, "allowed", False):
+                for archived_thread_id in archived_thread_ids:
+                    thread_id = str(archived_thread_id).strip()
+                    if not thread_id.isdigit():
                         continue
-                except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
-                    continue
 
-                try:
-                    thread_payload = fetch_json(method="GET", url=thread_api_url, headers=headers, timeout=15.0)
-                except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
-                    continue
+                    thread_api_url = f"https://a.4cdn.org/{board}/thread/{thread_id}.json"
+                    try:
+                        from tldw_Server_API.app.core.Security.egress import evaluate_url_policy
+                        pol = evaluate_url_policy(thread_api_url)
+                        if not getattr(pol, "allowed", False):
+                            continue
+                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                        continue
 
-                posts = thread_payload.get("posts", []) if isinstance(thread_payload, dict) else []
-                if not isinstance(posts, list) or not posts:
-                    continue
+                    try:
+                        thread_payload = fetch_json(method="GET", url=thread_api_url, headers=headers, timeout=15.0)
+                    except _WEBSEARCH_NONCRITICAL_EXCEPTIONS:
+                        continue
 
-                op = next((post for post in posts if isinstance(post, dict)), None)
-                if not op:
-                    continue
-                op_data = dict(op)
-                op_data.setdefault("no", int(thread_id))
-                op_data.setdefault(
-                    "replies",
-                    max(0, len([post for post in posts if isinstance(post, dict)]) - 1),
-                )
-                op_data.setdefault(
-                    "images",
-                    sum(1 for post in posts if isinstance(post, dict) and post.get("tim") is not None),
-                )
-                op_data.setdefault("archived", 1)
+                    posts = thread_payload.get("posts", []) if isinstance(thread_payload, dict) else []
+                    if not isinstance(posts, list) or not posts:
+                        continue
 
-                _append_4chan_candidate(
-                    candidates=candidates,
-                    board=board,
-                    thread=op_data,
-                    query_terms=query_terms,
-                    query_text=query_text,
-                    archived=True,
-                )
+                    op = next((post for post in posts if isinstance(post, dict)), None)
+                    if not op:
+                        continue
+                    op_data = dict(op)
+                    op_data.setdefault("no", int(thread_id))
+                    op_data.setdefault(
+                        "replies",
+                        max(0, len([post for post in posts if isinstance(post, dict)]) - 1),
+                    )
+                    op_data.setdefault(
+                        "images",
+                        sum(1 for post in posts if isinstance(post, dict) and post.get("tim") is not None),
+                    )
+                    op_data.setdefault("archived", 1)
+
+                    _append_4chan_candidate(
+                        candidates=candidates,
+                        board=board,
+                        thread=op_data,
+                        query_terms=query_terms,
+                        query_text=query_text,
+                        archived=True,
+                    )
+            except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as exc:
+                _record_board_warning(board, "archive", exc)
 
     candidates = _dedupe_4chan_candidates(candidates)
     candidates.sort(
@@ -3476,13 +3525,18 @@ def search_web_4chan(
         reverse=True,
     )
 
-    return {
+    result: dict[str, Any] = {
         "results": candidates[:limit],
         "total_results_found": len(candidates),
         "boards": boards,
         "include_archived": include_archived,
         "query": search_query,
     }
+    if board_warnings:
+        result["warnings"] = board_warnings
+    if board_warnings and not successful_boards:
+        result["error"] = "4chan search failed for all requested boards."
+    return result
 
 
 def parse_4chan_results(fourchan_search_results, web_search_results_dict):
@@ -3519,6 +3573,14 @@ def parse_4chan_results(fourchan_search_results, web_search_results_dict):
                 },
             }
             web_search_results_dict["results"].append(processed)
+
+        warnings = (
+            fourchan_search_results.get("warnings", [])
+            if isinstance(fourchan_search_results, dict)
+            else []
+        )
+        if isinstance(warnings, list) and warnings:
+            web_search_results_dict["warnings"] = warnings
 
         web_search_results_dict["total_results_found"] = len(web_search_results_dict["results"])
     except _WEBSEARCH_NONCRITICAL_EXCEPTIONS as e:

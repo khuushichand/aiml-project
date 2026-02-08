@@ -91,7 +91,7 @@
     section{border-top:1px solid var(--ring)}
     .section{padding:64px 0;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00))}
     .section .grid{display:grid;gap:24px}
-    @media (min-width:900px){.section .grid{grid-template-columns:2fr 1fr}}
+    @media (min-width:900px){.section .grid{grid-template-columns:3fr 2fr}}
     .panel{border:1px solid var(--ring);background:linear-gradient(160deg, #121217, #0b0b0c);border-radius:16px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.35)}
 
     /* Code blocks */
@@ -225,13 +225,16 @@ docker compose up</code></pre>
           <p class="muted">Everything runs on your infrastructure. No telemetry, no data collection, no cloud lock-in. You own your data and control every aspect of the system.</p>
         </div>
         <div class="panel reveal">
-          <ul style="margin:0;padding:0;list-style:none;display:grid;gap:12px;font-size:15px">
-            <li><strong style="color:var(--brand)">FastAPI Server</strong> — production-ready REST API with OpenAPI docs, rate limiting, and background tasks</li>
-            <li><strong style="color:var(--brand)">16+ LLM Providers</strong> — OpenAI, Anthropic, Google, Cohere, Mistral, DeepSeek, Ollama, llama.cpp, and more</li>
-            <li><strong style="color:var(--brand)">Hybrid RAG</strong> — FTS5 full-text search + ChromaDB vectors + BM25 scoring + re-ranking pipeline</li>
-            <li><strong style="color:var(--brand)">Real-Time Transcription</strong> — faster_whisper, NeMo Parakeet/Canary, Qwen2Audio with WebSocket streaming</li>
-            <li><strong style="color:var(--brand)">JWT &amp; RBAC Auth</strong> — single-user API key and multi-user JWT modes with role-based access control</li>
-            <li><strong style="color:var(--brand)">MCP Server</strong> — production-ready Model Context Protocol with tool execution and WebSocket support</li>
+          <ul style="margin:0;padding:0;list-style:none;display:grid;gap:12px;font-size:14px">
+            <li><strong style="color:var(--brand)">25 LLM Providers</strong> — OpenAI, Anthropic, Google Gemini, Cohere, DeepSeek, Groq, Mistral, OpenRouter, HuggingFace, Qwen, plus Ollama, llama.cpp, vLLM, Kobold.cpp, MLX, and more</li>
+            <li><strong style="color:var(--brand)">15+ Media Formats</strong> — Video, audio, PDF, EPUB, DOCX, HTML, XML, email, and MediaWiki dumps. yt-dlp for 1,000+ sites. OCR and visual document processing</li>
+            <li><strong style="color:var(--brand)">7 STT Engines</strong> — faster_whisper, NeMo Parakeet/Canary, Qwen3-ASR, VibeVoice-ASR with real-time WebSocket streaming and diarization</li>
+            <li><strong style="color:var(--brand)">18 TTS Engines</strong> — OpenAI, ElevenLabs, Kokoro, Dia, Chatterbox, VibeVoice, NeuTTS, and more. Voice cloning, emotion control, and streaming synthesis</li>
+            <li><strong style="color:var(--brand)">Hybrid RAG Pipeline</strong> — BM25 + vector fusion, semantic caching, HyDE, query expansion, cross-encoder reranking, faithfulness scoring, regression detection, and batch checkpointing</li>
+            <li><strong style="color:var(--brand)">6 Evaluation Types</strong> — G-Eval, RAG eval, proposition checking, response quality, OCR quality, and embeddings A/B testing with batch processing and webhooks</li>
+            <li><strong style="color:var(--brand)">Character Chat</strong> — SillyTavern V2 cards with PNG export, world books, 20+ prompt formats, chatbooks, prompt library, and notebook notes</li>
+            <li><strong style="color:var(--brand)">11 MCP Modules</strong> — Knowledge, media, notes, chats, characters, prompts, flashcards, quizzes, slides, and kanban with JWT/RBAC and Prometheus metrics</li>
+            <li><strong style="color:var(--brand)">Multi-Provider Search</strong> — Google, Brave, DuckDuckGo, SearXNG, and arXiv with LLM-powered result aggregation and full content scraping</li>
           </ul>
         </div>
       </div>
